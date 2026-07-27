@@ -914,12 +914,17 @@ def models_benchmark(
                 reasoning=controls.reasoning,
             )
             try:
+                await client.validate_authentication()
+                models_payload = await client.get_certification_model_metadata()
                 zdr_payload = await client.list_zdr_endpoints()
                 policy_mode: Literal["only", "order"] = (
                     "only" if controls.provider_policy.only else "order"
                 )
+                endpoint_payloads: dict[str, dict[str, Any]] = {}
+                discovery_payloads = []
                 for target in targets:
                     endpoint_payload = await client.get_model_endpoint_metadata(target.model_id)
+                    endpoint_payloads[target.model_id] = endpoint_payload
                     endpoint_snapshot = validate_openrouter_endpoint_snapshot(
                         exact_model_id=target.model_id,
                         configured_provider_endpoints=(
@@ -931,9 +936,37 @@ def models_benchmark(
                         zdr_payload=zdr_payload,
                         reasoning_requested=controls.reasoning is not None,
                     )
-                    client.register_certification_endpoint_snapshot(
-                        evidence=endpoint_snapshot,
+                    discovery_payloads.append(
+                        validate_openrouter_model_discovery(
+                            exact_model_id=target.model_id,
+                            models_payload=models_payload,
+                            endpoint_snapshot=endpoint_snapshot,
+                        )
                     )
+                _provenance, discovery_evidence = client.seal_real_model_discovery_run(
+                    run_id=uuid.uuid4().hex,
+                    retrieved_at=datetime.now(UTC).replace(microsecond=0),
+                    models_payload=models_payload,
+                    zdr_payload=zdr_payload,
+                    endpoint_payloads=endpoint_payloads,
+                    candidate_routes=tuple(
+                        DiscoveryCandidateRoute(
+                            exact_model_id=target.model_id,
+                            approved_provider_endpoint=(
+                                controls.provider_policy.configured_endpoints[0]
+                            ),
+                        )
+                        for target in sorted(targets, key=lambda item: item.model_id)
+                    ),
+                    payloads=tuple(
+                        sorted(
+                            discovery_payloads,
+                            key=lambda item: item.exact_model_id,
+                        )
+                    ),
+                )
+                for evidence in discovery_evidence:
+                    client.register_certification_model_discovery(evidence=evidence)
                 report = await run_model_benchmark(
                     corpus=benchmark_corpus,
                     targets=targets,

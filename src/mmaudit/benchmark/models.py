@@ -601,7 +601,7 @@ class ModelBenchmarkCaseResult(StrictModel):
             self.usage_record is None
             or (
                 self.generation_evidence.generation_id != self.usage_record.openrouter_generation_id
-                or self.generation_evidence.exact_model_id != self.usage_record.requested_model
+                or self.generation_evidence.exact_model_id != self.usage_record.actual_model
                 or self.generation_evidence.execution_evidence
                 is not self.usage_record.execution_evidence
             )

@@ -6,6 +6,7 @@ import hashlib
 import json
 import traceback
 from collections.abc import Callable
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,17 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from mmaudit.constants import OPENROUTER_DEFAULT_BASE_URL
+from mmaudit.models.discovery import (
+    _TRUSTED_OPENROUTER_DISCOVERY_ISSUER,
+    DiscoveryCandidateRoute,
+    DiscoveryEndpointMetadataBinding,
+    OpenRouterModelDiscoveryEvidence,
+    OpenRouterModelDiscoveryRunManifest,
+    _issue_real_openrouter_discovery_run,
+    openrouter_endpoint_query,
+    validate_openrouter_model_discovery,
+    write_model_discovery_run,
+)
 from mmaudit.models.endpoint_snapshots import (
     EndpointSnapshotValidationError,
     OpenRouterEndpointSnapshotEvidence,
@@ -59,8 +71,10 @@ def _completion(
     *,
     cost: float | None = 0.01,
     model: str = "alpha/atlas-secure",
+    selected_model: str | None = None,
     provider: str = "synthetic-provider",
 ) -> dict[str, Any]:
+    routed_model = selected_model or model
     usage: dict[str, Any] = {
         "prompt_tokens": 10,
         "completion_tokens": 5,
@@ -90,7 +104,7 @@ def _completion(
                 "available": [
                     {
                         "provider": provider,
-                        "model": model,
+                        "model": routed_model,
                         "selected": True,
                     }
                 ],
@@ -98,7 +112,7 @@ def _completion(
             "attempts": [
                 {
                     "provider": provider,
-                    "model": model,
+                    "model": routed_model,
                     "status": 200,
                 }
             ],
@@ -112,12 +126,19 @@ def _completion_response(
     *,
     cost: float | None = 0.01,
     model: str = "alpha/atlas-secure",
+    selected_model: str | None = None,
     provider: str = "synthetic-provider",
 ) -> httpx.Response:
     return httpx.Response(
         200,
         headers={"X-Generation-Id": "generation-test"},
-        json=_completion(content, cost=cost, model=model, provider=provider),
+        json=_completion(
+            content,
+            cost=cost,
+            model=model,
+            selected_model=selected_model,
+            provider=provider,
+        ),
     )
 
 
@@ -151,6 +172,64 @@ def _endpoint_snapshot(
         require_zdr=True,
         zdr_payload={"data": [{**endpoint, "model_id": model}]},
     )
+
+
+def _model_discovery_run(
+    tmp_path: Path,
+    *,
+    canonical_model: str = "alpha/atlas-secure-20260727",
+) -> tuple[OpenRouterModelDiscoveryRunManifest, OpenRouterModelDiscoveryEvidence]:
+    exact_model = "alpha/atlas-secure"
+    endpoint_snapshot = _endpoint_snapshot()
+    catalog = {
+        "data": [
+            {
+                "id": exact_model,
+                "canonical_slug": canonical_model,
+                "context_length": 200_000,
+                "top_provider": {
+                    "context_length": 200_000,
+                    "max_completion_tokens": 20_000,
+                },
+                "supported_parameters": [
+                    "max_tokens",
+                    "response_format",
+                    "temperature",
+                ],
+            }
+        ]
+    }
+    payload = validate_openrouter_model_discovery(
+        exact_model_id=exact_model,
+        models_payload=catalog,
+        endpoint_snapshot=endpoint_snapshot,
+    )
+    route = DiscoveryCandidateRoute(
+        exact_model_id=exact_model,
+        approved_provider_endpoint="approved-provider",
+    )
+    _provenance, evidence = _issue_real_openrouter_discovery_run(
+        run_id="1" * 32,
+        retrieved_at=datetime(2026, 7, 27, 12, 0, tzinfo=UTC),
+        client_fingerprint_sha256="a" * 64,
+        provider_fingerprint_sha256="b" * 64,
+        catalog_snapshot_sha256=hashlib.sha256(
+            json.dumps(catalog, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        zdr_snapshot_sha256="d" * 64,
+        candidate_routes=(route,),
+        endpoint_metadata_bindings=(
+            DiscoveryEndpointMetadataBinding(
+                exact_model_id=exact_model,
+                api_query=openrouter_endpoint_query(exact_model),
+                response_snapshot_sha256="e" * 64,
+            ),
+        ),
+        payloads=(payload,),
+        issuer=_TRUSTED_OPENROUTER_DISCOVERY_ISSUER,
+    )
+    manifest = write_model_discovery_run(tmp_path / canonical_model.rsplit("/", 1)[-1], evidence)
+    return manifest, evidence[0]
 
 
 def _multi_endpoint_snapshot(
@@ -957,6 +1036,188 @@ async def test_multi_endpoint_routing_evidence_binds_actual_endpoint_and_full_sn
         record.routing["endpoint_pricing_sha256"]
         == snapshot.endpoint("provider-premium").pricing_sha256
     )
+
+
+@pytest.mark.asyncio
+async def test_frozen_discovery_authorizes_and_records_exact_canonical_route(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    canonical_model = "alpha/atlas-secure-20260727"
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        canonical_model=canonical_model,
+    )
+    client, http_client, usage = _client(
+        config_factory(execution={"max_json_repair_attempts": 0}),
+        lambda _request: _completion_response(
+            '{"answer":"canonical"}',
+            selected_model=canonical_model,
+            provider="Approved Provider",
+        ),
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+    )
+    try:
+        client.register_certification_model_discovery(
+            evidence=evidence,
+            manifest=manifest,
+        )
+        result = await client.complete(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="synthetic local input",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    record = usage.records[0]
+    assert result.answer == "canonical"
+    assert record.returned_model == "alpha/atlas-secure"
+    assert record.actual_model == canonical_model
+    assert record.routing["selected_model"] == canonical_model
+    assert (
+        record.routing["catalog_identity_binding_sha256"]
+        == evidence.catalog_identity_binding_sha256
+    )
+    assert record.routing["discovery_evidence_sha256"] == evidence.discovery_evidence_sha256
+
+
+@pytest.mark.parametrize("fault", ["unbound", "wrong_canonical", "attempt_mismatch"])
+@pytest.mark.asyncio
+async def test_canonical_route_must_match_one_frozen_identity(
+    config_factory,
+    tmp_path: Path,
+    fault: str,
+) -> None:
+    canonical_model = "alpha/atlas-secure-20260727"
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        canonical_model=canonical_model,
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        selected_model = (
+            "alpha/atlas-secure-20260728" if fault == "wrong_canonical" else canonical_model
+        )
+        payload = _completion(
+            '{"answer":"must reject"}',
+            selected_model=selected_model,
+            provider="Approved Provider",
+        )
+        if fault == "attempt_mismatch":
+            payload["openrouter_metadata"]["attempts"][0]["model"] = "alpha/atlas-secure"
+        return httpx.Response(
+            200,
+            headers={"X-Generation-Id": "generation-test"},
+            json=payload,
+        )
+
+    client, http_client, usage = _client(
+        config_factory(execution={"max_json_repair_attempts": 0}),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+    )
+    try:
+        if fault != "unbound":
+            client.register_certification_model_discovery(
+                evidence=evidence,
+                manifest=manifest,
+            )
+        with pytest.raises((OpenRouterModelError, OpenRouterSchemaError)):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert usage.records[0].status != "success"
+
+
+@pytest.mark.asyncio
+async def test_top_level_returned_model_cannot_use_the_canonical_alias(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    canonical_model = "alpha/atlas-secure-20260727"
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        canonical_model=canonical_model,
+    )
+    client, http_client, usage = _client(
+        config_factory(execution={"max_json_repair_attempts": 0}),
+        lambda _request: _completion_response(
+            '{"answer":"must reject"}',
+            model=canonical_model,
+            provider="Approved Provider",
+        ),
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+    )
+    try:
+        client.register_certification_model_discovery(
+            evidence=evidence,
+            manifest=manifest,
+        )
+        with pytest.raises(OpenRouterModelError, match="exact configured model"):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert usage.records[0].status != "success"
+
+
+@pytest.mark.asyncio
+async def test_model_identity_registration_rejects_a_spliced_manifest(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    _first_manifest, evidence = _model_discovery_run(
+        tmp_path,
+        canonical_model="alpha/atlas-secure-20260727",
+    )
+    other_manifest, _other_evidence = _model_discovery_run(
+        tmp_path,
+        canonical_model="alpha/atlas-secure-20260728",
+    )
+    client, http_client, _usage = _client(
+        config_factory(execution={"max_json_repair_attempts": 0}),
+        lambda _request: _completion_response('{"answer":"unused"}'),
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+    )
+    try:
+        with pytest.raises(OpenRouterModelError, match="different run provenance"):
+            client.register_certification_model_discovery(
+                evidence=evidence,
+                manifest=other_manifest,
+            )
+    finally:
+        await http_client.aclose()
 
 
 @pytest.mark.asyncio

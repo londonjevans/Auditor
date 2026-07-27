@@ -1746,6 +1746,175 @@ class CandidateBatch(StrictModel):
     findings: list[CandidateFinding]
 
 
+class ModelSurfaceReviewStatus(StrEnum):
+    """Explicit outcome for one requested deterministic review surface."""
+
+    REVIEWED_NO_ISSUE = "REVIEWED_NO_ISSUE"
+    CANDIDATE = "CANDIDATE"
+    INCONCLUSIVE = "INCONCLUSIVE"
+    NOT_REVIEWED = "NOT_REVIEWED"
+
+
+class ModelSurfaceReviewCitation(StrictModel):
+    """A source location or symbol that can be validated outside model output."""
+
+    location: Location | None = None
+    symbol: str | None = Field(default=None, min_length=1, max_length=500)
+
+    @field_validator("symbol")
+    @classmethod
+    def symbol_is_bounded_plain_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized or any(
+            ord(character) < 32 or ord(character) == 127 for character in normalized
+        ):
+            raise ValueError("model surface review symbol must be bounded plain text")
+        return normalized
+
+    @model_validator(mode="after")
+    def location_or_symbol_is_explicit(self) -> ModelSurfaceReviewCitation:
+        if self.location is None and self.symbol is None:
+            raise ValueError("model surface review requires a source location or symbol")
+        if self.location is not None:
+            if self.location.end_line < self.location.start_line:
+                raise ValueError("model surface review location range is reversed")
+            if (
+                self.location.symbol is not None
+                and self.symbol is not None
+                and self.location.symbol != self.symbol
+            ):
+                raise ValueError("model surface review citation symbols disagree")
+        return self
+
+
+class ModelSurfaceReviewRecord(StrictModel):
+    """One model-authored, surface-specific review statement."""
+
+    surface_id: str = Field(pattern=r"^model-surface:[0-9a-f]{64}$")
+    contract: str = Field(min_length=1, max_length=500)
+    function_or_state_surface: str = Field(min_length=1, max_length=500)
+    review_role: str = Field(pattern=r"^[a-z][a-z0-9_:.-]{0,127}$")
+    status: ModelSurfaceReviewStatus
+    rationale: str = Field(min_length=8, max_length=2_000)
+    citation: ModelSurfaceReviewCitation
+    invariant_considered: str = Field(min_length=1, max_length=1_000)
+    assumptions: tuple[str, ...] = Field(max_length=50)
+    confidence: float = Field(ge=0, le=1)
+
+    @field_validator(
+        "contract",
+        "function_or_state_surface",
+        "rationale",
+        "invariant_considered",
+    )
+    @classmethod
+    def narrative_fields_are_bounded_plain_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or any(
+            ord(character) < 32 or ord(character) == 127 for character in normalized
+        ):
+            raise ValueError("model surface review text must be bounded plain text")
+        return normalized
+
+    @field_validator("assumptions")
+    @classmethod
+    def assumptions_are_canonical(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(item.strip() for item in value)
+        if any(
+            not item
+            or len(item) > 500
+            or any(ord(character) < 32 or ord(character) == 127 for character in item)
+            for item in normalized
+        ) or normalized != tuple(sorted(set(normalized))):
+            raise ValueError("model surface review assumptions must be bounded, unique, and sorted")
+        return normalized
+
+
+class ModelSurfaceReviewArtifact(StrictModel):
+    """Hash-linked normalized response for one exact requested surface set."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    request_id: str = Field(min_length=1, max_length=500)
+    review_role: str = Field(pattern=r"^[a-z][a-z0-9_:.-]{0,127}$")
+    requested_surface_ids: tuple[str, ...] = Field(min_length=1, max_length=10_000)
+    requested_surface_ids_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    prompt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    validated_response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    response_schema_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    records: tuple[ModelSurfaceReviewRecord, ...] = Field(
+        min_length=1,
+        max_length=10_000,
+    )
+    artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @staticmethod
+    def calculate_artifact_sha256(payload: dict[str, Any]) -> str:
+        """Hash a JSON-compatible artifact payload without its digest field."""
+
+        canonical = {key: value for key, value in payload.items() if key != "artifact_sha256"}
+        return hashlib.sha256(
+            json.dumps(
+                canonical,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+
+    @field_validator("request_id")
+    @classmethod
+    def request_id_is_bounded_plain_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or any(
+            ord(character) < 32 or ord(character) == 127 for character in normalized
+        ):
+            raise ValueError("model surface review request ID must be bounded plain text")
+        return normalized
+
+    @field_validator("requested_surface_ids")
+    @classmethod
+    def requested_surface_ids_are_canonical(
+        cls,
+        value: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if value != tuple(sorted(set(value))) or any(
+            re.fullmatch(r"model-surface:[0-9a-f]{64}", surface_id) is None for surface_id in value
+        ):
+            raise ValueError("requested model surface IDs must be valid, unique, and sorted")
+        return value
+
+    @model_validator(mode="after")
+    def exact_surface_set_role_and_hashes_are_consistent(
+        self,
+    ) -> ModelSurfaceReviewArtifact:
+        record_ids = tuple(record.surface_id for record in self.records)
+        if record_ids != self.requested_surface_ids:
+            raise ValueError(
+                "model surface review records must exactly cover the requested surface set"
+            )
+        if any(record.review_role != self.review_role for record in self.records):
+            raise ValueError("model surface review record role differs from its request")
+        expected_surface_ids_hash = hashlib.sha256(
+            json.dumps(
+                list(self.requested_surface_ids),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+        if self.requested_surface_ids_sha256 != expected_surface_ids_hash:
+            raise ValueError("requested model surface ID hash is inconsistent")
+        expected_artifact_hash = self.calculate_artifact_sha256(self.model_dump(mode="json"))
+        if self.artifact_sha256 != expected_artifact_hash:
+            raise ValueError("model surface review artifact hash is inconsistent")
+        return self
+
+
 class VerificationDecision(StrictModel):
     candidate_id: str
     verdict: VerificationVerdict
@@ -3993,6 +4162,7 @@ class UsageRecord(StrictModel):
     execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.UNVERIFIED
     requested_model: str
     returned_model: str | None = None
+    actual_model: str | None = None
     provider: str | None = None
     model_family: str
     timestamp: datetime
@@ -4041,6 +4211,7 @@ class UsageRecord(StrictModel):
             raise ValueError("configured provider endpoints must be unique")
         if self.validation_status is ModelRequestValidationStatus.VALID:
             required = (
+                self.actual_model,
                 self.response_sha256,
                 self.validated_response_sha256,
                 self.request_body_sha256,

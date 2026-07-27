@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -11,6 +13,19 @@ from mmaudit.models.schemas import (
     UsageRecord,
 )
 from mmaudit.models.usage import is_creditable_usage_record
+
+_REQUESTED_MODEL = "author/exact-model"
+_CANONICAL_MODEL = "author/exact-model-20260727"
+_CATALOG_IDENTITY_BINDING_SHA256 = hashlib.sha256(
+    json.dumps(
+        {
+            "canonical_slug": _CANONICAL_MODEL,
+            "id": _REQUESTED_MODEL,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+).hexdigest()
 
 
 def _creditable_record(
@@ -26,10 +41,11 @@ def _creditable_record(
         request_id="request-test",
         role="source_audit",
         execution_evidence=execution_evidence,
-        requested_model="author/exact-model",
-        returned_model="author/exact-model",
+        requested_model=_REQUESTED_MODEL,
+        returned_model=_REQUESTED_MODEL,
+        actual_model=_CANONICAL_MODEL,
         provider="Anthropic",
-        model_family="author/exact-model",
+        model_family=_REQUESTED_MODEL,
         timestamp=started_at,
         prompt_tokens=100,
         completion_tokens=25,
@@ -38,6 +54,8 @@ def _creditable_record(
         accounted_cost_usd=0.01,
         routing={
             "generation_id": generation_id,
+            "selected_model": _CANONICAL_MODEL,
+            "canonical_model": _CANONICAL_MODEL,
             "selected_provider_endpoint": endpoint,
             "router_strategy": "direct",
             "router_attempt": 1,
@@ -157,6 +175,10 @@ def test_certification_credit_requires_endpoint_snapshot_cost_and_no_fallback() 
         "certification_request": True,
         "endpoint_snapshot_sha256": "1" * 64,
         "endpoint_pricing_sha256": "2" * 64,
+        "catalog_identity_binding_sha256": _CATALOG_IDENTITY_BINDING_SHA256,
+        "catalog_snapshot_sha256": "3" * 64,
+        "discovery_provenance_sha256": "4" * 64,
+        "discovery_evidence_sha256": "5" * 64,
     }
 
     certified = record.model_copy(
@@ -188,6 +210,68 @@ def test_certification_credit_requires_endpoint_snapshot_cost_and_no_fallback() 
     )
     assert not is_creditable_usage_record(
         certified.model_copy(update={"configured_provider_endpoints": []}),
+        require_real=True,
+        require_certification=True,
+    )
+
+
+def test_creditable_usage_rejects_actual_model_or_catalog_identity_mismatch() -> None:
+    record = _creditable_record()
+    certified = record.model_copy(
+        update={
+            "execution_evidence": ExecutionEvidenceKind.REAL,
+            "routing": {
+                **record.routing,
+                "certification_request": True,
+                "endpoint_snapshot_sha256": "1" * 64,
+                "endpoint_pricing_sha256": "2" * 64,
+                "catalog_identity_binding_sha256": _CATALOG_IDENTITY_BINDING_SHA256,
+                "catalog_snapshot_sha256": "3" * 64,
+                "discovery_provenance_sha256": "4" * 64,
+                "discovery_evidence_sha256": "5" * 64,
+            },
+        }
+    )
+
+    assert not is_creditable_usage_record(
+        certified.model_copy(update={"actual_model": "author/other-model"}),
+        require_real=True,
+        require_certification=True,
+    )
+    assert not is_creditable_usage_record(
+        certified.model_copy(
+            update={
+                "actual_model": "author/other-model",
+                "routing": {
+                    **certified.routing,
+                    "selected_model": "author/other-model",
+                },
+            }
+        ),
+        require_real=True,
+        require_certification=True,
+    )
+    assert not is_creditable_usage_record(
+        certified.model_copy(
+            update={
+                "routing": {
+                    **certified.routing,
+                    "selected_model": _REQUESTED_MODEL,
+                }
+            }
+        ),
+        require_real=True,
+        require_certification=True,
+    )
+    assert not is_creditable_usage_record(
+        certified.model_copy(
+            update={
+                "routing": {
+                    **certified.routing,
+                    "catalog_identity_binding_sha256": None,
+                }
+            }
+        ),
         require_real=True,
         require_certification=True,
     )

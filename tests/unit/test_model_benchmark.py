@@ -212,6 +212,7 @@ def _mock_usage_record(
         execution_evidence=ExecutionEvidenceKind.MOCK,
         requested_model=target.model_id,
         returned_model=target.model_id,
+        actual_model=target.model_id,
         provider="Synthetic",
         model_family=target.model_id,
         timestamp=started_at,
@@ -222,6 +223,7 @@ def _mock_usage_record(
         accounted_cost_usd=0.01,
         routing={
             "generation_id": generation_id,
+            "selected_model": target.model_id,
             "selected_provider_endpoint": endpoint,
             "router_strategy": "direct",
             "router_attempt": 1,
@@ -272,13 +274,13 @@ def _case_id_for_dimension(dimension: ModelBenchmarkDimension) -> str:
 
 def _forged_real_generation_evidence(record: UsageRecord) -> OpenRouterGenerationEvidence:
     assert record.openrouter_generation_id is not None
-    assert record.returned_model is not None
+    assert record.actual_model is not None
     assert record.provider is not None
     return validate_openrouter_generation_payload(
         {
             "data": {
                 "id": record.openrouter_generation_id,
-                "model": record.returned_model,
+                "model": record.actual_model,
                 "provider_name": record.provider,
                 "finish_reason": "stop",
                 "native_finish_reason": None,
@@ -569,8 +571,18 @@ async def test_mock_report_cannot_be_relabelled_as_real() -> None:
         )
         case["usage_record"]["execution_evidence"] = "real"
         case["usage_record"]["routing"]["certification_request"] = True
+        case["usage_record"]["routing"]["canonical_model"] = record.requested_model
         case["usage_record"]["routing"]["endpoint_snapshot_sha256"] = "1" * 64
         case["usage_record"]["routing"]["endpoint_pricing_sha256"] = "2" * 64
+        case["usage_record"]["routing"]["catalog_identity_binding_sha256"] = canonical_sha256(
+            {
+                "canonical_slug": record.requested_model,
+                "id": record.requested_model,
+            }
+        )
+        case["usage_record"]["routing"]["catalog_snapshot_sha256"] = "3" * 64
+        case["usage_record"]["routing"]["discovery_provenance_sha256"] = "4" * 64
+        case["usage_record"]["routing"]["discovery_evidence_sha256"] = "5" * 64
     forged["report_sha256"] = canonical_sha256(
         {key: value for key, value in forged.items() if key != "report_sha256"}
     )

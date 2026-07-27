@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -11,9 +13,17 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from mmaudit.config import ExecutionConfig, PrivacyConfig
+from mmaudit.models.discovery import (
+    DiscoveryCandidateRoute,
+    validate_openrouter_model_discovery,
+)
 from mmaudit.models.endpoint_snapshots import validate_openrouter_endpoint_snapshot
 from mmaudit.models.generation_evidence import GenerationVerificationRequest
-from mmaudit.models.openrouter import OpenRouterClient, OpenRouterProviderPolicy
+from mmaudit.models.openrouter import (
+    OpenRouterClient,
+    OpenRouterProviderPolicy,
+    OpenRouterReasoning,
+)
 from mmaudit.models.schemas import ExecutionEvidenceKind, ModelRequestValidationStatus
 from mmaudit.models.usage import UsageLedger
 from mmaudit.operator_secrets import load_operator_secrets
@@ -58,7 +68,7 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
         max_model_retries=0,
         max_json_repair_attempts=0,
         budget_usd=float(settings.cost_cap_usd),
-        max_output_tokens_per_request=256,
+        max_output_tokens_per_request=512,
         max_requests_per_agent=1,
         conservative_usd_per_million_tokens=60,
     )
@@ -103,10 +113,14 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     only=settings.provider_endpoint_allowlist,
                     allow_fallbacks=False,
                 ),
+                reasoning=OpenRouterReasoning(max_tokens=64, exclude=True),
             )
             async with client:
                 await client.validate_authentication()
-                models = await client.list_certification_models()
+                models_payload = await client.get_certification_model_metadata()
+                models = models_payload.get("data")
+                if not isinstance(models, list):
+                    raise AssertionError("the certification model catalog is invalid")
                 if settings.model_id not in {
                     item.get("id") for item in models if isinstance(item.get("id"), str)
                 }:
@@ -121,8 +135,27 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     require_zdr=True,
                     zdr_payload=zdr_payload,
                 )
-                client.register_certification_endpoint_snapshot(
-                    evidence=endpoint_snapshot,
+                discovery_payload = validate_openrouter_model_discovery(
+                    exact_model_id=settings.model_id,
+                    models_payload=models_payload,
+                    endpoint_snapshot=endpoint_snapshot,
+                )
+                _provenance, discovery_evidence = client.seal_real_model_discovery_run(
+                    run_id=uuid.uuid4().hex,
+                    retrieved_at=datetime.now(UTC).replace(microsecond=0),
+                    models_payload=models_payload,
+                    zdr_payload=zdr_payload,
+                    endpoint_payloads={settings.model_id: endpoint_payload},
+                    candidate_routes=(
+                        DiscoveryCandidateRoute(
+                            exact_model_id=settings.model_id,
+                            approved_provider_endpoint=settings.provider_endpoint_allowlist[0],
+                        ),
+                    ),
+                    payloads=(discovery_payload,),
+                )
+                client.register_certification_model_discovery(
+                    evidence=discovery_evidence[0],
                 )
 
                 preview = client.build_request(
@@ -139,6 +172,7 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     model=settings.model_id,
                     providers=settings.provider_endpoint_allowlist,
                 )
+                assert preview["reasoning"] == {"exclude": True, "max_tokens": 64}
                 response = await client.complete(
                     role="real_provider_smoke",
                     models=[settings.model_id],
@@ -158,6 +192,13 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                                 benchmark_report_sha256="1" * 64,
                                 case_id="synthetic-provider-smoke",
                                 exact_model_id=settings.model_id,
+                                canonical_model_id=discovery_payload.canonical_slug,
+                                catalog_identity_binding_sha256=(
+                                    discovery_payload.catalog_identity_binding_sha256
+                                ),
+                                discovery_evidence_sha256=(
+                                    discovery_evidence[0].discovery_evidence_sha256
+                                ),
                                 expected_provider_name=selected_provider_name,
                                 usage_record=record,
                             ),
@@ -168,6 +209,11 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     benchmark_report_sha256="1" * 64,
                     case_id="synthetic-provider-smoke",
                     exact_model_id=settings.model_id,
+                    canonical_model_id=discovery_payload.canonical_slug,
+                    catalog_identity_binding_sha256=(
+                        discovery_payload.catalog_identity_binding_sha256
+                    ),
+                    discovery_evidence_sha256=(discovery_evidence[0].discovery_evidence_sha256),
                     usage_record=record,
                     expected_provider_name=selected_provider_name,
                 )
@@ -182,6 +228,7 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
     assert record.validation_status is ModelRequestValidationStatus.VALID
     assert record.requested_model == settings.model_id
     assert record.returned_model == settings.model_id
+    assert record.actual_model == discovery_payload.canonical_slug
     assert record.configured_provider_endpoints == list(settings.provider_endpoint_allowlist)
     assert record.actual_provider_endpoint is not None
     assert record.actual_provider_endpoint in settings.provider_endpoint_allowlist
@@ -193,6 +240,10 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
     assert record.openrouter_generation_id
     assert refetched_generation.generation_id == record.openrouter_generation_id
     assert record.routing["endpoint_snapshot_sha256"] == endpoint_snapshot.snapshot_sha256
+    assert (
+        record.routing["catalog_identity_binding_sha256"]
+        == discovery_payload.catalog_identity_binding_sha256
+    )
     assert not record.fallback_used
     assert not record.substitution_detected
 

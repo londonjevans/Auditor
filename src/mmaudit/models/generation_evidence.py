@@ -41,6 +41,9 @@ class GenerationVerificationRequest:
     benchmark_report_sha256: str
     case_id: str
     exact_model_id: str
+    canonical_model_id: str
+    catalog_identity_binding_sha256: str
+    discovery_evidence_sha256: str
     expected_provider_name: str
     usage_record: UsageRecord
 
@@ -50,6 +53,20 @@ class GenerationVerificationRequest:
         if _CASE_ID_PATTERN.fullmatch(self.case_id) is None:
             raise GenerationEvidenceValidationError("benchmark case ID is invalid")
         _require_exact_model_id(self.exact_model_id)
+        _require_exact_model_id(self.canonical_model_id)
+        if (
+            self.catalog_identity_binding_sha256
+            != _canonical_sha256(
+                {
+                    "canonical_slug": self.canonical_model_id,
+                    "id": self.exact_model_id,
+                }
+            )
+            or _SHA256_PATTERN.fullmatch(self.discovery_evidence_sha256) is None
+        ):
+            raise GenerationEvidenceValidationError(
+                "generation verification model identity binding is invalid"
+            )
         _require_safe_text(self.expected_provider_name, "expected provider name")
         if not isinstance(self.usage_record, UsageRecord):
             raise GenerationEvidenceValidationError(
@@ -65,6 +82,20 @@ class GenerationVerificationRequest:
             raise GenerationEvidenceValidationError(
                 "generation verification request lacks a generation ID"
             )
+        if (
+            usage_record.requested_model != self.exact_model_id
+            or usage_record.returned_model != self.exact_model_id
+            or usage_record.actual_model not in {self.exact_model_id, self.canonical_model_id}
+            or usage_record.routing.get("selected_model") != usage_record.actual_model
+            or usage_record.routing.get("canonical_model") != self.canonical_model_id
+            or usage_record.routing.get("catalog_identity_binding_sha256")
+            != self.catalog_identity_binding_sha256
+            or usage_record.routing.get("discovery_evidence_sha256")
+            != self.discovery_evidence_sha256
+        ):
+            raise GenerationEvidenceValidationError(
+                "generation verification usage has a different model identity binding"
+            )
         object.__setattr__(self, "usage_record", usage_record)
 
 
@@ -73,6 +104,9 @@ class _TrustedGenerationBinding:
     benchmark_report_sha256: str
     case_id: str
     exact_model_id: str
+    canonical_model_id: str
+    catalog_identity_binding_sha256: str
+    discovery_evidence_sha256: str
     expected_provider_name: str
     usage_record_sha256: str
     attestation: OpenRouterGenerationEvidence
@@ -118,6 +152,9 @@ class TrustedGenerationVerification:
         benchmark_report_sha256: str,
         case_id: str,
         exact_model_id: str,
+        canonical_model_id: str,
+        catalog_identity_binding_sha256: str,
+        discovery_evidence_sha256: str,
         usage_record: UsageRecord,
         expected_provider_name: str,
     ) -> OpenRouterGenerationEvidence:
@@ -139,6 +176,9 @@ class TrustedGenerationVerification:
         binding = self.__bindings.get((benchmark_report_sha256, exact_model_id, case_id))
         if (
             binding is None
+            or binding.canonical_model_id != canonical_model_id
+            or binding.catalog_identity_binding_sha256 != catalog_identity_binding_sha256
+            or binding.discovery_evidence_sha256 != discovery_evidence_sha256
             or binding.expected_provider_name != expected_provider_name
             or binding.usage_record_sha256 != _usage_record_sha256(validated_usage)
         ):
@@ -149,6 +189,9 @@ class TrustedGenerationVerification:
             binding.attestation,
             usage_record=validated_usage,
             expected_exact_model=exact_model_id,
+            expected_canonical_model=canonical_model_id,
+            expected_catalog_identity_binding_sha256=(catalog_identity_binding_sha256),
+            expected_discovery_evidence_sha256=discovery_evidence_sha256,
             expected_provider_name=expected_provider_name,
         )
 
@@ -374,11 +417,28 @@ def reconcile_generation_evidence(
     *,
     usage_record: UsageRecord,
     expected_exact_model: str,
+    expected_canonical_model: str,
+    expected_catalog_identity_binding_sha256: str,
+    expected_discovery_evidence_sha256: str,
     expected_provider_name: str,
 ) -> OpenRouterGenerationEvidence:
     """Require real certification usage and exact independent generation metadata."""
 
     _require_exact_model_id(expected_exact_model)
+    _require_exact_model_id(expected_canonical_model)
+    if (
+        expected_catalog_identity_binding_sha256
+        != _canonical_sha256(
+            {
+                "canonical_slug": expected_canonical_model,
+                "id": expected_exact_model,
+            }
+        )
+        or _SHA256_PATTERN.fullmatch(expected_discovery_evidence_sha256) is None
+    ):
+        raise GenerationEvidenceValidationError(
+            "generation reconciliation model identity binding is invalid"
+        )
     _require_safe_text(expected_provider_name, "expected provider name")
     if not isinstance(evidence, OpenRouterGenerationEvidence):
         raise GenerationEvidenceValidationError("generation evidence has an invalid type")
@@ -404,6 +464,11 @@ def reconcile_generation_evidence(
             "generation attestation requires one creditable real certification request"
         )
     routing = usage_record.routing
+    actual_model = usage_record.actual_model
+    if actual_model not in {expected_exact_model, expected_canonical_model}:
+        raise GenerationEvidenceValidationError(
+            "generation evidence does not reconcile approved actual model"
+        )
     comparisons = (
         (
             evidence.generation_id,
@@ -411,9 +476,21 @@ def reconcile_generation_evidence(
             "generation ID",
         ),
         (evidence.generation_id, routing.get("generation_id"), "routing generation ID"),
-        (evidence.exact_model_id, expected_exact_model, "expected exact model"),
+        (evidence.exact_model_id, actual_model, "actual provider model"),
         (usage_record.requested_model, expected_exact_model, "requested exact model"),
         (usage_record.returned_model, expected_exact_model, "returned exact model"),
+        (routing.get("selected_model"), actual_model, "routed actual model"),
+        (routing.get("canonical_model"), expected_canonical_model, "routed canonical model"),
+        (
+            routing.get("catalog_identity_binding_sha256"),
+            expected_catalog_identity_binding_sha256,
+            "catalog identity binding",
+        ),
+        (
+            routing.get("discovery_evidence_sha256"),
+            expected_discovery_evidence_sha256,
+            "discovery evidence binding",
+        ),
         (evidence.provider_name, expected_provider_name, "expected provider"),
         (
             routing.get("selected_provider_name"),
@@ -477,6 +554,9 @@ def validate_generation_evidence_against_usage(
     *,
     usage_record: UsageRecord,
     expected_exact_model: str,
+    expected_canonical_model: str,
+    expected_catalog_identity_binding_sha256: str,
+    expected_discovery_evidence_sha256: str,
     expected_provider_name: str,
 ) -> OpenRouterGenerationEvidence:
     """Compatibility spelling for explicit generation/usage reconciliation."""
@@ -485,6 +565,9 @@ def validate_generation_evidence_against_usage(
         evidence,
         usage_record=usage_record,
         expected_exact_model=expected_exact_model,
+        expected_canonical_model=expected_canonical_model,
+        expected_catalog_identity_binding_sha256=(expected_catalog_identity_binding_sha256),
+        expected_discovery_evidence_sha256=expected_discovery_evidence_sha256,
         expected_provider_name=expected_provider_name,
     )
 
@@ -513,6 +596,9 @@ def _issue_trusted_generation_verification(
             benchmark_report_sha256=request.benchmark_report_sha256,
             case_id=request.case_id,
             exact_model_id=request.exact_model_id,
+            canonical_model_id=request.canonical_model_id,
+            catalog_identity_binding_sha256=request.catalog_identity_binding_sha256,
+            discovery_evidence_sha256=request.discovery_evidence_sha256,
             expected_provider_name=request.expected_provider_name,
             usage_record=request.usage_record,
         )
@@ -562,6 +648,9 @@ def _issue_trusted_generation_verification(
             attestation,
             usage_record=request.usage_record,
             expected_exact_model=request.exact_model_id,
+            expected_canonical_model=request.canonical_model_id,
+            expected_catalog_identity_binding_sha256=(request.catalog_identity_binding_sha256),
+            expected_discovery_evidence_sha256=request.discovery_evidence_sha256,
             expected_provider_name=request.expected_provider_name,
         )
         bindings.append(
@@ -569,6 +658,9 @@ def _issue_trusted_generation_verification(
                 benchmark_report_sha256=request.benchmark_report_sha256,
                 case_id=request.case_id,
                 exact_model_id=request.exact_model_id,
+                canonical_model_id=request.canonical_model_id,
+                catalog_identity_binding_sha256=(request.catalog_identity_binding_sha256),
+                discovery_evidence_sha256=request.discovery_evidence_sha256,
                 expected_provider_name=request.expected_provider_name,
                 usage_record_sha256=_usage_record_sha256(request.usage_record),
                 attestation=attestation,

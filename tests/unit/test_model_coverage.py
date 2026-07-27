@@ -235,6 +235,7 @@ def _usage(role: str, model_id: str, request_id: str) -> UsageRecord:
         execution_evidence=ExecutionEvidenceKind.REAL,
         requested_model=model_id,
         returned_model=model_id,
+        actual_model=model_id,
         provider="approved-provider",
         model_family=model_id.split("/", 1)[0],
         timestamp=started_at,
@@ -245,6 +246,7 @@ def _usage(role: str, model_id: str, request_id: str) -> UsageRecord:
         accounted_cost_usd=0.01,
         routing={
             "generation_id": generation_id,
+            "selected_model": model_id,
             "selected_provider_endpoint": "approved-provider",
             "router_strategy": "direct",
             "finish_reason": "stop",

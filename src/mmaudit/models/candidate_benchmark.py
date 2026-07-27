@@ -20,7 +20,9 @@ from mmaudit.benchmark.models import (
 from mmaudit.config import AuditConfig
 from mmaudit.models.discovery import (
     OpenRouterModelDiscoveryEvidence,
+    OpenRouterModelDiscoveryPayload,
     OpenRouterModelDiscoveryRunManifest,
+    validate_openrouter_model_discovery,
 )
 from mmaudit.models.endpoint_snapshots import validate_openrouter_endpoint_snapshot
 from mmaudit.models.identifiers import (
@@ -427,6 +429,7 @@ async def run_candidate_registry_benchmarks(
                 candidate=candidate,
                 target=target,
                 endpoint_evidence=evidence_by_model[candidate.exact_model_id],
+                discovery_manifest=discovery_manifest,
                 operator_api_key=operator_api_key,
                 reasoning=reasoning,
                 factory=factory,
@@ -505,6 +508,7 @@ async def _execute_candidate(
     candidate: CandidateModel,
     target: ModelBenchmarkTarget,
     endpoint_evidence: OpenRouterModelDiscoveryEvidence,
+    discovery_manifest: OpenRouterModelDiscoveryRunManifest,
     operator_api_key: str,
     reasoning: OpenRouterReasoning | None,
     factory: CandidateBenchmarkClientFactory,
@@ -551,6 +555,7 @@ async def _execute_candidate(
                 len(usage.records) - before_usage,
             )
         try:
+            models_payload = await client.get_certification_model_metadata()
             endpoint_payload = await client.get_model_endpoint_metadata(candidate.exact_model_id)
             zdr_payload = await client.list_zdr_endpoints()
             current_endpoint_evidence = validate_openrouter_endpoint_snapshot(
@@ -564,11 +569,27 @@ async def _execute_candidate(
             )
             if current_endpoint_evidence != endpoint_evidence.endpoint_snapshot:
                 raise ValueError("current endpoint metadata differs from frozen discovery evidence")
+            current_model_evidence = validate_openrouter_model_discovery(
+                exact_model_id=candidate.exact_model_id,
+                models_payload=models_payload,
+                endpoint_snapshot=current_endpoint_evidence,
+            )
+            frozen_model_evidence = OpenRouterModelDiscoveryPayload.model_validate(
+                endpoint_evidence.model_dump(
+                    mode="json",
+                    exclude={"provenance", "discovery_evidence_sha256"},
+                )
+            )
+            if current_model_evidence != frozen_model_evidence:
+                raise ValueError("current model metadata differs from frozen discovery evidence")
             if reasoning is not None and "reasoning" not in (
                 current_endpoint_evidence.endpoints[0].supported_parameters
             ):
                 raise ValueError("current endpoint does not support requested reasoning")
-            client.register_certification_endpoint_snapshot(evidence=current_endpoint_evidence)
+            client.register_certification_model_discovery(
+                evidence=endpoint_evidence,
+                manifest=discovery_manifest,
+            )
         except Exception:
             return (
                 await _unverified_failure_report(

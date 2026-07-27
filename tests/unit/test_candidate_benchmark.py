@@ -138,6 +138,12 @@ class _MockClientFactory:
                     request=request,
                     json={"data": [_endpoint(candidate_spec)]},
                 )
+            if request.method == "GET" and request.url.path.endswith("/models"):
+                return httpx.Response(
+                    200,
+                    request=request,
+                    json={"data": [_catalog_model(candidate_spec)]},
+                )
             if request.method == "GET" and request.url.path.endswith("/endpoints"):
                 endpoint = _endpoint(candidate_spec)
                 if candidate.exact_model_id in self.pricing_drift_models:

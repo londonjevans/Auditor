@@ -551,6 +551,9 @@ class TrustedBenchmarkVerificationEvidence(StrictModel):
         "mmaudit-deterministic-benchmark-verifier"
     )
     exact_model_id: str = Field(pattern=_MODEL_PATTERN, max_length=300)
+    canonical_model_id: str = Field(pattern=_MODEL_PATTERN, max_length=300)
+    catalog_identity_binding_sha256: str = Field(pattern=_SHA256_PATTERN)
+    discovery_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
     benchmark_report_sha256: str = Field(pattern=_SHA256_PATTERN)
     benchmark_corpus_sha256: str = Field(pattern=_SHA256_PATTERN)
     benchmark_ground_truth_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -572,7 +575,7 @@ class TrustedBenchmarkVerificationEvidence(StrictModel):
     valid: Literal[True] = True
     verification_sha256: str = Field(pattern=_SHA256_PATTERN)
 
-    @field_validator("exact_model_id")
+    @field_validator("exact_model_id", "canonical_model_id")
     @classmethod
     def model_id_is_exact(cls, value: str) -> str:
         return _validate_exact_model_id(value)
@@ -608,6 +611,13 @@ class TrustedBenchmarkVerificationEvidence(StrictModel):
             raise ValueError("verified benchmark request and generation IDs must be unique")
         if set(generation_ids) != set(attestation_ids):
             raise ValueError("verified benchmark usage and generation evidence differ")
+        if self.catalog_identity_binding_sha256 != canonical_sha256(
+            {
+                "canonical_slug": self.canonical_model_id,
+                "id": self.exact_model_id,
+            }
+        ):
+            raise ValueError("verified benchmark catalog identity binding is inconsistent")
         attestations = {
             attestation.generation_id: attestation for attestation in self.generation_attestations
         }
@@ -620,6 +630,9 @@ class TrustedBenchmarkVerificationEvidence(StrictModel):
                 attestations[generation_id],
                 usage_record=record,
                 expected_exact_model=self.exact_model_id,
+                expected_canonical_model=self.canonical_model_id,
+                expected_catalog_identity_binding_sha256=(self.catalog_identity_binding_sha256),
+                expected_discovery_evidence_sha256=self.discovery_evidence_sha256,
                 expected_provider_name=provider_name,
             )
         expected_generation_hash = canonical_sha256(
@@ -638,11 +651,20 @@ def verify_and_seal_trusted_benchmark_evidence(
     report: ModelBenchmarkReport,
     corpus: ModelBenchmarkSuite,
     exact_model_id: str,
+    canonical_model_id: str,
+    discovery_evidence_sha256: str,
     trusted_generation_verification: TrustedGenerationVerification,
 ) -> TrustedBenchmarkVerificationEvidence:
     """Recompute and seal one model result after authenticated generation re-fetches."""
 
     exact_model_id = _validate_exact_model_id(exact_model_id)
+    canonical_model_id = _validate_exact_model_id(canonical_model_id)
+    catalog_identity_binding_sha256 = canonical_sha256(
+        {
+            "canonical_slug": canonical_model_id,
+            "id": exact_model_id,
+        }
+    )
     verify_model_benchmark_report_structure(report, corpus=corpus)
     if type(trusted_generation_verification) is not TrustedGenerationVerification:
         raise ValueError("REAL benchmark qualification requires trusted generation verification")
@@ -670,6 +692,9 @@ def verify_and_seal_trusted_benchmark_evidence(
                 benchmark_report_sha256=report.report_sha256,
                 case_id=case.case_id,
                 exact_model_id=exact_model_id,
+                canonical_model_id=canonical_model_id,
+                catalog_identity_binding_sha256=(catalog_identity_binding_sha256),
+                discovery_evidence_sha256=discovery_evidence_sha256,
                 usage_record=record,
                 expected_provider_name=provider_name,
             )
@@ -722,6 +747,9 @@ def verify_and_seal_trusted_benchmark_evidence(
     )
     return _seal_trusted_benchmark_verification(
         exact_model_id=exact_model_id,
+        canonical_model_id=canonical_model_id,
+        catalog_identity_binding_sha256=catalog_identity_binding_sha256,
+        discovery_evidence_sha256=discovery_evidence_sha256,
         benchmark_report_sha256=report.report_sha256,
         benchmark_corpus_sha256=corpus.corpus_sha256,
         benchmark_ground_truth_sha256=corpus.ground_truth_sha256,
@@ -738,6 +766,9 @@ def verify_and_seal_trusted_benchmark_evidence(
 def _seal_trusted_benchmark_verification(
     *,
     exact_model_id: str,
+    canonical_model_id: str,
+    catalog_identity_binding_sha256: str,
+    discovery_evidence_sha256: str,
     benchmark_report_sha256: str,
     benchmark_corpus_sha256: str,
     benchmark_ground_truth_sha256: str,
@@ -756,6 +787,9 @@ def _seal_trusted_benchmark_verification(
         "schema_version": "1.0",
         "verified_by": "mmaudit-deterministic-benchmark-verifier",
         "exact_model_id": exact_model_id,
+        "canonical_model_id": canonical_model_id,
+        "catalog_identity_binding_sha256": catalog_identity_binding_sha256,
+        "discovery_evidence_sha256": discovery_evidence_sha256,
         "benchmark_report_sha256": benchmark_report_sha256,
         "benchmark_corpus_sha256": benchmark_corpus_sha256,
         "benchmark_ground_truth_sha256": benchmark_ground_truth_sha256,

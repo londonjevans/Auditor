@@ -152,8 +152,24 @@ def candidate_generation_verification_requests(
             if (
                 record.requested_model != candidate.exact_model_id
                 or record.returned_model != candidate.exact_model_id
+                or record.actual_model
+                not in {
+                    candidate.exact_model_id,
+                    candidate.canonical_model_slug,
+                }
                 or record.actual_provider_endpoint != candidate.approved_provider_endpoint
                 or record.routing.get("selected_provider_name") != candidate.approved_provider_name
+                or record.routing.get("selected_model") != record.actual_model
+                or record.routing.get("canonical_model") != candidate.canonical_model_slug
+                or record.routing.get("catalog_identity_binding_sha256")
+                != canonical_sha256(
+                    {
+                        "canonical_slug": candidate.canonical_model_slug,
+                        "id": candidate.exact_model_id,
+                    }
+                )
+                or record.routing.get("discovery_evidence_sha256")
+                != candidate.discovery_evidence_sha256
                 or record.routing.get("endpoint_snapshot_sha256")
                 != candidate.endpoint_snapshot_sha256
                 or record.routing.get("endpoint_pricing_sha256")
@@ -165,6 +181,14 @@ def candidate_generation_verification_requests(
                     benchmark_report_sha256=report.report_sha256,
                     case_id=case.case_id,
                     exact_model_id=candidate.exact_model_id,
+                    canonical_model_id=candidate.canonical_model_slug,
+                    catalog_identity_binding_sha256=canonical_sha256(
+                        {
+                            "canonical_slug": candidate.canonical_model_slug,
+                            "id": candidate.exact_model_id,
+                        }
+                    ),
+                    discovery_evidence_sha256=candidate.discovery_evidence_sha256,
                     expected_provider_name=candidate.approved_provider_name,
                     usage_record=record,
                 )
@@ -468,13 +492,31 @@ def run_qualification_workflow(
                 report=report,
                 corpus=benchmark_suite,
                 exact_model_id=model_id,
+                canonical_model_id=candidate.canonical_model_slug,
+                discovery_evidence_sha256=candidate.discovery_evidence_sha256,
                 trusted_generation_verification=trusted_generation_verification,
             )
             if any(
                 record.requested_model != candidate.exact_model_id
                 or record.returned_model != candidate.exact_model_id
+                or record.actual_model
+                not in {
+                    candidate.exact_model_id,
+                    candidate.canonical_model_slug,
+                }
                 or record.actual_provider_endpoint != candidate.approved_provider_endpoint
                 or record.routing.get("selected_provider_name") != candidate.approved_provider_name
+                or record.routing.get("selected_model") != record.actual_model
+                or record.routing.get("canonical_model") != candidate.canonical_model_slug
+                or record.routing.get("catalog_identity_binding_sha256")
+                != canonical_sha256(
+                    {
+                        "canonical_slug": candidate.canonical_model_slug,
+                        "id": candidate.exact_model_id,
+                    }
+                )
+                or record.routing.get("discovery_evidence_sha256")
+                != candidate.discovery_evidence_sha256
                 or record.routing.get("endpoint_snapshot_sha256")
                 != candidate.endpoint_snapshot_sha256
                 or record.routing.get("endpoint_pricing_sha256")

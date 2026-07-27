@@ -194,6 +194,7 @@ def _usage_record(
         execution_evidence=execution_evidence,
         requested_model=target.model_id,
         returned_model=target.model_id,
+        actual_model=target.model_id,
         provider="Synthetic",
         model_family=target.model_id,
         timestamp=started_at,
@@ -204,6 +205,7 @@ def _usage_record(
         accounted_cost_usd=0.01,
         routing={
             "generation_id": generation_id,
+            "selected_model": target.model_id,
             "selected_provider_endpoint": endpoint,
             "router_strategy": "direct",
             "router_attempt": 1,
@@ -268,18 +270,28 @@ def _as_structural_real(report: ModelBenchmarkReport) -> ModelBenchmarkReport:
     for case in payload["results"][0]["cases"]:
         record = UsageRecord.model_validate(case["usage_record"])
         assert record.openrouter_generation_id is not None
-        assert record.returned_model is not None
+        assert record.actual_model is not None
         assert record.started_at is not None
         case["execution_evidence"] = ExecutionEvidenceKind.REAL.value
         case["usage_record"]["execution_evidence"] = ExecutionEvidenceKind.REAL.value
         case["usage_record"]["routing"]["certification_request"] = True
+        case["usage_record"]["routing"]["canonical_model"] = record.requested_model
         case["usage_record"]["routing"]["endpoint_snapshot_sha256"] = "1" * 64
         case["usage_record"]["routing"]["endpoint_pricing_sha256"] = "2" * 64
+        case["usage_record"]["routing"]["catalog_identity_binding_sha256"] = canonical_sha256(
+            {
+                "canonical_slug": record.requested_model,
+                "id": record.requested_model,
+            }
+        )
+        case["usage_record"]["routing"]["catalog_snapshot_sha256"] = "3" * 64
+        case["usage_record"]["routing"]["discovery_provenance_sha256"] = "4" * 64
+        case["usage_record"]["routing"]["discovery_evidence_sha256"] = "5" * 64
         case["generation_evidence"] = validate_openrouter_generation_payload(
             {
                 "data": {
                     "id": record.openrouter_generation_id,
-                    "model": record.returned_model,
+                    "model": record.actual_model,
                     "provider_name": "Synthetic",
                     "finish_reason": "stop",
                     "native_finish_reason": None,

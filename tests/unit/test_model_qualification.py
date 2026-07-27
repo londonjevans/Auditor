@@ -227,6 +227,8 @@ def _usage_record(
     generation_id = f"generation-{request_id}"
     routing: dict[str, object] = {
         "generation_id": generation_id,
+        "selected_model": candidate.canonical_model_slug,
+        "canonical_model": candidate.canonical_model_slug,
         "selected_provider_endpoint": candidate.approved_provider_endpoint,
         "selected_provider_name": candidate.approved_provider_name,
         "router_strategy": "direct",
@@ -241,6 +243,15 @@ def _usage_record(
         "certification_request": True,
         "endpoint_snapshot_sha256": candidate.endpoint_snapshot_sha256,
         "endpoint_pricing_sha256": candidate.pricing_snapshot_sha256,
+        "catalog_identity_binding_sha256": canonical_sha256(
+            {
+                "canonical_slug": candidate.canonical_model_slug,
+                "id": candidate.exact_model_id,
+            }
+        ),
+        "catalog_snapshot_sha256": _sha(f"catalog-{candidate.exact_model_id}"),
+        "discovery_provenance_sha256": _sha(f"discovery-provenance-{candidate.exact_model_id}"),
+        "discovery_evidence_sha256": candidate.discovery_evidence_sha256,
         "validation_status": "valid",
         "zdr_requested": True,
         "data_collection": "deny",
@@ -260,6 +271,7 @@ def _usage_record(
         execution_evidence=execution_evidence,
         requested_model=candidate.exact_model_id,
         returned_model=candidate.exact_model_id,
+        actual_model=candidate.canonical_model_slug,
         provider="Approved Provider",
         model_family=candidate.exact_model_id,
         timestamp=_NOW,
@@ -290,14 +302,14 @@ def _usage_record(
 
 def _generation_attestation(record: UsageRecord) -> OpenRouterGenerationEvidence:
     assert record.openrouter_generation_id is not None
-    assert record.returned_model is not None
+    assert record.actual_model is not None
     assert record.finish_reason is not None
     assert record.reported_cost_usd is not None
     return validate_openrouter_generation_payload(
         {
             "data": {
                 "id": record.openrouter_generation_id,
-                "model": record.returned_model,
+                "model": record.actual_model,
                 "provider_name": record.routing["selected_provider_name"],
                 "finish_reason": record.finish_reason,
                 "native_finish_reason": None,
@@ -345,6 +357,14 @@ def _test_trusted_benchmark_evidence(
         "schema_version": "1.0",
         "verified_by": "mmaudit-deterministic-benchmark-verifier",
         "exact_model_id": candidate.exact_model_id,
+        "canonical_model_id": candidate.canonical_model_slug,
+        "catalog_identity_binding_sha256": canonical_sha256(
+            {
+                "canonical_slug": candidate.canonical_model_slug,
+                "id": candidate.exact_model_id,
+            }
+        ),
+        "discovery_evidence_sha256": candidate.discovery_evidence_sha256,
         "benchmark_report_sha256": report_sha256,
         "benchmark_corpus_sha256": corpus_sha256,
         "benchmark_ground_truth_sha256": ground_truth_sha256,

@@ -365,6 +365,7 @@ def _real_model_usage(now: datetime) -> list[UsageRecord]:
             execution_evidence=ExecutionEvidenceKind.REAL,
             requested_model=(model_id := role_models[role]),
             returned_model=model_id,
+            actual_model=model_id,
             provider="approved-provider",
             model_family=model_id,
             timestamp=now,
@@ -375,6 +376,8 @@ def _real_model_usage(now: datetime) -> list[UsageRecord]:
             accounted_cost_usd=0.01,
             routing={
                 "generation_id": f"generation-{index:02d}",
+                "selected_model": model_id,
+                "canonical_model": model_id,
                 "selected_provider_endpoint": "approved-provider",
                 "router_strategy": "direct",
                 "router_attempt": 1,
@@ -388,6 +391,15 @@ def _real_model_usage(now: datetime) -> list[UsageRecord]:
                 "certification_request": True,
                 "endpoint_snapshot_sha256": "1" * 64,
                 "endpoint_pricing_sha256": "2" * 64,
+                "catalog_identity_binding_sha256": canonical_sha256(
+                    {
+                        "canonical_slug": model_id,
+                        "id": model_id,
+                    }
+                ),
+                "catalog_snapshot_sha256": "3" * 64,
+                "discovery_provenance_sha256": "4" * 64,
+                "discovery_evidence_sha256": "5" * 64,
                 "validation_status": "valid",
                 "zdr_requested": True,
                 "data_collection": "deny",
@@ -2428,11 +2440,20 @@ def test_high_critical_cross_examination_requires_two_lineages(config_factory) -
                     "role": f"specialist:falsifier:cross_exam_{index}",
                     "requested_model": model_id,
                     "returned_model": model_id,
+                    "actual_model": model_id,
                     "model_family": model_id,
                     "openrouter_generation_id": generation_id,
                     "routing": {
                         **template.routing,
                         "generation_id": generation_id,
+                        "selected_model": model_id,
+                        "canonical_model": model_id,
+                        "catalog_identity_binding_sha256": canonical_sha256(
+                            {
+                                "canonical_slug": model_id,
+                                "id": model_id,
+                            }
+                        ),
                     },
                 }
             )

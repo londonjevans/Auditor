@@ -166,16 +166,28 @@ def _as_real_report(
         routing = dict(usage["routing"])
         routing.update(
             {
+                "selected_model": candidate.canonical_model_slug,
+                "canonical_model": candidate.canonical_model_slug,
                 "selected_provider_endpoint": candidate.approved_provider_endpoint,
                 "selected_provider_name": candidate.approved_provider_name,
                 "certification_request": True,
                 "endpoint_snapshot_sha256": candidate.endpoint_snapshot_sha256,
                 "endpoint_pricing_sha256": candidate.pricing_snapshot_sha256,
+                "catalog_identity_binding_sha256": canonical_sha256(
+                    {
+                        "canonical_slug": candidate.canonical_model_slug,
+                        "id": candidate.exact_model_id,
+                    }
+                ),
+                "catalog_snapshot_sha256": "6" * 64,
+                "discovery_provenance_sha256": "7" * 64,
+                "discovery_evidence_sha256": candidate.discovery_evidence_sha256,
             }
         )
         usage.update(
             {
                 "execution_evidence": ExecutionEvidenceKind.REAL.value,
+                "actual_model": candidate.canonical_model_slug,
                 "provider": candidate.approved_provider_name,
                 "configured_provider_endpoints": [candidate.approved_provider_endpoint],
                 "actual_provider_endpoint": candidate.approved_provider_endpoint,
@@ -581,6 +593,20 @@ async def test_candidate_generation_requests_bind_exact_report_usage() -> None:
     assert len(requests) == len(report.results[0].cases)
     assert {item.benchmark_report_sha256 for item in requests} == {report.report_sha256}
     assert {item.exact_model_id for item in requests} == {MODEL_ID}
+    assert {item.canonical_model_id for item in requests} == {
+        registry.candidates[0].canonical_model_slug
+    }
+    assert {item.catalog_identity_binding_sha256 for item in requests} == {
+        canonical_sha256(
+            {
+                "canonical_slug": registry.candidates[0].canonical_model_slug,
+                "id": MODEL_ID,
+            }
+        )
+    }
+    assert {item.discovery_evidence_sha256 for item in requests} == {
+        registry.candidates[0].discovery_evidence_sha256
+    }
     assert {item.expected_provider_name for item in requests} == {
         registry.candidates[0].approved_provider_name
     }

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import re
 from typing import Any
@@ -44,6 +46,7 @@ def is_creditable_usage_record(
         record.role,
         record.requested_model,
         record.returned_model,
+        record.actual_model,
         record.provider,
         record.actual_provider_endpoint,
         record.openrouter_generation_id,
@@ -95,6 +98,7 @@ def is_creditable_usage_record(
     routing = record.routing
     base_valid = (
         routing.get("generation_id") == record.openrouter_generation_id
+        and routing.get("selected_model") == record.actual_model
         and routing.get("selected_provider_endpoint") == actual_endpoint
         and routing.get("router_strategy") in {"direct", "fallback"}
         and routing.get("finish_reason") == record.finish_reason
@@ -117,8 +121,26 @@ def is_creditable_usage_record(
         return False
     if not certification_request:
         return True
+    canonical_model = routing.get("canonical_model")
+    actual_model = record.actual_model
+    expected_identity_hash = (
+        hashlib.sha256(
+            json.dumps(
+                {
+                    "canonical_slug": canonical_model,
+                    "id": record.requested_model,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        if isinstance(canonical_model, str)
+        else None
+    )
     return (
         not record.fallback_used
+        and actual_model in {record.requested_model, canonical_model}
+        and routing.get("catalog_identity_binding_sha256") == expected_identity_hash
         and len(record.configured_provider_endpoints) == 1
         and routing.get("provider_fallbacks_allowed") is False
         and routing.get("router_strategy") == "direct"
@@ -127,6 +149,10 @@ def is_creditable_usage_record(
         and routing.get("router_pipeline") == []
         and _is_sha256(routing.get("endpoint_snapshot_sha256"))
         and _is_sha256(routing.get("endpoint_pricing_sha256"))
+        and _is_sha256(routing.get("catalog_identity_binding_sha256"))
+        and _is_sha256(routing.get("catalog_snapshot_sha256"))
+        and _is_sha256(routing.get("discovery_provenance_sha256"))
+        and _is_sha256(routing.get("discovery_evidence_sha256"))
     )
 
 

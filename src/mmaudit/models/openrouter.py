@@ -35,6 +35,7 @@ from mmaudit.models.discovery import (
     OpenRouterDiscoveryRunProvenance,
     OpenRouterModelDiscoveryEvidence,
     OpenRouterModelDiscoveryPayload,
+    OpenRouterModelDiscoveryRunManifest,
     _issue_real_openrouter_discovery_run,
     openrouter_endpoint_query,
     validate_openrouter_model_discovery,
@@ -67,6 +68,7 @@ from mmaudit.orchestration.budgets import (
     Reservation,
     UnprovenCostBoundError,
 )
+from mmaudit.reporting.json_report import stable_json
 
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
 
@@ -190,6 +192,7 @@ class OpenRouterReasoning:
 class CompletionEnvelope:
     generation_id: str
     returned_model: str
+    selected_model: str
     provider: str
     finish_reason: str
     native_finish_reason: str | None
@@ -230,6 +233,20 @@ class _RegisteredEndpointPolicy:
             if normalized in {identity.casefold() for identity in endpoint.provider_identities}
         ]
         return matches[0] if len(matches) == 1 else None
+
+
+@dataclass(frozen=True)
+class _RegisteredModelIdentity:
+    exact_model_id: str
+    canonical_slug: str
+    catalog_identity_binding_sha256: str
+    catalog_snapshot_sha256: str
+    discovery_provenance_sha256: str
+    discovery_evidence_sha256: str
+
+    @property
+    def accepted_response_models(self) -> frozenset[str]:
+        return frozenset((self.exact_model_id, self.canonical_slug))
 
 
 class OpenRouterError(RuntimeError):
@@ -359,6 +376,7 @@ class OpenRouterClient:
         self.provider_policy = provider_policy or OpenRouterProviderPolicy()
         self.reasoning = reasoning
         self._endpoint_pricing: dict[str, _RegisteredEndpointPolicy] = {}
+        self._model_identities: dict[str, _RegisteredModelIdentity] = {}
         self._metadata_observations: dict[str, str] = {}
         self._authentication_validated = False
         if self.provider_policy.certification and not self.privacy.require_zdr:
@@ -671,6 +689,9 @@ class OpenRouterClient:
                 benchmark_report_sha256=request.benchmark_report_sha256,
                 case_id=request.case_id,
                 exact_model_id=request.exact_model_id,
+                canonical_model_id=request.canonical_model_id,
+                catalog_identity_binding_sha256=request.catalog_identity_binding_sha256,
+                discovery_evidence_sha256=request.discovery_evidence_sha256,
                 expected_provider_name=request.expected_provider_name,
                 usage_record=request.usage_record,
             )
@@ -728,6 +749,88 @@ class OpenRouterClient:
                 "endpoint pricing may only be registered for one certification endpoint"
             )
         self.register_endpoint_snapshot(evidence=evidence)
+
+    def register_certification_model_discovery(
+        self,
+        *,
+        evidence: OpenRouterModelDiscoveryEvidence,
+        manifest: OpenRouterModelDiscoveryRunManifest | None = None,
+    ) -> None:
+        """Bind one exact requested/canonical identity from frozen REAL discovery."""
+
+        if not self.provider_policy.certification:
+            raise OpenRouterCostControlError(
+                "model discovery may only be registered for certification"
+            )
+        if not isinstance(evidence, OpenRouterModelDiscoveryEvidence):
+            raise OpenRouterModelError("model discovery evidence has an invalid type")
+        if evidence.provenance.execution_evidence is not ExecutionEvidenceKind.REAL:
+            raise OpenRouterModelError("model discovery evidence is not REAL")
+        if manifest is None:
+            OpenRouterClient._validate_transport_provenance(self)
+            endpoint_binding = next(
+                (
+                    item
+                    for item in evidence.provenance.endpoint_metadata_bindings
+                    if item.exact_model_id == evidence.exact_model_id
+                ),
+                None,
+            )
+            if (
+                type(self) is not _TRUSTED_OPENROUTER_CLIENT_TYPE
+                or self.execution_evidence is not ExecutionEvidenceKind.REAL
+                or not self._owns_client
+                or not self._authentication_validated
+                or endpoint_binding is None
+                or self._metadata_observations.get(OPENROUTER_CATALOG_QUERY)
+                != evidence.provenance.catalog_snapshot_sha256
+                or self._metadata_observations.get(OPENROUTER_ZDR_QUERY)
+                != evidence.provenance.zdr_snapshot_sha256
+                or self._metadata_observations.get(endpoint_binding.api_query)
+                != endpoint_binding.response_snapshot_sha256
+            ):
+                raise OpenRouterPrivacyError(
+                    "unmanifested model discovery must match this authenticated REAL session"
+                )
+        else:
+            if not isinstance(manifest, OpenRouterModelDiscoveryRunManifest):
+                raise OpenRouterModelError("model discovery manifest has an invalid type")
+            if manifest.run_provenance != evidence.provenance:
+                raise OpenRouterModelError("model discovery manifest has different run provenance")
+            matching_artifacts = tuple(
+                item
+                for item in manifest.artifacts
+                if item.exact_model_id == evidence.exact_model_id
+            )
+            expected_artifact_sha256 = hashlib.sha256(
+                stable_json(evidence).encode("utf-8")
+            ).hexdigest()
+            if (
+                len(matching_artifacts) != 1
+                or matching_artifacts[0].approved_provider_endpoint
+                != evidence.approved_provider_endpoint
+                or matching_artifacts[0].discovery_evidence_sha256
+                != evidence.discovery_evidence_sha256
+                or matching_artifacts[0].artifact_sha256 != expected_artifact_sha256
+            ):
+                raise OpenRouterModelError(
+                    "model discovery manifest does not bind the exact evidence artifact"
+                )
+        identity = _RegisteredModelIdentity(
+            exact_model_id=evidence.exact_model_id,
+            canonical_slug=evidence.canonical_slug,
+            catalog_identity_binding_sha256=evidence.catalog_identity_binding_sha256,
+            catalog_snapshot_sha256=evidence.provenance.catalog_snapshot_sha256,
+            discovery_provenance_sha256=evidence.provenance.provenance_sha256,
+            discovery_evidence_sha256=evidence.discovery_evidence_sha256,
+        )
+        existing = self._model_identities.get(evidence.exact_model_id)
+        if existing is not None and existing != identity:
+            raise OpenRouterModelError(
+                "conflicting frozen model identity evidence cannot replace a binding"
+            )
+        self.register_endpoint_snapshot(evidence=evidence.endpoint_snapshot)
+        self._model_identities[evidence.exact_model_id] = identity
 
     def register_endpoint_snapshot(
         self,
@@ -1265,6 +1368,7 @@ class OpenRouterClient:
                 requested_model=model,
                 provider_policy=self.provider_policy,
                 endpoint_policy=endpoint_policy,
+                model_identity=self._model_identities.get(model),
             )
             initial_usage = envelope.usage
             initial_cost = _optional_cost_decimal(initial_usage.get("cost"))
@@ -1300,6 +1404,7 @@ class OpenRouterClient:
                     execution_evidence=self.execution_evidence,
                     requested_model=model,
                     returned_model=envelope.returned_model,
+                    actual_model=envelope.selected_model,
                     provider=envelope.provider,
                     model_family=model_family(model),
                     timestamp=started_at,
@@ -1513,6 +1618,12 @@ class OpenRouterClient:
         return {
             "generation_id": envelope.generation_id,
             "provider": envelope.provider,
+            "selected_model": envelope.selected_model,
+            "canonical_model": (
+                self._model_identities[envelope.returned_model].canonical_slug
+                if envelope.returned_model in self._model_identities
+                else envelope.returned_model
+            ),
             "selected_provider_endpoint": envelope.selected_provider,
             "selected_provider_name": envelope.selected_provider_name,
             "router_strategy": envelope.router_metadata["strategy"],
@@ -1534,6 +1645,26 @@ class OpenRouterClient:
             ),
             "endpoint_pricing_sha256": (
                 endpoint_pricing.pricing_sha256 if endpoint_pricing is not None else None
+            ),
+            "catalog_identity_binding_sha256": (
+                self._model_identities[envelope.returned_model].catalog_identity_binding_sha256
+                if envelope.returned_model in self._model_identities
+                else None
+            ),
+            "catalog_snapshot_sha256": (
+                self._model_identities[envelope.returned_model].catalog_snapshot_sha256
+                if envelope.returned_model in self._model_identities
+                else None
+            ),
+            "discovery_provenance_sha256": (
+                self._model_identities[envelope.returned_model].discovery_provenance_sha256
+                if envelope.returned_model in self._model_identities
+                else None
+            ),
+            "discovery_evidence_sha256": (
+                self._model_identities[envelope.returned_model].discovery_evidence_sha256
+                if envelope.returned_model in self._model_identities
+                else None
             ),
             "configured_provider_only": list(self.provider_policy.only),
             "configured_provider_order": list(self.provider_policy.order),
@@ -1878,6 +2009,7 @@ def _validate_completion_envelope(
     requested_model: str,
     provider_policy: OpenRouterProviderPolicy,
     endpoint_policy: _RegisteredEndpointPolicy | None,
+    model_identity: _RegisteredModelIdentity | None,
 ) -> CompletionEnvelope:
     generation_id = _required_safe_string(payload.get("id"), field="generation ID")
     raw_header_generation_id = _header_value(headers, "x-generation-id")
@@ -1935,6 +2067,7 @@ def _validate_completion_envelope(
     usage = _validate_usage(payload.get("usage"))
     (
         router_metadata,
+        selected_model,
         selected_provider,
         selected_provider_name,
         router_attempt,
@@ -1947,11 +2080,13 @@ def _validate_completion_envelope(
         response_provider=response_provider,
         provider_policy=provider_policy,
         endpoint_policy=endpoint_policy,
+        model_identity=model_identity,
     )
     provider = response_provider or selected_provider_name
     return CompletionEnvelope(
         generation_id=generation_id,
         returned_model=returned_model,
+        selected_model=selected_model,
         provider=provider,
         finish_reason=finish_reason,
         native_finish_reason=native_finish_reason,
@@ -2008,8 +2143,10 @@ def _validate_router_metadata(
     response_provider: str | None,
     provider_policy: OpenRouterProviderPolicy,
     endpoint_policy: _RegisteredEndpointPolicy | None,
+    model_identity: _RegisteredModelIdentity | None,
 ) -> tuple[
     dict[str, Any],
+    str,
     str,
     str,
     int,
@@ -2063,7 +2200,12 @@ def _validate_router_metadata(
         selected[0].get("provider"),
         field="selected provider",
     )
-    if selected_model != requested_model:
+    accepted_response_models = frozenset((requested_model,))
+    if model_identity is not None:
+        if model_identity.exact_model_id != requested_model:
+            raise OpenRouterModelError("registered model identity does not match the request")
+        accepted_response_models = model_identity.accepted_response_models
+    if selected_model not in accepted_response_models:
         raise OpenRouterModelError("selected provider used a different exact model")
     selected_provider = _resolve_provider_endpoint(
         selected_provider_name,
@@ -2108,7 +2250,7 @@ def _validate_router_metadata(
             )
             status = attempt.get("status")
             if (
-                attempt_model != requested_model
+                attempt_model != selected_model
                 or not isinstance(status, int)
                 or isinstance(status, bool)
                 or not 100 <= status <= 599
@@ -2145,6 +2287,7 @@ def _validate_router_metadata(
         )
     return (
         value,
+        selected_model,
         selected_provider,
         selected_provider_name,
         router_attempt,

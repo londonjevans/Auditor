@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -35,14 +36,35 @@ from mmaudit.models.usage import UsageLedger, is_creditable_usage_record
 from mmaudit.orchestration.budgets import BudgetManager
 
 _MODEL = "alpha/atlas-secure"
+_CANONICAL_MODEL = "alpha/atlas-secure-20260727"
 _PROVIDER_ENDPOINT = "approved-provider"
 _PROVIDER_NAME = "Approved Provider"
 _GENERATION_ID = "gen-test_123"
 _STARTED = datetime(2026, 7, 27, 8, 0, tzinfo=UTC)
 _ENDED = datetime(2026, 7, 27, 8, 0, 1, tzinfo=UTC)
+_CATALOG_SNAPSHOT_SHA256 = "d" * 64
+_DISCOVERY_PROVENANCE_SHA256 = "e" * 64
+_DISCOVERY_EVIDENCE_SHA256 = "f" * 64
 
 
-def _generation_payload() -> dict[str, Any]:
+def _catalog_identity_binding(
+    *,
+    exact_model: str = _MODEL,
+    canonical_model: str = _CANONICAL_MODEL,
+) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "canonical_slug": canonical_model,
+                "id": exact_model,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+
+def _generation_payload(*, model: str = _CANONICAL_MODEL) -> dict[str, Any]:
     return {
         "data": {
             "api_type": "completions",
@@ -52,7 +74,7 @@ def _generation_payload() -> dict[str, Any]:
             "generation_time": 120,
             "id": _GENERATION_ID,
             "latency": 125,
-            "model": _MODEL,
+            "model": model,
             "native_finish_reason": "stop",
             "native_tokens_cached": 3,
             "native_tokens_completion": 7,
@@ -75,11 +97,14 @@ def _usage_record(
     *,
     execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.REAL,
     certification: bool = True,
+    actual_model: str = _CANONICAL_MODEL,
 ) -> UsageRecord:
     sha = "a" * 64
     routing = {
         "generation_id": _GENERATION_ID,
         "provider": _PROVIDER_NAME,
+        "selected_model": actual_model,
+        "canonical_model": _CANONICAL_MODEL,
         "selected_provider_endpoint": _PROVIDER_ENDPOINT,
         "selected_provider_name": _PROVIDER_NAME,
         "router_strategy": "direct",
@@ -96,6 +121,10 @@ def _usage_record(
         "provider_policy_sha256": "d" * 64,
         "endpoint_snapshot_sha256": "e" * 64,
         "endpoint_pricing_sha256": "f" * 64,
+        "catalog_identity_binding_sha256": _catalog_identity_binding(),
+        "catalog_snapshot_sha256": _CATALOG_SNAPSHOT_SHA256,
+        "discovery_provenance_sha256": _DISCOVERY_PROVENANCE_SHA256,
+        "discovery_evidence_sha256": _DISCOVERY_EVIDENCE_SHA256,
         "configured_provider_only": [_PROVIDER_ENDPOINT],
         "configured_provider_order": [],
         "provider_fallbacks_allowed": False,
@@ -115,6 +144,7 @@ def _usage_record(
         execution_evidence=execution_evidence,
         requested_model=_MODEL,
         returned_model=_MODEL,
+        actual_model=actual_model,
         provider=_PROVIDER_NAME,
         model_family="atlas",
         timestamp=_STARTED,
@@ -144,6 +174,27 @@ def _usage_record(
         substitution_detected=False,
         status="success",
         attempts=1,
+    )
+
+
+def _reconcile(
+    evidence: OpenRouterGenerationEvidence,
+    *,
+    usage_record: UsageRecord | None = None,
+    expected_canonical_model: str = _CANONICAL_MODEL,
+    expected_catalog_identity_binding_sha256: str | None = None,
+) -> OpenRouterGenerationEvidence:
+    return reconcile_generation_evidence(
+        evidence,
+        usage_record=usage_record or _usage_record(),
+        expected_exact_model=_MODEL,
+        expected_canonical_model=expected_canonical_model,
+        expected_catalog_identity_binding_sha256=(
+            expected_catalog_identity_binding_sha256
+            or _catalog_identity_binding(canonical_model=expected_canonical_model)
+        ),
+        expected_discovery_evidence_sha256=_DISCOVERY_EVIDENCE_SHA256,
+        expected_provider_name=_PROVIDER_NAME,
     )
 
 
@@ -252,12 +303,7 @@ def test_optional_native_token_metadata_is_not_fabricated(mode: str) -> None:
     assert evidence.native_completion_tokens is None
     assert evidence.reasoning_tokens is None
     assert evidence.cached_tokens is None
-    reconciled = reconcile_generation_evidence(
-        evidence,
-        usage_record=_usage_record(),
-        expected_exact_model=_MODEL,
-        expected_provider_name=_PROVIDER_NAME,
-    )
+    reconciled = _reconcile(evidence)
     assert reconciled.reasoning_tokens is None
     assert reconciled.cached_tokens is None
 
@@ -287,33 +333,90 @@ def test_real_generation_evidence_reconciles_creditable_certification_usage() ->
         require_certification=True,
     )
 
-    evidence = reconcile_generation_evidence(
-        _evidence(),
-        usage_record=usage,
-        expected_exact_model=_MODEL,
-        expected_provider_name=_PROVIDER_NAME,
-    )
+    evidence = _reconcile(_evidence(), usage_record=usage)
 
     assert evidence.generation_id == _GENERATION_ID
+
+
+def test_generation_evidence_accepts_requested_model_as_the_actual_provider_model() -> None:
+    usage = _usage_record(actual_model=_MODEL)
+    evidence = _evidence(payload=_generation_payload(model=_MODEL))
+
+    assert _reconcile(evidence, usage_record=usage).exact_model_id == _MODEL
+
+
+def test_canonical_generation_requires_frozen_catalog_identity_binding() -> None:
+    usage = _usage_record()
+    unbound_usage = usage.model_copy(
+        update={
+            "routing": {
+                **usage.routing,
+                "catalog_identity_binding_sha256": None,
+            }
+        }
+    )
+
+    assert not is_creditable_usage_record(
+        unbound_usage,
+        require_real=True,
+        require_certification=True,
+    )
+    with pytest.raises(
+        GenerationEvidenceValidationError,
+        match="different model identity binding",
+    ):
+        GenerationVerificationRequest(
+            benchmark_report_sha256="1" * 64,
+            case_id="case-unbound-canonical",
+            exact_model_id=_MODEL,
+            canonical_model_id=_CANONICAL_MODEL,
+            catalog_identity_binding_sha256=_catalog_identity_binding(),
+            discovery_evidence_sha256=_DISCOVERY_EVIDENCE_SHA256,
+            expected_provider_name=_PROVIDER_NAME,
+            usage_record=unbound_usage,
+        )
+
+
+def test_generation_verification_rejects_wrong_canonical_identity() -> None:
+    wrong_canonical = "alpha/other-canonical-20260727"
+
+    with pytest.raises(
+        GenerationEvidenceValidationError,
+        match="different model identity binding",
+    ):
+        GenerationVerificationRequest(
+            benchmark_report_sha256="1" * 64,
+            case_id="case-wrong-canonical",
+            exact_model_id=_MODEL,
+            canonical_model_id=wrong_canonical,
+            catalog_identity_binding_sha256=_catalog_identity_binding(
+                canonical_model=wrong_canonical
+            ),
+            discovery_evidence_sha256=_DISCOVERY_EVIDENCE_SHA256,
+            expected_provider_name=_PROVIDER_NAME,
+            usage_record=_usage_record(),
+        )
+
+
+def test_generation_evidence_rejects_actual_model_mismatch() -> None:
+    usage = _usage_record(actual_model=_MODEL)
+
+    with pytest.raises(GenerationEvidenceValidationError, match="actual provider model"):
+        _reconcile(_evidence(), usage_record=usage)
 
 
 def test_reconciliation_revalidates_the_evidence_self_hash() -> None:
     evidence = _evidence().model_copy(update={"provider_name": "Other Provider"})
 
     with pytest.raises(GenerationEvidenceValidationError, match="schema-valid"):
-        reconcile_generation_evidence(
-            evidence,
-            usage_record=_usage_record(),
-            expected_exact_model=_MODEL,
-            expected_provider_name=_PROVIDER_NAME,
-        )
+        _reconcile(evidence)
 
 
 @pytest.mark.parametrize(
     ("field", "value", "requested_generation_id", "message"),
     [
         ("id", "gen-other", "gen-other", "generation ID"),
-        ("model", "beta/other-secure", _GENERATION_ID, "expected exact model"),
+        ("model", "beta/other-secure", _GENERATION_ID, "actual provider model"),
         ("provider_name", "Other Provider", _GENERATION_ID, "expected provider"),
         ("finish_reason", "error", _GENERATION_ID, "finish reason"),
         ("native_finish_reason", "other", _GENERATION_ID, "native finish reason"),
@@ -341,12 +444,7 @@ def test_generation_evidence_rejects_usage_mismatches(
     )
 
     with pytest.raises(GenerationEvidenceValidationError, match=message):
-        reconcile_generation_evidence(
-            evidence,
-            usage_record=_usage_record(),
-            expected_exact_model=_MODEL,
-            expected_provider_name=_PROVIDER_NAME,
-        )
+        _reconcile(evidence)
 
 
 @pytest.mark.parametrize(
@@ -370,12 +468,7 @@ def test_self_hash_cannot_upgrade_nonreal_or_noncertification_evidence(
     )
 
     with pytest.raises(GenerationEvidenceValidationError):
-        reconcile_generation_evidence(
-            evidence,
-            usage_record=usage,
-            expected_exact_model=_MODEL,
-            expected_provider_name=_PROVIDER_NAME,
-        )
+        _reconcile(evidence, usage_record=usage)
 
 
 @pytest.mark.asyncio
@@ -545,6 +638,9 @@ async def test_mock_client_cannot_issue_trusted_generation_verification(
         benchmark_report_sha256="1" * 64,
         case_id="case-synthetic",
         exact_model_id=_MODEL,
+        canonical_model_id=_CANONICAL_MODEL,
+        catalog_identity_binding_sha256=_catalog_identity_binding(),
+        discovery_evidence_sha256=_DISCOVERY_EVIDENCE_SHA256,
         expected_provider_name=_PROVIDER_NAME,
         usage_record=_usage_record(),
     )
@@ -572,6 +668,9 @@ async def test_generation_verification_rejects_replayed_generation_before_transp
             benchmark_report_sha256="1" * 64,
             case_id=f"case-{index}",
             exact_model_id=_MODEL,
+            canonical_model_id=_CANONICAL_MODEL,
+            catalog_identity_binding_sha256=_catalog_identity_binding(),
+            discovery_evidence_sha256=_DISCOVERY_EVIDENCE_SHA256,
             expected_provider_name=_PROVIDER_NAME,
             usage_record=_usage_record(),
         )
@@ -593,6 +692,9 @@ def test_generation_verification_request_rejects_missing_generation_identity() -
             benchmark_report_sha256="1" * 64,
             case_id="case-synthetic",
             exact_model_id=_MODEL,
+            canonical_model_id=_CANONICAL_MODEL,
+            catalog_identity_binding_sha256=_catalog_identity_binding(),
+            discovery_evidence_sha256=_DISCOVERY_EVIDENCE_SHA256,
             expected_provider_name=_PROVIDER_NAME,
             usage_record=usage,
         )
