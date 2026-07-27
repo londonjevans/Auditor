@@ -13,7 +13,7 @@ REMAINING_CODE_DEFECTS: 11
 REMAINING_REAL_INTEGRATIONS: OpenRouter exact-model smoke/qualification/specialist review; Slither; Echidna; Medusa; Halmos; formal proof engine; rootless isolation; isolated replay; product benchmark reports
 BLOCKED_EXTERNAL_PREREQUISITES: Echidna, Medusa, Kontrol, Certora, rootless runtime/image, private holdout, and independently adjudicated expert comparison are not yet evidenced as available
 OPENROUTER_COST_USED_USD: 0.00
-LAST_CHECKPOINT_COMMIT: f2a782b7319ccad848df392f5d40da45fcc63283
+LAST_CHECKPOINT_COMMIT: 30e04caec21d9d01e1ed39fd98f288cf25a025a3
 
 ## Immutable baseline
 
@@ -229,6 +229,7 @@ LAST_CHECKPOINT_COMMIT: f2a782b7319ccad848df392f5d40da45fcc63283
   independently bound.
 - **Result:** `COMPLETE` for the false-COMPLETE code defect. Certified isolated
   replay remains an explicit external integration blocker.
+- **Checkpoint commit:** `30e04caec21d9d01e1ed39fd98f288cf25a025a3`.
 - **Exact next safe action:** Checkpoint this ticket, record its commit, and
   continue `EVAL-DEFECT-003`.
 

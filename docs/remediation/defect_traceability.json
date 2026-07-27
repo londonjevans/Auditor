@@ -22,7 +22,7 @@
       "regression_test": "tests/unit/test_assurance.py::test_failed_reproduction_attempt_never_satisfies_maximum_assurance",
       "runtime_artifact": "docs/remediation/runtime/eval_defect_002.json",
       "acceptance_command": ".venv/bin/pytest -q tests/unit/test_assurance.py tests/unit/test_reproduction.py tests/unit/test_reproduction_integrity.py tests/integration/test_pipeline.py",
-      "completion_commit": null
+      "completion_commit": "30e04caec21d9d01e1ed39fd98f288cf25a025a3"
     },
     {
       "id": "EVAL-DEFECT-003",
