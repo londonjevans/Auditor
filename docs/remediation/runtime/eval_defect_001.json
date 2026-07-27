@@ -1,0 +1,109 @@
+{
+  "schema_version": "1.0",
+  "ticket_id": "EVAL-DEFECT-001",
+  "baseline_commit": "e304807cf942542706b88544fa216516f8f95cad",
+  "source_parent_commit": "051a95687beea411635f66cf11722d44f1c817f0",
+  "implementation_commit": null,
+  "executed_at": "2026-07-27T14:06:10Z",
+  "implementation": [
+    {
+      "path": "src/mmaudit/orchestration/assurance.py",
+      "sha256": "4a05cd5d6b85f743c242c698b7bbd6fca9b6f5ccba734f6db163f6a081197267"
+    },
+    {
+      "path": "src/mmaudit/solidity/compile.py",
+      "sha256": "eebc8a4f1b95d7da21c2cc2cedc88db2e58487029e034ec4a3e807ca78154e5d"
+    }
+  ],
+  "regression_test": {
+    "paths": {
+      "tests/unit/test_assurance.py": "23649fee1a2e7ac99a6f8ca25c91a8885f3ad90e5af38252e0336350ad3baa7a",
+      "tests/unit/test_solidity.py": "d9cd4add5828395adb9eff0d0f41acdf04caf9d0051ce6077c571928f420c8bc"
+    },
+    "command": ".venv/bin/pytest -q tests/unit/test_assurance.py tests/unit/test_solidity.py tests/integration/test_pipeline.py::test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete",
+    "result": "PASS",
+    "tests_passed": 56,
+    "duration_seconds": 3.78
+  },
+  "negative_assays": [
+    {
+      "id": "compilation_failed",
+      "compilation_status": "failed",
+      "compilation_clause_passed": false,
+      "maximum_assurance_status": "INCONCLUSIVE"
+    },
+    {
+      "id": "compilation_timed_out",
+      "compilation_status": "timed_out",
+      "compilation_clause_passed": false,
+      "maximum_assurance_status": "INCONCLUSIVE"
+    },
+    {
+      "id": "compilation_skipped",
+      "compilation_status": "skipped",
+      "compilation_clause_passed": false,
+      "maximum_assurance_status": "FAILED"
+    },
+    {
+      "id": "compilation_unavailable",
+      "compilation_status": "unavailable",
+      "compilation_clause_passed": false,
+      "maximum_assurance_status": "FAILED"
+    },
+    {
+      "id": "successful_status_without_ast",
+      "compilation_status": "success",
+      "compilation_clause_passed": false,
+      "maximum_assurance_status": "INCONCLUSIVE"
+    },
+    {
+      "id": "successful_status_without_compiled_contracts",
+      "compilation_status": "success",
+      "compilation_clause_passed": false,
+      "maximum_assurance_status": "INCONCLUSIVE"
+    },
+    {
+      "id": "partial_multi_project_results",
+      "compilation_status": "partial",
+      "compilation_clause_passed": false,
+      "maximum_assurance_status": "INCONCLUSIVE"
+    },
+    {
+      "id": "fallback_parser_only",
+      "compilation_status": "success",
+      "ast_backed_index_clause_passed": false,
+      "maximum_assurance_status": "FAILED"
+    }
+  ],
+  "real_component_control": {
+    "evidence_class": "REAL_LOCAL_COMPONENT_EXECUTION",
+    "qualifies_for_certified_maximum_assurance": false,
+    "qualification_limitation": "Trusted synthetic fixture compilation ran locally without the required hardened rootless isolation backend.",
+    "command": "env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE forge build --root tests/fixtures/solidity/foundry --offline --force --ast --build-info --out /private/tmp/mmaudit-eval001.p9fvUf/out-ast --cache-path /private/tmp/mmaudit-eval001.p9fvUf/cache-ast",
+    "result": "PASS",
+    "exit_code": 0,
+    "tool": {
+      "path": "/Users/josevans/.foundry/bin/forge",
+      "version": "1.3.2-stable",
+      "commit": "b0381e15d1465396aabcb398b60d2c10cc0112f2",
+      "sha256": "c0ed9870bf0637ce351ef70e347bcf8ab5e23c4cc12d32ef6fdf4eb1d97116ee"
+    },
+    "compiler_version": "Solc 0.8.20",
+    "target": "tests/fixtures/solidity/foundry",
+    "target_bindings": {
+      "foundry.toml": "744ba8c48db0ae99d9e9b9fe30bdae60ce0572fcc082abded6e98276db94e914",
+      "src/Vault.sol": "e5ef0296628ad6b7713a3e84c81c166cce65a79273ce069dab76dcda5c9041b4",
+      "test/audit/VaultAudit.t.sol": "2a31b888b4ac07c8eeed90d4231ee19015ccc5403791b27e9ae17c6bc86f9e25"
+    },
+    "output_bindings": {
+      "Vault.sol/Vault.json": "0b73df3bb6ecbcf3abde8a03ba9aa2276a91efc1db2baf96cb4c4ec60ebd524e",
+      "VaultAudit.t.sol/VaultAuditTest.json": "f98cd8c2e786efa10229580fb40a0f606a8e12eabd7f762375ebb7ee53453bfc"
+    },
+    "ast_output_validated": true,
+    "network_mode": "offline",
+    "secret_environment_removed": [
+      "MMAUDIT_SECRETS_ENV_FILE",
+      "OPENROUTER_API_KEY"
+    ]
+  }
+}

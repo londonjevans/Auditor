@@ -743,8 +743,27 @@ def _artifact_summary(roots: list[Path]) -> dict[str, Any]:
             continue
         if contract_name := payload.get("contractName"):
             contracts.add(str(contract_name))
-        if "ast" in payload or payload.get("output", {}).get("sources"):
-            ast_available = True
+        metadata = payload.get("metadata")
+        if isinstance(metadata, dict):
+            settings = metadata.get("settings")
+            compilation_target = (
+                settings.get("compilationTarget") if isinstance(settings, dict) else None
+            )
+            if isinstance(compilation_target, dict):
+                contracts.update(
+                    name for name in compilation_target.values() if isinstance(name, str) and name
+                )
+        output = payload.get("output")
+        output_contracts = output.get("contracts") if isinstance(output, dict) else None
+        if isinstance(output_contracts, dict):
+            contracts.update(
+                name
+                for source_contracts in output_contracts.values()
+                if isinstance(source_contracts, dict)
+                for name in source_contracts
+                if isinstance(name, str) and name
+            )
+        ast_available = ast_available or _has_compiler_ast(payload, output)
         source_maps_available = source_maps_available or _has_source_map(payload)
     return {
         "contracts": sorted(contracts),
@@ -753,8 +772,26 @@ def _artifact_summary(roots: list[Path]) -> dict[str, Any]:
     }
 
 
+def _has_compiler_ast(payload: dict[str, Any], output: Any) -> bool:
+    direct_ast = payload.get("ast")
+    if isinstance(direct_ast, dict) and direct_ast.get("nodeType"):
+        return True
+    if not isinstance(output, dict):
+        return False
+    sources = output.get("sources")
+    return isinstance(sources, dict) and any(
+        isinstance(source, dict)
+        and isinstance(source.get("ast"), dict)
+        and bool(source["ast"].get("nodeType"))
+        for source in sources.values()
+    )
+
+
 def _has_source_map(payload: dict[str, Any]) -> bool:
     if payload.get("sourceMap"):
+        return True
+    bytecode = payload.get("bytecode", {})
+    if isinstance(bytecode, dict) and bytecode.get("sourceMap"):
         return True
     deployed = payload.get("deployedBytecode", {})
     if isinstance(deployed, dict) and deployed.get("sourceMap"):

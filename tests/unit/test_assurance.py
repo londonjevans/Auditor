@@ -4,6 +4,8 @@ import json
 from dataclasses import replace
 from datetime import UTC, datetime
 
+import pytest
+
 from mmaudit.agents.specialists import SPECIALIST_ROLE_REGISTRY
 from mmaudit.benchmark.certificate import (
     BenchmarkCertificateVerification,
@@ -359,6 +361,148 @@ def test_maximum_assurance_complete_requires_all_runtime_clauses(config_factory)
     assert all(
         requirement.passed for requirement in assessment.requirements if requirement.required
     )
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_state", "expected_assessment"),
+    [
+        pytest.param(
+            CompilationStatus.FAILED,
+            AnalysisState.ATTEMPTED_FAILED,
+            MaximumAssuranceStatus.INCONCLUSIVE,
+            id="compilation_failed",
+        ),
+        pytest.param(
+            CompilationStatus.TIMED_OUT,
+            AnalysisState.ATTEMPTED_FAILED,
+            MaximumAssuranceStatus.INCONCLUSIVE,
+            id="compilation_timed_out",
+        ),
+        pytest.param(
+            CompilationStatus.SKIPPED,
+            AnalysisState.NOT_ANALYZED,
+            MaximumAssuranceStatus.FAILED,
+            id="compilation_skipped",
+        ),
+        pytest.param(
+            CompilationStatus.UNAVAILABLE,
+            AnalysisState.NOT_ANALYZED,
+            MaximumAssuranceStatus.FAILED,
+            id="compilation_unavailable",
+        ),
+    ],
+)
+def test_non_successful_compilation_never_satisfies_maximum_assurance(
+    config_factory,
+    status: CompilationStatus,
+    expected_state: AnalysisState,
+    expected_assessment: MaximumAssuranceStatus,
+) -> None:
+    runtime = _complete_runtime()
+    runtime.compilations[0] = runtime.compilations[0].model_copy(
+        update={
+            "status": status,
+            "ast_available": False,
+            "contracts_compiled": [],
+        }
+    )
+
+    assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(runtime)
+    gate = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "compilation"
+    )
+
+    assert assessment.status is expected_assessment
+    assert not gate.passed
+    assert gate.blocking
+    assert gate.state is expected_state
+    assert status.value in gate.detail
+
+
+@pytest.mark.parametrize(
+    ("updates", "expected_detail"),
+    [
+        pytest.param(
+            {"ast_available": False},
+            "compiler AST unavailable",
+            id="successful_status_without_ast",
+        ),
+        pytest.param(
+            {"contracts_compiled": []},
+            "no compiled contracts",
+            id="successful_status_without_compiled_contracts",
+        ),
+    ],
+)
+def test_success_status_without_compiler_evidence_fails_compilation_clause(
+    config_factory,
+    updates: dict[str, object],
+    expected_detail: str,
+) -> None:
+    runtime = _complete_runtime()
+    runtime.compilations[0] = runtime.compilations[0].model_copy(update=updates)
+
+    assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(runtime)
+    gate = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "compilation"
+    )
+
+    assert assessment.status is MaximumAssuranceStatus.INCONCLUSIVE
+    assert not gate.passed
+    assert gate.state is AnalysisState.ATTEMPTED_FAILED
+    assert expected_detail in gate.detail
+
+
+def test_partial_multi_project_compilation_fails_closed(config_factory) -> None:
+    runtime = _complete_runtime()
+    runtime.projects.append(
+        SolidityProjectMetadata(
+            project_type=SolidityProjectType.HARDHAT,
+            project_root="packages/secondary",
+            source_directories=["contracts"],
+        )
+    )
+
+    assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(runtime)
+    gate = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "compilation"
+    )
+
+    assert assessment.status is MaximumAssuranceStatus.INCONCLUSIVE
+    assert not gate.passed
+    assert "packages/secondary (hardhat)" in gate.detail
+
+
+def test_fallback_parser_only_index_never_satisfies_ast_clause(config_factory) -> None:
+    runtime = _complete_runtime()
+    assert runtime.index is not None
+    runtime = replace(
+        runtime,
+        index=runtime.index.model_copy(
+            update={
+                "ast_sources": [],
+                "fallback_sources": ["src/Vault.sol"],
+            }
+        ),
+    )
+
+    assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(runtime)
+    gate = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "ast_backed_index"
+    )
+
+    assert assessment.status is MaximumAssuranceStatus.FAILED
+    assert not gate.passed
+    assert gate.state is AnalysisState.FALLBACK_PARSER
+    assert "fallback-parsed sources" in gate.detail
 
 
 def test_benchmark_gate_requires_current_typed_verification_and_artifact(

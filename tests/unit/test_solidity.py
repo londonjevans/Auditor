@@ -39,7 +39,7 @@ from mmaudit.repository.discovery import discover_repository
 from mmaudit.repository.ignore import IgnoreMatcher
 from mmaudit.repository.mapping import build_repository_map
 from mmaudit.scanners.slither import SlitherScanner
-from mmaudit.solidity.compile import compile_solidity_projects
+from mmaudit.solidity.compile import _artifact_summary, compile_solidity_projects
 from mmaudit.solidity.coverage import build_solidity_coverage
 from mmaudit.solidity.graphs import build_solidity_graphs
 from mmaudit.solidity.index import build_solidity_index
@@ -312,6 +312,72 @@ def test_hardhat_compilation_uses_mocked_off_host_adapter_and_serializes_evidenc
     assert not (root / "repository-config-executed.marker").exists()
     restored = SolidityCompilationResult.model_validate_json(result.model_dump_json())
     assert restored.repository_code_execution is RepositoryCodeExecutionState.ISOLATED
+
+
+def test_artifact_summary_recognizes_current_foundry_compilation_target(
+    tmp_path: Path,
+) -> None:
+    artifact_root = tmp_path / "out" / "Vault.sol"
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "Vault.json").write_text(
+        json.dumps(
+            {
+                "abi": [],
+                "ast": {"nodeType": "SourceUnit"},
+                "bytecode": {"object": "00", "sourceMap": "1:2:3"},
+                "metadata": {
+                    "settings": {
+                        "compilationTarget": {
+                            "src/Vault.sol": "Vault",
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = _artifact_summary([tmp_path / "out"])
+
+    assert summary == {
+        "contracts": ["Vault"],
+        "ast_available": True,
+        "source_maps_available": True,
+    }
+
+
+def test_artifact_summary_does_not_credit_null_or_declared_only_ast(
+    tmp_path: Path,
+) -> None:
+    artifact_root = tmp_path / "out" / "Vault.sol"
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "Vault.json").write_text(
+        json.dumps(
+            {
+                "ast": None,
+                "metadata": {
+                    "settings": {
+                        "compilationTarget": {
+                            "src/Vault.sol": "Vault",
+                        }
+                    }
+                },
+                "output": {
+                    "sources": {
+                        "src/Vault.sol": {
+                            "id": 0,
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = _artifact_summary([tmp_path / "out"])
+
+    assert summary["contracts"] == ["Vault"]
+    assert not summary["ast_available"]
 
 
 def test_compilation_rejects_repository_local_build_tool(

@@ -4,12 +4,12 @@ The seven files under `docs/evaluation/` are immutable baseline evidence from
 commit `e304807cf942542706b88544fa216516f8f95cad`.
 
 AUTORUN_STATUS: IN_PROGRESS
-CURRENT_TICKET: EVAL-DEFECT-001
-LAST_COMPLETED_TICKET: REM-SECRET-001
-NEXT_ACTION: Add the compilation_failed negative assay and require successful AST-backed compilation for certified maximum assurance.
-LAST_COMMAND: .venv/bin/ruff format . && .venv/bin/ruff check . && .venv/bin/mypy && .venv/bin/pytest -q
-LAST_RESULT: PASS — Ruff formatted 7 files and passed; mypy checked 102 source files; pytest passed 695 tests with 9 explicit external-integration skips in 142.76s.
-REMAINING_CODE_DEFECTS: 13
+CURRENT_TICKET: EVAL-DEFECT-002
+LAST_COMPLETED_TICKET: EVAL-DEFECT-001
+NEXT_ACTION: Add the failed_reproduction_attempt assay and require a typed qualifying resolution for every feasible high/critical candidate.
+LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_assurance.py tests/unit/test_solidity.py tests/integration/test_pipeline.py::test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete
+LAST_RESULT: PASS — 56 tests passed in 3.78s after Ruff and strict mypy passed on the affected implementation.
+REMAINING_CODE_DEFECTS: 12
 REMAINING_REAL_INTEGRATIONS: OpenRouter exact-model smoke/qualification/specialist review; Slither; Echidna; Medusa; Halmos; formal proof engine; rootless isolation; isolated replay; product benchmark reports
 BLOCKED_EXTERNAL_PREREQUISITES: Echidna, Medusa, Kontrol, Certora, rootless runtime/image, private holdout, and independently adjudicated expert comparison are not yet evidenced as available
 OPENROUTER_COST_USED_USD: 0.00
@@ -135,9 +135,60 @@ LAST_CHECKPOINT_COMMIT: a333ff9df5c1b680c110c0e011682dfbf4e7aa42
 
 ## 2026-07-27 — EVAL-DEFECT-001
 
-- **Status:** `IN_PROGRESS`
+- **Status:** `COMPLETE`
 - **Defensive objective:** Require successful AST-backed compilation before a
   certified maximum-assurance run can be complete.
-- **Exact next safe action:** Reproduce the baseline `compilation_failed` assay in
-  a permanent regression, then repair the assurance clause without weakening any
-  profile or evidence gate.
+- **Completed changes:** The compilation clause now requires an exact one-to-one
+  project/result inventory, `SUCCESS` for every project, non-empty compiled
+  contracts, per-result AST availability, and a matching AST-backed index with no
+  fallback-parsed sources. Current Foundry compilation-target metadata and
+  top-level source maps are normalized so genuine current artifacts can satisfy
+  the evidence fields.
+- **Permanent negative assays:** `FAILED`, `TIMED_OUT`, `SKIPPED`, `UNAVAILABLE`,
+  successful-without-AST, successful-without-contract-output, partial
+  multi-project results, and fallback-parser-only indexing all produce a blocking
+  clause and never `COMPLETE`.
+- **Commands run:**
+  - `.venv/bin/ruff format src/mmaudit/orchestration/assurance.py
+    src/mmaudit/solidity/compile.py tests/unit/test_assurance.py
+    tests/unit/test_solidity.py` — PASS; unchanged.
+  - `.venv/bin/ruff check <affected files>` — PASS.
+  - `.venv/bin/mypy src/mmaudit/orchestration/assurance.py
+    src/mmaudit/solidity/compile.py` — PASS; two source files.
+  - Initial focused pytest — one test assertion exposed that current Foundry
+    artifacts store source maps under `bytecode`; normalized that supported
+    format and reran.
+  - `.venv/bin/pytest -q tests/unit/test_assurance.py
+    tests/unit/test_solidity.py
+    tests/integration/test_pipeline.py::test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete`
+    — PASS, `56 passed in 3.78s`.
+  - `forge --version` and executable SHA-256 — real local Forge
+    `1.3.2-stable`, commit `b0381e15d1465396aabcb398b60d2c10cc0112f2`,
+    SHA-256 `c0ed9870bf0637ce351ef70e347bcf8ab5e23c4cc12d32ef6fdf4eb1d97116ee`.
+  - First offline synthetic control compilation without `--ast` — PASS but did
+    not emit AST in the per-contract artifacts; it was not credited as the
+    AST-backed control.
+  - A follow-up attempt using unsupported `--extra-output ast` — correctly
+    rejected by Forge with exit `2`; it was not credited.
+  - `env -u OPENROUTER_API_KEY -u MMAUDIT_SECRETS_ENV_FILE forge build --root
+    tests/fixtures/solidity/foundry --offline --force --ast --build-info --out
+    /private/tmp/mmaudit-eval001.p9fvUf/out-ast --cache-path
+    /private/tmp/mmaudit-eval001.p9fvUf/cache-ast` — PASS; two files compiled
+    using Solc `0.8.20`, AST/ABI/bytecode validated, and output hashes recorded.
+- **Runtime artifact:**
+  `docs/remediation/runtime/eval_defect_001.json`.
+- **Limitation:** The real compiler control used trusted synthetic local input but
+  was not executed under the unavailable certified rootless backend. It is
+  explicitly component evidence and does not satisfy maximum-assurance isolation.
+- **Result:** `COMPLETE`; the false-COMPLETE code defect and its current-artifact
+  normalization gap are fixed without claiming certified isolated compilation.
+- **Exact next safe action:** Checkpoint this ticket, record its commit, and
+  continue `EVAL-DEFECT-002`.
+
+## 2026-07-27 — EVAL-DEFECT-002
+
+- **Status:** `IN_PROGRESS`
+- **Defensive objective:** Prevent an attempted but unsuccessful high/critical
+  reproduction from satisfying maximum assurance.
+- **Exact next safe action:** Add the permanent failed-attempt assay and map every
+  feasible high/critical candidate to a qualifying typed outcome.

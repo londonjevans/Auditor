@@ -6,6 +6,7 @@ module converts actual engine results into explicit, machine-readable clauses.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
@@ -300,11 +301,28 @@ class MaximumAssuranceContract:
         self,
         runtime: AssuranceRuntime,
     ) -> list[MaximumAssuranceRequirement]:
-        compilation_attempted = bool(runtime.compilations) and all(
-            result.status is not CompilationStatus.SKIPPED for result in runtime.compilations
+        expected_compilations = Counter(
+            (project.project_root, project.project_type.value) for project in runtime.projects
         )
-        compilation_succeeded = compilation_attempted and all(
-            result.status is CompilationStatus.SUCCESS for result in runtime.compilations
+        observed_compilations = Counter(
+            (result.project_root, result.framework.value) for result in runtime.compilations
+        )
+        compilation_attempted = any(
+            result.status
+            not in {
+                CompilationStatus.SKIPPED,
+                CompilationStatus.UNAVAILABLE,
+            }
+            for result in runtime.compilations
+        )
+        compilation_inventory_complete = bool(expected_compilations) and (
+            observed_compilations == expected_compilations
+        )
+        compilation_succeeded = compilation_inventory_complete and all(
+            result.status is CompilationStatus.SUCCESS
+            and result.ast_available
+            and bool(result.contracts_compiled)
+            for result in runtime.compilations
         )
         compilation_state = (
             AnalysisState.DETERMINISTIC
@@ -315,7 +333,39 @@ class MaximumAssuranceContract:
                 else AnalysisState.NOT_ANALYZED
             )
         )
-        ast_backed = runtime.index is not None and bool(runtime.index.ast_sources)
+        missing_compilations = list((expected_compilations - observed_compilations).elements())
+        unexpected_compilations = list((observed_compilations - expected_compilations).elements())
+        incomplete_compilations = [
+            f"{result.project_root} ({result.framework.value}): {result.status.value}"
+            + (
+                "; compiler AST unavailable"
+                if result.status is CompilationStatus.SUCCESS and not result.ast_available
+                else ""
+            )
+            + (
+                "; no compiled contracts"
+                if result.status is CompilationStatus.SUCCESS and not result.contracts_compiled
+                else ""
+            )
+            for result in runtime.compilations
+            if result.status is not CompilationStatus.SUCCESS
+            or not result.ast_available
+            or not result.contracts_compiled
+        ]
+        indexed_projects = (
+            Counter(
+                (project.project_root, project.project_type.value)
+                for project in runtime.index.projects
+            )
+            if runtime.index is not None
+            else Counter()
+        )
+        ast_backed = (
+            runtime.index is not None
+            and indexed_projects == expected_compilations
+            and bool(runtime.index.ast_sources)
+            and not runtime.index.fallback_sources
+        )
         index_state = (
             AnalysisState.DETERMINISTIC
             if ast_backed
@@ -435,14 +485,15 @@ class MaximumAssuranceContract:
             ),
             _requirement(
                 "compilation",
-                compilation_attempted,
+                compilation_succeeded,
                 (
-                    "all detected projects compiled successfully"
+                    "all detected projects compiled successfully with compiler AST output"
                     if compilation_succeeded
-                    else (
-                        "compilation was attempted and failure coverage was recorded"
-                        if compilation_attempted
-                        else "compilation was not attempted"
+                    else _compilation_failure_detail(
+                        missing=missing_compilations,
+                        unexpected=unexpected_compilations,
+                        incomplete=incomplete_compilations,
+                        attempted=compilation_attempted,
                     )
                 ),
                 state=compilation_state,
@@ -454,7 +505,10 @@ class MaximumAssuranceContract:
                 (
                     f"{len(runtime.index.ast_sources)} source file(s) indexed from compiler AST"
                     if ast_backed and runtime.index
-                    else "compiler AST unavailable; fallback parsing is not maximum assurance"
+                    else (
+                        "compiler AST index is incomplete, project-mismatched, or includes "
+                        "fallback-parsed sources"
+                    )
                 ),
                 state=index_state,
                 artifacts=_present(runtime.artifacts, "solidity-index.json"),
@@ -821,6 +875,35 @@ def _requirement(
         state=state or (AnalysisState.DETERMINISTIC if passed else AnalysisState.NOT_ANALYZED),
         detail=detail,
         artifacts=artifacts or [],
+    )
+
+
+def _compilation_failure_detail(
+    *,
+    missing: list[tuple[str, str]],
+    unexpected: list[tuple[str, str]],
+    incomplete: list[str],
+    attempted: bool,
+) -> str:
+    issues: list[str] = []
+    if missing:
+        issues.append(
+            "missing project results: "
+            + ", ".join(f"{root} ({framework})" for root, framework in sorted(missing))
+        )
+    if unexpected:
+        issues.append(
+            "unexpected project results: "
+            + ", ".join(f"{root} ({framework})" for root, framework in sorted(unexpected))
+        )
+    if incomplete:
+        issues.append("non-qualifying results: " + ", ".join(sorted(incomplete)))
+    if issues:
+        return "; ".join(issues)
+    return (
+        "compilation did not produce qualifying project evidence"
+        if attempted
+        else ("compilation was not attempted")
     )
 
 

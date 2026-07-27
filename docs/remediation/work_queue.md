@@ -33,10 +33,8 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   fallback-parser-only compilation all fail the required clause; the baseline
   `compilation_failed` assay is a permanent regression.
 - **Dependencies:** `REM-SECRET-001`.
-- **Status:** `IN_PROGRESS`
-- **Next action:** Add the permanent `compilation_failed` negative assay and make
-  every non-successful or non-AST-backed compilation state fail the certified
-  maximum-assurance clause.
+- **Status:** `COMPLETE`
+- **Next action:** None; continue with `EVAL-DEFECT-002`.
 
 ## EVAL-DEFECT-002 — Failed reproduction can satisfy maximum assurance
 
@@ -47,7 +45,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   validated severity reduction, or explicit `INCONCLUSIVE`; unresolved candidates
   block `COMPLETE`; the baseline `failed_reproduction_attempt` assay fails closed.
 - **Dependencies:** `EVAL-DEFECT-001`.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
+- **Next action:** Add the `failed_reproduction_attempt` negative assay and require
+  a typed qualifying resolution for every feasible high/critical candidate.
 
 ## EVAL-DEFECT-003 — Complementary engines are optional by default
 
