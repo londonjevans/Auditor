@@ -3,7 +3,7 @@
   "ticket_id": "EVAL-DEFECT-001",
   "baseline_commit": "e304807cf942542706b88544fa216516f8f95cad",
   "source_parent_commit": "051a95687beea411635f66cf11722d44f1c817f0",
-  "implementation_commit": null,
+  "implementation_commit": "f2a782b7319ccad848df392f5d40da45fcc63283",
   "executed_at": "2026-07-27T14:06:10Z",
   "implementation": [
     {

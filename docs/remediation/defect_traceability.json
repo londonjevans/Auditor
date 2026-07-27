@@ -12,7 +12,7 @@
       "regression_test": "tests/unit/test_assurance.py::test_non_successful_compilation_never_satisfies_maximum_assurance",
       "runtime_artifact": "docs/remediation/runtime/eval_defect_001.json",
       "acceptance_command": ".venv/bin/pytest -q tests/unit/test_assurance.py tests/unit/test_solidity.py tests/integration/test_pipeline.py::test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete",
-      "completion_commit": null
+      "completion_commit": "f2a782b7319ccad848df392f5d40da45fcc63283"
     },
     {
       "id": "EVAL-DEFECT-002",
