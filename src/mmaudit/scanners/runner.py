@@ -65,7 +65,10 @@ class ScannerRunner:
         results: list[ScannerRun] = []
         semaphore = asyncio.Semaphore(self.config.execution.concurrency)
 
-        async def run_one(adapter: ScannerAdapter) -> ScannerRun:
+        async def run_one(
+            adapter: ScannerAdapter,
+            scanner_config: ScannerConfig,
+        ) -> ScannerRun:
             async with semaphore:
                 return await asyncio.to_thread(
                     adapter.run,
@@ -73,6 +76,8 @@ class ScannerRunner:
                     private_dir / adapter.name,
                     self.config.execution.scanner_timeout_seconds,
                     backend=self.backend,
+                    expected_version=scanner_config.version,
+                    expected_sha256=scanner_config.sha256,
                 )
 
         for name, adapter in self.adapters.items():
@@ -100,7 +105,12 @@ class ScannerRunner:
                 continue
             if isinstance(adapter, FoundryForkScanner):
                 adapter = adapter.with_runtime_allowance(allow_fork_probing)
-            tasks.append(asyncio.create_task(run_one(adapter), name=f"scanner:{name}"))
+            tasks.append(
+                asyncio.create_task(
+                    run_one(adapter, scanner_config),
+                    name=f"scanner:{name}",
+                )
+            )
         if tasks:
             results.extend(await asyncio.gather(*tasks))
         return sorted(results, key=lambda result: result.scanner)

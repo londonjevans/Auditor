@@ -595,6 +595,8 @@ def test_replay_cli_and_published_schema(
     )
     assert schema["additionalProperties"] is False
     assert schema["properties"]["components"]["maxItems"] == 200_000
+    assert "applicable_kinds" in schema["required"]
+    assert schema["properties"]["applicable_kinds"]["minItems"] == 1
     assert schema["$defs"]["component"]["additionalProperties"] is False
     assert schema["properties"]["model_provider_contacted"] == {"const": False}
 

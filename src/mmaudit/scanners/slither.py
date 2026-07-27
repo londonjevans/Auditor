@@ -14,6 +14,7 @@ class SlitherScanner(ScannerAdapter):
     executable = "slither"
     finding_exit_codes = frozenset({0})
     may_execute_repository_code = True
+    strict_machine_output = True
 
     def build_command(self, root: Path, private_dir: Path) -> list[str]:
         del root, private_dir
@@ -29,12 +30,10 @@ class SlitherScanner(ScannerAdapter):
     def parse(self, root: Path, stdout: str, private_dir: Path) -> list[ScannerFinding]:
         del private_dir
         payload = safe_json(stdout)
-        results = payload.get("results", {}) if isinstance(payload, dict) else {}
-        detectors = results.get("detectors", []) if isinstance(results, dict) else []
+        results, detectors = _validate_slither_envelope(payload)
         findings: list[ScannerFinding] = []
-        for detector in detectors if isinstance(detectors, list) else []:
-            if not isinstance(detector, dict):
-                continue
+        del results
+        for detector in detectors:
             source = _source_mapping(detector)
             if source is None:
                 continue
@@ -66,6 +65,28 @@ class SlitherScanner(ScannerAdapter):
             if finding is not None:
                 findings.append(finding)
         return findings
+
+
+def _validate_slither_envelope(
+    payload: Any,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Require Slither's successful machine envelope before accepting its output."""
+
+    if not isinstance(payload, dict):
+        raise ValueError("Slither output must be a JSON object")
+    if payload.get("success") is not True:
+        raise ValueError("Slither machine output did not report success")
+    if payload.get("error") not in (None, ""):
+        raise ValueError("Slither machine output contains an error")
+    results = payload.get("results")
+    if not isinstance(results, dict):
+        raise ValueError("Slither results must be a JSON object")
+    detectors = results.get("detectors")
+    if not isinstance(detectors, list) or any(
+        not isinstance(detector, dict) for detector in detectors
+    ):
+        raise ValueError("Slither detectors must be a JSON object array")
+    return results, detectors
 
 
 def _slither_severity(value: Any) -> Severity:

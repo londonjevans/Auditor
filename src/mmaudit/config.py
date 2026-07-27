@@ -192,6 +192,8 @@ class SmartContractsConfig(ConfigModel):
 
     enabled: bool = True
     compile: bool = False
+    solc_version: str | None = Field(default=None, min_length=1, max_length=200)
+    solc_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     allow_network: bool = False
     framework: Literal["auto", "foundry", "hardhat", "mixed", "plain"] = "auto"
     project_root: str | None = None
@@ -207,6 +209,12 @@ class SmartContractsConfig(ConfigModel):
     foundry_invariant_runs: int = Field(default=64, ge=1, le=100_000)
     max_fork_probe_seconds: float = Field(default=900, gt=0, le=3_600)
     fail_on_fork_test_failure: bool = False
+
+    @model_validator(mode="after")
+    def solc_trust_pin_is_complete(self) -> SmartContractsConfig:
+        if (self.solc_version is None) != (self.solc_sha256 is None):
+            raise ValueError("solc_version and solc_sha256 must be configured together")
+        return self
 
     @field_validator("project_root")
     @classmethod
@@ -559,6 +567,19 @@ class FormalConfig(ConfigModel):
     kontrol_max_depth: int = Field(default=1_000, ge=1, le=100_000)
     kontrol_max_iterations: int = Field(default=1_000, ge=1, le=100_000)
 
+    @model_validator(mode="after")
+    def executable_trust_pins_are_paired(self) -> FormalConfig:
+        for label, version, sha256 in (
+            ("Echidna", self.echidna_version, self.echidna_sha256),
+            ("Medusa", self.medusa_version, self.medusa_sha256),
+            ("Halmos", self.halmos_version, self.halmos_sha256),
+            ("Halmos solver", self.halmos_solver_version, self.halmos_solver_sha256),
+            ("Kontrol", self.kontrol_version, self.kontrol_sha256),
+        ):
+            if (version is None) != (sha256 is None):
+                raise ValueError(f"{label} version and SHA-256 trust pins must be paired")
+        return self
+
 
 ModelQualityTier = Literal["standard", "high", "highest"]
 ModelRetentionPolicy = Literal["zero", "temporary", "persistent"]
@@ -712,6 +733,17 @@ class ModelsConfig(ConfigModel):
 class ScannerConfig(ConfigModel):
     enabled: bool = True
     required: bool = False
+    version: str | None = Field(
+        default=None,
+        pattern=r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$",
+    )
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def trust_pins_are_paired(self) -> ScannerConfig:
+        if (self.version is None) != (self.sha256 is None):
+            raise ValueError("scanner version and SHA-256 trust pins must be configured together")
+        return self
 
 
 class CodeQLConfig(ScannerConfig):
@@ -834,6 +866,7 @@ class AuditConfig(ConfigModel):
                 ),
                 "require_reproduction_for_critical": True,
                 "require_formal_or_reproduction_for_confirmed_critical": True,
+                "benchmark_gate": True,
             }
         )
         invariants = self.invariants.model_copy(
@@ -843,7 +876,19 @@ class AuditConfig(ConfigModel):
                 "execute_generated": True,
             }
         )
-        formal = self.formal.model_copy(update={"enabled": True})
+        formal = self.formal.model_copy(
+            update={
+                "enabled": True,
+                "required_tools": sorted(
+                    {
+                        *self.formal.required_tools,
+                        "echidna",
+                        "medusa",
+                        "halmos",
+                    }
+                ),
+            }
+        )
         models = self.models.model_copy(
             update={
                 "minimum_distinct_families": (
@@ -866,6 +911,12 @@ class AuditConfig(ConfigModel):
                         "required": (
                             self.scanners.slither.required or not maximum_assurance.allow_downgrade
                         ),
+                    }
+                ),
+                "foundry_fork": self.scanners.foundry_fork.model_copy(
+                    update={
+                        "enabled": True,
+                        "required": True,
                     }
                 ),
             }

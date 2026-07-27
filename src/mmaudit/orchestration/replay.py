@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from mmaudit.config import AuditConfig
 from mmaudit.models.schemas import (
     CandidateFinding,
+    ExecutionEvidenceKind,
     FalsificationDecision,
     FoundryInvariantHarnessSpec,
     GeneratedFoundryTestSpec,
@@ -67,6 +68,12 @@ class OfflineReplayComponent(StrictModel):
     identifier: str = Field(min_length=1, max_length=1_000)
     status: ReplayComponentStatus
     executed: bool
+    execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.UNVERIFIED
+    isolation_backend: str | None = Field(default=None, min_length=1, max_length=100)
+    isolation_attestation_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     expected_state: str = Field(min_length=1, max_length=200)
     observed_state: str | None = Field(default=None, min_length=1, max_length=200)
     expected_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -128,6 +135,7 @@ class OfflineReplayPayload(StrictModel):
     remote_network_policy: Literal["denied"] = "denied"
     loopback_policy: Literal["local_only"] = "local_only"
     components: list[OfflineReplayComponent] = Field(max_length=200_000)
+    applicable_kinds: list[ReplayComponentKind] = Field(min_length=1, max_length=3)
     missing_kinds: list[ReplayComponentKind] = Field(max_length=3)
 
     @model_validator(mode="after")
@@ -137,13 +145,18 @@ class OfflineReplayPayload(StrictModel):
             raise ValueError("offline replay components must be unique and sorted")
         if self.missing_kinds != sorted(set(self.missing_kinds), key=lambda item: item.value):
             raise ValueError("offline replay missing kinds must be unique and sorted")
+        if self.applicable_kinds != sorted(
+            set(self.applicable_kinds),
+            key=lambda item: item.value,
+        ):
+            raise ValueError("offline replay applicable kinds must be unique and sorted")
         observed_kinds = {
             item.kind
             for item in self.components
             if item.status is ReplayComponentStatus.MATCHED and item.executed
         }
         expected_missing = sorted(
-            set(ReplayComponentKind) - observed_kinds,
+            set(self.applicable_kinds) - observed_kinds,
             key=lambda item: item.value,
         )
         if self.missing_kinds != expected_missing:
@@ -365,13 +378,14 @@ class OfflineReplayOrchestrator:
             )
 
         ordered = sorted(components, key=lambda item: (item.kind.value, item.identifier))
+        applicable = _applicable_replay_kinds(artifacts)
         observed_kinds = {
             item.kind
             for item in ordered
             if item.status is ReplayComponentStatus.MATCHED and item.executed
         }
         missing = sorted(
-            set(ReplayComponentKind) - observed_kinds,
+            set(applicable) - observed_kinds,
             key=lambda item: item.value,
         )
         status = (
@@ -389,6 +403,7 @@ class OfflineReplayOrchestrator:
             manifest_sha256=verification.manifest_sha256,
             run_verification_sha256=verification.verification_sha256,
             components=ordered,
+            applicable_kinds=applicable,
             missing_kinds=missing,
         )
         serialized = payload.model_dump(mode="json")
@@ -463,6 +478,9 @@ class OfflineReplayOrchestrator:
                         expected_projection=_scanner_projection(prior),
                         observed_projection=_scanner_projection(current),
                         executed=executed,
+                        execution_evidence=current.execution_evidence,
+                        isolation_backend=current.isolation_backend,
+                        isolation_attestation_sha256=current.isolation_attestation_sha256,
                         blocked_limitation=(
                             None
                             if executed
@@ -552,6 +570,9 @@ class OfflineReplayOrchestrator:
                     expected_projection=_invariant_projection(prior),
                     observed_projection=_invariant_projection(current),
                     executed=executed,
+                    execution_evidence=current.execution_evidence,
+                    isolation_backend=current.isolation_backend,
+                    isolation_attestation_sha256=current.isolation_attestation_sha256,
                     blocked_limitation=(
                         None
                         if executed
@@ -656,6 +677,9 @@ class OfflineReplayOrchestrator:
                     expected_projection=_reproduction_projection(prior),
                     observed_projection=_reproduction_projection(current),
                     executed=executed,
+                    execution_evidence=current.execution_evidence,
+                    isolation_backend=current.isolation_backend,
+                    isolation_attestation_sha256=current.isolation_attestation_sha256,
                     blocked_limitation=(
                         None
                         if executed
@@ -722,6 +746,19 @@ def write_offline_replay(path: Path, replay: OfflineReplay) -> None:
         raise ValueError("offline replay exceeds the bounded output size")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(serialized, encoding="utf-8")
+
+
+def load_offline_replay(path: Path) -> OfflineReplay:
+    """Load bounded normalized replay evidence without following links."""
+
+    if is_sensitive_workspace_name(path.name):
+        raise ValueError("refusing to read a sensitive offline-replay filename")
+    if path.is_symlink() or path.is_junction() or not path.is_file():
+        raise ValueError("offline replay must be a regular non-link file")
+    metadata = path.stat()
+    if metadata.st_nlink != 1 or metadata.st_size > _MAX_REPLAY_BYTES:
+        raise ValueError("offline replay must be a bounded unshared file")
+    return OfflineReplay.model_validate_json(path.read_text(encoding="utf-8"))
 
 
 def _load_replay_artifacts(run_dir: Path) -> _ReplayArtifacts:
@@ -791,12 +828,77 @@ def _scanner_projection(run: ScannerRun) -> dict[str, object]:
     return {
         "scanner": run.scanner,
         "status": run.status.value,
+        "execution_evidence": run.execution_evidence.value,
         "version": run.version,
         "executable_sha256": run.executable_sha256,
+        "raw_output_sha256": run.raw_output_sha256,
+        "raw_output_bytes": run.raw_output_bytes,
+        "process_exit_code": run.process_exit_code,
+        "execution_observation_sha256": run.execution_observation_sha256,
+        "foundry_summary": (
+            run.foundry_summary.model_dump(mode="json") if run.foundry_summary is not None else None
+        ),
         "findings": findings,
         "isolation_backend": run.isolation_backend,
+        "isolation_attestation_sha256": run.isolation_attestation_sha256,
         "repository_code_execution": run.repository_code_execution.value,
     }
+
+
+def _applicable_replay_kinds(artifacts: _ReplayArtifacts) -> list[ReplayComponentKind]:
+    """Derive replay obligations from the sealed baseline rather than a fixed universe."""
+
+    return sorted(
+        {kind for kind, _identifier in _applicable_replay_components(artifacts)},
+        key=lambda item: item.value,
+    )
+
+
+def _applicable_replay_components(
+    artifacts: _ReplayArtifacts,
+) -> set[tuple[ReplayComponentKind, str]]:
+    """Derive every exact replay member from the sealed baseline."""
+
+    applicable = {(ReplayComponentKind.SCANNER, run.scanner) for run in artifacts.scanners.runs}
+    invariant_results = {
+        (item.invariant_id, item.harness_name): item for item in artifacts.invariant_results.results
+    }
+    for harness in artifacts.harnesses.harnesses:
+        result = invariant_results[(harness.invariant_id, harness.name)]
+        applicable.add(
+            (
+                ReplayComponentKind.COUNTEREXAMPLE
+                if result.status is InvariantExecutionStatus.COUNTEREXAMPLE
+                else ReplayComponentKind.SAVED_TEST,
+                f"{harness.invariant_id}/{harness.name}",
+            )
+        )
+    applicable.update(
+        (
+            ReplayComponentKind.SAVED_TEST,
+            f"{specification.candidate_id}/{specification.name}",
+        )
+        for specification in artifacts.reproductions.test_specifications
+    )
+    if not applicable:
+        raise ValueError("offline replay has no sealed deterministic component to execute")
+    return applicable
+
+
+def expected_replay_kinds_for_run(run_dir: Path) -> set[ReplayComponentKind]:
+    """Derive replay obligations from bounded sealed run artifacts."""
+
+    root = _safe_directory(run_dir, "run")
+    return set(_applicable_replay_kinds(_load_replay_artifacts(root)))
+
+
+def expected_replay_components_for_run(
+    run_dir: Path,
+) -> set[tuple[ReplayComponentKind, str]]:
+    """Derive exact replay member obligations from bounded sealed run artifacts."""
+
+    root = _safe_directory(run_dir, "run")
+    return _applicable_replay_components(_load_replay_artifacts(root))
 
 
 def _invariant_projection(result: InvariantExecutionResult) -> dict[str, object]:
@@ -868,6 +970,9 @@ def _compared_component(
     expected_projection: object,
     observed_projection: object,
     executed: bool,
+    execution_evidence: ExecutionEvidenceKind,
+    isolation_backend: str | None,
+    isolation_attestation_sha256: str | None,
     blocked_limitation: str | None,
 ) -> OfflineReplayComponent:
     expected_sha256 = canonical_sha256(expected_projection)
@@ -878,6 +983,9 @@ def _compared_component(
             identifier=identifier,
             status=ReplayComponentStatus.BLOCKED,
             executed=False,
+            execution_evidence=execution_evidence,
+            isolation_backend=isolation_backend,
+            isolation_attestation_sha256=isolation_attestation_sha256,
             expected_state=expected_state,
             observed_state=observed_state,
             expected_sha256=expected_sha256,
@@ -893,6 +1001,9 @@ def _compared_component(
             else ReplayComponentStatus.DRIFTED
         ),
         executed=True,
+        execution_evidence=execution_evidence,
+        isolation_backend=isolation_backend,
+        isolation_attestation_sha256=isolation_attestation_sha256,
         expected_state=expected_state,
         observed_state=observed_state,
         expected_sha256=expected_sha256,

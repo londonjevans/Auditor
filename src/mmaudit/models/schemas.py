@@ -162,6 +162,14 @@ class ScannerStatus(StrEnum):
     SKIPPED = "skipped"
 
 
+class ExecutionEvidenceKind(StrEnum):
+    """Whether a runtime record came from a real process or a test double."""
+
+    REAL = "real"
+    MOCK = "mock"
+    UNVERIFIED = "unverified"
+
+
 class SolidityProjectType(StrEnum):
     FOUNDRY = "foundry"
     HARDHAT = "hardhat"
@@ -1213,6 +1221,8 @@ class ReproductionResult(StrictModel):
     candidate_id: str
     test_name: str
     state: ReproductionState
+    execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.UNVERIFIED
+    executable_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     specification_sha256: str
     generated_test_sha256: str | None = None
     generated_test_path: str | None = None
@@ -1230,6 +1240,10 @@ class ReproductionResult(StrictModel):
     stdout_path: str | None = None
     stderr_path: str | None = None
     isolation_backend: str | None = None
+    isolation_attestation_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     repository_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     attempt_evidence: list[ReproductionAttemptEvidence] = Field(
         default_factory=list,
@@ -1780,9 +1794,32 @@ class ScannerFinding(StrictModel):
     fingerprint: str
 
 
+class FoundryTestExecutionSummary(StrictModel):
+    """Observed unit, fuzz/property, and invariant coverage from one Forge suite."""
+
+    unit_tests: int = Field(ge=0)
+    fuzz_tests: int = Field(ge=0)
+    invariant_tests: int = Field(ge=0)
+    passed_tests: int = Field(ge=0)
+    failed_tests: int = Field(ge=0)
+    skipped_tests: int = Field(ge=0)
+    fuzz_cases: int = Field(ge=0)
+    invariant_runs: int = Field(ge=0)
+    invariant_calls: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def outcome_count_matches_classified_tests(self) -> FoundryTestExecutionSummary:
+        classified = self.unit_tests + self.fuzz_tests + self.invariant_tests
+        outcomes = self.passed_tests + self.failed_tests + self.skipped_tests
+        if classified != outcomes:
+            raise ValueError("Foundry classified test count must match observed outcomes")
+        return self
+
+
 class ScannerRun(StrictModel):
     scanner: str
     status: ScannerStatus
+    execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.UNVERIFIED
     version: str | None = None
     executable_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     command: list[str] = Field(default_factory=list)
@@ -1792,10 +1829,40 @@ class ScannerRun(StrictModel):
     findings: list[ScannerFinding] = Field(default_factory=list)
     error: str | None = None
     raw_output_path: str | None = None
+    raw_output_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    raw_output_bytes: int = Field(default=0, ge=0)
+    process_exit_code: int | None = None
     isolation_backend: str | None = None
+    isolation_attestation_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    machine_output_validated: bool = False
+    foundry_summary: FoundryTestExecutionSummary | None = None
+    execution_observation_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     repository_code_execution: RepositoryCodeExecutionState = (
         RepositoryCodeExecutionState.NOT_APPLICABLE
     )
+
+    def expected_execution_observation_sha256(self) -> str:
+        """Bind every scanner observation except the digest itself."""
+
+        payload = self.model_dump(
+            mode="json",
+            exclude={"execution_observation_sha256"},
+        )
+        return hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
 
     @model_validator(mode="after")
     def repository_code_isolation_evidence_is_consistent(self) -> ScannerRun:
@@ -1809,6 +1876,13 @@ class ScannerRun(StrictModel):
             and self.status is ScannerStatus.SUCCESS
         ):
             raise ValueError("blocked repository code cannot have a successful scanner result")
+        if self.raw_output_sha256 is None and self.raw_output_bytes:
+            raise ValueError("scanner output bytes require a SHA-256 binding")
+        if (
+            self.execution_observation_sha256 is not None
+            and self.execution_observation_sha256 != self.expected_execution_observation_sha256()
+        ):
+            raise ValueError("scanner execution observation hash does not match its fields")
         return self
 
 
@@ -2487,6 +2561,19 @@ class FoundryInvariantHarnessSpec(StrictModel):
     share_price_boundary: SharePriceBoundaryProbeSpec | None = None
     assumptions: list[str] = Field(default_factory=list, max_length=40)
 
+    def specification_sha256(self) -> str:
+        """Return the canonical identity of this complete typed harness."""
+
+        return hashlib.sha256(
+            json.dumps(
+                self.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+
     @model_validator(mode="after")
     def references_declared_actors(self) -> FoundryInvariantHarnessSpec:
         actor_names = [actor.name for actor in self.actors]
@@ -2998,6 +3085,10 @@ class InvariantExecutionAttemptEvidence(StrictModel):
     stderr_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     stdout_path: str = Field(min_length=1, max_length=500)
     stderr_path: str = Field(min_length=1, max_length=500)
+    process_exit_code: int | None = None
+    machine_output_validated: bool = False
+    campaign_runs: int = Field(default=0, ge=0)
+    campaign_calls: int = Field(default=0, ge=0)
 
 
 class InvariantExecutionRemovalTrial(StrictModel):
@@ -3086,6 +3177,8 @@ class InvariantCampaignCoverage(StrictModel):
     observed_sequence_lengths: list[int] = Field(default_factory=list, max_length=32)
     minimized_sequence_action_ids: list[str] = Field(default_factory=list, max_length=32)
     attempts_consistent: bool
+    observed_campaign_runs: int = Field(default=0, ge=0)
+    observed_campaign_calls: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def dimensions_are_separate_and_consistent(self) -> InvariantCampaignCoverage:
@@ -3118,8 +3211,12 @@ class InvariantCampaignCoverage(StrictModel):
 class InvariantExecutionResult(StrictModel):
     invariant_id: str
     harness_name: str
+    harness_spec_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     status: InvariantExecutionStatus
+    execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.UNVERIFIED
+    executable_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     source_sha256: str | None = None
+    compiler_version: str | None = Field(default=None, min_length=1, max_length=1_000)
     compiler_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     command: list[str] = Field(default_factory=list)
     runs: int = Field(default=0, ge=0)
@@ -3147,6 +3244,77 @@ class InvariantExecutionResult(StrictModel):
     stdout_path: str | None = None
     stderr_path: str | None = None
     isolation_backend: str | None = None
+    isolation_attestation_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    execution_observation_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    def expected_execution_observation_sha256(self) -> str:
+        """Bind the normalized campaign result to every retained execution attempt."""
+
+        payload = {
+            "invariant_id": self.invariant_id,
+            "harness_name": self.harness_name,
+            "harness_spec_sha256": self.harness_spec_sha256,
+            "status": self.status.value,
+            "execution_evidence": self.execution_evidence.value,
+            "executable_sha256": self.executable_sha256,
+            "source_sha256": self.source_sha256,
+            "compiler_version": self.compiler_version,
+            "compiler_sha256": self.compiler_sha256,
+            "command": self.command,
+            "runs": self.runs,
+            "depth": self.depth,
+            "seed": self.seed,
+            "economic_template": (
+                self.economic_template.value if self.economic_template is not None else None
+            ),
+            "required_transaction_ordering": self.required_transaction_ordering.value,
+            "capability_policy": (
+                self.capability_policy.model_dump(mode="json")
+                if self.capability_policy is not None
+                else None
+            ),
+            "economic_metrics": (
+                self.economic_metrics.model_dump(mode="json")
+                if self.economic_metrics is not None
+                else None
+            ),
+            "attempts": self.attempts,
+            "successful_attempts": self.successful_attempts,
+            "replay_confirmed": self.replay_confirmed,
+            "attempt_evidence": [item.model_dump(mode="json") for item in self.attempt_evidence],
+            "minimization_evidence": (
+                self.minimization_evidence.model_dump(mode="json")
+                if self.minimization_evidence is not None
+                else None
+            ),
+            "campaign_coverage": (
+                self.campaign_coverage.model_dump(mode="json")
+                if self.campaign_coverage is not None
+                else None
+            ),
+            "limitations": self.limitations,
+            "counterexample_summary": self.counterexample_summary,
+            "source_path": self.source_path,
+            "stdout_path": self.stdout_path,
+            "stderr_path": self.stderr_path,
+            "isolation_backend": self.isolation_backend,
+            "isolation_attestation_sha256": self.isolation_attestation_sha256,
+        }
+        return hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
 
     @model_validator(mode="after")
     def replay_and_minimization_are_consistent(self) -> InvariantExecutionResult:
@@ -3169,6 +3337,11 @@ class InvariantExecutionResult(StrictModel):
             and self.status is not InvariantExecutionStatus.COUNTEREXAMPLE
         ):
             raise ValueError("invariant minimization evidence requires a counterexample")
+        if (
+            self.execution_observation_sha256 is not None
+            and self.execution_observation_sha256 != self.expected_execution_observation_sha256()
+        ):
+            raise ValueError("invariant execution observation hash does not match its fields")
         return self
 
 
@@ -3239,11 +3412,56 @@ class FormalDependencyProvenance(StrictModel):
     executable_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class FormalCampaignBounds(StrictModel):
+    """Configured campaign limits; these are not runtime observations."""
+
+    runs: int = Field(ge=1)
+    depth: int = Field(ge=1)
+
+
+class FormalCampaignObservation(StrictModel):
+    """Campaign statistics explicitly emitted by validated engine output."""
+
+    runs: int | None = Field(default=None, ge=0)
+    calls: int | None = Field(default=None, ge=0)
+    depth: int | None = Field(default=None, ge=0)
+    iterations: int | None = Field(default=None, ge=0)
+    paths: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def at_least_one_statistic_was_observed(self) -> FormalCampaignObservation:
+        if all(
+            value is None
+            for value in (self.runs, self.calls, self.depth, self.iterations, self.paths)
+        ):
+            raise ValueError("formal campaign observation requires an emitted statistic")
+        return self
+
+
+class FormalPropertyBinding(StrictModel):
+    """Typed identity link from one generated engine property to the shared corpus."""
+
+    generated_property_id: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_]{0,127}$")
+    corpus_property_id: str = Field(pattern=r"^prop-[0-9a-f]{24}$")
+    property_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def corpus_identifier_matches_property_hash(self) -> FormalPropertyBinding:
+        if self.corpus_property_id != f"prop-{self.property_hash[:24]}":
+            raise ValueError("formal property binding ID must derive from its property hash")
+        return self
+
+
 class FormalToolRun(StrictModel):
     tool: str
+    execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.UNVERIFIED
     version: str | None = None
     executable_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     isolation_backend: str | None = None
+    isolation_attestation_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     dependencies: list[FormalDependencyProvenance] = Field(default_factory=list)
     status: FormalToolStatus
     command: list[str] = Field(default_factory=list)
@@ -3251,9 +3469,14 @@ class FormalToolRun(StrictModel):
     evidence: list[FormalEvidence] = Field(default_factory=list)
     coverage: dict[str, Any] = Field(default_factory=dict)
     property_corpus_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    property_corpus_property_ids: list[str] = Field(default_factory=list)
+    translated_property_bindings: list[FormalPropertyBinding] = Field(default_factory=list)
     campaign_seed: int | None = Field(default=None, ge=0, le=2**256 - 1)
+    configured_campaign: FormalCampaignBounds | None = None
+    observed_campaign: FormalCampaignObservation | None = None
     translated_properties: int = Field(default=0, ge=0)
     executed_property_ids: list[str] = Field(default_factory=list)
+    observed_property_ids: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     translation_limitations: list[str] = Field(default_factory=list)
     specification_artifacts: list[str] = Field(default_factory=list)
@@ -3263,11 +3486,115 @@ class FormalToolRun(StrictModel):
     stdout_path: str | None = None
     stderr_path: str | None = None
     result_path: str | None = None
+    process_exit_code: int | None = None
+    stdout_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    stderr_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    result_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    stdout_bytes: int = Field(default=0, ge=0)
+    stderr_bytes: int = Field(default=0, ge=0)
+    result_bytes: int = Field(default=0, ge=0)
+    machine_output_validated: bool = False
+    execution_observation_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    def expected_execution_observation_sha256(self) -> str:
+        """Bind normalized outcomes and campaign coverage to retained process evidence."""
+
+        payload = {
+            "tool": self.tool,
+            "execution_evidence": self.execution_evidence.value,
+            "version": self.version,
+            "executable_sha256": self.executable_sha256,
+            "isolation_backend": self.isolation_backend,
+            "isolation_attestation_sha256": self.isolation_attestation_sha256,
+            "dependencies": [
+                dependency.model_dump(mode="json") for dependency in self.dependencies
+            ],
+            "status": self.status.value,
+            "command": self.command,
+            "process_exit_code": self.process_exit_code,
+            "stdout_sha256": self.stdout_sha256,
+            "stderr_sha256": self.stderr_sha256,
+            "result_sha256": self.result_sha256,
+            "stdout_bytes": self.stdout_bytes,
+            "stderr_bytes": self.stderr_bytes,
+            "result_bytes": self.result_bytes,
+            "machine_output_validated": self.machine_output_validated,
+            "property_corpus_hash": self.property_corpus_hash,
+            "property_corpus_property_ids": self.property_corpus_property_ids,
+            "translated_property_bindings": [
+                binding.model_dump(mode="json") for binding in self.translated_property_bindings
+            ],
+            "campaign_seed": self.campaign_seed,
+            "configured_campaign": (
+                self.configured_campaign.model_dump(mode="json")
+                if self.configured_campaign is not None
+                else None
+            ),
+            "observed_campaign": (
+                self.observed_campaign.model_dump(mode="json")
+                if self.observed_campaign is not None
+                else None
+            ),
+            "translated_properties": self.translated_properties,
+            "executed_property_ids": self.executed_property_ids,
+            "observed_property_ids": self.observed_property_ids,
+            "evidence": [item.model_dump(mode="json") for item in self.evidence],
+            "coverage": self.coverage,
+            "assumptions": self.assumptions,
+            "translation_limitations": self.translation_limitations,
+            "specification_artifacts": self.specification_artifacts,
+            "assumption_artifacts": self.assumption_artifacts,
+            "vacuity_artifacts": self.vacuity_artifacts,
+            "failure_reason": self.failure_reason,
+        }
+        return hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
 
     @model_validator(mode="after")
     def translated_run_retains_corpus_identity(self) -> FormalToolRun:
         if self.translated_properties and self.property_corpus_hash is None:
             raise ValueError("translated formal runs require a corpus hash")
+        if self.property_corpus_property_ids != sorted(set(self.property_corpus_property_ids)):
+            raise ValueError("formal corpus property IDs must be unique and sorted")
+        if any(
+            re.fullmatch(r"prop-[0-9a-f]{24}", property_id) is None
+            for property_id in self.property_corpus_property_ids
+        ):
+            raise ValueError("formal corpus property IDs must be canonical")
+        if self.property_corpus_hash is None and self.property_corpus_property_ids:
+            raise ValueError("formal corpus property IDs require a corpus hash")
+        generated_property_ids = [
+            binding.generated_property_id for binding in self.translated_property_bindings
+        ]
+        if generated_property_ids != sorted(set(generated_property_ids)):
+            raise ValueError("formal property bindings must be unique and sorted")
+        bound_corpus_ids = [
+            binding.corpus_property_id for binding in self.translated_property_bindings
+        ]
+        if len(bound_corpus_ids) != len(set(bound_corpus_ids)):
+            raise ValueError("formal property bindings must not duplicate corpus property IDs")
+        if not set(bound_corpus_ids) <= set(self.property_corpus_property_ids):
+            raise ValueError("formal property bindings must reference the recorded corpus")
+        if self.translated_property_bindings and (
+            len(self.translated_property_bindings) != self.translated_properties
+            or sorted(bound_corpus_ids) != self.executed_property_ids
+        ):
+            raise ValueError("formal property bindings must exactly identify translated properties")
+        if self.execution_observation_sha256 is not None and self.translated_properties:
+            if not self.property_corpus_property_ids:
+                raise ValueError("observed translated runs require complete corpus property IDs")
+            if len(self.translated_property_bindings) != self.translated_properties:
+                raise ValueError("observed translated runs require typed property bindings")
         if (
             self.translated_properties
             and self.tool in {"echidna", "medusa"}
@@ -3299,8 +3626,27 @@ class FormalToolRun(StrictModel):
                     raise ValueError("formal artifact paths must be normalized")
         if self.executed_property_ids != sorted(set(self.executed_property_ids)):
             raise ValueError("executed formal property IDs must be unique and sorted")
+        if any(
+            re.fullmatch(r"prop-[0-9a-f]{24}", property_id) is None
+            for property_id in self.executed_property_ids
+        ):
+            raise ValueError("executed formal property IDs must be canonical")
         if len(self.executed_property_ids) != self.translated_properties:
             raise ValueError("executed property IDs must match the translated property count")
+        if self.observed_property_ids != sorted(set(self.observed_property_ids)):
+            raise ValueError("observed formal property IDs must be unique and sorted")
+        if any(
+            re.fullmatch(r"prop-[0-9a-f]{24}", property_id) is None
+            for property_id in self.observed_property_ids
+        ):
+            raise ValueError("observed formal property IDs must be canonical")
+        if not set(self.observed_property_ids) <= set(self.executed_property_ids):
+            raise ValueError("observed formal property IDs must have been translated")
+        if (
+            self.execution_observation_sha256 is not None
+            and self.execution_observation_sha256 != self.expected_execution_observation_sha256()
+        ):
+            raise ValueError("formal execution observation hash does not match its fields")
         return self
 
 
@@ -3632,6 +3978,7 @@ class SpecialistExecutionRecord(StrictModel):
 class UsageRecord(StrictModel):
     request_id: str
     role: str
+    execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.UNVERIFIED
     requested_model: str
     returned_model: str | None = None
     provider: str | None = None

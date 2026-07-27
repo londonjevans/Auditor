@@ -12,7 +12,9 @@ import pytest
 
 from mmaudit.benchmark.certificate import (
     BenchmarkCertificateVerification,
+    CertificateVerificationOrigin,
     CertificateVerificationStatus,
+    FileBackedBenchmarkVerificationEvidence,
 )
 from mmaudit.constants import ALL_SPECIALIST_ROLES, ExitCode
 from mmaudit.isolation.dependencies import dependency_tree_sha256
@@ -157,6 +159,19 @@ def _current_benchmark_verification() -> BenchmarkCertificateVerification:
         "observed_repository_git_commit": "b" * 40,
         "observed_bindings_sha256": "c" * 64,
         "mismatches": [],
+        "origin": CertificateVerificationOrigin.FILE_BACKED,
+        "file_backed_evidence": FileBackedBenchmarkVerificationEvidence(
+            certificate_loaded=True,
+            certificate_file_sha256="d" * 64,
+            benchmark_report_loaded=True,
+            benchmark_report_file_sha256="e" * 64,
+            benchmark_name="Synthetic standard benchmark",
+            benchmark_profile=AuditProfile.STANDARD,
+            benchmark_report_status="passed",
+            benchmark_report_gate_count=1,
+            benchmark_reports_expected=1,
+            benchmark_reports_loaded=1,
+        ).model_dump(mode="json"),
     }
     payload["verification_sha256"] = canonical_sha256(payload)
     return BenchmarkCertificateVerification.model_validate(payload)
@@ -2973,6 +2988,7 @@ async def test_pipeline_persists_current_benchmark_verification(
     result = await pipeline.run(
         scanner_only=True,
         benchmark_verification=verification,
+        benchmark_repository_git_commit=verification.observed_repository_git_commit,
     )
 
     persisted = BenchmarkCertificateVerification.model_validate_json(
@@ -2985,6 +3001,26 @@ async def test_pipeline_persists_current_benchmark_verification(
     assert "benchmark-certificate-verification.json" in {
         artifact.path for artifact in manifest.artifacts
     }
+
+
+@pytest.mark.asyncio
+async def test_maximum_pipeline_rejects_standard_profile_benchmark_before_run(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    pipeline = AuditPipeline(
+        config_factory(profile=AuditProfile.MAXIMUM_ASSURANCE),
+        repo=vulnerable_repo,
+        output=tmp_path / "benchmark-wrong-profile-output",
+        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(ValueError, match="requires current certificate verification"):
+        await pipeline.run(
+            scanner_only=True,
+            benchmark_verification=_current_benchmark_verification(),
+        )
 
 
 @pytest.mark.asyncio

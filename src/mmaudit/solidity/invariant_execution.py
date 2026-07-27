@@ -14,9 +14,14 @@ from dataclasses import field as dataclass_field
 from pathlib import Path
 
 from mmaudit.config import ReproductionConfig, SmartContractsConfig
+from mmaudit.isolation.provenance import (
+    isolation_attestation_sha256,
+    isolation_execution_evidence,
+)
 from mmaudit.models.schemas import (
     EconomicMetrics,
     EconomicSimulationKind,
+    ExecutionEvidenceKind,
     FinancialSettlementEvidence,
     FinancialSettlementProbeSpec,
     ForkArgument,
@@ -45,6 +50,11 @@ from mmaudit.models.schemas import (
     TransactionOrderingCapability,
 )
 from mmaudit.scanners.base import sanitized_scanner_environment
+from mmaudit.scanners.foundry import (
+    _foundry_kind,
+    _foundry_status,
+    _foundry_suites,
+)
 from mmaudit.solidity.reproduction import (
     IsolationBackend,
     _argument_literal,
@@ -856,8 +866,10 @@ class FoundryInvariantRunner:
 
     @property
     def isolation_available(self) -> bool:
-        return self.backend is not None and bool(
-            getattr(self.backend, "supports_local_fork_rpc", True)
+        return (
+            isolation_execution_evidence(self.backend) is ExecutionEvidenceKind.REAL
+            and self.backend is not None
+            and bool(getattr(self.backend, "supports_local_fork_rpc", True))
         )
 
     def run(
@@ -872,6 +884,7 @@ class FoundryInvariantRunner:
         base = {
             "invariant_id": specification.invariant_id,
             "harness_name": specification.name,
+            "harness_spec_sha256": specification.specification_sha256(),
             "runs": specification.runs,
             "depth": specification.depth,
             "seed": specification.seed,
@@ -949,7 +962,18 @@ class FoundryInvariantRunner:
                 isolation_backend=self.backend.name,
                 duration_seconds=time.monotonic() - started,
             )
+        try:
+            forge_sha256 = _file_sha256(forge)
+        except OSError as exc:
+            return InvariantExecutionResult(
+                **base,
+                status=InvariantExecutionStatus.ENVIRONMENT_BLOCKED,
+                limitations=[f"forge executable hashing failed: {type(exc).__name__}"],
+                isolation_backend=self.backend.name,
+                duration_seconds=time.monotonic() - started,
+            )
         compiler: Path | None = None
+        compiler_version: str | None = None
         compiler_sha256: str | None = None
         if local_only:
             if self.solc_executable is None:
@@ -968,8 +992,9 @@ class FoundryInvariantRunner:
                     repository_root,
                     self.solc_executable,
                 )
+                compiler_version = _external_executable_version(compiler, private_dir)
                 compiler_sha256 = _file_sha256(compiler)
-            except (OSError, ValueError) as exc:
+            except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
                 return InvariantExecutionResult(
                     **base,
                     status=InvariantExecutionStatus.ENVIRONMENT_BLOCKED,
@@ -1064,8 +1089,7 @@ class FoundryInvariantRunner:
             command.extend(
                 [
                     "--offline",
-                    "--color",
-                    "never",
+                    "--json",
                     "--fuzz-runs",
                     str(specification.runs),
                     "--fuzz-seed",
@@ -1112,6 +1136,10 @@ class FoundryInvariantRunner:
                     stderr_sha256=hashlib.sha256(execution.stderr_path.read_bytes()).hexdigest(),
                     stdout_path=execution.stdout_path.relative_to(private_dir).as_posix(),
                     stderr_path=execution.stderr_path.relative_to(private_dir).as_posix(),
+                    process_exit_code=execution.process_exit_code,
+                    machine_output_validated=execution.machine_output_validated,
+                    campaign_runs=execution.campaign_runs,
+                    campaign_calls=execution.campaign_calls,
                 )
             )
             if execution.status not in completed_statuses:
@@ -1329,10 +1357,13 @@ class FoundryInvariantRunner:
                 limitations.append("counterexample action sequence was replayed but not minimized")
         first_execution = executions[0]
         first_test_path = test_paths[0]
-        return InvariantExecutionResult(
+        result = InvariantExecutionResult(
             **base,
             status=status,
+            execution_evidence=isolation_execution_evidence(self.backend),
+            executable_sha256=forge_sha256,
             source_sha256=source_hash,
+            compiler_version=compiler_version,
             compiler_sha256=compiler_sha256,
             command=display_command,
             economic_metrics=_economic_metrics_from_specification(
@@ -1367,6 +1398,12 @@ class FoundryInvariantRunner:
             stdout_path=first_execution.stdout_path.relative_to(private_dir).as_posix(),
             stderr_path=first_execution.stderr_path.relative_to(private_dir).as_posix(),
             isolation_backend=self.backend.name,
+            isolation_attestation_sha256=isolation_attestation_sha256(self.backend),
+        )
+        return result.model_copy(
+            update={
+                "execution_observation_sha256": (result.expected_execution_observation_sha256())
+            }
         )
 
     def _execute(
@@ -1455,41 +1492,108 @@ class FoundryInvariantRunner:
                 stderr_path=stderr_path,
                 limitations=["generated invariant campaign exceeded the output limit"],
             )
-        output = "\n".join(
+        stdout_text = stdout_path.read_text(encoding="utf-8", errors="replace")
+        try:
             (
-                stdout_path.read_text(encoding="utf-8", errors="replace"),
-                stderr_path.read_text(encoding="utf-8", errors="replace"),
+                status,
+                counterexample,
+                structured_text,
+                observed_property_ids,
+                campaign_runs,
+                campaign_calls,
+            ) = _structured_foundry_invariant_result(
+                stdout_text,
+                return_code=return_code,
+                property_ids=property_ids,
+                action_ids=set(action_functions),
             )
-        )
-        status, limitations, counterexample = normalize_foundry_invariant_output(
-            return_code,
-            output,
-        )
-        sequence = _foundry_counterexample_sequence(output, set(action_functions))
+        except ValueError as exc:
+            legacy_output = "\n".join(
+                (
+                    stdout_text,
+                    stderr_path.read_text(encoding="utf-8", errors="replace"),
+                )
+            )
+            legacy_status, legacy_limitations, legacy_counterexample = (
+                normalize_foundry_invariant_output(return_code, legacy_output)
+            )
+            legacy_sequence = _foundry_counterexample_sequence(
+                legacy_output,
+                set(action_functions),
+            )
+            legacy_action_ids = sorted(
+                set(
+                    re.findall(
+                        r"\baction_([A-Za-z][A-Za-z0-9_]{0,47})(?:\(\))?",
+                        legacy_output,
+                    )
+                )
+                & set(action_functions)
+            )
+            legacy_properties = sorted(
+                set(
+                    re.findall(
+                        r"\binvariant_([A-Za-z][A-Za-z0-9_]{0,47})\(\)",
+                        legacy_output,
+                    )
+                )
+                & property_ids
+            )
+            legacy_lengths = sorted(
+                {
+                    int(length)
+                    for length in re.findall(
+                        r"\[Sequence\]\s+\(original:\s*[0-9]+,\s*shrunk:\s*([0-9]+)\)",
+                        legacy_output,
+                    )
+                    if 1 <= int(length) <= depth
+                }
+            )
+            return _InvariantExecution(
+                status=legacy_status,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+                limitations=[
+                    *legacy_limitations,
+                    (
+                        "structured Foundry invariant evidence was unavailable; "
+                        f"legacy normalization only ({type(exc).__name__})"
+                    ),
+                ],
+                counterexample_summary=legacy_counterexample,
+                counterexample_action_ids=(
+                    legacy_sequence.action_ids if legacy_sequence is not None else []
+                ),
+                original_sequence_length=(
+                    legacy_sequence.original_length if legacy_sequence is not None else None
+                ),
+                shrunk_sequence_length=(
+                    legacy_sequence.shrunk_length if legacy_sequence is not None else None
+                ),
+                observed_action_functions=sorted(
+                    {action_functions[action_id] for action_id in legacy_action_ids}
+                ),
+                observed_state_properties=legacy_properties,
+                observed_sequence_lengths=legacy_lengths,
+                process_exit_code=return_code,
+                machine_output_validated=False,
+            )
+        sequence = _foundry_counterexample_sequence(structured_text, set(action_functions))
         observed_action_ids = sorted(
             set(
                 re.findall(
                     r"\baction_([A-Za-z][A-Za-z0-9_]{0,47})(?:\(\))?",
-                    output,
+                    structured_text,
                 )
             )
             & set(action_functions)
-        )
-        observed_property_ids = sorted(
-            set(
-                re.findall(
-                    r"\binvariant_([A-Za-z][A-Za-z0-9_]{0,47})\(\)",
-                    output,
-                )
-            )
-            & property_ids
         )
         observed_sequence_lengths = sorted(
             {
                 int(length)
                 for length in re.findall(
                     r"\[Sequence\]\s+\(original:\s*[0-9]+,\s*shrunk:\s*([0-9]+)\)",
-                    output,
+                    structured_text,
                 )
                 if 1 <= int(length) <= depth
             }
@@ -1498,7 +1602,7 @@ class FoundryInvariantRunner:
             status=status,
             stdout_path=stdout_path,
             stderr_path=stderr_path,
-            limitations=limitations,
+            limitations=[],
             counterexample_summary=counterexample,
             counterexample_action_ids=sequence.action_ids if sequence is not None else [],
             original_sequence_length=(sequence.original_length if sequence is not None else None),
@@ -1508,6 +1612,10 @@ class FoundryInvariantRunner:
             ),
             observed_state_properties=observed_property_ids,
             observed_sequence_lengths=observed_sequence_lengths,
+            process_exit_code=return_code,
+            machine_output_validated=True,
+            campaign_runs=campaign_runs,
+            campaign_calls=campaign_calls,
         )
 
 
@@ -1528,6 +1636,24 @@ def _file_sha256(path: Path) -> str:
         while chunk := handle.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _external_executable_version(executable: Path, private_dir: Path) -> str:
+    """Probe one trusted external executable without exposing operator environment."""
+
+    private_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    completed = subprocess.run(
+        [str(executable), "--version"],
+        cwd=private_dir,
+        env=sanitized_scanner_environment(private_dir),
+        check=False,
+        capture_output=True,
+        timeout=10,
+    )
+    output = completed.stdout + completed.stderr
+    if completed.returncode != 0 or not output or len(output) > 64_000:
+        raise ValueError("external compiler version probe did not return bounded output")
+    return output.decode("utf-8", errors="replace").strip()[:1_000]
 
 
 def _limit_invariant_process() -> None:
@@ -1560,6 +1686,10 @@ class _InvariantExecution:
     observed_action_functions: list[str] = dataclass_field(default_factory=list)
     observed_state_properties: list[str] = dataclass_field(default_factory=list)
     observed_sequence_lengths: list[int] = dataclass_field(default_factory=list)
+    process_exit_code: int | None = None
+    machine_output_validated: bool = False
+    campaign_runs: int = 0
+    campaign_calls: int = 0
 
 
 @dataclass(frozen=True)
@@ -1567,6 +1697,200 @@ class _FoundryCounterexampleSequence:
     original_length: int
     shrunk_length: int
     action_ids: list[str]
+
+
+def _structured_foundry_invariant_result(
+    stdout: str,
+    *,
+    return_code: int,
+    property_ids: set[str],
+    action_ids: set[str] | None = None,
+) -> tuple[
+    InvariantExecutionStatus,
+    str | None,
+    str,
+    list[str],
+    int,
+    int,
+]:
+    """Normalize only the exact generated invariant suite from Forge JSON."""
+
+    if return_code not in {0, 1} or not property_ids:
+        raise ValueError("Foundry invariant process or property inventory is invalid")
+    suites = _foundry_suites(stdout)
+    if len(suites) != 1:
+        raise ValueError("Foundry invariant output must contain one generated suite")
+    observed: dict[str, str] = {}
+    normalized_observations: set[str] = set()
+    normalized_counterexamples: list[str] = []
+    campaign_runs = 0
+    campaign_calls = 0
+    suite = next(iter(suites.values()))
+    test_results = suite["test_results"]
+    assert isinstance(test_results, dict)
+    for signature, result in test_results.items():
+        assert isinstance(signature, str)
+        assert isinstance(result, dict)
+        name = signature.partition("(")[0]
+        match = re.fullmatch(r"invariant_([A-Za-z][A-Za-z0-9_]{0,47})", name)
+        if match is None or match.group(1) not in property_ids:
+            raise ValueError("Foundry invariant output contains an unexpected test")
+        property_id = match.group(1)
+        if property_id in observed:
+            raise ValueError("Foundry invariant property result is duplicated")
+        status = _foundry_status(result)
+        kind, metadata = _foundry_kind(result)
+        if kind != "invariant":
+            raise ValueError("Foundry generated invariant has a non-invariant test kind")
+        runs = metadata.get("runs")
+        calls = metadata.get("calls")
+        if (
+            not isinstance(runs, int)
+            or isinstance(runs, bool)
+            or runs < 0
+            or not isinstance(calls, int)
+            or isinstance(calls, bool)
+            or calls < 0
+        ):
+            raise ValueError("Foundry invariant campaign metrics are invalid")
+        observed[property_id] = status
+        metrics = metadata.get("metrics")
+        if status != "SKIP" and (not isinstance(metrics, dict) or not metrics):
+            raise ValueError("Foundry invariant lacks handler campaign metrics")
+        metric_calls = 0
+        metric_action_ids: set[str] = set()
+        for metric_name, metric in metrics.items() if isinstance(metrics, dict) else ():
+            if not isinstance(metric_name, str) or not isinstance(metric, dict):
+                raise ValueError("Foundry invariant handler metric is malformed")
+            metric_count = metric.get("calls")
+            if (
+                not isinstance(metric_count, int)
+                or isinstance(metric_count, bool)
+                or metric_count < 0
+            ):
+                raise ValueError("Foundry invariant handler call count is invalid")
+            metric_calls += metric_count
+            metric_match = re.search(
+                r"(?:^|\.)action_([A-Za-z][A-Za-z0-9_]{0,47})$",
+                metric_name,
+            )
+            if metric_match is not None:
+                action_id = metric_match.group(1)
+                if action_ids is not None and action_id not in action_ids:
+                    raise ValueError("Foundry invariant metrics contain an undeclared action")
+                if metric_count > 0:
+                    metric_action_ids.add(action_id)
+                    normalized_observations.add(f"observed=action_{action_id}()")
+        if status == "PASS":
+            if (
+                runs <= 0
+                or calls <= 0
+                or metric_calls != calls
+                or result.get("counterexample") is not None
+            ):
+                raise ValueError("passing Foundry invariant campaign evidence is empty")
+            campaign_runs += runs
+            campaign_calls += calls
+            continue
+        if status == "SKIP":
+            continue
+        sequence = _validated_structured_counterexample(
+            result.get("counterexample"),
+            action_ids=action_ids,
+        )
+        if metric_calls < len(sequence.action_ids) or not set(sequence.action_ids) <= (
+            metric_action_ids
+        ):
+            raise ValueError("Foundry invariant handler metrics omit the counterexample calls")
+        campaign_runs += runs + 1
+        campaign_calls += max(calls, metric_calls)
+        normalized_counterexamples.append(
+            "\n".join(
+                [
+                    (
+                        f"[Sequence] (original: {sequence.original_length}, "
+                        f"shrunk: {sequence.shrunk_length})"
+                    ),
+                    *(f"calldata=action_{action_id}()" for action_id in sequence.action_ids),
+                    f"invariant_{property_id}()",
+                ]
+            )
+        )
+    if set(observed) != property_ids or any(status == "SKIP" for status in observed.values()):
+        raise ValueError("Foundry invariant results do not exactly cover declared properties")
+    failures = [property_id for property_id, status in observed.items() if status == "FAIL"]
+    if (bool(failures) and return_code != 1) or (not failures and return_code != 0):
+        raise ValueError("Foundry invariant process exit disagrees with structured outcomes")
+    if len(normalized_counterexamples) > 1:
+        raise ValueError("Foundry invariant output contains ambiguous counterexamples")
+    structured_text = "\n".join(
+        [
+            *sorted(normalized_observations),
+            *normalized_counterexamples,
+        ]
+    )
+    counterexample = (
+        f"{len(failures)} generated invariant property result(s) failed with a validated sequence"
+        if failures
+        else None
+    )
+    return (
+        (InvariantExecutionStatus.COUNTEREXAMPLE if failures else InvariantExecutionStatus.PASSED),
+        counterexample,
+        structured_text,
+        sorted(observed),
+        campaign_runs,
+        campaign_calls,
+    )
+
+
+def _validated_structured_counterexample(
+    counterexample: object,
+    *,
+    action_ids: set[str] | None,
+) -> _FoundryCounterexampleSequence:
+    """Validate one Forge JSON invariant sequence without retaining raw trace data."""
+
+    if not isinstance(counterexample, dict) or set(counterexample) != {"Sequence"}:
+        raise ValueError("Foundry invariant counterexample is not one typed sequence")
+    payload = counterexample["Sequence"]
+    if not isinstance(payload, list) or len(payload) != 2:
+        raise ValueError("Foundry invariant counterexample sequence is malformed")
+    original_length, raw_calls = payload
+    if (
+        not isinstance(original_length, int)
+        or isinstance(original_length, bool)
+        or original_length < 1
+        or original_length > 10_000
+        or not isinstance(raw_calls, list)
+        or not raw_calls
+        or len(raw_calls) > original_length
+    ):
+        raise ValueError("Foundry invariant counterexample sequence is empty or out of bounds")
+    observed_action_ids: list[str] = []
+    for call in raw_calls:
+        if not isinstance(call, dict):
+            raise ValueError("Foundry invariant counterexample call is malformed")
+        function_name = call.get("func_name")
+        signature = call.get("signature")
+        if (
+            not isinstance(function_name, str)
+            or not isinstance(signature, str)
+            or signature != f"{function_name}()"
+        ):
+            raise ValueError("Foundry invariant counterexample call has no exact function")
+        match = re.fullmatch(r"action_([A-Za-z][A-Za-z0-9_]{0,47})", function_name)
+        if match is None:
+            raise ValueError("Foundry invariant counterexample contains a non-action call")
+        action_id = match.group(1)
+        if action_ids is not None and action_id not in action_ids:
+            raise ValueError("Foundry invariant counterexample contains an undeclared action")
+        observed_action_ids.append(action_id)
+    return _FoundryCounterexampleSequence(
+        original_length=original_length,
+        shrunk_length=len(observed_action_ids),
+        action_ids=observed_action_ids,
+    )
 
 
 def _foundry_counterexample_sequence(
@@ -1619,9 +1943,14 @@ def _invariant_campaign_coverage(
             tuple(execution.observed_action_functions),
             tuple(execution.observed_state_properties),
             tuple(execution.observed_sequence_lengths),
+            execution.process_exit_code,
+            execution.machine_output_validated,
+            execution.campaign_runs,
+            execution.campaign_calls,
         )
         for execution in executions
     ]
+    attempts_consistent = len(set(attempt_dimensions)) <= 1
     observed_sequence_lengths = sorted(
         {length for execution in executions for length in execution.observed_sequence_lengths}
     )
@@ -1656,7 +1985,13 @@ def _invariant_campaign_coverage(
         sequence_depth_bound=specification.depth,
         observed_sequence_lengths=observed_sequence_lengths,
         minimized_sequence_action_ids=minimized_action_ids,
-        attempts_consistent=len(set(attempt_dimensions)) <= 1,
+        attempts_consistent=attempts_consistent,
+        observed_campaign_runs=(
+            executions[0].campaign_runs if executions and attempts_consistent else 0
+        ),
+        observed_campaign_calls=(
+            executions[0].campaign_calls if executions and attempts_consistent else 0
+        ),
     )
 
 

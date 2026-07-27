@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -15,14 +16,27 @@ from typing import Any
 from urllib.parse import urlparse
 
 from mmaudit.config import SmartContractsConfig
-from mmaudit.models.schemas import ScannerFinding, ScannerRun, ScannerStatus, Severity
+from mmaudit.isolation.provenance import (
+    isolation_attestation_sha256,
+    isolation_execution_evidence,
+)
+from mmaudit.models.schemas import (
+    ExecutionEvidenceKind,
+    FoundryTestExecutionSummary,
+    ScannerFinding,
+    ScannerRun,
+    ScannerStatus,
+    Severity,
+)
 from mmaudit.scanners.base import (
     ScannerAdapter,
     ScannerIsolationBackend,
+    _file_sha256,
     copy_scanner_workspace,
     isolated_executable_version,
     make_finding,
     sanitized_scanner_environment,
+    scanner_trust_pin_error,
 )
 
 
@@ -58,10 +72,7 @@ class FoundryForkScanner(ScannerAdapter):
             self.config.foundry_match_path,
             "--fuzz-runs",
             str(self.config.foundry_fuzz_runs),
-            "--invariant-runs",
-            str(self.config.foundry_invariant_runs),
-            "--color",
-            "never",
+            "--json",
             "-vv",
         ]
         if self.config.foundry_match_test:
@@ -78,10 +89,7 @@ class FoundryForkScanner(ScannerAdapter):
             self.config.foundry_match_path,
             "--fuzz-runs",
             str(self.config.foundry_fuzz_runs),
-            "--invariant-runs",
-            str(self.config.foundry_invariant_runs),
-            "--color",
-            "never",
+            "--json",
             "-vv",
         ]
         if self.config.foundry_match_test:
@@ -91,38 +99,44 @@ class FoundryForkScanner(ScannerAdapter):
     def parse(self, root: Path, stdout: str, private_dir: Path) -> list[ScannerFinding]:
         del private_dir
         findings: list[ScannerFinding] = []
-        current_path: str | None = None
-        for raw_line in stdout.splitlines():
-            path_match = re.search(r"Encountered \d+ failing test[s]? in ([^:\s]+):", raw_line)
-            if path_match:
-                current_path = path_match.group(1)
-                continue
-            failure = re.search(
-                r"\[FAIL(?:: (?P<reason>[^\]]+))?\]\s+(?P<test>[A-Za-z0-9_]+)", raw_line
-            )
-            if not failure or current_path is None:
-                continue
-            location = _find_test_location(root, current_path, failure.group("test"))
-            reason = _clean_reason(failure.group("reason") or "Foundry fork test failed")
-            finding = make_finding(
-                root=root,
-                scanner=self.name,
-                rule_id="foundry-fork-test-failure",
-                title=f"Fork reproduction test failed: {failure.group('test')}",
-                severity=Severity.HIGH,
-                message=reason,
-                path=current_path,
-                start_line=location[0],
-                end_line=location[1],
-                metadata={
-                    "class": "fork_reproduction",
-                    "fork_only": True,
-                    "test_name": failure.group("test"),
-                    "fork_rpc_url_env": self.config.fork_rpc_url_env,
-                },
-            )
-            if finding is not None:
-                findings.append(finding)
+        for suite_name, suite in _foundry_suites(stdout).items():
+            current_path = suite_name.rsplit(":", maxsplit=1)[0]
+            test_results = suite["test_results"]
+            assert isinstance(test_results, dict)
+            for test_signature, result in test_results.items():
+                assert isinstance(test_signature, str)
+                assert isinstance(result, dict)
+                if _foundry_status(result) != "FAIL":
+                    continue
+                test_name = test_signature.partition("(")[0]
+                if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", test_name) is None:
+                    raise ValueError("Forge JSON contains an invalid test name")
+                location = _find_test_location(root, current_path, test_name)
+                raw_reason = result.get("reason")
+                reason = _clean_reason(
+                    raw_reason
+                    if isinstance(raw_reason, str) and raw_reason
+                    else "Foundry fork test failed"
+                )
+                finding = make_finding(
+                    root=root,
+                    scanner=self.name,
+                    rule_id="foundry-fork-test-failure",
+                    title=f"Fork reproduction test failed: {test_name}",
+                    severity=Severity.HIGH,
+                    message=reason,
+                    path=current_path,
+                    start_line=location[0],
+                    end_line=location[1],
+                    metadata={
+                        "class": "fork_reproduction",
+                        "fork_only": True,
+                        "test_name": test_name,
+                        "fork_rpc_url_env": self.config.fork_rpc_url_env,
+                    },
+                )
+                if finding is not None:
+                    findings.append(finding)
         return findings
 
     def run(
@@ -132,6 +146,8 @@ class FoundryForkScanner(ScannerAdapter):
         timeout_seconds: float,
         *,
         backend: ScannerIsolationBackend | None = None,
+        expected_version: str | None = None,
+        expected_sha256: str | None = None,
     ) -> ScannerRun:
         private_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         environment = sanitized_scanner_environment(private_dir)
@@ -180,6 +196,17 @@ class FoundryForkScanner(ScannerAdapter):
                 duration_seconds=time.monotonic() - monotonic_start,
                 error="refusing forge executable resolved from inside audited repository",
             )
+        try:
+            executable_sha256 = _file_sha256(executable_path)
+        except OSError as exc:
+            return ScannerRun(
+                scanner=self.name,
+                status=ScannerStatus.FAILED,
+                started_at=start,
+                finished_at=datetime.now(UTC),
+                duration_seconds=time.monotonic() - monotonic_start,
+                error=f"could not hash forge executable: {type(exc).__name__}",
+            )
         workspace = private_dir / "workspace"
         version: str | None = None
         try:
@@ -201,6 +228,25 @@ class FoundryForkScanner(ScannerAdapter):
                 workspace,
                 private_dir,
             )
+            trust_error = scanner_trust_pin_error(
+                version=version,
+                executable_sha256=executable_sha256,
+                expected_version=expected_version,
+                expected_sha256=expected_sha256,
+            )
+            if trust_error is not None:
+                return ScannerRun(
+                    scanner=self.name,
+                    status=ScannerStatus.FAILED,
+                    version=version,
+                    executable_sha256=executable_sha256,
+                    command=self.display_command(),
+                    started_at=start,
+                    finished_at=datetime.now(UTC),
+                    duration_seconds=time.monotonic() - monotonic_start,
+                    error=trust_error,
+                    isolation_backend=str(getattr(backend, "name", "")) or None,
+                )
         except (OSError, ValueError) as exc:
             return ScannerRun(
                 scanner=self.name,
@@ -212,10 +258,11 @@ class FoundryForkScanner(ScannerAdapter):
                 duration_seconds=time.monotonic() - monotonic_start,
                 error=f"unsafe or invalid fork probe configuration: {type(exc).__name__}",
             )
-        raw_path = private_dir / "foundry-fork.stdout.txt"
+        raw_path = private_dir / "foundry-fork.json"
         error_path = private_dir / "foundry-fork.stderr.txt"
         environment["ETH_RPC_URL"] = self._fork_rpc_url()
         environment["FOUNDRY_FFI"] = "false"
+        environment["FOUNDRY_INVARIANT_RUNS"] = str(self.config.foundry_invariant_runs)
         environment["FOUNDRY_NO_STORAGE_CACHING"] = "true"
         if profile := os.environ.get("FOUNDRY_PROFILE"):
             environment["FOUNDRY_PROFILE"] = profile
@@ -295,22 +342,65 @@ class FoundryForkScanner(ScannerAdapter):
                 error="fork probe output exceeded the private output limit",
                 raw_output_path=str(raw_path.relative_to(private_dir.parent)),
             )
-        stdout = raw_path.read_text(encoding="utf-8", errors="replace")
-        findings = self.parse(workspace, stdout, private_dir)
-        status = ScannerStatus.SUCCESS if return_code == 0 else ScannerStatus.FAILED
-        return ScannerRun(
+        parse_error: str | None = None
+        findings: list[ScannerFinding] = []
+        foundry_summary: FoundryTestExecutionSummary | None = None
+        try:
+            stdout = raw_path.read_text(encoding="utf-8")
+            foundry_summary = _foundry_execution_summary(stdout)
+            findings = self.parse(workspace, stdout, private_dir)
+        except (UnicodeError, ValueError) as exc:
+            parse_error = f"invalid Forge JSON execution output: {type(exc).__name__}"
+        status = (
+            ScannerStatus.SUCCESS
+            if (
+                return_code in self.finding_exit_codes
+                and foundry_summary is not None
+                and parse_error is None
+            )
+            else ScannerStatus.FAILED
+        )
+        run = ScannerRun(
             scanner=self.name,
             status=status,
+            execution_evidence=(
+                isolation_execution_evidence(backend)
+                if status is ScannerStatus.SUCCESS
+                else ExecutionEvidenceKind.UNVERIFIED
+            ),
             version=version,
+            executable_sha256=executable_sha256,
             command=self.display_command(),
             started_at=start,
             finished_at=datetime.now(UTC),
             duration_seconds=time.monotonic() - monotonic_start,
             findings=findings,
-            error=None
-            if status is ScannerStatus.SUCCESS
-            else f"forge exited with code {return_code}",
+            error=(
+                None
+                if status is ScannerStatus.SUCCESS
+                else (
+                    parse_error
+                    or (
+                        "Forge JSON contained no structured test results"
+                        if return_code in self.finding_exit_codes and foundry_summary is None
+                        else f"forge exited with code {return_code}"
+                    )
+                )
+            ),
             raw_output_path=str(raw_path.relative_to(private_dir.parent)),
+            raw_output_sha256=_file_sha256(raw_path),
+            raw_output_bytes=raw_path.stat().st_size,
+            process_exit_code=return_code,
+            isolation_backend=str(getattr(backend, "name", "")) or None,
+            isolation_attestation_sha256=isolation_attestation_sha256(backend),
+            machine_output_validated=parse_error is None and foundry_summary is not None,
+            foundry_summary=foundry_summary,
+        )
+        return ScannerRun.model_validate(
+            {
+                **run.model_dump(mode="json"),
+                "execution_observation_sha256": run.expected_execution_observation_sha256(),
+            }
         )
 
     def _skip_reason(self, root: Path) -> str | None:
@@ -417,6 +507,156 @@ def _find_block_end(lines: list[str], start_line: int) -> int:
 def _clean_reason(value: str) -> str:
     sanitized = "".join(character if ord(character) >= 32 else " " for character in value)
     return " ".join(sanitized.split())[:500]
+
+
+def _foundry_execution_summary(stdout: str) -> FoundryTestExecutionSummary | None:
+    """Count only typed Forge JSON results; repository log text is never classified."""
+
+    classified = {"unit": 0, "fuzz": 0, "invariant": 0}
+    outcomes = {"PASS": 0, "FAIL": 0, "SKIP": 0}
+    fuzz_cases = 0
+    invariant_runs = 0
+    invariant_calls = 0
+
+    for suite in _foundry_suites(stdout).values():
+        test_results = suite["test_results"]
+        assert isinstance(test_results, dict)
+        for result in test_results.values():
+            assert isinstance(result, dict)
+            status = _foundry_status(result)
+            kind, metadata = _foundry_kind(result)
+            outcomes[status] += 1
+            classified[kind] += 1
+            if kind == "fuzz":
+                fuzz_cases += _foundry_nonnegative_integer(metadata, "runs")
+            elif kind == "invariant":
+                invariant_runs += _foundry_nonnegative_integer(metadata, "runs")
+                invariant_calls += _foundry_nonnegative_integer(metadata, "calls")
+
+    if not any(classified.values()):
+        return None
+    return FoundryTestExecutionSummary(
+        unit_tests=classified["unit"],
+        fuzz_tests=classified["fuzz"],
+        invariant_tests=classified["invariant"],
+        passed_tests=outcomes["PASS"],
+        failed_tests=outcomes["FAIL"],
+        skipped_tests=outcomes["SKIP"],
+        fuzz_cases=fuzz_cases,
+        invariant_runs=invariant_runs,
+        invariant_calls=invariant_calls,
+    )
+
+
+def _foundry_suites(stdout: str) -> dict[str, dict[str, Any]]:
+    """Load the bounded Forge JSON suite map and reject ambiguous structures."""
+
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Forge JSON contains a duplicate object key")
+            result[key] = value
+        return result
+
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"Forge JSON contains a non-finite number: {value}")
+
+    try:
+        payload = json.loads(
+            stdout,
+            object_pairs_hook=unique_object,
+            parse_constant=reject_constant,
+        )
+    except (json.JSONDecodeError, RecursionError) as exc:
+        raise ValueError("Forge output is not one JSON document") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Forge JSON root must be a suite object")
+    if len(payload) > 10_000:
+        raise ValueError("Forge JSON suite count exceeds the execution bound")
+
+    suites: dict[str, dict[str, Any]] = {}
+    total_tests = 0
+    for suite_name, raw_suite in sorted(payload.items()):
+        if (
+            not isinstance(suite_name, str)
+            or not suite_name
+            or len(suite_name) > 2_000
+            or any(ord(character) < 32 or ord(character) == 127 for character in suite_name)
+            or ":" not in suite_name
+        ):
+            raise ValueError("Forge JSON contains an invalid suite identifier")
+        raw_path, contract_name = suite_name.rsplit(":", maxsplit=1)
+        path = PurePosixPath(raw_path)
+        if (
+            not raw_path
+            or not contract_name
+            or path.is_absolute()
+            or path.as_posix() != raw_path
+            or "\\" in raw_path
+            or any(part in {"", ".", ".."} for part in path.parts)
+        ):
+            raise ValueError("Forge JSON suite identifier is not repository-relative")
+        if not isinstance(raw_suite, dict):
+            raise ValueError("Forge JSON suite must be an object")
+        test_results = raw_suite.get("test_results")
+        if not isinstance(test_results, dict):
+            raise ValueError("Forge JSON suite is missing test_results")
+        total_tests += len(test_results)
+        if total_tests > 200_000:
+            raise ValueError("Forge JSON test count exceeds the execution bound")
+        for test_name, result in test_results.items():
+            if (
+                not isinstance(test_name, str)
+                or not test_name
+                or len(test_name) > 1_000
+                or any(ord(character) < 32 or ord(character) == 127 for character in test_name)
+                or not isinstance(result, dict)
+            ):
+                raise ValueError("Forge JSON contains an invalid test result")
+            _foundry_status(result)
+            _foundry_kind(result)
+        suites[suite_name] = raw_suite
+    return suites
+
+
+def _foundry_status(result: dict[str, Any]) -> str:
+    raw_status = result.get("status")
+    statuses = {
+        "Success": "PASS",
+        "Failure": "FAIL",
+        "Skipped": "SKIP",
+    }
+    if not isinstance(raw_status, str) or raw_status not in statuses:
+        raise ValueError("Forge JSON contains an unknown test status")
+    return statuses[raw_status]
+
+
+def _foundry_kind(result: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    raw_kind = result.get("kind")
+    if not isinstance(raw_kind, dict) or len(raw_kind) != 1:
+        raise ValueError("Forge JSON test kind must contain one typed variant")
+    kind_name, metadata = next(iter(raw_kind.items()))
+    normalized = {
+        "Unit": "unit",
+        "Fuzz": "fuzz",
+        "Invariant": "invariant",
+    }.get(kind_name)
+    if normalized is None or not isinstance(metadata, dict):
+        raise ValueError("Forge JSON contains an unsupported test kind")
+    if normalized == "fuzz":
+        _foundry_nonnegative_integer(metadata, "runs")
+    elif normalized == "invariant":
+        _foundry_nonnegative_integer(metadata, "runs")
+        _foundry_nonnegative_integer(metadata, "calls")
+    return normalized, metadata
+
+
+def _foundry_nonnegative_integer(metadata: dict[str, Any], field: str) -> int:
+    value = metadata.get(field)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0 or value > 2**63 - 1:
+        raise ValueError(f"Forge JSON {field} must be a bounded non-negative integer")
+    return value
 
 
 def _limit_process() -> None:

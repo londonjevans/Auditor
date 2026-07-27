@@ -217,6 +217,13 @@ class CertificateVerificationStatus(StrEnum):
     STALE = "stale"
 
 
+class CertificateVerificationOrigin(StrEnum):
+    """Trusted boundary that produced one verification record."""
+
+    IN_MEMORY = "in_memory"
+    FILE_BACKED = "file_backed"
+
+
 class CertificateMismatchKind(StrEnum):
     """A deterministic reason that a certificate binding is stale."""
 
@@ -267,6 +274,27 @@ class CertificateBindingMismatch(StrictModel):
         return self
 
 
+class FileBackedBenchmarkVerificationEvidence(StrictModel):
+    """Bounded proof that a certificate and complete non-empty passed report were loaded."""
+
+    certificate_loaded: Literal[True]
+    certificate_file_sha256: str = Field(pattern=_SHA256_PATTERN)
+    benchmark_report_loaded: Literal[True]
+    benchmark_report_file_sha256: str = Field(pattern=_SHA256_PATTERN)
+    benchmark_name: str = Field(min_length=1, max_length=500)
+    benchmark_profile: AuditProfile
+    benchmark_report_status: Literal["passed"]
+    benchmark_report_gate_count: int = Field(ge=1, le=_MAX_BINDINGS_PER_CATEGORY)
+    benchmark_reports_expected: int = Field(ge=1, le=_MAX_BINDINGS_PER_CATEGORY)
+    benchmark_reports_loaded: int = Field(ge=1, le=_MAX_BINDINGS_PER_CATEGORY)
+
+    @model_validator(mode="after")
+    def all_expected_reports_were_loaded(self) -> FileBackedBenchmarkVerificationEvidence:
+        if self.benchmark_reports_loaded != self.benchmark_reports_expected:
+            raise ValueError("file-backed benchmark evidence requires every expected report")
+        return self
+
+
 class BenchmarkCertificateVerification(StrictModel):
     """Self-hashed, deterministic current-versus-sealed comparison evidence."""
 
@@ -278,10 +306,18 @@ class BenchmarkCertificateVerification(StrictModel):
     mismatches: list[CertificateBindingMismatch] = Field(
         max_length=3 + (14 * _MAX_BINDINGS_PER_CATEGORY)
     )
+    origin: CertificateVerificationOrigin = CertificateVerificationOrigin.IN_MEMORY
+    file_backed_evidence: FileBackedBenchmarkVerificationEvidence | None = None
     verification_sha256: str = Field(pattern=_SHA256_PATTERN)
 
     @model_validator(mode="after")
     def status_order_and_hash_are_consistent(self) -> BenchmarkCertificateVerification:
+        if (self.origin is CertificateVerificationOrigin.FILE_BACKED) != (
+            self.file_backed_evidence is not None
+        ):
+            raise ValueError(
+                "file-backed certificate verification requires exact loaded-file evidence"
+            )
         mismatch_keys = [
             (item.category, item.identifier, item.kind.value) for item in self.mismatches
         ]
@@ -297,7 +333,20 @@ class BenchmarkCertificateVerification(StrictModel):
         expected_hash = canonical_sha256(
             self.model_dump(mode="json", exclude={"verification_sha256"})
         )
-        if self.verification_sha256 != expected_hash:
+        if self.verification_sha256 == expected_hash:
+            return self
+        provenance_fields = {"origin", "file_backed_evidence"}
+        legacy_compatible = (
+            self.origin is CertificateVerificationOrigin.IN_MEMORY
+            and self.file_backed_evidence is None
+        )
+        legacy_hash = canonical_sha256(
+            self.model_dump(
+                mode="json",
+                exclude={"verification_sha256", *provenance_fields},
+            )
+        )
+        if not legacy_compatible or self.verification_sha256 != legacy_hash:
             raise ValueError("certificate verification self-hash is inconsistent")
         return self
 
@@ -566,6 +615,8 @@ def verify_benchmark_certificate(
         "observed_repository_git_commit": repository_git_commit,
         "observed_bindings_sha256": observed_bindings_sha256,
         "mismatches": [item.model_dump(mode="json") for item in mismatches],
+        "origin": CertificateVerificationOrigin.IN_MEMORY,
+        "file_backed_evidence": None,
     }
     verification_payload["verification_sha256"] = canonical_sha256(verification_payload)
     return BenchmarkCertificateVerification.model_validate(verification_payload)
@@ -579,34 +630,67 @@ def verify_file_backed_benchmark_certificate(
 ) -> BenchmarkCertificateVerification:
     """Load, re-observe, and validate one CLI-issued certificate without execution."""
 
-    certificate = load_benchmark_certificate(certificate_path)
+    certificate, certificate_file_sha256 = _load_benchmark_certificate_with_hash(certificate_path)
     observed_bindings, observed_report = observe_file_backed_certificate(
         certificate,
         component_root=component_root,
     )
+    if certificate.benchmark_report.path is None:
+        raise ValueError("file-backed certificate does not bind a local benchmark report")
+    report, loaded_report_binding = _load_passed_benchmark_report_with_binding(
+        component_root,
+        certificate.benchmark_report.path,
+    )
+    if (
+        loaded_report_binding.path != observed_report.path
+        or loaded_report_binding.size != observed_report.size
+        or loaded_report_binding.sha256 != observed_report.sha256
+    ):
+        raise ValueError("benchmark report changed while file-backed verification was loading")
+    if (
+        report.corpus_name != certificate.benchmark_name
+        or report.profile is not certificate.profile
+    ):
+        raise ValueError("benchmark report identity does not match the certificate")
     verification = verify_benchmark_certificate(
         certificate,
         repository_git_commit=repository_git_commit,
         bindings=observed_bindings,
         benchmark_report=observed_report,
     )
-    if verification.status is CertificateVerificationStatus.CURRENT:
-        if certificate.benchmark_report.path is None:
-            raise ValueError("current certificate does not bind a local benchmark report")
-        report = _load_passed_benchmark_report(
-            component_root,
-            certificate.benchmark_report.path,
-        )
-        if (
-            report.corpus_name != certificate.benchmark_name
-            or report.profile is not certificate.profile
-        ):
-            raise ValueError("benchmark report identity does not match the certificate")
-    return verification
+    payload = verification.model_dump(mode="json", exclude={"verification_sha256"})
+    payload.update(
+        {
+            "origin": CertificateVerificationOrigin.FILE_BACKED,
+            "file_backed_evidence": FileBackedBenchmarkVerificationEvidence(
+                certificate_loaded=True,
+                certificate_file_sha256=certificate_file_sha256,
+                benchmark_report_loaded=True,
+                benchmark_report_file_sha256=loaded_report_binding.sha256,
+                benchmark_name=certificate.benchmark_name,
+                benchmark_profile=certificate.profile,
+                benchmark_report_status=report.status.value,
+                benchmark_report_gate_count=len(report.gates),
+                benchmark_reports_expected=report.reports_expected,
+                benchmark_reports_loaded=report.reports_loaded,
+            ).model_dump(mode="json"),
+        }
+    )
+    payload["verification_sha256"] = canonical_sha256(payload)
+    return BenchmarkCertificateVerification.model_validate(payload)
 
 
 def load_benchmark_certificate(path: Path) -> BenchmarkCertificate:
     """Load one bounded certificate without following links or shared hardlinks."""
+
+    certificate, _file_sha256 = _load_benchmark_certificate_with_hash(path)
+    return certificate
+
+
+def _load_benchmark_certificate_with_hash(
+    path: Path,
+) -> tuple[BenchmarkCertificate, str]:
+    """Load and hash the exact bounded bytes used to validate one certificate."""
 
     if is_sensitive_workspace_name(path.name):
         raise ValueError("refusing to read a sensitive benchmark certificate filename")
@@ -615,7 +699,13 @@ def load_benchmark_certificate(path: Path) -> BenchmarkCertificate:
     metadata = path.stat()
     if metadata.st_nlink != 1 or metadata.st_size > _MAX_CERTIFICATE_BYTES:
         raise ValueError("benchmark certificate must be a bounded unshared file")
-    return BenchmarkCertificate.model_validate_json(path.read_text(encoding="utf-8"))
+    contents = path.read_bytes()
+    if len(contents) != metadata.st_size or len(contents) > _MAX_CERTIFICATE_BYTES:
+        raise ValueError("benchmark certificate changed while it was being loaded")
+    return (
+        BenchmarkCertificate.model_validate_json(contents),
+        hashlib.sha256(contents).hexdigest(),
+    )
 
 
 def write_benchmark_certificate(
@@ -681,6 +771,19 @@ def _load_passed_benchmark_report(
     component_root: Path,
     relative_path: str,
 ) -> BenchmarkReport:
+    report, _binding = _load_passed_benchmark_report_with_binding(
+        component_root,
+        relative_path,
+    )
+    return report
+
+
+def _load_passed_benchmark_report_with_binding(
+    component_root: Path,
+    relative_path: str,
+) -> tuple[BenchmarkReport, CertificateComponentBinding]:
+    """Load exact report bytes after binding them to a bounded local file."""
+
     binding = bind_certificate_file(
         component_root,
         relative_path,
@@ -689,14 +792,22 @@ def _load_passed_benchmark_report(
     if binding.path is None:
         raise ValueError("benchmark report binding did not retain its local path")
     report_path = component_root.resolve(strict=True).joinpath(*PurePosixPath(binding.path).parts)
-    report = BenchmarkReport.model_validate_json(report_path.read_text(encoding="utf-8"))
+    contents = report_path.read_bytes()
+    if len(contents) != binding.size or hashlib.sha256(contents).hexdigest() != binding.sha256:
+        raise ValueError("benchmark report changed while it was being loaded")
+    report = BenchmarkReport.model_validate_json(contents)
     if (
         report.status is not BenchmarkStatus.PASSED
         or not report.gates
         or not all(gate.passed for gate in report.gates)
+        or report.reports_expected < 1
+        or report.reports_loaded != report.reports_expected
     ):
-        raise ValueError("benchmark certification requires a passed report and passed gates")
-    return report
+        raise ValueError(
+            "benchmark certification requires a passed report and passed gates "
+            "with non-empty complete coverage"
+        )
+    return report, binding
 
 
 def _rebind_expected_file(

@@ -152,6 +152,37 @@ def test_halmos_parser_captures_only_counterexample_models() -> None:
     assert "query_file" not in records[0].counterexample["models"][0]
 
 
+def test_halmos_adapter_retains_explicit_passing_machine_result(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    root = tmp_path / "repo"
+    shutil.copytree(FIXTURE, root)
+    _, index, _, _ = _inputs(root, config_factory())
+    output = json.dumps(
+        {
+            "exitcode": 0,
+            "test_results": {
+                "src/MMAuditHalmos.sol:MMAuditHalmosProperties": [
+                    {
+                        "name": "invariant_safe()",
+                        "exitcode": 0,
+                        "num_models": 0,
+                    }
+                ]
+            },
+        }
+    )
+    adapter = HalmosAdapter()
+
+    evidence = adapter.parse_result("", "", output, index)
+
+    assert len(evidence) == 1
+    assert evidence[0].property_id == "invariant_safe"
+    assert evidence[0].result_kind is FormalResultKind.NONE
+    assert adapter.validates_machine_output("", "", output)
+
+
 def test_repository_halmos_option_annotations_are_explicitly_unsupported(
     tmp_path: Path,
     config_factory,
@@ -255,7 +286,8 @@ def test_mocked_halmos_run_pins_engine_and_solver_and_normalizes_result(
     )[0]
 
     assert FormalToolRun.model_validate_json(run.model_dump_json()) == run
-    assert run.status is FormalToolStatus.INCONCLUSIVE
+    assert run.status is FormalToolStatus.SUCCESS
+    assert run.machine_output_validated
     assert run.version == "halmos 0.3.3"
     assert run.executable_sha256 == executable_hash
     assert [(dependency.name, dependency.version) for dependency in run.dependencies] == [
@@ -263,8 +295,11 @@ def test_mocked_halmos_run_pins_engine_and_solver_and_normalizes_result(
     ]
     assert run.dependencies[0].executable_sha256 == solver_hash
     assert run.campaign_seed is None
-    assert run.coverage["campaign_runs"] == 100
-    assert run.coverage["campaign_depth"] == 4
+    assert run.configured_campaign is not None
+    assert (run.configured_campaign.runs, run.configured_campaign.depth) == (100, 4)
+    assert run.observed_campaign is not None
+    assert run.observed_campaign.paths == 5
+    assert run.observed_campaign.depth is None
     assert run.executed_property_ids == [corpus.properties[0].id]
     assert run.result_path == "halmos/result.json"
     assert run.evidence[0].result_kind is FormalResultKind.COUNTEREXAMPLE

@@ -7,10 +7,15 @@ import pytest
 from pydantic import ValidationError
 
 from mmaudit.config import ReproductionConfig, SmartContractsConfig
+from mmaudit.isolation.provenance import (
+    _IsolationProbeResults,
+    isolation_execution_evidence,
+)
 from mmaudit.models.schemas import (
     AttackerCapability,
     AttackerCapabilityPolicy,
     CrossChainMessageCapability,
+    ExecutionEvidenceKind,
     FinancialAssetKind,
     FinancialSettlementEvidence,
     ForkActor,
@@ -31,6 +36,7 @@ from mmaudit.solidity.reproduction import (
     ForkReproductionRunner,
     MacOSSandboxBackend,
     capability_policy_error,
+    default_isolation_backend,
     translate_foundry_test,
 )
 
@@ -48,6 +54,13 @@ class TestIsolationBackend:
     ) -> list[str]:
         del workspace, private_dir, rpc_port
         return command
+
+
+class SelfAssertedRealIsolationBackend(TestIsolationBackend):
+    """Adversarial injected backend that must not mint real provenance."""
+
+    name = "sandbox-exec"
+    execution_evidence = ExecutionEvidenceKind.REAL
 
 
 def _spec() -> GeneratedFoundryTestSpec:
@@ -364,6 +377,60 @@ def test_bubblewrap_never_claims_local_fork_capability(
     assert runner.isolation_available is False
     assert result.state is ReproductionState.ENVIRONMENT_BLOCKED
     assert "cannot reach a host loopback fork RPC" in " ".join(result.limitations)
+
+
+@pytest.mark.parametrize(
+    ("configured", "system", "executable_name", "backend_type"),
+    [
+        (
+            "sandbox-exec",
+            "Darwin",
+            "sandbox-exec",
+            MacOSSandboxBackend,
+        ),
+        (
+            "bubblewrap",
+            "Linux",
+            "bwrap",
+            BubblewrapBackend,
+        ),
+    ],
+)
+def test_builtin_isolation_is_real_only_after_discovery_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    configured: str,
+    system: str,
+    executable_name: str,
+    backend_type: type[MacOSSandboxBackend] | type[BubblewrapBackend],
+) -> None:
+    executable = tmp_path / executable_name
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o700)
+    monkeypatch.setattr("mmaudit.solidity.reproduction.platform.system", lambda: system)
+    monkeypatch.setattr(
+        "mmaudit.solidity.reproduction.shutil.which",
+        lambda name: str(executable) if name == executable_name else None,
+    )
+    monkeypatch.setattr(
+        "mmaudit.isolation.provenance._run_builtin_preflight",
+        lambda _backend: _IsolationProbeResults(
+            benign_execution=True,
+            workspace_write_allowed=True,
+            network_denied=True,
+            host_home_read_denied=True,
+            secret_environment_denied=True,
+            outside_write_denied=True,
+        ),
+    )
+
+    direct = backend_type(executable=str(executable))
+    discovered = default_isolation_backend(configured)
+
+    assert isolation_execution_evidence(direct) is ExecutionEvidenceKind.UNVERIFIED
+    assert discovered is not None
+    assert type(discovered) is backend_type
+    assert isolation_execution_evidence(discovered) is ExecutionEvidenceKind.REAL
 
 
 def test_model_cannot_inject_shell_or_source_text() -> None:
@@ -713,6 +780,47 @@ def test_reproduced_test_is_repeated_and_single_step_is_minimal(
     assert result.command[0] == "[FORGE]"
     assert "127.0.0.1" not in " ".join(result.command)
     assert not (repo / "test").exists()
+
+
+def test_injected_reproduction_backend_cannot_self_assert_real(
+    candidate_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "Vault.sol").write_text("contract Vault {}\n", encoding="utf-8")
+    forge = _fake_forge(tmp_path / "forge", "exit 0")
+    monkeypatch.setenv("MMAUDIT_FORK_RPC_URL", "http://127.0.0.1:8545")
+    runner = ForkReproductionRunner(
+        ReproductionConfig(
+            repetitions=2,
+            timeout_seconds=2,
+            pinned_block_number=123,
+            expected_chain_id=1,
+            targets={"Vault": "0x2000000000000000000000000000000000000002"},
+        ),
+        SmartContractsConfig(),
+        backend=SelfAssertedRealIsolationBackend(),
+        forge_executable=forge,
+    )
+
+    result = runner.run(
+        repository_root=repo,
+        project=_project(),
+        candidate=candidate_factory(
+            candidate_id="candidate-solidity",
+            path="src/Vault.sol",
+            start_line=1,
+            end_line=1,
+        ),
+        specification=_spec(),
+        private_dir=tmp_path / "private",
+    )
+
+    assert result.state is ReproductionState.REPRODUCED_AND_MINIMIZED
+    assert result.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
+    assert not runner.isolation_available
 
 
 def test_patched_control_does_not_reproduce(

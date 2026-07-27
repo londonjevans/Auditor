@@ -3,8 +3,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from mmaudit.config import FormalConfig
 from mmaudit.models.schemas import (
+    ExecutionEvidenceKind,
     FormalResultKind,
     FormalToolStatus,
     InvariantSuite,
@@ -37,6 +40,13 @@ class PassthroughIsolation:
     ) -> list[str]:
         del workspace, private_dir, rpc_port
         return command
+
+
+class SelfAssertedRealIsolation(PassthroughIsolation):
+    """Adversarial injected backend that must not mint real provenance."""
+
+    name = "sandbox-exec"
+    execution_evidence = ExecutionEvidenceKind.REAL
 
 
 class FixedAdapter(FormalAdapter):
@@ -193,6 +203,23 @@ def test_echidna_json_counterexample_is_normalized_to_property_location() -> Non
     assert evidence[0].counterexample["seed"] == 7
 
 
+def test_echidna_json_pass_is_explicit_machine_validated_evidence() -> None:
+    output = '{"tests":[{"name":"echidna_assets_backed","status":"passed"}]}'
+    adapter = EchidnaAdapter()
+
+    evidence = adapter.parse(output, "", _property_index())
+
+    assert len(evidence) == 1
+    assert evidence[0].result_kind is FormalResultKind.NONE
+    assert evidence[0].property_id == "echidna_assets_backed"
+    assert adapter.validates_machine_output(output, "", "")
+    assert not adapter.validates_machine_output(
+        '{"tests":[{"name":"echidna_assets_backed","status":"unknown"}]}',
+        "",
+        "",
+    )
+
+
 def test_medusa_json_counterexample_is_normalized_to_property_location() -> None:
     evidence = MedusaAdapter().parse(
         '{"campaign":{"testCases":[{"property":"echidna_assets_backed",'
@@ -205,6 +232,21 @@ def test_medusa_json_counterexample_is_normalized_to_property_location() -> None
     assert evidence[0].result_kind is FormalResultKind.COUNTEREXAMPLE
     assert evidence[0].property_id == "echidna_assets_backed"
     assert evidence[0].locations[0].path == "src/VaultProperties.sol"
+
+
+def test_medusa_json_pass_is_explicit_machine_validated_evidence() -> None:
+    output = (
+        '{"campaign":{"testCases":[{"property":"echidna_assets_backed",'
+        '"result":"property_test_passed"}]}}'
+    )
+    adapter = MedusaAdapter()
+
+    evidence = adapter.parse(output, "", _property_index())
+
+    assert len(evidence) == 1
+    assert evidence[0].result_kind is FormalResultKind.NONE
+    assert evidence[0].property_id == "echidna_assets_backed"
+    assert adapter.validates_machine_output(output, "", "")
 
 
 def test_timeout_is_inconclusive_and_preserves_no_safety_claim(tmp_path: Path) -> None:
@@ -232,6 +274,59 @@ def test_timeout_is_inconclusive_and_preserves_no_safety_claim(tmp_path: Path) -
     assert runs[0].status is FormalToolStatus.TIMED_OUT
     assert runs[0].evidence == []
     assert "wall-clock" in (runs[0].failure_reason or "")
+
+
+def test_injected_formal_backend_and_adapter_cannot_self_assert_real(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _repository(tmp_path)
+    executable = tmp_path / "fixed-formal"
+    executable.write_text(
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "fixed 1.0"; else echo "{}"; fi\n',
+        encoding="utf-8",
+    )
+    executable.chmod(0o700)
+    adapter = FixedAdapter()
+    adapter.available = lambda repository_root: executable  # type: ignore[method-assign]
+    runner = FormalRunner(
+        FormalConfig(enabled=True),
+        backend=SelfAssertedRealIsolation(),
+        adapters=[adapter],
+    )
+
+    run = runner.run(
+        repository_root=root,
+        projects=[_project()],
+        index=_index(),
+        invariants=InvariantSuite(),
+        private_dir=tmp_path / "unsealed",
+    )[0]
+
+    assert run.status is FormalToolStatus.SUCCESS
+    assert run.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
+    assert not runner.isolation_available
+
+    monkeypatch.setattr(
+        "mmaudit.solidity.formal.isolation_execution_evidence",
+        lambda _backend: ExecutionEvidenceKind.REAL,
+    )
+    sealed_runner = FormalRunner(
+        FormalConfig(enabled=True),
+        backend=SelfAssertedRealIsolation(),
+        adapters=[adapter],
+    )
+    sealed_run = sealed_runner.run(
+        repository_root=root,
+        projects=[_project()],
+        index=_index(),
+        invariants=InvariantSuite(),
+        private_dir=tmp_path / "sealed-backend-injected-adapter",
+    )[0]
+
+    assert sealed_runner.isolation_available
+    assert sealed_run.status is FormalToolStatus.SUCCESS
+    assert sealed_run.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
 
 
 def test_repository_local_formal_binary_is_rejected(

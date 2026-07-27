@@ -188,13 +188,17 @@ def test_mocked_kontrol_run_pins_command_and_preserves_counterexample_artifacts(
     )[0]
 
     assert FormalToolRun.model_validate_json(run.model_dump_json()) == run
-    assert run.status is FormalToolStatus.INCONCLUSIVE
+    assert run.status is FormalToolStatus.SUCCESS
+    assert run.machine_output_validated
     assert run.version == "Kontrol version 1.0.0"
     assert run.executable_sha256 == executable_sha256
     assert run.property_corpus_hash == corpus.corpus_hash
     assert run.campaign_seed is None
-    assert run.coverage["campaign_runs"] == 5
-    assert run.coverage["campaign_depth"] == 3
+    assert run.configured_campaign is not None
+    assert (run.configured_campaign.runs, run.configured_campaign.depth) == (5, 3)
+    assert run.observed_campaign is not None
+    assert run.observed_campaign.depth == 3
+    assert run.observed_campaign.iterations == 5
     assert run.executed_property_ids == [corpus.properties[0].id]
     assert run.assumptions == translation.assumptions
     assert run.command == [
@@ -225,6 +229,31 @@ def test_mocked_kontrol_run_pins_command_and_preserves_counterexample_artifacts(
         "kontrol/stdout.txt",
     ]
     assert str(tmp_path) not in run.model_dump_json()
+
+
+def test_kontrol_adapter_normalizes_strict_passing_proof(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    root = tmp_path / "repo"
+    shutil.copytree(FIXTURE, root)
+    _, index, _, corpus = _inputs(root, config_factory())
+    translation = translate_kontrol_corpus(
+        corpus,
+        index,
+        maximum_depth=3,
+        maximum_iterations=5,
+    )
+    generated_name = next(iter(translation.property_map))
+    output = json.dumps({"proofs": [{"test": generated_name, "status": "proved"}]})
+    adapter = KontrolAdapter()
+
+    evidence = adapter.parse_result(output, "", "", index)
+
+    assert len(evidence) == 1
+    assert evidence[0].property_id == generated_name
+    assert evidence[0].result_kind is FormalResultKind.PROOF
+    assert adapter.validates_machine_output(output, "", "")
 
 
 def test_kontrol_hash_mismatch_prevents_proof_execution(

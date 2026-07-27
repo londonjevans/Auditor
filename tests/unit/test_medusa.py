@@ -118,6 +118,9 @@ def test_mocked_medusa_run_enforces_pins_and_normalizes_independent_outcome(
     assert run.status is FormalToolStatus.SUCCESS
     assert run.version == "medusa version 1.3.1"
     assert run.executable_sha256 == executable_hash
+    assert run.configured_campaign is not None
+    assert (run.configured_campaign.runs, run.configured_campaign.depth) == (100, 4)
+    assert run.observed_campaign is None
     assert run.executed_property_ids == [corpus.properties[0].id]
     assert run.evidence[0].property_id == corpus.properties[0].id
     assert run.evidence[0].counterexample["sequence"] == [{"function": "reset()"}]

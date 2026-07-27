@@ -11,6 +11,7 @@ import httpx
 import pytest
 from pydantic import BaseModel, ConfigDict
 
+from mmaudit.constants import OPENROUTER_DEFAULT_BASE_URL
 from mmaudit.models.openrouter import (
     OpenRouterAuthenticationError,
     OpenRouterClient,
@@ -23,6 +24,7 @@ from mmaudit.models.openrouter import (
     safe_headers,
     strict_json_schema,
 )
+from mmaudit.models.schemas import ExecutionEvidenceKind
 from mmaudit.models.usage import UsageLedger
 from mmaudit.orchestration.budgets import BudgetExhaustedError, BudgetManager
 
@@ -86,6 +88,57 @@ def _client(
     return client, http_client, usage
 
 
+def _owned_client(config, *, base_url: str) -> OpenRouterClient:
+    return OpenRouterClient(
+        api_key="synthetic-key",
+        execution=config.execution,
+        privacy=config.privacy,
+        budget=BudgetManager(
+            total_usd=config.execution.budget_usd,
+            max_output_tokens=config.execution.max_output_tokens_per_request,
+            conservative_usd_per_million_tokens=(
+                config.execution.conservative_usd_per_million_tokens
+            ),
+            max_requests_per_agent=config.execution.max_requests_per_agent,
+        ),
+        usage=UsageLedger(),
+        base_url=base_url,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        OPENROUTER_DEFAULT_BASE_URL,
+        f"{OPENROUTER_DEFAULT_BASE_URL}/",
+        f"{OPENROUTER_DEFAULT_BASE_URL}///",
+    ],
+)
+async def test_owned_official_transport_is_real_after_trailing_slash_normalization(
+    config_factory,
+    base_url: str,
+) -> None:
+    client = _owned_client(config_factory(), base_url=base_url)
+    try:
+        assert client.execution_evidence is ExecutionEvidenceKind.REAL
+        assert str(client._client.base_url) == f"{OPENROUTER_DEFAULT_BASE_URL}/"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_owned_alternate_endpoint_is_unverified(config_factory) -> None:
+    client = _owned_client(
+        config_factory(),
+        base_url="https://operator-proxy.invalid/api/v1",
+    )
+    try:
+        assert client.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
+    finally:
+        await client.close()
+
+
 @pytest.mark.asyncio
 async def test_structured_request_and_usage(config_factory) -> None:
     observed: list[httpx.Request] = []
@@ -96,6 +149,7 @@ async def test_structured_request_and_usage(config_factory) -> None:
 
     config = config_factory()
     client, http_client, usage = _client(config, handler)
+    assert client.execution_evidence is ExecutionEvidenceKind.MOCK
     try:
         result = await client.complete(
             role="source_audit",
@@ -121,6 +175,7 @@ async def test_structured_request_and_usage(config_factory) -> None:
     assert observed[0].headers["Authorization"] == "Bearer synthetic-key"
     assert usage.records[0].reported_cost_usd == 0.01
     assert usage.records[0].returned_model == "alpha/atlas-secure"
+    assert usage.records[0].execution_evidence is ExecutionEvidenceKind.MOCK
 
 
 def test_safe_headers_redacts_every_authorization_header() -> None:

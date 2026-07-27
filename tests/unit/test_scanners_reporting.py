@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from mmaudit.config import SmartContractsConfig
 from mmaudit.models.openrouter import safe_headers
 from mmaudit.models.schemas import (
     AttackerCapability,
@@ -18,6 +19,7 @@ from mmaudit.models.schemas import (
     EconomicMetrics,
     EconomicSimulationKind,
     EconomicSimulationPlan,
+    ExecutionEvidenceKind,
     FinancialAssetKind,
     FinancialSettlementEvidence,
     Finding,
@@ -45,6 +47,7 @@ from mmaudit.reporting.markdown import render_markdown
 from mmaudit.reporting.sarif import generate_sarif
 from mmaudit.scanners.base import ScannerAdapter, sanitized_scanner_environment
 from mmaudit.scanners.codeql import CodeQLScanner
+from mmaudit.scanners.foundry import FoundryForkScanner, _foundry_execution_summary
 from mmaudit.scanners.gitleaks import GitleaksScanner
 from mmaudit.scanners.osv import OsvScanner
 from mmaudit.scanners.semgrep import SemgrepScanner
@@ -84,6 +87,13 @@ class _PassthroughIsolation:
     ) -> list[str]:
         del workspace, private_dir, rpc_port
         return command
+
+
+class _SelfAssertedRealIsolation(_PassthroughIsolation):
+    """Adversarial injected backend that must not mint real provenance."""
+
+    name = "sandbox-exec"
+    execution_evidence = ExecutionEvidenceKind.REAL
 
 
 class _MockRepositoryJavaScriptIsolation(_PassthroughIsolation):
@@ -210,6 +220,226 @@ def test_codeql_database_cannot_escape_repository(vulnerable_repo: Path, tmp_pat
         scanner.build_command(vulnerable_repo, tmp_path)
 
 
+def test_foundry_execution_summary_records_observed_portfolio_evidence() -> None:
+    stdout = json.dumps(
+        {
+            "test/audit/Portfolio.t.sol:PortfolioTest": {
+                "test_results": {
+                    "testOwnerCanWithdraw()": {
+                        "status": "Success",
+                        "kind": {"Unit": {"gas": 12_345}},
+                    },
+                    "testFuzz_Deposit(uint256)": {
+                        "status": "Success",
+                        "kind": {"Fuzz": {"runs": 256, "mean_gas": 456}},
+                    },
+                    "invariant_TotalAssets()": {
+                        "status": "Failure",
+                        "kind": {
+                            "Invariant": {
+                                "runs": 128,
+                                "calls": 4_096,
+                                "reverts": 0,
+                            }
+                        },
+                    },
+                    "testProperty_Rounding(uint256)": {
+                        "status": "Skipped",
+                        "kind": {"Fuzz": {"runs": 32}},
+                    },
+                }
+            }
+        }
+    )
+
+    summary = _foundry_execution_summary(stdout)
+
+    assert summary is not None
+    assert summary.unit_tests == 1
+    assert summary.fuzz_tests == 2
+    assert summary.invariant_tests == 1
+    assert summary.passed_tests == 2
+    assert summary.failed_tests == 1
+    assert summary.skipped_tests == 1
+    assert summary.fuzz_cases == 288
+    assert summary.invariant_runs == 128
+    assert summary.invariant_calls == 4096
+
+    now = datetime.now(UTC)
+    run = ScannerRun(
+        scanner="foundry_fork",
+        status=ScannerStatus.SUCCESS,
+        version="1.3.2",
+        command=["forge", "test"],
+        started_at=now,
+        finished_at=now,
+        duration_seconds=0,
+        foundry_summary=summary,
+    )
+    restored = ScannerRun.model_validate_json(run.model_dump_json())
+    assert restored.foundry_summary == summary
+
+
+def test_foundry_execution_summary_requires_structured_test_results() -> None:
+    stdout = json.dumps(
+        {
+            "test/audit/Portfolio.t.sol:PortfolioTest": {
+                "test_results": {},
+            }
+        }
+    )
+
+    assert _foundry_execution_summary(stdout) is None
+    with pytest.raises(ValueError, match="one JSON document"):
+        _foundry_execution_summary(
+            "[PASS] testFuzz_Spoofed(uint256) (runs: 100000)\n"
+            "[PASS] invariant_Spoofed() (runs: 100000, calls: 100000)"
+        )
+
+
+def test_foundry_execution_summary_ignores_spoofed_repository_log_text() -> None:
+    stdout = json.dumps(
+        {
+            "test/audit/Portfolio.t.sol:PortfolioTest": {
+                "test_results": {
+                    "testUnit()": {
+                        "status": "Success",
+                        "kind": {"Unit": {"gas": 123}},
+                        "logs": [
+                            "[PASS] testFuzz_Spoofed(uint256) (runs: 100000)",
+                            "[PASS] invariant_Spoofed() (runs: 100000, calls: 100000)",
+                        ],
+                    }
+                }
+            }
+        }
+    )
+
+    summary = _foundry_execution_summary(stdout)
+
+    assert summary is not None
+    assert summary.unit_tests == 1
+    assert summary.fuzz_tests == 0
+    assert summary.invariant_tests == 0
+    assert summary.fuzz_cases == 0
+    assert summary.invariant_runs == 0
+    assert summary.invariant_calls == 0
+
+
+def test_foundry_execution_summary_rejects_ambiguous_or_unknown_metadata() -> None:
+    duplicate_status = (
+        '{"test/audit/Portfolio.t.sol:PortfolioTest":{"test_results":'
+        '{"testUnit()":{"status":"Success","status":"Failure",'
+        '"kind":{"Unit":{"gas":1}}}}}}'
+    )
+    unsupported_kind = json.dumps(
+        {
+            "test/audit/Portfolio.t.sol:PortfolioTest": {
+                "test_results": {
+                    "testUnit()": {
+                        "status": "Success",
+                        "kind": {"Unknown": {}},
+                    }
+                }
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="duplicate object key"):
+        _foundry_execution_summary(duplicate_status)
+    with pytest.raises(ValueError, match="unsupported test kind"):
+        _foundry_execution_summary(unsupported_kind)
+
+
+def test_foundry_scanner_uses_json_and_binds_observed_execution(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path / "repository"
+    test_dir = root / "test" / "audit"
+    test_dir.mkdir(parents=True)
+    (root / "foundry.toml").write_text("[profile.default]\n", encoding="utf-8")
+    (test_dir / "Portfolio.t.sol").write_text(
+        "contract PortfolioTest { function testUnit() public {} }\n",
+        encoding="utf-8",
+    )
+    payload = json.dumps(
+        {
+            "test/audit/Portfolio.t.sol:PortfolioTest": {
+                "test_results": {
+                    "testUnit()": {
+                        "status": "Success",
+                        "kind": {"Unit": {"gas": 123}},
+                    },
+                    "testFuzz_Portfolio(uint256)": {
+                        "status": "Success",
+                        "kind": {"Fuzz": {"runs": 8}},
+                    },
+                    "invariant_Portfolio()": {
+                        "status": "Success",
+                        "kind": {"Invariant": {"runs": 4, "calls": 64}},
+                    },
+                }
+            }
+        },
+        separators=(",", ":"),
+    )
+    fake_forge = tmp_path / "forge"
+    fake_forge.write_text(
+        "\n".join(
+            (
+                f"#!{sys.executable}",
+                "import os",
+                "import sys",
+                'if "--version" in sys.argv:',
+                '    print("forge 1.3.2")',
+                "    raise SystemExit(0)",
+                'if os.environ.get("FOUNDRY_INVARIANT_RUNS") != "4":',
+                "    raise SystemExit(19)",
+                f"sys.stdout.write({payload!r})",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    fake_forge.chmod(0o755)
+    monkeypatch.setattr(
+        "mmaudit.scanners.foundry.shutil.which",
+        lambda executable: str(fake_forge) if executable == "forge" else None,
+    )
+    monkeypatch.setenv("MMAUDIT_FORK_RPC_URL", "http://127.0.0.1:8545")
+    scanner = FoundryForkScanner(
+        SmartContractsConfig(
+            allow_fork_probing=True,
+            foundry_fuzz_runs=8,
+            foundry_invariant_runs=4,
+        )
+    )
+
+    run = scanner.run(
+        root,
+        tmp_path / "private",
+        5,
+        backend=_SelfAssertedRealIsolation(),
+    )
+
+    assert run.status is ScannerStatus.SUCCESS
+    assert run.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
+    assert run.isolation_backend == "sandbox-exec"
+    assert run.foundry_summary is not None
+    assert run.foundry_summary.unit_tests == 1
+    assert run.foundry_summary.fuzz_tests == 1
+    assert run.foundry_summary.invariant_tests == 1
+    assert "--json" in run.command
+    assert "--color" not in run.command
+    assert "--invariant-runs" not in run.command
+    assert run.execution_observation_sha256 == run.expected_execution_observation_sha256()
+    payload_with_tampered_output = run.model_dump(mode="json")
+    payload_with_tampered_output["raw_output_bytes"] = run.raw_output_bytes + 1
+    with pytest.raises(ValueError, match="execution observation hash"):
+        ScannerRun.model_validate(payload_with_tampered_output)
+
+
 def test_scanner_commands_are_fixed_argument_arrays(tmp_path: Path) -> None:
     adapters = [SemgrepScanner(), GitleaksScanner(), TrivyScanner(), OsvScanner(), SlitherScanner()]
     for adapter in adapters:
@@ -217,6 +447,106 @@ def test_scanner_commands_are_fixed_argument_arrays(tmp_path: Path) -> None:
         assert isinstance(command, list)
         assert command[0] == adapter.executable
         assert not any(token in command for token in ("curl", "wget", "ssh"))
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"success": False, "results": {"detectors": []}},
+        {"success": True, "results": []},
+        {"success": True, "results": {"detectors": [None]}},
+        {"success": True, "error": "compilation failed", "results": {"detectors": []}},
+    ],
+)
+def test_slither_rejects_invalid_machine_envelopes(
+    tmp_path: Path,
+    payload: object,
+) -> None:
+    with pytest.raises(ValueError, match="Slither"):
+        SlitherScanner().parse(tmp_path, json.dumps(payload), tmp_path / "private")
+
+
+def test_exit_zero_slither_success_false_is_failed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "target"
+    root.mkdir()
+    (root / "Vault.sol").write_text("contract Vault {}\n", encoding="utf-8")
+    trusted_bin = tmp_path / "trusted-bin"
+    trusted_bin.mkdir()
+    executable = trusted_bin / "slither"
+    executable.write_text(
+        "\n".join(
+            (
+                f"#!{sys.executable}",
+                "import sys",
+                'print("slither 0.11.5" if "--version" in sys.argv else '
+                '\'{"success":false,"results":{"detectors":[]}}\')',
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", str(trusted_bin))
+
+    run = SlitherScanner().run(
+        root,
+        tmp_path / "private-slither-false",
+        2,
+        backend=_PassthroughIsolation(),
+    )
+
+    assert run.status is ScannerStatus.FAILED
+    assert run.process_exit_code == 0
+    assert not run.machine_output_validated
+    assert run.execution_observation_sha256 == run.expected_execution_observation_sha256()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("status", ScannerStatus.FAILED),
+        ("version", "slither 0.11.4"),
+        ("execution_evidence", ExecutionEvidenceKind.MOCK),
+        ("isolation_backend", "rootless-container"),
+        ("repository_code_execution", RepositoryCodeExecutionState.ISOLATED),
+    ],
+)
+def test_scanner_observation_binds_assurance_provenance(
+    field: str,
+    value: object,
+) -> None:
+    now = datetime.now(UTC)
+    run = ScannerRun(
+        scanner="slither",
+        status=ScannerStatus.SUCCESS,
+        execution_evidence=ExecutionEvidenceKind.REAL,
+        version="slither 0.11.5",
+        executable_sha256="1" * 64,
+        command=["slither", ".", "--json", "-"],
+        started_at=now,
+        finished_at=now,
+        duration_seconds=0,
+        raw_output_path="private/slither.json",
+        raw_output_sha256="2" * 64,
+        raw_output_bytes=2,
+        process_exit_code=0,
+        isolation_backend="sandbox-exec",
+        machine_output_validated=True,
+    )
+    sealed = ScannerRun.model_validate(
+        {
+            **run.model_dump(mode="json"),
+            "execution_observation_sha256": run.expected_execution_observation_sha256(),
+        }
+    )
+    payload = sealed.model_dump(mode="json")
+    payload[field] = value
+
+    with pytest.raises(ValueError, match="execution observation hash"):
+        ScannerRun.model_validate(payload)
 
 
 def test_scanner_environment_drops_unrelated_secrets(tmp_path: Path, monkeypatch) -> None:
@@ -235,6 +565,41 @@ def test_scanner_fails_closed_without_hardened_isolation(tmp_path: Path) -> None
     result = scanner.run(tmp_path, tmp_path / "private-no-isolation", 2)
     assert result.status is ScannerStatus.UNAVAILABLE
     assert "isolation" in (result.error or "")
+
+
+def test_scanner_trust_pin_mismatch_blocks_target_execution(tmp_path: Path) -> None:
+    marker = tmp_path / "target-executed"
+    scanner = _SyntheticProcessScanner(
+        f"from pathlib import Path; Path({str(marker)!r}).write_text('executed')"
+    )
+
+    result = scanner.run(
+        tmp_path,
+        tmp_path / "private-trust-mismatch",
+        2,
+        backend=_PassthroughIsolation(),
+        expected_version="0.0.0",
+        expected_sha256="0" * 64,
+    )
+
+    assert result.status is ScannerStatus.FAILED
+    assert "trust pin" in (result.error or "")
+    assert not marker.exists()
+
+
+def test_injected_scanner_backend_cannot_self_assert_real(tmp_path: Path) -> None:
+    scanner = _SyntheticProcessScanner("print('{}')")
+
+    result = scanner.run(
+        tmp_path,
+        tmp_path / "private-self-asserted",
+        2,
+        backend=_SelfAssertedRealIsolation(),
+    )
+
+    assert result.status is ScannerStatus.SUCCESS
+    assert result.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
+    assert result.isolation_backend == "sandbox-exec"
 
 
 def test_slither_on_hardhat_blocks_before_host_tool_or_repository_code_execution(

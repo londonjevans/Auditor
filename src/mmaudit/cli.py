@@ -52,7 +52,14 @@ from mmaudit.constants import DEFAULT_CONFIG_NAME, VERSION, ExitCode
 from mmaudit.logging import configure_logging
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterError
 from mmaudit.models.registry import ModelRegistry, extract_zdr_model_ids
-from mmaudit.models.schemas import AuditProfile, AuditReport, AuditScope, Finding, Severity
+from mmaudit.models.schemas import (
+    AuditProfile,
+    AuditReport,
+    AuditScope,
+    Finding,
+    MaximumAssuranceStatus,
+    Severity,
+)
 from mmaudit.models.usage import UsageLedger
 from mmaudit.operator_secrets import (
     OperatorSecretError,
@@ -60,6 +67,10 @@ from mmaudit.operator_secrets import (
     load_operator_secrets,
 )
 from mmaudit.orchestration.budgets import BudgetManager
+from mmaudit.orchestration.certification import (
+    certify_maximum_assurance_run,
+    write_maximum_assurance_certification,
+)
 from mmaudit.orchestration.pipeline import AuditPipeline, resolve_safe_output_root
 from mmaudit.orchestration.replay import (
     OfflineReplayOrchestrator,
@@ -1321,6 +1332,55 @@ def replay_command(
         raise typer.Exit(ExitCode.INCOMPLETE)
 
 
+@app.command("certify-run")
+def certify_run_command(
+    manifest: Annotated[
+        Path,
+        typer.Option("--manifest", help="Self-hashed run evidence manifest."),
+    ],
+    run_dir: Annotated[
+        Path,
+        typer.Option("--run-dir", help="Local completed maximum-assurance run directory."),
+    ],
+    replay: Annotated[
+        Path,
+        typer.Option("--replay", help="Manifest-bound offline replay evidence."),
+    ],
+    repository: Annotated[
+        Path,
+        typer.Option("--repo", help="Local source repository bound by the run."),
+    ] = Path("."),
+    config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
+    output: Annotated[
+        Path,
+        typer.Option("--output", help="Destination for post-run certification evidence."),
+    ] = Path("maximum-assurance-certification.json"),
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Certify a verified immutable run after its required offline replay."""
+
+    local_console = Console(no_color=no_color)
+    try:
+        certification = certify_maximum_assurance_run(
+            manifest_path=manifest,
+            run_dir=run_dir,
+            repository_root=repository,
+            replay_path=replay,
+            config=load_config(config_path),
+        )
+        write_maximum_assurance_certification(output, certification)
+    except (OSError, ValueError) as exc:
+        local_console.print(f"[red]Maximum-assurance certification failed safely:[/red] {exc}")
+        raise typer.Exit(ExitCode.CONFIGURATION) from exc
+    local_console.print(
+        f"Maximum assurance {certification.assessment.status.value}: "
+        f"{len(certification.assessment.requirements)} clause(s)"
+    )
+    local_console.print(f"Result: {output.resolve()}")
+    if certification.assessment.status is not MaximumAssuranceStatus.COMPLETE:
+        raise typer.Exit(ExitCode.INCOMPLETE)
+
+
 @snapshot_app.command("import")
 def snapshot_import_command(
     plan: Annotated[
@@ -1455,24 +1515,36 @@ def _execute_audit(
             benchmark_component_root,
             benchmark_repository_commit,
         )
+        supplied_benchmark_inputs = sum(value is not None for value in benchmark_inputs)
+        downgrade_allowed = config.maximum_assurance.allow_downgrade
         benchmark_verification = None
         if benchmark_required:
-            if any(value is None for value in benchmark_inputs):
+            if supplied_benchmark_inputs not in {0, len(benchmark_inputs)}:
                 raise ConfigError(
                     "benchmark gate requires --benchmark-certificate, "
                     "--benchmark-component-root, and --benchmark-repository-commit"
                 )
-            assert benchmark_certificate is not None
-            assert benchmark_component_root is not None
-            assert benchmark_repository_commit is not None
-            benchmark_verification = verify_file_backed_benchmark_certificate(
-                benchmark_certificate,
-                component_root=benchmark_component_root,
-                repository_git_commit=benchmark_repository_commit,
-            )
-            if benchmark_verification.status is not CertificateVerificationStatus.CURRENT:
-                raise ConfigError("benchmark certificate is stale")
-        elif any(value is not None for value in benchmark_inputs):
+            if supplied_benchmark_inputs == 0:
+                if not downgrade_allowed:
+                    raise ConfigError(
+                        "benchmark gate requires --benchmark-certificate, "
+                        "--benchmark-component-root, and --benchmark-repository-commit"
+                    )
+            else:
+                assert benchmark_certificate is not None
+                assert benchmark_component_root is not None
+                assert benchmark_repository_commit is not None
+                benchmark_verification = verify_file_backed_benchmark_certificate(
+                    benchmark_certificate,
+                    component_root=benchmark_component_root,
+                    repository_git_commit=benchmark_repository_commit,
+                )
+                if (
+                    benchmark_verification.status is not CertificateVerificationStatus.CURRENT
+                    and not downgrade_allowed
+                ):
+                    raise ConfigError("benchmark certificate is stale")
+        elif supplied_benchmark_inputs:
             raise ConfigError(
                 "benchmark certificate inputs require --benchmark-gate or a configured gate"
             )
@@ -1499,9 +1571,10 @@ def _execute_audit(
                 changed_since=changed_since,
                 severity_threshold=severity_threshold,
                 allow_fork_probing=allow_fork_probing,
-                require_maximum_assurance=require_maximum_assurance,
-                allow_maximum_assurance_downgrade=allow_maximum_assurance_downgrade,
+                require_maximum_assurance=None,
+                allow_maximum_assurance_downgrade=None,
                 benchmark_verification=benchmark_verification,
+                benchmark_repository_git_commit=benchmark_repository_commit,
             )
         )
         Console(no_color=no_color).print(f"Reports: {result.run_dir}")
@@ -1581,20 +1654,32 @@ def _apply_overrides(
             "--require-maximum-assurance and --allow-maximum-assurance-downgrade "
             "cannot be used together"
         )
+    assurance_mode_updates: dict[str, bool] = {}
+    if require_maximum_assurance:
+        assurance_mode_updates = {
+            "require": True,
+            "allow_downgrade": False,
+        }
+    elif allow_maximum_assurance_downgrade:
+        assurance_mode_updates = {
+            "require": False,
+            "allow_downgrade": True,
+        }
     maximum_assurance_updates = {
-        key: value
-        for key, value in {
-            "require": True if require_maximum_assurance else None,
-            "allow_downgrade": (True if allow_maximum_assurance_downgrade else None),
-            "minimum_model_families": min_model_families,
-            "minimum_specialist_agents": min_specialist_agents,
-            "require_reproduction_for_critical": require_reproduction_for_critical,
-            "require_formal_or_reproduction_for_confirmed_critical": (
-                require_formal_or_reproduction_for_confirmed_critical
-            ),
-            "benchmark_gate": True if benchmark_gate else None,
-        }.items()
-        if value is not None
+        **assurance_mode_updates,
+        **{
+            key: value
+            for key, value in {
+                "minimum_model_families": min_model_families,
+                "minimum_specialist_agents": min_specialist_agents,
+                "require_reproduction_for_critical": require_reproduction_for_critical,
+                "require_formal_or_reproduction_for_confirmed_critical": (
+                    require_formal_or_reproduction_for_confirmed_critical
+                ),
+                "benchmark_gate": True if benchmark_gate else None,
+            }.items()
+            if value is not None
+        },
     }
     model_updates = (
         {"minimum_distinct_families": min_model_families} if min_model_families is not None else {}

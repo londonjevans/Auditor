@@ -1,0 +1,150 @@
+{
+  "schema_version": "1.0",
+  "ticket_id": "EVAL-DEFECT-003",
+  "baseline_commit": "e304807cf942542706b88544fa216516f8f95cad",
+  "source_parent_commit": "236a4ba",
+  "implementation_commit": "PENDING_CHECKPOINT",
+  "executed_at": "2026-07-27T17:10:36Z",
+  "implementation": [
+    {
+      "path": "src/mmaudit/orchestration/assurance.py",
+      "sha256": "80bd6dbf3173b89d082d8f04404954bd914240f9176278fb4618b6b090fa9b87"
+    },
+    {
+      "path": "src/mmaudit/orchestration/replay.py",
+      "sha256": "51cd0c32db219db5751453ebf288fd5915524d373e3f7dfe5d1712fbd9884ea3"
+    },
+    {
+      "path": "src/mmaudit/orchestration/certification.py",
+      "sha256": "49dba0322a31e3553879f82ba3cc33f4ed71c91d42d0d490a3786a64dbebe447"
+    },
+    {
+      "path": "src/mmaudit/isolation/provenance.py",
+      "sha256": "ffd4d78098737a195a0269c7650d288b5a017e6892a69b8851d5ba6bb2737113"
+    },
+    {
+      "path": "src/mmaudit/scanners/foundry.py",
+      "sha256": "77805fd1281fe42ec99a0072842782cf007aa2874dbae75b0a0a33c63d201c3c"
+    },
+    {
+      "path": "src/mmaudit/solidity/formal.py",
+      "sha256": "2e6cf645fa2c7045b7fdd513dab055d18b16bedec5476a0265549c9ef415a7c0"
+    },
+    {
+      "path": "src/mmaudit/solidity/invariant_execution.py",
+      "sha256": "080f223c8f3d197c7b261015ae5a9148fb26664877027ca977d417bc7fd7809d"
+    }
+  ],
+  "tests": {
+    "bindings": {
+      "tests/unit/test_assurance.py": "faced76706368e916196190855943cd017d6981d9672a8bc38e3bc9896b883c4",
+      "tests/unit/test_isolation_provenance.py": "861ad7f93c829f68ea58eb222ce031a68c620253cf690862509738333220812b",
+      "tests/unit/test_invariant_execution.py": "c04272cc576e542698835487df640248e7ad7a66a69224e4320d21765408a464",
+      "tests/unit/test_certification.py": "6691d7f678561f218237f221eab3d52036c658fb07d9f1cc3f0d981c02c3ea92",
+      "tests/integration/test_pipeline.py": "fa31704805e909eb8819a41c1a8a0dad977d83c2a1f95943cbe35b665479ab6d"
+    },
+    "focused_command": ".venv/bin/pytest -q tests/unit/test_assurance.py tests/unit/test_certification.py tests/unit/test_replay.py tests/unit/test_invariant_execution.py tests/unit/test_isolation.py tests/unit/test_isolation_provenance.py tests/unit/test_scanners_reporting.py tests/unit/test_formal.py tests/unit/test_echidna.py tests/unit/test_medusa.py tests/unit/test_halmos.py tests/unit/test_kontrol.py tests/integration/test_pipeline.py",
+    "focused_result": "PASS",
+    "focused_tests_passed": 354,
+    "focused_duration_seconds": 69.50,
+    "full_command": ".venv/bin/pytest -q",
+    "full_result": "PASS",
+    "full_tests_passed": 867,
+    "full_tests_skipped": 9,
+    "full_duration_seconds": 152.18,
+    "ruff_command": ".venv/bin/ruff format . && .venv/bin/ruff check .",
+    "ruff_result": "PASS",
+    "mypy_command": ".venv/bin/mypy",
+    "mypy_result": "PASS: 104 source files"
+  },
+  "negative_assays": [
+    "baseline_no_echidna_medusa",
+    "formal_only_unavailable_record",
+    "required_slither_missing",
+    "missing_benchmark_default",
+    "missing_isolation",
+    "missing_model_reviews",
+    "stale_benchmark",
+    "empty_benchmark_reports",
+    "missing_exact_invariant_execution",
+    "configured_campaign_not_observed",
+    "formal_property_corpus_drift",
+    "formal_proof_evidence_identity_drift",
+    "unvalidated_foundry_output",
+    "detached_benchmark_commit",
+    "omitted_economic_applicability",
+    "incomplete_replay_inventory",
+    "missing_serialized_isolation_attestation",
+    "unconfigured_model_usage",
+    "zero_call_action_credit"
+  ],
+  "fail_closed_contract": {
+    "required_scanners": [
+      "foundry_unit_property_invariant",
+      "slither"
+    ],
+    "required_property_engines": [
+      "echidna",
+      "medusa",
+      "halmos"
+    ],
+    "required_formal_proof_engines_minimum": 1,
+    "required_adjacent_evidence": [
+      "exact invariant harness inventory",
+      "shared full-hash property corpus",
+      "adversarially preflighted isolation attestation",
+      "exact replay component inventory",
+      "configured real model request",
+      "non-empty maximum-assurance benchmark",
+      "benchmark repository commit binding"
+    ],
+    "nonqualifying_states": [
+      "unavailable",
+      "skipped",
+      "mock",
+      "timed_out",
+      "unisolated",
+      "empty",
+      "malformed",
+      "unattested",
+      "partially_observed"
+    ]
+  },
+  "locally_observed_tools": [
+    {
+      "name": "forge",
+      "path": "/Users/josevans/.foundry/bin/forge",
+      "version": "1.3.2-stable",
+      "sha256": "c0ed9870bf0637ce351ef70e347bcf8ab5e23c4cc12d32ef6fdf4eb1d97116ee",
+      "certified_portfolio_execution": false
+    },
+    {
+      "name": "slither",
+      "path": "/Users/josevans/anaconda3/bin/slither",
+      "version": "0.11.5",
+      "sha256": "1a95e1d6b88b600e219d40643ddb7353e0822d19b930d315828ea1f98bcd9aaf",
+      "certified_portfolio_execution": false
+    },
+    {
+      "name": "halmos",
+      "path": "/Users/josevans/anaconda3/bin/halmos",
+      "version": "0.3.3",
+      "sha256": "99ef8b6844cfe6e5288fa2f3b57587a3356c9b563a31f52dfb335d9e87623065",
+      "certified_portfolio_execution": false
+    }
+  ],
+  "external_integration_status": {
+    "qualifies_for_certified_maximum_assurance": false,
+    "blocked": [
+      "Echidna is not installed",
+      "Medusa is not installed",
+      "no approved formal proof engine executed",
+      "no adversarially certified rootless image/backend executed",
+      "isolated replay skipped because no qualifying backend was available",
+      "no current non-empty maximum-assurance benchmark certificate exists",
+      "no real qualified model review exists"
+    ],
+    "classification": "BLOCKED_TECHNICAL",
+    "tracking_ticket": "REM-INTEGRATIONS-001"
+  }
+}

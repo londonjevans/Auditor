@@ -37,6 +37,7 @@ from mmaudit.agents.verifier import (
 )
 from mmaudit.benchmark.certificate import (
     BenchmarkCertificateVerification,
+    CertificateVerificationOrigin,
     CertificateVerificationStatus,
 )
 from mmaudit.config import AuditConfig, validate_model_independence
@@ -243,11 +244,26 @@ class AuditPipeline:
             self.config,
             backend=self.reproduction_runner.backend,
         )
-        self.invariant_runner = invariant_runner or FoundryInvariantRunner(
-            self.config.reproduction,
-            self.config.smart_contracts,
-        )
-        self.formal_runner = formal_runner or FormalRunner(self.config.formal)
+        shared_backend = getattr(self.reproduction_runner, "backend", None)
+        if invariant_runner is None:
+            configured_invariant_runner = FoundryInvariantRunner(
+                self.config.reproduction,
+                self.config.smart_contracts,
+                backend=shared_backend,
+            )
+            configured_invariant_runner.backend = shared_backend
+            self.invariant_runner = configured_invariant_runner
+        else:
+            self.invariant_runner = invariant_runner
+        if formal_runner is None:
+            configured_formal_runner = FormalRunner(
+                self.config.formal,
+                backend=shared_backend,
+            )
+            configured_formal_runner.backend = shared_backend
+            self.formal_runner = configured_formal_runner
+        else:
+            self.formal_runner = formal_runner
         self._owns_client = False
 
     def clear_credentials(self) -> None:
@@ -270,6 +286,7 @@ class AuditPipeline:
         require_maximum_assurance: bool | None = None,
         allow_maximum_assurance_downgrade: bool | None = None,
         benchmark_verification: BenchmarkCertificateVerification | None = None,
+        benchmark_repository_git_commit: str | None = None,
     ) -> PipelineResult:
         """Execute one audit and always clear provider credentials afterward."""
 
@@ -285,6 +302,7 @@ class AuditPipeline:
                 require_maximum_assurance=require_maximum_assurance,
                 allow_maximum_assurance_downgrade=allow_maximum_assurance_downgrade,
                 benchmark_verification=benchmark_verification,
+                benchmark_repository_git_commit=benchmark_repository_git_commit,
             )
         finally:
             self.api_key = ""
@@ -307,13 +325,36 @@ class AuditPipeline:
         require_maximum_assurance: bool | None = None,
         allow_maximum_assurance_downgrade: bool | None = None,
         benchmark_verification: BenchmarkCertificateVerification | None = None,
+        benchmark_repository_git_commit: str | None = None,
     ) -> PipelineResult:
         benchmark_required = (
             self.config.maximum_assurance.benchmark_gate or self.config.maximum_assurance.ci_mode
         )
-        if benchmark_required and (
-            benchmark_verification is None
-            or benchmark_verification.status is not CertificateVerificationStatus.CURRENT
+        downgrade_allowed = (
+            self.config.maximum_assurance.allow_downgrade
+            if allow_maximum_assurance_downgrade is None
+            else allow_maximum_assurance_downgrade
+        )
+        if (
+            benchmark_required
+            and (
+                benchmark_verification is None
+                or benchmark_repository_git_commit is None
+                or (
+                    benchmark_verification is not None
+                    and benchmark_verification.observed_repository_git_commit
+                    != benchmark_repository_git_commit
+                )
+                or benchmark_verification.status is not CertificateVerificationStatus.CURRENT
+                or benchmark_verification.origin is not CertificateVerificationOrigin.FILE_BACKED
+                or benchmark_verification.file_backed_evidence is None
+                or (
+                    self.config.profile is AuditProfile.MAXIMUM_ASSURANCE
+                    and benchmark_verification.file_backed_evidence.benchmark_profile
+                    is not AuditProfile.MAXIMUM_ASSURANCE
+                )
+            )
+            and not downgrade_allowed
         ):
             raise ValueError("configured benchmark gate requires current certificate verification")
         run_started_at = datetime.now(UTC)
@@ -394,6 +435,7 @@ class AuditPipeline:
         isolation_available = bool(
             getattr(self.reproduction_runner, "isolation_available", False)
             and getattr(self.invariant_runner, "isolation_available", False)
+            and getattr(self.formal_runner, "isolation_available", False)
         )
         preflight_requirements = assurance_contract.configuration_requirements(
             isolation_available=isolation_available,
@@ -1789,9 +1831,25 @@ class AuditPipeline:
                 graphs=solidity_graphs,
                 scanners=scanner_runs,
                 invariants=solidity_invariants,
+                expected_invariant_harnesses={
+                    (
+                        harness.invariant_id,
+                        harness.name,
+                        harness.specification_sha256(),
+                    )
+                    for harness in invariant_harnesses
+                },
                 invariant_executions=invariant_executions,
                 economic_simulations=economic_simulations,
                 formal_runs=formal_runs,
+                property_corpus_sha256=property_corpus.corpus_hash,
+                property_corpus_property_ids={
+                    property_spec.id for property_spec in property_corpus.properties
+                },
+                property_corpus_property_hashes={
+                    property_spec.id: property_spec.property_hash
+                    for property_spec in property_corpus.properties
+                },
                 reproduction_results=reproductions,
                 reproduction_resolutions=reproduction_resolutions,
                 eligible_high_critical_ids=high_critical,
@@ -1814,8 +1872,10 @@ class AuditPipeline:
                 judge_completed=("judge" in successful_usage_roles or candidate_groups_count == 0),
                 coverage=solidity_coverage,
                 model_review_coverage=model_review_coverage,
+                model_usage=usage.records,
                 scope_assessment=scope_assessment,
                 benchmark_verification=benchmark_verification,
+                benchmark_repository_git_commit=benchmark_repository_git_commit,
                 isolation_available=isolation_available,
                 scanner_only=scanner_only,
                 artifacts=artifact_names,
@@ -1959,6 +2019,7 @@ class AuditPipeline:
             base = {
                 "invariant_id": harness.invariant_id,
                 "harness_name": harness.name,
+                "harness_spec_sha256": harness.specification_sha256(),
                 "runs": harness.runs,
                 "depth": harness.depth,
                 "seed": harness.seed,

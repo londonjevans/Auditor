@@ -12,17 +12,22 @@ import signal
 import subprocess
 import time
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Protocol
 from urllib.parse import urlparse
 
 from mmaudit.config import ReproductionConfig, SmartContractsConfig
 from mmaudit.isolation.container import discover_rootless_container_backend
+from mmaudit.isolation.provenance import (
+    _seal_builtin_isolation_backend,
+    isolation_attestation_sha256,
+    isolation_execution_evidence,
+)
 from mmaudit.models.schemas import (
     AttackerCapabilityPolicy,
     CandidateFinding,
     CrossChainMessageCapability,
+    ExecutionEvidenceKind,
     FinancialAssetKind,
     FinancialSettlementEvidence,
     ForkArgument,
@@ -277,42 +282,29 @@ def default_isolation_backend(
         return None
     if configured in {"auto", "sandbox-exec"} and platform.system() == "Darwin":
         executable = shutil.which("sandbox-exec")
-        if executable and _macos_sandbox_usable(executable):
-            return MacOSSandboxBackend(executable=executable)
+        if executable:
+            try:
+                resolved = str(Path(executable).resolve(strict=True))
+            except OSError:
+                resolved = ""
+            if resolved:
+                try:
+                    return _seal_builtin_isolation_backend(MacOSSandboxBackend(executable=resolved))
+                except ValueError:
+                    return None
     if configured in {"auto", "bubblewrap"} and platform.system() == "Linux":
         executable = shutil.which("bwrap")
         if executable:
-            return BubblewrapBackend(executable=executable)
+            try:
+                resolved = str(Path(executable).resolve(strict=True))
+            except OSError:
+                resolved = ""
+            if resolved:
+                try:
+                    return _seal_builtin_isolation_backend(BubblewrapBackend(executable=resolved))
+                except ValueError:
+                    return None
     return None
-
-
-@lru_cache(maxsize=4)
-def _macos_sandbox_usable(executable: str) -> bool:
-    """Require a benign policy application, not merely a binary on PATH."""
-
-    try:
-        result = subprocess.run(
-            [
-                executable,
-                "-p",
-                "(version 1)\n(allow default)",
-                "/usr/bin/true",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=5,
-            env={
-                "PATH": os.environ.get("PATH", ""),
-                "HOME": "/var/empty",
-                "LANG": "C",
-                "LC_ALL": "C",
-            },
-            shell=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0
 
 
 class ForkReproductionRunner:
@@ -343,8 +335,10 @@ class ForkReproductionRunner:
     def isolation_available(self) -> bool:
         """Whether a hardened backend was resolved without executing target code."""
 
-        return self.backend is not None and bool(
-            getattr(self.backend, "supports_local_fork_rpc", True)
+        return (
+            isolation_execution_evidence(self.backend) is ExecutionEvidenceKind.REAL
+            and self.backend is not None
+            and bool(getattr(self.backend, "supports_local_fork_rpc", True))
         )
 
     def run(
@@ -411,6 +405,16 @@ class ForkReproductionRunner:
                 **base,
                 state=ReproductionState.ENVIRONMENT_BLOCKED,
                 limitations=["forge is not installed outside the audited repository"],
+                duration_seconds=time.monotonic() - started,
+                isolation_backend=self.backend.name,
+            )
+        try:
+            forge_sha256 = _file_sha256(forge)
+        except OSError as exc:
+            return ReproductionResult(
+                **base,
+                state=ReproductionState.ENVIRONMENT_BLOCKED,
+                limitations=[f"forge executable hashing failed: {type(exc).__name__}"],
                 duration_seconds=time.monotonic() - started,
                 isolation_backend=self.backend.name,
             )
@@ -560,6 +564,12 @@ class ForkReproductionRunner:
         return ReproductionResult(
             **base,
             state=final_state,
+            execution_evidence=(
+                isolation_execution_evidence(self.backend)
+                if attempts > 0
+                else ExecutionEvidenceKind.UNVERIFIED
+            ),
+            executable_sha256=forge_sha256,
             generated_test_sha256=source_hash,
             generated_test_path=(
                 str(test_path.relative_to(private_dir)) if test_path is not None else None
@@ -581,6 +591,7 @@ class ForkReproductionRunner:
                 str(stderr_path.relative_to(private_dir)) if stderr_path is not None else None
             ),
             isolation_backend=self.backend.name,
+            isolation_attestation_sha256=isolation_attestation_sha256(self.backend),
             repository_sha256=repository_sha256,
             attempt_evidence=attempt_evidence,
             minimization_evidence=minimization_evidence,

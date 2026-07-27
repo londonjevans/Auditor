@@ -4,13 +4,13 @@ The seven files under `docs/evaluation/` are immutable baseline evidence from
 commit `e304807cf942542706b88544fa216516f8f95cad`.
 
 AUTORUN_STATUS: IN_PROGRESS
-CURRENT_TICKET: EVAL-DEFECT-003
-LAST_COMPLETED_TICKET: EVAL-DEFECT-002
-NEXT_ACTION: Require qualifying real, non-empty execution provenance for the exact certified engine portfolio.
-LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_assurance.py tests/unit/test_reproduction.py tests/unit/test_reproduction_integrity.py tests/integration/test_pipeline.py
-LAST_RESULT: PASS — 110 tests passed in 42.49s; affected Ruff and strict mypy gates passed; independent code review found no remaining EVAL-DEFECT-002 blocker.
-REMAINING_CODE_DEFECTS: 11
-REMAINING_REAL_INTEGRATIONS: OpenRouter exact-model smoke/qualification/specialist review; Slither; Echidna; Medusa; Halmos; formal proof engine; rootless isolation; isolated replay; product benchmark reports
+CURRENT_TICKET: EVAL-DEFECT-004
+LAST_COMPLETED_TICKET: EVAL-DEFECT-003
+NEXT_ACTION: Checkpoint the EVAL-DEFECT-003 fail-closed portfolio, then validate the independent exact-Slither gate for EVAL-DEFECT-004.
+LAST_COMMAND: .venv/bin/pytest -q
+LAST_RESULT: PASS — 867 tests passed and 9 real-integration tests skipped with explicit prerequisites in 152.18s.
+REMAINING_CODE_DEFECTS: 10
+REMAINING_REAL_INTEGRATIONS: OpenRouter exact-model smoke/qualification/specialist review; certified-isolation Foundry and Slither; Echidna; Medusa; Halmos; formal proof engine; rootless isolation; isolated replay; product benchmark reports
 BLOCKED_EXTERNAL_PREREQUISITES: Echidna, Medusa, Kontrol, Certora, rootless runtime/image, private holdout, and independently adjudicated expert comparison are not yet evidenced as available
 OPENROUTER_COST_USED_USD: 0.00
 LAST_CHECKPOINT_COMMIT: 30e04caec21d9d01e1ed39fd98f288cf25a025a3
@@ -235,9 +235,64 @@ LAST_CHECKPOINT_COMMIT: 30e04caec21d9d01e1ed39fd98f288cf25a025a3
 
 ## 2026-07-27 — EVAL-DEFECT-003
 
-- **Status:** `IN_PROGRESS`
+- **Status:** `COMPLETE`
 - **Defensive objective:** Require the exact real engine portfolio, non-empty
   execution evidence, hardened isolation, replay, real model review, and a current
   benchmark for certified maximum assurance.
-- **Exact next safe action:** Add explicit execution provenance and permanent
-  missing-engine negative assays before changing portfolio defaults.
+- **Implementation slice:** Exact Foundry, Slither, Echidna, Medusa, Halmos, and
+  formal-proof gates now require configured version/checksum pins, sealed
+  observation hashes, strict machine output, non-empty campaign/property evidence,
+  and provenance minted only by preflighted built-in hardened-isolation backends.
+  Foundry unit/fuzz/invariant summaries and generated invariant campaigns are
+  derived from exact Forge JSON rather than human-readable logs. Manifest-bound
+  replay records only applicable component kinds and can promote replay-only
+  clauses only through a separately hash-sealed post-run certification.
+- **Commands and results:**
+  - `.venv/bin/pytest -q tests/unit/test_assurance.py tests/unit/test_scanners_reporting.py tests/unit/test_formal.py tests/unit/test_halmos.py tests/unit/test_kontrol.py tests/unit/test_echidna.py tests/unit/test_medusa.py tests/unit/test_replay.py tests/unit/test_config.py tests/unit/test_benchmark_certificate.py tests/unit/test_cli.py tests/unit/test_reproduction.py tests/unit/test_isolation.py tests/unit/test_openrouter.py tests/unit/test_invariant_execution.py tests/unit/test_certification.py tests/integration/test_pipeline.py`
+    → `451 passed in 69.28s`.
+  - `.venv/bin/pytest -q tests/unit/test_invariant_execution.py tests/integration/test_pipeline.py::test_erc4626_generated_harness_executes_locally_and_is_counted_separately`
+    → `78 passed in 15.44s`.
+  - Six real local Forge economic/invariant integration controls → `5 passed,
+    1 failed`; inspection showed the remaining state-ordering control required
+    structured handler-metric normalization. After the fix, its focused rerun
+    passed. This execution used a synthetic local-only test backend and therefore
+    is not credited as certified hardened-isolation evidence.
+  - Ruff checks and strict mypy over the invariant runner passed.
+  - Independent adversarial review reproduced ten additional false-COMPLETE
+    paths: unbound proof/property identities, unconfigured model usage, detached
+    benchmark commit, omitted economic applicability, incomplete replay member
+    inventory, declarative isolation evidence, unvalidated Foundry output,
+    partial campaigns, and zero-call action credit. Each path received a
+    fail-closed implementation fix and permanent negative regression.
+  - The first combined post-review command reported `9 failed, 467 passed`;
+    all nine failures were certification fixture setup that mocked a run
+    directory without mocking its newly required sealed replay inventory.
+    After correcting the fixture, certification/replay passed `13 passed`.
+  - `.venv/bin/pytest -q tests/unit/test_assurance.py
+    tests/unit/test_certification.py tests/unit/test_replay.py
+    tests/unit/test_invariant_execution.py tests/unit/test_isolation.py
+    tests/unit/test_isolation_provenance.py tests/unit/test_scanners_reporting.py
+    tests/unit/test_formal.py tests/unit/test_echidna.py tests/unit/test_medusa.py
+    tests/unit/test_halmos.py tests/unit/test_kontrol.py
+    tests/integration/test_pipeline.py` → `354 passed in 69.50s`.
+  - `.venv/bin/ruff check src/mmaudit ...` → PASS.
+  - `.venv/bin/mypy` → PASS, `104 source files`.
+  - `.venv/bin/pytest -q` → PASS, `867 passed, 9 skipped in 152.18s`.
+    Every skip named its unavailable real prerequisite; none was counted as
+    certified engine, isolation, or replay evidence.
+  - `.venv/bin/ruff format .`, `.venv/bin/ruff check .`, and
+    `.venv/bin/mypy` → PASS after final formatting.
+  - Immutable baseline artifact SHA-256 verification → PASS; all seven hashes
+    exactly match the recorded baseline.
+- **Runtime artifact:** `docs/remediation/runtime/eval_defect_003.json`.
+- **External evidence boundary:** Echidna, Medusa, Kontrol, Certora, and an
+  approved rootless runtime remain unavailable. Installed tools have not yet
+  executed as the complete digest-pinned certified-isolation portfolio. These
+  remain explicit blockers and cannot satisfy maximum assurance. The exact
+  integration work remains queued under `REM-INTEGRATIONS-001`.
+- **Result:** `COMPLETE` for the false-COMPLETE implementation defect. The
+  contract now rejects unavailable, mocked, unobserved, partial, unattested,
+  identity-drifted, or incomplete portfolio evidence.
+- **Checkpoint commit:** `PENDING_CHECKPOINT`.
+- **Exact next safe action:** Checkpoint this ticket and continue
+  `EVAL-DEFECT-004`.

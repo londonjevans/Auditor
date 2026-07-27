@@ -655,6 +655,179 @@ def test_run_benchmark_gate_rejects_absent_certificate_before_pipeline(
     assert not constructed
 
 
+def test_run_benchmark_gate_allows_wholly_missing_inputs_with_explicit_downgrade(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repository = _synthetic_run_repository(tmp_path)
+    captured: dict[str, object] = {}
+
+    class SyntheticPipelineResult:
+        run_dir = tmp_path / "synthetic-run"
+
+        def exit_for_findings(self, fail_on) -> ExitCode:
+            del fail_on
+            return ExitCode.SUCCESS
+
+    class SyntheticPipeline:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+
+        async def run(self, **kwargs):
+            captured.update(kwargs)
+            return SyntheticPipelineResult()
+
+    monkeypatch.setattr("mmaudit.cli.AuditPipeline", SyntheticPipeline)
+    arguments = [
+        *_run_gate_arguments(tmp_path=tmp_path, repository=repository),
+        "--profile",
+        "maximum-assurance",
+        "--allow-maximum-assurance-downgrade",
+    ]
+
+    result = runner.invoke(app, arguments)
+
+    assert result.exit_code == ExitCode.SUCCESS
+    assert captured["benchmark_verification"] is None
+    assert captured["require_maximum_assurance"] is None
+    assert captured["allow_maximum_assurance_downgrade"] is None
+
+
+def test_run_benchmark_gate_preserves_configured_downgrade_when_flag_is_absent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repository = _synthetic_run_repository(tmp_path)
+    config_path = tmp_path / "maximum-downgrade.toml"
+    config_contents = (ROOT / "mmaudit.example.toml").read_text(encoding="utf-8")
+    config_contents = config_contents.replace(
+        'profile = "standard"',
+        'profile = "maximum-assurance"',
+        1,
+    ).replace(
+        "allow_downgrade = false",
+        "allow_downgrade = true",
+        1,
+    )
+    config_path.write_text(config_contents, encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    class SyntheticPipelineResult:
+        run_dir = tmp_path / "synthetic-run"
+
+        def exit_for_findings(self, fail_on) -> ExitCode:
+            del fail_on
+            return ExitCode.SUCCESS
+
+    class SyntheticPipeline:
+        def __init__(self, config, *args, **kwargs) -> None:
+            del args, kwargs
+            captured["config"] = config
+
+        async def run(self, **kwargs):
+            captured.update(kwargs)
+            return SyntheticPipelineResult()
+
+    monkeypatch.setattr("mmaudit.cli.AuditPipeline", SyntheticPipeline)
+    arguments = _run_gate_arguments(tmp_path=tmp_path, repository=repository)
+    arguments[arguments.index("--config") + 1] = str(config_path)
+
+    result = runner.invoke(app, arguments)
+
+    assert result.exit_code == ExitCode.SUCCESS
+    config = captured["config"]
+    assert config.maximum_assurance.allow_downgrade is True
+    assert captured["benchmark_verification"] is None
+    assert captured["require_maximum_assurance"] is None
+    assert captured["allow_maximum_assurance_downgrade"] is None
+
+
+def test_run_preserves_configured_maximum_requirement_when_flag_is_absent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repository = _synthetic_run_repository(tmp_path)
+    config_path = tmp_path / "required-maximum.toml"
+    config_contents = (ROOT / "mmaudit.example.toml").read_text(encoding="utf-8")
+    config_path.write_text(
+        config_contents.replace("require = false", "require = true", 1),
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    class SyntheticPipelineResult:
+        run_dir = tmp_path / "synthetic-run"
+
+        def exit_for_findings(self, fail_on) -> ExitCode:
+            del fail_on
+            return ExitCode.SUCCESS
+
+    class SyntheticPipeline:
+        def __init__(self, config, *args, **kwargs) -> None:
+            del args, kwargs
+            captured["config"] = config
+
+        async def run(self, **kwargs):
+            captured.update(kwargs)
+            return SyntheticPipelineResult()
+
+    monkeypatch.setattr("mmaudit.cli.AuditPipeline", SyntheticPipeline)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--config",
+            str(config_path),
+            "--repo",
+            str(repository),
+            "--output",
+            str(tmp_path / "audit-output"),
+            "--scanner-only",
+            "--skip-codeql",
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.SUCCESS
+    config = captured["config"]
+    assert config.maximum_assurance.require is True
+    assert captured["require_maximum_assurance"] is None
+    assert captured["allow_maximum_assurance_downgrade"] is None
+
+
+def test_run_benchmark_gate_rejects_partial_inputs_even_with_downgrade(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repository = _synthetic_run_repository(tmp_path)
+    constructed = False
+
+    class ForbiddenPipeline:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            nonlocal constructed
+            constructed = True
+
+    monkeypatch.setattr("mmaudit.cli.AuditPipeline", ForbiddenPipeline)
+    arguments = [
+        *_run_gate_arguments(
+            tmp_path=tmp_path,
+            repository=repository,
+            certificate_path=tmp_path / "partial-certificate.json",
+        ),
+        "--profile",
+        "maximum-assurance",
+        "--allow-maximum-assurance-downgrade",
+    ]
+
+    result = runner.invoke(app, arguments)
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "benchmark gate requires" in result.stdout
+    assert not constructed
+
+
 def test_run_benchmark_gate_rejects_stale_binding_before_pipeline(
     tmp_path: Path,
     monkeypatch,
@@ -694,6 +867,60 @@ def test_run_benchmark_gate_rejects_stale_binding_before_pipeline(
     assert result.exit_code == ExitCode.CONFIGURATION
     assert "certificate is stale" in result.stdout
     assert not constructed
+
+
+def test_run_benchmark_gate_allows_stale_binding_with_explicit_downgrade(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    component_root, inputs_path = _write_certificate_components(tmp_path)
+    certificate_path, certify_result = _certify(
+        tmp_path,
+        component_root,
+        inputs_path,
+    )
+    assert certify_result.exit_code == ExitCode.SUCCESS
+    (component_root / "tools.json").write_text(
+        '{"scanner":"changed"}\n',
+        encoding="utf-8",
+    )
+    repository = _synthetic_run_repository(tmp_path)
+    captured: dict[str, object] = {}
+
+    class SyntheticPipelineResult:
+        run_dir = tmp_path / "synthetic-run"
+
+        def exit_for_findings(self, fail_on) -> ExitCode:
+            del fail_on
+            return ExitCode.SUCCESS
+
+    class SyntheticPipeline:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+
+        async def run(self, **kwargs):
+            captured.update(kwargs)
+            return SyntheticPipelineResult()
+
+    monkeypatch.setattr("mmaudit.cli.AuditPipeline", SyntheticPipeline)
+    arguments = [
+        *_run_gate_arguments(
+            tmp_path=tmp_path,
+            repository=repository,
+            certificate_path=certificate_path,
+            component_root=component_root,
+        ),
+        "--profile",
+        "maximum-assurance",
+        "--allow-maximum-assurance-downgrade",
+    ]
+
+    result = runner.invoke(app, arguments)
+
+    assert result.exit_code == ExitCode.SUCCESS
+    verification = captured["benchmark_verification"]
+    assert verification.status is CertificateVerificationStatus.STALE
+    assert captured["allow_maximum_assurance_downgrade"] is None
 
 
 def test_run_benchmark_gate_rejects_current_failed_corpus_before_pipeline(

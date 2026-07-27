@@ -15,6 +15,7 @@
     "remote_network_policy",
     "loopback_policy",
     "components",
+    "applicable_kinds",
     "missing_kinds",
     "replay_sha256"
   ],
@@ -58,6 +59,14 @@
         "$ref": "#/$defs/component"
       }
     },
+    "applicable_kinds": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "$ref": "#/$defs/componentKind"
+      }
+    },
     "missing_kinds": {
       "type": "array",
       "maxItems": 3,
@@ -99,6 +108,9 @@
         "identifier",
         "status",
         "executed",
+        "execution_evidence",
+        "isolation_backend",
+        "isolation_attestation_sha256",
         "expected_state",
         "observed_state",
         "expected_sha256",
@@ -123,6 +135,28 @@
         },
         "executed": {
           "type": "boolean"
+        },
+        "execution_evidence": {
+          "enum": [
+            "real",
+            "mock",
+            "unverified"
+          ]
+        },
+        "isolation_backend": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "isolation_attestation_sha256": {
+          "$ref": "#/$defs/optionalSha256"
         },
         "expected_state": {
           "type": "string",

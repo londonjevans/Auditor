@@ -35,8 +35,8 @@
   },
   "defects": {
     "total": 13,
-    "fixed": 2,
-    "remaining": 11
+    "fixed": 3,
+    "remaining": 10
   },
   "release_status": "NOT_A_RELEASE_CANDIDATE",
   "independent_evaluation_handoff": null,

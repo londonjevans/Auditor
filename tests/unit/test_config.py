@@ -215,7 +215,7 @@ def test_reproduction_capability_names_are_safe_and_unique(
         ReproductionConfig(**{field: value})
 
 
-def test_maximum_assurance_profile_keeps_legacy_fork_scanner_opt_in(config_factory) -> None:
+def test_maximum_assurance_profile_forces_exact_engine_portfolio(config_factory) -> None:
     config = config_factory(
         profile=AuditProfile.MAXIMUM_ASSURANCE,
         smart_contracts={"compile": False},
@@ -234,8 +234,16 @@ def test_maximum_assurance_profile_keeps_legacy_fork_scanner_opt_in(config_facto
     assert config.quality_gates.min_dependency_resolution_fraction == 1.0
     assert config.scanners.slither.enabled is True
     assert config.scanners.slither.required is True
-    assert config.scanners.foundry_fork.enabled is False
-    assert config.scanners.foundry_fork.required is False
+    assert config.scanners.foundry_fork.enabled is True
+    assert config.scanners.foundry_fork.required is True
+    assert config.maximum_assurance.benchmark_gate is True
+    assert {"echidna", "medusa", "halmos"} <= set(config.formal.required_tools)
+    assert "foundry-invariant" not in config.formal.required_tools
+
+
+def test_scanner_trust_pins_must_be_paired(config_factory) -> None:
+    with pytest.raises(ValueError, match="version and SHA-256"):
+        config_factory(scanners={"slither": {"version": "0.11.5"}})
 
 
 def test_smart_contract_path_and_env_validation(config_factory) -> None:

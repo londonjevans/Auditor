@@ -57,9 +57,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   review, and the current benchmark gate are mandatory; unavailable, skipped,
   mocked, timed-out, unisolated, or empty evidence fails closed.
 - **Dependencies:** `EVAL-DEFECT-002`.
-- **Status:** `IN_PROGRESS`
-- **Next action:** Define and enforce real, non-empty provenance for the exact
-  certified engine portfolio while preserving explicit external blockers.
+- **Status:** `COMPLETE`
+- **Next action:** None; certified execution remains fail-closed and the unavailable
+  real portfolio is tracked under `REM-INTEGRATIONS-001`. Continue with
+  `EVAL-DEFECT-004`.
 
 ## EVAL-DEFECT-004 — Missing Slither can be hidden
 
@@ -68,7 +69,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Acceptance criteria:** The `required_slither_missing` assay fails and no other
   scanner can satisfy the Slither clause.
 - **Dependencies:** `EVAL-DEFECT-003`.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
 
 ## REM-OPENROUTER-001 — Exact OpenRouter client and cost ledger
 

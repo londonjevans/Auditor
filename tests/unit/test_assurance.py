@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -9,7 +10,9 @@ import pytest
 from mmaudit.agents.specialists import SPECIALIST_ROLE_REGISTRY
 from mmaudit.benchmark.certificate import (
     BenchmarkCertificateVerification,
+    CertificateVerificationOrigin,
     CertificateVerificationStatus,
+    FileBackedBenchmarkVerificationEvidence,
 )
 from mmaudit.config import validate_model_independence
 from mmaudit.constants import ALL_SPECIALIST_ROLES, SPECIALIST_INVESTIGATOR_ROLES
@@ -26,9 +29,19 @@ from mmaudit.models.schemas import (
     CoverageProvenance,
     EconomicSimulationKind,
     EconomicSimulationPlan,
+    ExecutionEvidenceKind,
+    FormalCampaignBounds,
+    FormalCampaignObservation,
+    FormalDependencyProvenance,
+    FormalEvidence,
+    FormalPropertyBinding,
+    FormalResultKind,
     FormalToolRun,
     FormalToolStatus,
+    FoundryTestExecutionSummary,
+    InvariantCampaignCoverage,
     InvariantCategory,
+    InvariantExecutionAttemptEvidence,
     InvariantExecutionResult,
     InvariantExecutionStatus,
     InvariantSpec,
@@ -64,6 +77,8 @@ from mmaudit.models.schemas import (
     SolidityProjectType,
     SolidityProvenance,
     SoliditySymbolIndex,
+    TransactionOrderingCapability,
+    UsageRecord,
 )
 from mmaudit.orchestration.assurance import (
     FULL_SEMANTIC_GRAPHS,
@@ -71,6 +86,13 @@ from mmaudit.orchestration.assurance import (
     MaximumAssuranceContract,
 )
 from mmaudit.orchestration.manifest import canonical_sha256
+from mmaudit.orchestration.replay import (
+    OfflineReplay,
+    OfflineReplayComponent,
+    OfflineReplayStatus,
+    ReplayComponentKind,
+    ReplayComponentStatus,
+)
 from mmaudit.reporting.markdown import render_markdown
 from mmaudit.reporting.sarif import generate_sarif
 from mmaudit.traceability import (
@@ -98,6 +120,38 @@ def _maximum_config(config_factory, *, allow_downgrade: bool = False, families: 
         profile=AuditProfile.MAXIMUM_ASSURANCE,
         maximum_assurance={"allow_downgrade": allow_downgrade},
         models={"specialists": _specialists(families=families)},
+        smart_contracts={
+            "solc_version": "0.8.30",
+            "solc_sha256": "6" * 64,
+        },
+        scanners={
+            "slither": {
+                "version": "0.11.5",
+                "sha256": "3" * 64,
+            },
+            "foundry_fork": {
+                "version": "1.3.2",
+                "sha256": "5" * 64,
+            },
+        },
+        formal={
+            "echidna_version": "1.0.0",
+            "echidna_sha256": hashlib.sha256(b"echidna:executable").hexdigest(),
+            "medusa_version": "1.0.0",
+            "medusa_sha256": hashlib.sha256(b"medusa:executable").hexdigest(),
+            "halmos_version": "1.0.0",
+            "halmos_sha256": hashlib.sha256(b"halmos:executable").hexdigest(),
+            "halmos_solver_version": "4.15.0",
+            "halmos_solver_sha256": "e" * 64,
+            "certora": {
+                "enabled": True,
+                "cli_version": "1.0.0",
+                "cli_sha256": hashlib.sha256(b"certora:executable").hexdigest(),
+                "source": "src/Vault.sol",
+                "contract": "Vault",
+                "specification": "certora/Vault.spec",
+            },
+        },
     ).effective()
 
 
@@ -173,6 +227,281 @@ def _complete_scope_assessment() -> AuditScopeAssessment:
     )
 
 
+def _real_formal_run(
+    tool: str,
+    *,
+    proof: bool = False,
+    observe_properties: bool = True,
+    execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.REAL,
+    isolation_backend: str = "sandbox-exec",
+) -> FormalToolRun:
+    executable_sha256 = hashlib.sha256(f"{tool}:executable".encode()).hexdigest()
+    stdout_sha256 = hashlib.sha256(f"{tool}:stdout".encode()).hexdigest()
+    stderr_sha256 = hashlib.sha256(f"{tool}:stderr".encode()).hexdigest()
+    result_sha256 = hashlib.sha256(f"{tool}:result".encode()).hexdigest()
+    command = [tool, "--bounded", "--offline"]
+    property_corpus_hash = "d" * 64
+    property_id = "prop-" + ("1" * 24)
+    property_hash = "1" * 64
+    executed_property_ids = [property_id]
+    observed_property_ids = list(executed_property_ids) if observe_properties else []
+    evidence = [
+        FormalEvidence(
+            tool=tool,
+            property_id=property_id,
+            property_description="synthetic typed execution observation",
+            status=FormalToolStatus.SUCCESS,
+            result_kind=FormalResultKind.PROOF if proof else FormalResultKind.NONE,
+            artifact_paths=[f"private/formal/{tool}/result.json"],
+            confidence=1,
+        )
+    ]
+    run = FormalToolRun(
+        tool=tool,
+        execution_evidence=execution_evidence,
+        version="1.0.0",
+        executable_sha256=executable_sha256,
+        isolation_backend=isolation_backend,
+        isolation_attestation_sha256="7" * 64,
+        dependencies=(
+            [
+                FormalDependencyProvenance(
+                    name="z3",
+                    version="4.15.0",
+                    executable_sha256="e" * 64,
+                )
+            ]
+            if tool == "halmos"
+            else []
+        ),
+        status=FormalToolStatus.SUCCESS,
+        command=command,
+        duration_seconds=1,
+        evidence=evidence,
+        coverage={
+            "indexed_sources": 1,
+            "properties": 1,
+        },
+        property_corpus_hash=property_corpus_hash,
+        property_corpus_property_ids=[property_id],
+        translated_property_bindings=[
+            FormalPropertyBinding(
+                generated_property_id="GeneratedProperty",
+                corpus_property_id=property_id,
+                property_hash=property_hash,
+            )
+        ],
+        campaign_seed=7 if tool in {"echidna", "medusa", "halmos"} else None,
+        configured_campaign=FormalCampaignBounds(runs=256, depth=32),
+        observed_campaign=(
+            FormalCampaignObservation(paths=64)
+            if tool == "halmos"
+            else (
+                FormalCampaignObservation(runs=256, calls=8_192, depth=32)
+                if tool in {"echidna", "medusa"}
+                else FormalCampaignObservation(iterations=32, depth=32)
+            )
+        ),
+        translated_properties=len(executed_property_ids),
+        executed_property_ids=executed_property_ids,
+        observed_property_ids=observed_property_ids,
+        specification_artifacts=(["private/formal/certora/specification.spec"] if proof else []),
+        vacuity_artifacts=(["private/formal/certora/vacuity.json"] if proof else []),
+        stdout_path=f"private/formal/{tool}/stdout.txt",
+        stderr_path=f"private/formal/{tool}/stderr.txt",
+        result_path=f"private/formal/{tool}/result.json",
+        process_exit_code=0,
+        stdout_sha256=stdout_sha256,
+        stderr_sha256=stderr_sha256,
+        result_sha256=result_sha256,
+        stdout_bytes=100,
+        stderr_bytes=1,
+        result_bytes=100,
+        machine_output_validated=True,
+    )
+    return run.model_copy(
+        update={"execution_observation_sha256": run.expected_execution_observation_sha256()}
+    )
+
+
+def _real_model_usage(now: datetime) -> list[UsageRecord]:
+    roles = sorted(
+        {
+            "threat_model",
+            "source_audit",
+            "business_logic",
+            "configuration",
+            "falsifier",
+            *(f"specialist:{role}" for role in ALL_SPECIALIST_ROLES),
+        }
+    )
+    base_models = {
+        "threat_model": "alpha/atlas-secure",
+        "source_audit": "bravo/borealis-secure",
+        "business_logic": "charlie/cirrus-secure",
+        "configuration": "delta/denali-secure",
+    }
+    specialist_models = {
+        f"specialist:{role}": f"specialist-{index % 8}/model-{index % 8}"
+        for index, role in enumerate(ALL_SPECIALIST_ROLES)
+    }
+    specialist_models.update(
+        {
+            role: f"specialist-{index % 8}/model-{index % 8}"
+            for index, role in enumerate(ALL_SPECIALIST_ROLES)
+        }
+    )
+    role_models = {**base_models, **specialist_models}
+    return [
+        UsageRecord(
+            request_id=f"request-{index:02d}",
+            role=role,
+            execution_evidence=ExecutionEvidenceKind.REAL,
+            requested_model=(model_id := role_models[role]),
+            returned_model=model_id,
+            provider="approved-provider",
+            model_family=model_id,
+            timestamp=now,
+            prompt_tokens=100,
+            completion_tokens=100,
+            total_tokens=200,
+            routing={
+                "generation_id": f"generation-{index:02d}",
+                "zdr_requested": True,
+                "data_collection": "deny",
+            },
+            prompt_sha256=hashlib.sha256(f"{role}:prompt".encode()).hexdigest(),
+            response_sha256=hashlib.sha256(f"{role}:response".encode()).hexdigest(),
+            status="success",
+            attempts=1,
+        )
+        for index, role in enumerate(roles)
+    ]
+
+
+def _real_offline_replay(
+    *,
+    execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.REAL,
+    isolation_backend: str = "sandbox-exec",
+    kinds: set[ReplayComponentKind] | None = None,
+) -> OfflineReplay:
+    component_identities = (
+        [
+            (ReplayComponentKind.SCANNER, "foundry_fork"),
+            (ReplayComponentKind.SCANNER, "slither"),
+            (ReplayComponentKind.SAVED_TEST, "inv-economic/DonationInflation"),
+        ]
+        if kinds is None
+        else [
+            (kind, f"{kind.value}-evidence") for kind in sorted(kinds, key=lambda item: item.value)
+        ]
+    )
+    component_identities = sorted(
+        component_identities,
+        key=lambda item: (item[0].value, item[1]),
+    )
+    applicable_kinds = {kind for kind, _identifier in component_identities}
+    components = [
+        OfflineReplayComponent(
+            kind=kind,
+            identifier=identifier,
+            status=ReplayComponentStatus.MATCHED,
+            executed=True,
+            execution_evidence=execution_evidence,
+            isolation_backend=isolation_backend,
+            isolation_attestation_sha256="7" * 64,
+            expected_state="matched",
+            observed_state="matched",
+            expected_sha256=hashlib.sha256(kind.value.encode()).hexdigest(),
+            observed_sha256=hashlib.sha256(kind.value.encode()).hexdigest(),
+        )
+        for kind, identifier in component_identities
+    ]
+    payload = {
+        "schema_version": "1.0",
+        "generated_by": "mmaudit",
+        "status": OfflineReplayStatus.REPLAYED,
+        "run_id": "synthetic-assurance-run",
+        "manifest_sha256": "1" * 64,
+        "run_verification_sha256": "2" * 64,
+        "model_provider_contacted": False,
+        "remote_network_policy": "denied",
+        "loopback_policy": "local_only",
+        "components": [component.model_dump(mode="json") for component in components],
+        "applicable_kinds": [
+            kind.value for kind in sorted(applicable_kinds, key=lambda item: item.value)
+        ],
+        "missing_kinds": [],
+    }
+    payload["replay_sha256"] = canonical_sha256(payload)
+    return OfflineReplay.model_validate(payload)
+
+
+def _real_foundry_scanner(now: datetime) -> ScannerRun:
+    run = ScannerRun(
+        scanner="foundry_fork",
+        status=ScannerStatus.SUCCESS,
+        execution_evidence=ExecutionEvidenceKind.REAL,
+        version="forge 1.3.2",
+        executable_sha256="5" * 64,
+        command=["forge", "test", "--offline", "--json"],
+        started_at=now,
+        finished_at=now,
+        duration_seconds=1,
+        raw_output_path="private/scanner-output/foundry-fork.json",
+        raw_output_sha256="6" * 64,
+        raw_output_bytes=1_000,
+        process_exit_code=0,
+        isolation_backend="sandbox-exec",
+        isolation_attestation_sha256="7" * 64,
+        machine_output_validated=True,
+        foundry_summary=FoundryTestExecutionSummary(
+            unit_tests=1,
+            fuzz_tests=1,
+            invariant_tests=1,
+            passed_tests=3,
+            failed_tests=0,
+            skipped_tests=0,
+            fuzz_cases=256,
+            invariant_runs=256,
+            invariant_calls=8_192,
+        ),
+    )
+    return ScannerRun.model_validate(
+        {
+            **run.model_dump(mode="json"),
+            "execution_observation_sha256": run.expected_execution_observation_sha256(),
+        }
+    )
+
+
+def _real_slither_scanner(now: datetime) -> ScannerRun:
+    run = ScannerRun(
+        scanner="slither",
+        status=ScannerStatus.SUCCESS,
+        execution_evidence=ExecutionEvidenceKind.REAL,
+        version="slither 0.11.5",
+        executable_sha256="3" * 64,
+        command=["slither", ".", "--json", "-"],
+        started_at=now,
+        finished_at=now,
+        duration_seconds=0,
+        raw_output_path="private/scanner-output/slither/slither.json",
+        raw_output_sha256="4" * 64,
+        raw_output_bytes=100,
+        process_exit_code=0,
+        isolation_backend="sandbox-exec",
+        isolation_attestation_sha256="7" * 64,
+        machine_output_validated=True,
+    )
+    return ScannerRun.model_validate(
+        {
+            **run.model_dump(mode="json"),
+            "execution_observation_sha256": run.expected_execution_observation_sha256(),
+        }
+    )
+
+
 def _complete_runtime() -> AssuranceRuntime:
     now = datetime.now(UTC)
     project = SolidityProjectMetadata(
@@ -200,7 +529,7 @@ def _complete_runtime() -> AssuranceRuntime:
         executable=True,
         evidence_hash="b" * 64,
     )
-    return AssuranceRuntime(
+    runtime = AssuranceRuntime(
         projects=[project],
         compilations=[
             SolidityCompilationResult(
@@ -232,26 +561,74 @@ def _complete_runtime() -> AssuranceRuntime:
             ast_sources=["src/Vault.sol"],
         ),
         graphs=SolidityGraphSet(edges=[], analyzed_graphs=list(FULL_SEMANTIC_GRAPHS)),
-        scanners=[
-            ScannerRun(
-                scanner="slither",
-                status=ScannerStatus.SUCCESS,
-                started_at=now,
-                finished_at=now,
-                duration_seconds=0,
-            )
-        ],
+        scanners=[_real_slither_scanner(now), _real_foundry_scanner(now)],
         invariants=InvariantSuite(
             invariants=[invariant],
             templates_available_count=1,
             executable_count=1,
         ),
+        expected_invariant_harnesses={
+            (
+                invariant.id,
+                "DonationInflation",
+                "9" * 64,
+            )
+        },
         invariant_executions=[
             InvariantExecutionResult(
                 invariant_id=invariant.id,
                 harness_name="DonationInflation",
+                harness_spec_sha256="9" * 64,
                 status=InvariantExecutionStatus.PASSED,
+                execution_evidence=ExecutionEvidenceKind.REAL,
+                executable_sha256="5" * 64,
+                source_sha256="8" * 64,
+                compiler_version="solc 0.8.30",
+                compiler_sha256="6" * 64,
+                command=["forge", "test", "--offline", "--match-test", "invariant_"],
+                runs=256,
+                depth=32,
+                seed=7,
                 economic_template=EconomicSimulationKind.ERC4626_DONATION,
+                attempts=2,
+                successful_attempts=2,
+                replay_confirmed=True,
+                attempt_evidence=[
+                    InvariantExecutionAttemptEvidence(
+                        attempt=attempt,
+                        status=InvariantExecutionStatus.PASSED,
+                        source_sha256="8" * 64,
+                        fresh_workspace=True,
+                        stdout_sha256=hashlib.sha256(
+                            f"invariant:{attempt}:stdout".encode()
+                        ).hexdigest(),
+                        stderr_sha256=hashlib.sha256(
+                            f"invariant:{attempt}:stderr".encode()
+                        ).hexdigest(),
+                        stdout_path=f"private/invariants/attempt-{attempt}/stdout.txt",
+                        stderr_path=f"private/invariants/attempt-{attempt}/stderr.txt",
+                        process_exit_code=0,
+                        machine_output_validated=True,
+                        campaign_runs=256,
+                        campaign_calls=8_192,
+                    )
+                    for attempt in (1, 2)
+                ],
+                campaign_coverage=InvariantCampaignCoverage(
+                    declared_action_functions=["deposit"],
+                    observed_action_functions=["deposit"],
+                    declared_state_properties=["conservation"],
+                    observed_state_properties=["conservation"],
+                    sequence_depth_bound=32,
+                    observed_sequence_lengths=[1],
+                    attempts_consistent=True,
+                    observed_campaign_runs=256,
+                    observed_campaign_calls=8_192,
+                ),
+                stdout_path="private/invariants/stdout.txt",
+                stderr_path="private/invariants/stderr.txt",
+                isolation_backend="sandbox-exec",
+                isolation_attestation_sha256="7" * 64,
             )
         ],
         economic_simulations=[
@@ -265,11 +642,14 @@ def _complete_runtime() -> AssuranceRuntime:
             )
         ],
         formal_runs=[
-            FormalToolRun(
-                tool="solc-smtchecker",
-                status=FormalToolStatus.SUCCESS,
-            )
+            _real_formal_run("echidna"),
+            _real_formal_run("medusa"),
+            _real_formal_run("halmos"),
+            _real_formal_run("certora", proof=True),
         ],
+        property_corpus_sha256="d" * 64,
+        property_corpus_property_ids={"prop-" + ("1" * 24)},
+        property_corpus_property_hashes={"prop-" + ("1" * 24): "1" * 64},
         model_roles_completed={
             "threat_model",
             "source_audit",
@@ -289,6 +669,13 @@ def _complete_runtime() -> AssuranceRuntime:
         judge_completed=True,
         coverage=SolidityCoverage(projects_discovered=1),
         model_review_coverage=_complete_model_coverage(),
+        model_usage=_real_model_usage(now),
+        offline_replay=_real_offline_replay(),
+        replay_run_id="synthetic-assurance-run",
+        replay_manifest_sha256="1" * 64,
+        replay_verification_sha256="2" * 64,
+        benchmark_verification=_current_benchmark_verification(),
+        benchmark_repository_git_commit="b" * 40,
         scope_assessment=_complete_scope_assessment(),
         isolation_available=True,
         artifacts={
@@ -307,11 +694,23 @@ def _complete_runtime() -> AssuranceRuntime:
             "cross-examination.json",
             "specialist-execution.json",
             "model-review-coverage.json",
+            "offline-replay.json",
+            "benchmark-certificate-verification.json",
             "scope-assessment.json",
             "maximum_assurance_traceability.json",
         },
         traceability=_implemented_traceability(),
     )
+    invariant_result = runtime.invariant_executions[0]
+    runtime.invariant_executions[0] = InvariantExecutionResult.model_validate(
+        {
+            **invariant_result.model_dump(mode="json"),
+            "execution_observation_sha256": (
+                invariant_result.expected_execution_observation_sha256()
+            ),
+        }
+    )
+    return runtime
 
 
 def _implemented_traceability() -> MaximumAssuranceTraceability:
@@ -332,7 +731,36 @@ def _implemented_traceability() -> MaximumAssuranceTraceability:
     )
 
 
-def _current_benchmark_verification() -> BenchmarkCertificateVerification:
+def _current_benchmark_verification(
+    *,
+    profile: AuditProfile = AuditProfile.MAXIMUM_ASSURANCE,
+) -> BenchmarkCertificateVerification:
+    payload = {
+        "schema_version": "1.0",
+        "certificate_sha256": "a" * 64,
+        "status": CertificateVerificationStatus.CURRENT,
+        "observed_repository_git_commit": "b" * 40,
+        "observed_bindings_sha256": "c" * 64,
+        "mismatches": [],
+        "origin": CertificateVerificationOrigin.FILE_BACKED,
+        "file_backed_evidence": FileBackedBenchmarkVerificationEvidence(
+            certificate_loaded=True,
+            certificate_file_sha256="d" * 64,
+            benchmark_report_loaded=True,
+            benchmark_report_file_sha256="e" * 64,
+            benchmark_name="Synthetic maximum-assurance benchmark",
+            benchmark_profile=profile,
+            benchmark_report_status="passed",
+            benchmark_report_gate_count=1,
+            benchmark_reports_expected=1,
+            benchmark_reports_loaded=1,
+        ).model_dump(mode="json"),
+    }
+    payload["verification_sha256"] = canonical_sha256(payload)
+    return BenchmarkCertificateVerification.model_validate(payload)
+
+
+def _in_memory_benchmark_verification() -> BenchmarkCertificateVerification:
     payload = {
         "schema_version": "1.0",
         "certificate_sha256": "a" * 64,
@@ -405,6 +833,926 @@ def test_maximum_assurance_complete_requires_all_runtime_clauses(config_factory)
     assert all(
         requirement.passed for requirement in assessment.requirements if requirement.required
     )
+
+
+def test_foundry_negative_regression_is_conclusive_engine_execution(config_factory) -> None:
+    runtime = _complete_runtime()
+    foundry = next(run for run in runtime.scanners if run.scanner == "foundry_fork")
+    assert foundry.foundry_summary is not None
+    updated = foundry.model_copy(
+        update={
+            "process_exit_code": 1,
+            "foundry_summary": foundry.foundry_summary.model_copy(
+                update={"passed_tests": 2, "failed_tests": 1}
+            ),
+        }
+    )
+    updated = ScannerRun.model_validate(
+        {
+            **updated.model_dump(mode="json"),
+            "execution_observation_sha256": updated.expected_execution_observation_sha256(),
+        }
+    )
+    runtime.scanners[runtime.scanners.index(foundry)] = updated
+
+    assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(runtime)
+
+    gate = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "foundry_unit_property_invariant_execution"
+    )
+    assert gate.passed
+    assert assessment.status is MaximumAssuranceStatus.COMPLETE
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("economic_template", EconomicSimulationKind.ROUNDING),
+        (
+            "required_transaction_ordering",
+            TransactionOrderingCapability.SAME_BLOCK,
+        ),
+        ("harness_spec_sha256", "0" * 64),
+        ("compiler_version", "solc 0.8.29"),
+    ],
+)
+def test_invariant_observation_binds_assurance_consumed_identity_and_economic_fields(
+    field: str,
+    value: object,
+) -> None:
+    result = _complete_runtime().invariant_executions[0]
+    assert result.execution_observation_sha256 is not None
+
+    changed = result.model_copy(update={field: value})
+
+    assert changed.expected_execution_observation_sha256() != result.execution_observation_sha256
+
+
+@pytest.mark.parametrize(
+    ("case", "failed_clause"),
+    [
+        pytest.param(
+            "legacy_empty_success",
+            "foundry_unit_property_invariant_execution",
+            id="legacy_empty_success",
+        ),
+        pytest.param(
+            "missing_slither",
+            "slither_execution",
+            id="required_slither_missing",
+        ),
+        pytest.param(
+            "missing_foundry",
+            "foundry_unit_property_invariant_execution",
+            id="foundry_missing",
+        ),
+        pytest.param(
+            "missing_slither_pin",
+            "slither_execution",
+            id="slither_without_trust_pin",
+        ),
+        pytest.param(
+            "missing_slither_observation",
+            "slither_execution",
+            id="slither_execution_observation_missing",
+        ),
+        pytest.param(
+            "unvalidated_slither_output",
+            "slither_execution",
+            id="slither_machine_envelope_unvalidated",
+        ),
+        pytest.param(
+            "tampered_slither_backend",
+            "slither_execution",
+            id="slither_backend_not_bound_to_observation",
+        ),
+        pytest.param(
+            "mismatched_foundry_pin",
+            "foundry_unit_property_invariant_execution",
+            id="foundry_with_wrong_trust_pin",
+        ),
+        pytest.param(
+            "zero_foundry_unit",
+            "foundry_unit_property_invariant_execution",
+            id="foundry_zero_unit",
+        ),
+        pytest.param(
+            "missing_foundry_observation",
+            "foundry_unit_property_invariant_execution",
+            id="foundry_execution_observation_missing",
+        ),
+        pytest.param(
+            "tampered_foundry_observation",
+            "foundry_unit_property_invariant_execution",
+            id="foundry_execution_observation_tampered",
+        ),
+        pytest.param(
+            "unvalidated_foundry_output",
+            "foundry_unit_property_invariant_execution",
+            id="foundry_machine_envelope_unvalidated",
+        ),
+        pytest.param(
+            "missing_foundry_attestation",
+            "foundry_unit_property_invariant_execution",
+            id="foundry_isolation_attestation_missing",
+        ),
+        pytest.param(
+            "rootless_foundry_unattested",
+            "foundry_unit_property_invariant_execution",
+            id="rootless_binary_identity_unattested",
+        ),
+        pytest.param(
+            "empty_invariant_coverage",
+            "stateful_invariant_execution",
+            id="empty_declared_invariant_coverage_is_not_execution",
+        ),
+        pytest.param(
+            "inconsistent_invariant_coverage",
+            "stateful_invariant_execution",
+            id="inconsistent_invariant_attempts_are_not_execution",
+        ),
+        pytest.param(
+            "missing_invariant_result",
+            "stateful_invariant_execution",
+            id="missing_expected_invariant_execution",
+        ),
+        pytest.param(
+            "duplicate_invariant_result",
+            "stateful_invariant_execution",
+            id="duplicate_invariant_execution",
+        ),
+        pytest.param(
+            "wrong_invariant_harness_hash",
+            "stateful_invariant_execution",
+            id="wrong_invariant_harness_identity",
+        ),
+        pytest.param(
+            "empty_observed_invariant_actions",
+            "stateful_invariant_execution",
+            id="declared_actions_without_observed_calls",
+        ),
+        pytest.param(
+            "missing_invariant_attestation",
+            "stateful_invariant_execution",
+            id="invariant_isolation_attestation_missing",
+        ),
+        pytest.param(
+            "missing_economic_plan",
+            "protocol_economic_simulation",
+            id="deterministic_economic_applicability_omitted",
+        ),
+        pytest.param("missing_echidna", "required_formal_tool:echidna"),
+        pytest.param("missing_medusa", "required_formal_tool:medusa"),
+        pytest.param("missing_halmos", "required_formal_tool:halmos"),
+        pytest.param(
+            "duplicate_echidna",
+            "required_formal_tool:echidna",
+            id="ambiguous_duplicate_engine",
+        ),
+        pytest.param(
+            "mock_echidna",
+            "required_formal_tool:echidna",
+            id="mock_engine_is_not_real",
+        ),
+        pytest.param(
+            "missing_medusa_pin",
+            "required_formal_tool:medusa",
+            id="medusa_without_trust_pin",
+        ),
+        pytest.param(
+            "wrong_halmos_solver_pin",
+            "required_formal_tool:halmos",
+            id="halmos_with_wrong_solver_pin",
+        ),
+        pytest.param(
+            "translation_only_echidna",
+            "required_formal_tool:echidna",
+            id="planned_property_ids_are_not_execution",
+        ),
+        pytest.param(
+            "mismatched_echidna_corpus",
+            "required_formal_tool:echidna",
+            id="property_engine_uses_another_corpus",
+        ),
+        pytest.param(
+            "mismatched_echidna_property_hash",
+            "required_formal_tool:echidna",
+            id="truncated_property_id_cannot_hide_content_drift",
+        ),
+        pytest.param(
+            "partial_echidna_campaign",
+            "required_formal_tool:echidna",
+            id="configured_campaign_was_not_completed",
+        ),
+        pytest.param(
+            "missing_echidna_attestation",
+            "required_formal_tool:echidna",
+            id="formal_isolation_attestation_missing",
+        ),
+        pytest.param(
+            "formal_only_unavailable",
+            "formal_proof_engine",
+            id="formal_only_unavailable_record",
+        ),
+        pytest.param(
+            "empty_formal_proof",
+            "formal_proof_engine",
+            id="empty_success_is_not_proof",
+        ),
+        pytest.param(
+            "zero_property_formal_proof",
+            "formal_proof_engine",
+            id="zero_property_proof_is_vacuous",
+        ),
+        pytest.param(
+            "mismatched_formal_evidence_id",
+            "formal_proof_engine",
+            id="proof_evidence_must_bind_executed_property",
+        ),
+        pytest.param(
+            "missing_offline_replay",
+            "isolated_replay_execution",
+            id="missing_isolated_replay",
+        ),
+        pytest.param(
+            "mock_offline_replay",
+            "isolated_replay_execution",
+            id="mock_replay_is_not_real",
+        ),
+        pytest.param(
+            "wrong_replay_run",
+            "isolated_replay_execution",
+            id="replay_from_another_run_is_not_real",
+        ),
+        pytest.param(
+            "wrong_replay_manifest",
+            "isolated_replay_execution",
+            id="replay_from_another_manifest_is_not_real",
+        ),
+        pytest.param(
+            "wrong_replay_verification",
+            "isolated_replay_execution",
+            id="replay_without_current_verification_is_not_real",
+        ),
+        pytest.param(
+            "scanner_only_replay",
+            "isolated_replay_execution",
+            id="replay_applicability_is_not_self_declared",
+        ),
+        pytest.param(
+            "missing_replay_member",
+            "isolated_replay_execution",
+            id="replay_must_cover_exact_component_inventory",
+        ),
+        pytest.param(
+            "missing_replay_attestation",
+            "isolated_replay_execution",
+            id="replay_isolation_attestation_missing",
+        ),
+        pytest.param(
+            "missing_model_usage",
+            "real_model_execution",
+            id="role_sets_are_not_model_execution",
+        ),
+        pytest.param(
+            "mock_model_usage",
+            "real_model_execution",
+            id="mock_models_are_not_real_reviews",
+        ),
+        pytest.param(
+            "unconfigured_model_usage",
+            "real_model_execution",
+            id="unconfigured_models_are_not_real_reviews",
+        ),
+        pytest.param(
+            "missing_benchmark",
+            "benchmark_regression_gate",
+            id="missing_benchmark_default",
+        ),
+        pytest.param(
+            "in_memory_benchmark",
+            "benchmark_regression_gate",
+            id="declared_current_benchmark_is_not_file_backed",
+        ),
+        pytest.param(
+            "standard_benchmark",
+            "benchmark_regression_gate",
+            id="standard_profile_benchmark_is_not_maximum_assurance",
+        ),
+        pytest.param(
+            "wrong_benchmark_commit",
+            "benchmark_regression_gate",
+            id="benchmark_from_another_commit_is_not_current",
+        ),
+    ],
+)
+def test_exact_maximum_assurance_portfolio_fails_closed(
+    config_factory,
+    case: str,
+    failed_clause: str,
+) -> None:
+    runtime = _complete_runtime()
+    config = _maximum_config(config_factory)
+    if case == "legacy_empty_success":
+        now = datetime.now(UTC)
+        runtime = replace(
+            runtime,
+            scanners=[
+                ScannerRun(
+                    scanner="slither",
+                    status=ScannerStatus.SUCCESS,
+                    started_at=now,
+                    finished_at=now,
+                    duration_seconds=0,
+                )
+            ],
+            invariant_executions=[
+                InvariantExecutionResult(
+                    invariant_id="inv-economic",
+                    harness_name="DonationInflation",
+                    status=InvariantExecutionStatus.PASSED,
+                )
+            ],
+            formal_runs=[
+                FormalToolRun(
+                    tool="solc-smtchecker",
+                    status=FormalToolStatus.SUCCESS,
+                )
+            ],
+            model_usage=[],
+            offline_replay=None,
+            benchmark_verification=None,
+        )
+    elif case == "missing_slither":
+        runtime = replace(
+            runtime,
+            scanners=[run for run in runtime.scanners if run.scanner != "slither"],
+        )
+    elif case == "missing_foundry":
+        runtime = replace(
+            runtime,
+            scanners=[run for run in runtime.scanners if run.scanner != "foundry_fork"],
+        )
+    elif case == "missing_slither_pin":
+        config = config.model_copy(
+            update={
+                "scanners": config.scanners.model_copy(
+                    update={
+                        "slither": config.scanners.slither.model_copy(
+                            update={"version": None, "sha256": None}
+                        )
+                    }
+                )
+            }
+        )
+    elif case in {
+        "missing_slither_observation",
+        "unvalidated_slither_output",
+        "tampered_slither_backend",
+    }:
+        run = next(run for run in runtime.scanners if run.scanner == "slither")
+        update: dict[str, object]
+        if case == "missing_slither_observation":
+            update = {"execution_observation_sha256": None}
+        elif case == "unvalidated_slither_output":
+            update = {"machine_output_validated": False}
+        else:
+            update = {"isolation_backend": "rootless-container"}
+        runtime.scanners[runtime.scanners.index(run)] = run.model_copy(update=update)
+    elif case == "mismatched_foundry_pin":
+        config = config.model_copy(
+            update={
+                "scanners": config.scanners.model_copy(
+                    update={
+                        "foundry_fork": config.scanners.foundry_fork.model_copy(
+                            update={"sha256": "0" * 64}
+                        )
+                    }
+                )
+            }
+        )
+    elif case == "zero_foundry_unit":
+        run = next(run for run in runtime.scanners if run.scanner == "foundry_fork")
+        runtime.scanners[runtime.scanners.index(run)] = run.model_copy(
+            update={
+                "foundry_summary": FoundryTestExecutionSummary(
+                    unit_tests=0,
+                    fuzz_tests=1,
+                    invariant_tests=1,
+                    passed_tests=2,
+                    failed_tests=0,
+                    skipped_tests=0,
+                    fuzz_cases=256,
+                    invariant_runs=256,
+                    invariant_calls=8_192,
+                )
+            }
+        )
+    elif case == "missing_foundry_observation":
+        run = next(run for run in runtime.scanners if run.scanner == "foundry_fork")
+        runtime.scanners[runtime.scanners.index(run)] = run.model_copy(
+            update={"execution_observation_sha256": None}
+        )
+    elif case == "tampered_foundry_observation":
+        run = next(run for run in runtime.scanners if run.scanner == "foundry_fork")
+        runtime.scanners[runtime.scanners.index(run)] = run.model_copy(
+            update={"raw_output_bytes": run.raw_output_bytes + 1}
+        )
+    elif case in {"unvalidated_foundry_output", "missing_foundry_attestation"}:
+        run_index = next(
+            index for index, item in enumerate(runtime.scanners) if item.scanner == "foundry_fork"
+        )
+        run = runtime.scanners[run_index]
+        run = run.model_copy(
+            update={
+                (
+                    "machine_output_validated"
+                    if case == "unvalidated_foundry_output"
+                    else "isolation_attestation_sha256"
+                ): False if case == "unvalidated_foundry_output" else None,
+                "execution_observation_sha256": None,
+            }
+        )
+        runtime.scanners[run_index] = run.model_copy(
+            update={"execution_observation_sha256": run.expected_execution_observation_sha256()}
+        )
+    elif case == "rootless_foundry_unattested":
+        run = next(run for run in runtime.scanners if run.scanner == "foundry_fork")
+        runtime.scanners[runtime.scanners.index(run)] = run.model_copy(
+            update={"isolation_backend": "rootless-container"}
+        )
+    elif case in {"empty_invariant_coverage", "inconsistent_invariant_coverage"}:
+        run = runtime.invariant_executions[0]
+        coverage = run.campaign_coverage
+        assert coverage is not None
+        replacement = (
+            InvariantCampaignCoverage(
+                declared_action_functions=[],
+                observed_action_functions=[],
+                declared_state_properties=[],
+                observed_state_properties=[],
+                sequence_depth_bound=run.depth,
+                observed_sequence_lengths=[],
+                attempts_consistent=False,
+            )
+            if case == "empty_invariant_coverage"
+            else coverage.model_copy(update={"attempts_consistent": False})
+        )
+        runtime = replace(
+            runtime,
+            invariant_executions=[run.model_copy(update={"campaign_coverage": replacement})],
+        )
+    elif case == "missing_invariant_result":
+        runtime = replace(runtime, invariant_executions=[])
+    elif case == "duplicate_invariant_result":
+        runtime.invariant_executions.append(runtime.invariant_executions[0])
+    elif case == "wrong_invariant_harness_hash":
+        run = runtime.invariant_executions[0].model_copy(update={"harness_spec_sha256": "0" * 64})
+        runtime = replace(
+            runtime,
+            invariant_executions=[
+                run.model_copy(
+                    update={
+                        "execution_observation_sha256": (
+                            run.expected_execution_observation_sha256()
+                        )
+                    }
+                )
+            ],
+        )
+    elif case == "empty_observed_invariant_actions":
+        run = runtime.invariant_executions[0]
+        coverage = run.campaign_coverage
+        assert coverage is not None
+        run = run.model_copy(
+            update={
+                "campaign_coverage": coverage.model_copy(update={"observed_action_functions": []})
+            }
+        )
+        runtime = replace(
+            runtime,
+            invariant_executions=[
+                run.model_copy(
+                    update={
+                        "execution_observation_sha256": (
+                            run.expected_execution_observation_sha256()
+                        )
+                    }
+                )
+            ],
+        )
+    elif case == "missing_invariant_attestation":
+        run = runtime.invariant_executions[0].model_copy(
+            update={
+                "isolation_attestation_sha256": None,
+                "execution_observation_sha256": None,
+            }
+        )
+        runtime = replace(
+            runtime,
+            invariant_executions=[
+                run.model_copy(
+                    update={
+                        "execution_observation_sha256": (
+                            run.expected_execution_observation_sha256()
+                        )
+                    }
+                )
+            ],
+        )
+    elif case == "missing_economic_plan":
+        runtime = replace(runtime, economic_simulations=[])
+    elif case.startswith("missing_") and case.removeprefix("missing_") in {
+        "echidna",
+        "medusa",
+        "halmos",
+    }:
+        tool = case.removeprefix("missing_")
+        runtime = replace(
+            runtime,
+            formal_runs=[run for run in runtime.formal_runs if run.tool != tool],
+        )
+    elif case == "duplicate_echidna":
+        runtime.formal_runs.append(_real_formal_run("echidna"))
+    elif case == "mock_echidna":
+        runtime = replace(
+            runtime,
+            formal_runs=[
+                (
+                    _real_formal_run(
+                        "echidna",
+                        execution_evidence=ExecutionEvidenceKind.MOCK,
+                    )
+                    if run.tool == "echidna"
+                    else run
+                )
+                for run in runtime.formal_runs
+            ],
+        )
+    elif case == "missing_medusa_pin":
+        config = config.model_copy(
+            update={
+                "formal": config.formal.model_copy(
+                    update={"medusa_version": None, "medusa_sha256": None}
+                )
+            }
+        )
+    elif case == "wrong_halmos_solver_pin":
+        config = config.model_copy(
+            update={"formal": config.formal.model_copy(update={"halmos_solver_sha256": "0" * 64})}
+        )
+    elif case == "translation_only_echidna":
+        runtime = replace(
+            runtime,
+            formal_runs=[
+                (
+                    _real_formal_run("echidna", observe_properties=False)
+                    if run.tool == "echidna"
+                    else run
+                )
+                for run in runtime.formal_runs
+            ],
+        )
+    elif case == "mismatched_echidna_corpus":
+        runtime = replace(
+            runtime,
+            formal_runs=[
+                (
+                    run.model_copy(
+                        update={
+                            "property_corpus_hash": "e" * 64,
+                            "execution_observation_sha256": None,
+                        }
+                    )
+                    if run.tool == "echidna"
+                    else run
+                )
+                for run in runtime.formal_runs
+            ],
+        )
+        echidna = next(run for run in runtime.formal_runs if run.tool == "echidna")
+        runtime.formal_runs[runtime.formal_runs.index(echidna)] = echidna.model_copy(
+            update={"execution_observation_sha256": echidna.expected_execution_observation_sha256()}
+        )
+    elif case in {
+        "mismatched_echidna_property_hash",
+        "partial_echidna_campaign",
+        "missing_echidna_attestation",
+    }:
+        echidna_index = next(
+            index for index, item in enumerate(runtime.formal_runs) if item.tool == "echidna"
+        )
+        echidna = runtime.formal_runs[echidna_index]
+        updates: dict[str, object] = {"execution_observation_sha256": None}
+        if case == "mismatched_echidna_property_hash":
+            binding = echidna.translated_property_bindings[0].model_copy(
+                update={"property_hash": ("1" * 24) + ("2" * 40)}
+            )
+            updates["translated_property_bindings"] = [binding]
+        elif case == "partial_echidna_campaign":
+            updates["observed_campaign"] = FormalCampaignObservation(runs=1, calls=1, depth=1)
+        else:
+            updates["isolation_attestation_sha256"] = None
+        echidna = echidna.model_copy(update=updates)
+        runtime.formal_runs[echidna_index] = echidna.model_copy(
+            update={"execution_observation_sha256": echidna.expected_execution_observation_sha256()}
+        )
+    elif case == "formal_only_unavailable":
+        runtime = replace(
+            runtime,
+            formal_runs=[
+                FormalToolRun(
+                    tool="certora",
+                    status=FormalToolStatus.UNAVAILABLE,
+                )
+            ],
+        )
+    elif case == "empty_formal_proof":
+        runtime = replace(
+            runtime,
+            formal_runs=[
+                (run.model_copy(update={"evidence": []}) if run.tool == "certora" else run)
+                for run in runtime.formal_runs
+            ],
+        )
+    elif case == "zero_property_formal_proof":
+        runtime = replace(
+            runtime,
+            formal_runs=[
+                (
+                    run.model_copy(
+                        update={
+                            "translated_properties": 0,
+                            "executed_property_ids": [],
+                            "observed_property_ids": [],
+                            "translated_property_bindings": [],
+                            "execution_observation_sha256": None,
+                        }
+                    )
+                    if run.tool == "certora"
+                    else run
+                )
+                for run in runtime.formal_runs
+            ],
+        )
+        certora = next(run for run in runtime.formal_runs if run.tool == "certora")
+        runtime.formal_runs[runtime.formal_runs.index(certora)] = certora.model_copy(
+            update={"execution_observation_sha256": certora.expected_execution_observation_sha256()}
+        )
+    elif case == "mismatched_formal_evidence_id":
+        certora_index = next(
+            index for index, item in enumerate(runtime.formal_runs) if item.tool == "certora"
+        )
+        certora = runtime.formal_runs[certora_index]
+        certora = certora.model_copy(
+            update={
+                "evidence": [
+                    certora.evidence[0].model_copy(update={"property_id": "prop-" + ("2" * 24)})
+                ],
+                "execution_observation_sha256": None,
+            }
+        )
+        runtime.formal_runs[certora_index] = certora.model_copy(
+            update={"execution_observation_sha256": certora.expected_execution_observation_sha256()}
+        )
+    elif case == "missing_offline_replay":
+        runtime = replace(runtime, offline_replay=None)
+    elif case == "mock_offline_replay":
+        runtime = replace(
+            runtime,
+            offline_replay=_real_offline_replay(execution_evidence=ExecutionEvidenceKind.MOCK),
+        )
+    elif case == "wrong_replay_run":
+        runtime = replace(runtime, replay_run_id="another-run")
+    elif case == "wrong_replay_manifest":
+        runtime = replace(runtime, replay_manifest_sha256="3" * 64)
+    elif case == "wrong_replay_verification":
+        runtime = replace(runtime, replay_verification_sha256="4" * 64)
+    elif case == "scanner_only_replay":
+        runtime = replace(
+            runtime,
+            offline_replay=_real_offline_replay(kinds={ReplayComponentKind.SCANNER}),
+        )
+    elif case in {"missing_replay_member", "missing_replay_attestation"}:
+        replay = runtime.offline_replay
+        assert replay is not None
+        components = list(replay.components)
+        if case == "missing_replay_member":
+            components = [
+                component for component in components if component.identifier != "slither"
+            ]
+        else:
+            components[0] = components[0].model_copy(update={"isolation_attestation_sha256": None})
+        payload = replay.model_dump(mode="json", exclude={"replay_sha256"})
+        payload["components"] = [component.model_dump(mode="json") for component in components]
+        payload["replay_sha256"] = canonical_sha256(payload)
+        runtime = replace(runtime, offline_replay=OfflineReplay.model_validate(payload))
+    elif case == "missing_model_usage":
+        runtime = replace(runtime, model_usage=[])
+    elif case == "mock_model_usage":
+        runtime = replace(
+            runtime,
+            model_usage=[
+                record.model_copy(update={"execution_evidence": ExecutionEvidenceKind.MOCK})
+                for record in runtime.model_usage
+            ],
+        )
+    elif case == "unconfigured_model_usage":
+        runtime = replace(
+            runtime,
+            model_usage=[
+                record.model_copy(
+                    update={
+                        "requested_model": "unregistered/unqualified",
+                        "returned_model": "unregistered/unqualified",
+                    }
+                )
+                for record in runtime.model_usage
+            ],
+        )
+    elif case == "missing_benchmark":
+        runtime = replace(runtime, benchmark_verification=None)
+    elif case == "in_memory_benchmark":
+        runtime = replace(
+            runtime,
+            benchmark_verification=_in_memory_benchmark_verification(),
+        )
+    elif case == "standard_benchmark":
+        runtime = replace(
+            runtime,
+            benchmark_verification=_current_benchmark_verification(
+                profile=AuditProfile.STANDARD,
+            ),
+        )
+    elif case == "wrong_benchmark_commit":
+        runtime = replace(runtime, benchmark_repository_git_commit="c" * 40)
+    else:  # pragma: no cover - guarded by the parameter table
+        raise AssertionError(f"unknown assurance portfolio case: {case}")
+
+    assessment = MaximumAssuranceContract(config).evaluate(runtime)
+    clause = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == failed_clause
+    )
+
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+    assert not clause.passed
+    assert clause.blocking
+
+
+@pytest.mark.parametrize("tool", ["echidna", "medusa", "halmos"])
+@pytest.mark.parametrize(
+    "status",
+    [
+        FormalToolStatus.UNAVAILABLE,
+        FormalToolStatus.SKIPPED,
+        FormalToolStatus.FAILED,
+        FormalToolStatus.TIMED_OUT,
+        FormalToolStatus.INCONCLUSIVE,
+    ],
+)
+def test_non_successful_property_engine_records_never_satisfy_portfolio(
+    config_factory,
+    tool: str,
+    status: FormalToolStatus,
+) -> None:
+    runtime = _complete_runtime()
+    runtime = replace(
+        runtime,
+        formal_runs=[
+            run.model_copy(update={"status": status}) if run.tool == tool else run
+            for run in runtime.formal_runs
+        ],
+    )
+
+    assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(runtime)
+    clause = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == f"required_formal_tool:{tool}"
+    )
+
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+    assert not clause.passed
+    assert clause.blocking
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        ScannerStatus.UNAVAILABLE,
+        ScannerStatus.SKIPPED,
+        ScannerStatus.FAILED,
+        ScannerStatus.TIMED_OUT,
+    ],
+)
+def test_non_successful_foundry_portfolio_never_satisfies_maximum_assurance(
+    config_factory,
+    status: ScannerStatus,
+) -> None:
+    runtime = _complete_runtime()
+    foundry = next(run for run in runtime.scanners if run.scanner == "foundry_fork")
+    runtime.scanners[runtime.scanners.index(foundry)] = foundry.model_copy(
+        update={"status": status}
+    )
+
+    assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(runtime)
+    clause = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "foundry_unit_property_invariant_execution"
+    )
+
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+    assert not clause.passed
+    assert clause.blocking
+
+
+@pytest.mark.parametrize(
+    ("mutation", "failed_clause"),
+    [
+        pytest.param(
+            "property_empty_evidence",
+            "required_formal_tool:echidna",
+        ),
+        pytest.param(
+            "property_empty_output",
+            "required_formal_tool:echidna",
+        ),
+        pytest.param(
+            "property_unisolated",
+            "required_formal_tool:echidna",
+        ),
+        pytest.param(
+            "invariant_zero_attempts",
+            "stateful_invariant_execution",
+        ),
+        pytest.param(
+            "invariant_mock",
+            "stateful_invariant_execution",
+        ),
+        pytest.param(
+            "invariant_unisolated",
+            "stateful_invariant_execution",
+        ),
+    ],
+)
+def test_empty_mock_or_unisolated_dynamic_evidence_fails_closed(
+    config_factory,
+    mutation: str,
+    failed_clause: str,
+) -> None:
+    runtime = _complete_runtime()
+    if mutation.startswith("property_"):
+        echidna = next(run for run in runtime.formal_runs if run.tool == "echidna")
+        if mutation == "property_empty_evidence":
+            changed = echidna.model_copy(update={"evidence": []})
+        elif mutation == "property_empty_output":
+            changed = echidna.model_copy(
+                update={
+                    "stdout_bytes": 0,
+                    "stderr_bytes": 0,
+                    "result_bytes": 0,
+                }
+            )
+        else:
+            changed = _real_formal_run(
+                "echidna",
+                isolation_backend="unisolated",
+            )
+        runtime = replace(
+            runtime,
+            formal_runs=[changed if run.tool == "echidna" else run for run in runtime.formal_runs],
+        )
+    else:
+        invariant = runtime.invariant_executions[0]
+        if mutation == "invariant_zero_attempts":
+            changed_invariant = InvariantExecutionResult(
+                invariant_id=invariant.invariant_id,
+                harness_name=invariant.harness_name,
+                status=InvariantExecutionStatus.PASSED,
+            )
+        elif mutation == "invariant_mock":
+            changed_invariant = invariant.model_copy(
+                update={"execution_evidence": ExecutionEvidenceKind.MOCK}
+            )
+        else:
+            changed_invariant = invariant.model_copy(update={"isolation_backend": "unisolated"})
+        runtime = replace(runtime, invariant_executions=[changed_invariant])
+
+    assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(runtime)
+    clause = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == failed_clause
+    )
+
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+    assert not clause.passed
+    assert clause.blocking
 
 
 @pytest.mark.parametrize(
@@ -559,7 +1907,13 @@ def test_benchmark_gate_requires_current_typed_verification_and_artifact(
     ).effective()
     contract = MaximumAssuranceContract(config)
     base_runtime = _complete_runtime()
-    absent = contract.evaluate(base_runtime)
+    absent = contract.evaluate(
+        replace(
+            base_runtime,
+            benchmark_verification=None,
+            artifacts=base_runtime.artifacts - {"benchmark-certificate-verification.json"},
+        )
+    )
     absent_gate = next(
         requirement
         for requirement in absent.requirements

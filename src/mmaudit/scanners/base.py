@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -19,8 +20,13 @@ from mmaudit.isolation.container import (
     cleanup_isolation_backend,
     isolation_host_environment,
 )
+from mmaudit.isolation.provenance import (
+    isolation_attestation_sha256,
+    isolation_execution_evidence,
+)
 from mmaudit.isolation.repository_code import contains_hardhat_repository_code
 from mmaudit.models.schemas import (
+    ExecutionEvidenceKind,
     Location,
     RepositoryCodeExecutionState,
     ScannerFinding,
@@ -145,6 +151,7 @@ class ScannerAdapter(ABC):
     max_stdout_bytes: int = 50_000_000
     max_stderr_bytes: int = 5_000_000
     may_execute_repository_code: bool = False
+    strict_machine_output: bool = False
 
     def available(self) -> bool:
         return shutil.which(self.executable) is not None
@@ -164,6 +171,8 @@ class ScannerAdapter(ABC):
         timeout_seconds: float,
         *,
         backend: ScannerIsolationBackend | None = None,
+        expected_version: str | None = None,
+        expected_sha256: str | None = None,
     ) -> ScannerRun:
         """Run in a copied workspace and fail closed without hardened isolation."""
 
@@ -192,10 +201,31 @@ class ScannerAdapter(ABC):
             findings: list[ScannerFinding] | None = None,
             error: str | None = None,
             raw_output_path: str | None = None,
+            process_exit_code: int | None = None,
+            machine_output_validated: bool = False,
         ) -> ScannerRun:
-            return ScannerRun(
+            output_sha256 = (
+                _file_sha256(raw_path)
+                if raw_output_path is not None and raw_path.is_file()
+                else None
+            )
+            output_bytes = (
+                raw_path.stat().st_size if raw_output_path is not None and raw_path.is_file() else 0
+            )
+            run = ScannerRun(
                 scanner=self.name,
                 status=status,
+                execution_evidence=(
+                    isolation_execution_evidence(backend)
+                    if (
+                        status is ScannerStatus.SUCCESS
+                        and executable_sha256 is not None
+                        and bool(command)
+                        and raw_output_path is not None
+                        and isolation_backend is not None
+                    )
+                    else ExecutionEvidenceKind.UNVERIFIED
+                ),
                 version=version,
                 executable_sha256=executable_sha256,
                 command=command or [],
@@ -205,8 +235,19 @@ class ScannerAdapter(ABC):
                 findings=findings or [],
                 error=error,
                 raw_output_path=raw_output_path,
+                raw_output_sha256=output_sha256,
+                raw_output_bytes=output_bytes,
+                process_exit_code=process_exit_code,
                 isolation_backend=isolation_backend,
+                isolation_attestation_sha256=isolation_attestation_sha256(backend),
+                machine_output_validated=machine_output_validated,
                 repository_code_execution=repository_code_execution,
+            )
+            return ScannerRun.model_validate(
+                {
+                    **run.model_dump(mode="json"),
+                    "execution_observation_sha256": (run.expected_execution_observation_sha256()),
+                }
             )
 
         if loads_repository_code and not isinstance(
@@ -289,6 +330,19 @@ class ScannerAdapter(ABC):
                 private_dir,
                 repository_javascript=loads_repository_code,
             )
+            trust_error = scanner_trust_pin_error(
+                version=version,
+                executable_sha256=executable_sha256,
+                expected_version=expected_version,
+                expected_sha256=expected_sha256,
+            )
+            if trust_error is not None:
+                return finish(
+                    ScannerStatus.FAILED,
+                    version=version,
+                    command=command,
+                    error=trust_error,
+                )
             process_environment = isolation_host_environment(
                 backend,
                 private_dir,
@@ -365,6 +419,7 @@ class ScannerAdapter(ABC):
                 command=command,
                 error=f"scanner exceeded {timeout_seconds:.0f}s timeout",
                 raw_output_path=str(raw_path.relative_to(private_dir.parent)),
+                process_exit_code=return_code,
             )
         if (
             output_exceeded
@@ -377,6 +432,7 @@ class ScannerAdapter(ABC):
                 command=command,
                 error="scanner output exceeded the private output limit",
                 raw_output_path=str(raw_path.relative_to(private_dir.parent)),
+                process_exit_code=return_code,
             )
 
         stdout = raw_path.read_text(encoding="utf-8", errors="replace")
@@ -387,6 +443,7 @@ class ScannerAdapter(ABC):
                 command=command,
                 error=f"scanner exited with code {return_code}",
                 raw_output_path=str(raw_path.relative_to(private_dir.parent)),
+                process_exit_code=return_code,
             )
         try:
             findings = self.parse(workspace, stdout, private_dir)
@@ -397,6 +454,7 @@ class ScannerAdapter(ABC):
                 command=command,
                 error=f"invalid scanner output: {type(exc).__name__}",
                 raw_output_path=str(raw_path.relative_to(private_dir.parent)),
+                process_exit_code=return_code,
             )
         return finish(
             ScannerStatus.SUCCESS,
@@ -404,7 +462,36 @@ class ScannerAdapter(ABC):
             command=command,
             findings=findings,
             raw_output_path=str(raw_path.relative_to(private_dir.parent)),
+            process_exit_code=return_code,
+            machine_output_validated=self.strict_machine_output,
         )
+
+
+def scanner_trust_pin_error(
+    *,
+    version: str | None,
+    executable_sha256: str | None,
+    expected_version: str | None,
+    expected_sha256: str | None,
+) -> str | None:
+    """Validate an optional paired scanner pin before target execution."""
+
+    if expected_version is None and expected_sha256 is None:
+        return None
+    if expected_version is None or expected_sha256 is None:
+        return "scanner trust policy requires paired version and SHA-256 pins"
+    if executable_sha256 != expected_sha256:
+        return "scanner executable SHA-256 does not match the configured trust pin"
+    if (
+        version is None
+        or re.search(
+            rf"(?<![0-9.]){re.escape(expected_version)}(?![0-9.])",
+            version,
+        )
+        is None
+    ):
+        return "scanner version does not match the configured trust pin"
+    return None
 
 
 def copy_scanner_workspace(root: Path, workspace: Path, private_dir: Path) -> None:

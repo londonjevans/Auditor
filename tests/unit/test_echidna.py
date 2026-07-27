@@ -6,6 +6,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from mmaudit.config import FormalConfig
 from mmaudit.models.schemas import (
     AnalysisState,
@@ -13,6 +15,7 @@ from mmaudit.models.schemas import (
     ForkArgument,
     ForkArgumentKind,
     ForkCallStep,
+    FormalPropertyBinding,
     FormalResultKind,
     FormalToolRun,
     FormalToolStatus,
@@ -253,7 +256,18 @@ def test_mocked_echidna_run_enforces_pins_and_normalizes_replay(
     assert run.version == "Echidna 2.2.7"
     assert run.executable_sha256 == executable_hash
     assert run.property_corpus_hash == corpus.corpus_hash
+    assert run.property_corpus_property_ids == [corpus.properties[0].id]
+    assert run.translated_property_bindings == [
+        FormalPropertyBinding(
+            generated_property_id=generated_name,
+            corpus_property_id=corpus.properties[0].id,
+            property_hash=corpus.properties[0].property_hash,
+        )
+    ]
     assert run.campaign_seed == 11
+    assert run.configured_campaign is not None
+    assert (run.configured_campaign.runs, run.configured_campaign.depth) == (100, 4)
+    assert run.observed_campaign is None
     assert run.translated_properties == 1
     assert run.translation_limitations == []
     assert run.command[0] == "[EXTERNAL_TOOL]"
@@ -273,6 +287,46 @@ def test_mocked_echidna_run_enforces_pins_and_normalizes_replay(
         "clean_workspace_required": True,
     }
     assert Path(tmp_path / "private/echidna/workspace/mmaudit-echidna/property-map.json").exists()
+
+    corpus_tamper = run.model_dump(mode="json")
+    corpus_tamper["property_corpus_hash"] = "0" * 64
+    with pytest.raises(ValueError, match="observation hash"):
+        FormalToolRun.model_validate(corpus_tamper)
+
+    alternate_hash = "a" * 64
+    alternate_id = f"prop-{alternate_hash[:24]}"
+    identity_tamper = run.model_dump(mode="json")
+    identity_tamper["property_corpus_property_ids"] = [alternate_id]
+    identity_tamper["translated_property_bindings"] = [
+        {
+            "generated_property_id": generated_name,
+            "corpus_property_id": alternate_id,
+            "property_hash": alternate_hash,
+        }
+    ]
+    identity_tamper["executed_property_ids"] = [alternate_id]
+    identity_tamper["observed_property_ids"] = [alternate_id]
+    identity_tamper["evidence"][0]["property_id"] = alternate_id
+    with pytest.raises(ValueError, match="observation hash"):
+        FormalToolRun.model_validate(identity_tamper)
+
+
+def test_echidna_observed_campaign_requires_emitted_machine_statistics() -> None:
+    adapter = EchidnaAdapter()
+    property_name = "echidna_" + ("a" * 24)
+    result_only = json.dumps({"tests": [{"name": property_name, "status": "passed"}]})
+    with_statistics = json.dumps(
+        {
+            "tests": [{"name": property_name, "status": "passed"}],
+            "campaign": {"runs": 100, "calls": 400, "depth": 4},
+        }
+    )
+
+    assert adapter.validates_machine_output(result_only, "", "")
+    assert adapter.parse_observed_campaign(result_only, "", "") is None
+    observation = adapter.parse_observed_campaign(with_statistics, "", "")
+    assert observation is not None
+    assert (observation.runs, observation.calls, observation.depth) == (100, 400, 4)
 
 
 def test_echidna_hash_mismatch_prevents_campaign_execution(

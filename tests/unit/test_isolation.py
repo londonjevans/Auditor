@@ -15,7 +15,9 @@ from mmaudit.isolation.container import (
     isolation_host_environment,
     rootless_runtime_environment,
 )
+from mmaudit.isolation.provenance import isolation_execution_evidence
 from mmaudit.isolation.repository_code import contains_hardhat_repository_code
+from mmaudit.models.schemas import ExecutionEvidenceKind
 
 _IMAGE = "registry.example/mmaudit-toolchain@sha256:" + "a" * 64
 
@@ -75,6 +77,7 @@ def test_rootless_backend_discovery_requires_verified_non_repository_runtime(
     assert backend is not None
     assert backend.rootless_verified
     assert backend.image == _IMAGE
+    assert isolation_execution_evidence(backend) is ExecutionEvidenceKind.UNVERIFIED
 
 
 def test_rootless_container_command_has_fixed_isolation_and_resource_controls(

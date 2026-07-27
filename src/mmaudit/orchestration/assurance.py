@@ -6,12 +6,15 @@ module converts actual engine results into explicit, machine-readable clauses.
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
+from mmaudit.agents.specialists import canonical_specialist_role
 from mmaudit.benchmark.certificate import (
     BenchmarkCertificateVerification,
+    CertificateVerificationOrigin,
     CertificateVerificationStatus,
 )
 from mmaudit.config import AuditConfig, model_family
@@ -24,6 +27,7 @@ from mmaudit.models.schemas import (
     CandidateReproductionResolution,
     CompilationStatus,
     EconomicSimulationPlan,
+    ExecutionEvidenceKind,
     FormalResultKind,
     FormalToolRun,
     FormalToolStatus,
@@ -47,7 +51,15 @@ from mmaudit.models.schemas import (
     SolidityGraphSet,
     SolidityProjectMetadata,
     SoliditySymbolIndex,
+    UsageRecord,
 )
+from mmaudit.orchestration.replay import (
+    OfflineReplay,
+    OfflineReplayStatus,
+    ReplayComponentKind,
+    ReplayComponentStatus,
+)
+from mmaudit.solidity.economics import plan_economic_simulations
 from mmaudit.traceability import (
     ImplementationStatus,
     MaximumAssuranceTraceability,
@@ -79,6 +91,12 @@ FULL_SEMANTIC_GRAPHS: frozenset[SolidityGraphKind] = frozenset(
     }
 )
 
+CERTIFIED_PROPERTY_ENGINES: frozenset[str] = frozenset({"echidna", "medusa", "halmos"})
+CERTIFIED_FORMAL_PROOF_ENGINES: frozenset[str] = frozenset(
+    {"certora", "kontrol", "solc-smtchecker"}
+)
+CERTIFIED_ISOLATION_BACKENDS: frozenset[str] = frozenset({"bubblewrap", "sandbox-exec"})
+
 
 @dataclass(frozen=True)
 class AssuranceRuntime:
@@ -90,9 +108,13 @@ class AssuranceRuntime:
     graphs: SolidityGraphSet | None = None
     scanners: list[ScannerRun] = field(default_factory=list)
     invariants: InvariantSuite | None = None
+    expected_invariant_harnesses: set[tuple[str, str, str]] = field(default_factory=set)
     invariant_executions: list[InvariantExecutionResult] = field(default_factory=list)
     economic_simulations: list[EconomicSimulationPlan] = field(default_factory=list)
     formal_runs: list[FormalToolRun] = field(default_factory=list)
+    property_corpus_sha256: str | None = None
+    property_corpus_property_ids: set[str] = field(default_factory=set)
+    property_corpus_property_hashes: dict[str, str] = field(default_factory=dict)
     reproduction_results: list[ReproductionResult] = field(default_factory=list)
     reproduction_resolutions: list[CandidateReproductionResolution] = field(default_factory=list)
     eligible_high_critical_ids: set[str] = field(default_factory=set)
@@ -107,8 +129,14 @@ class AssuranceRuntime:
     judge_completed: bool = False
     coverage: SolidityCoverage | None = None
     model_review_coverage: ModelReviewCoverage | None = None
+    model_usage: list[UsageRecord] = field(default_factory=list)
     scope_assessment: AuditScopeAssessment | None = None
     benchmark_verification: BenchmarkCertificateVerification | None = None
+    benchmark_repository_git_commit: str | None = None
+    offline_replay: OfflineReplay | None = None
+    replay_run_id: str | None = None
+    replay_manifest_sha256: str | None = None
+    replay_verification_sha256: str | None = None
     isolation_available: bool = False
     scanner_only: bool = False
     artifacts: set[str] = field(default_factory=set)
@@ -382,14 +410,35 @@ class MaximumAssuranceContract:
         )
         analyzed_graphs = set(runtime.graphs.analyzed_graphs) if runtime.graphs else set()
         missing_graphs = sorted(graph.value for graph in FULL_SEMANTIC_GRAPHS - analyzed_graphs)
-        deterministic_scanners = [
-            run for run in runtime.scanners if run.status is ScannerStatus.SUCCESS
-        ]
-        required_scanner_failures = [
-            run
-            for run in runtime.scanners
-            if run.scanner == "slither" and run.status is not ScannerStatus.SUCCESS
-        ]
+        real_scanners = [run for run in runtime.scanners if _is_real_scanner_run(run)]
+        slither_records = [run for run in runtime.scanners if run.scanner == "slither"]
+        real_slither = (
+            slither_records[0]
+            if (
+                len(slither_records) == 1
+                and _is_real_slither_run(slither_records[0])
+                and _scanner_matches_trust_pin(
+                    slither_records[0],
+                    version=self.config.scanners.slither.version,
+                    sha256=self.config.scanners.slither.sha256,
+                )
+            )
+            else None
+        )
+        foundry_records = [run for run in runtime.scanners if run.scanner == "foundry_fork"]
+        real_foundry_portfolio = (
+            foundry_records[0]
+            if (
+                len(foundry_records) == 1
+                and _is_real_foundry_portfolio(foundry_records[0])
+                and _scanner_matches_trust_pin(
+                    foundry_records[0],
+                    version=self.config.scanners.foundry_fork.version,
+                    sha256=self.config.scanners.foundry_fork.sha256,
+                )
+            )
+            else None
+        )
         invariant_count = (
             len(runtime.invariants.invariants) if runtime.invariants is not None else 0
         )
@@ -407,6 +456,38 @@ class MaximumAssuranceContract:
                 InvariantExecutionStatus.COUNTEREXAMPLE,
             }
         ]
+        real_invariant_executions = [
+            result
+            for result in runtime.invariant_executions
+            if _is_real_invariant_execution(result, self.config)
+        ]
+        expected_harnesses = {
+            (invariant_id, harness_name): harness_sha256
+            for invariant_id, harness_name, harness_sha256 in runtime.expected_invariant_harnesses
+        }
+        observed_harness_counts = Counter(
+            (result.invariant_id, result.harness_name) for result in runtime.invariant_executions
+        )
+        observed_harnesses = {
+            (result.invariant_id, result.harness_name): result.harness_spec_sha256
+            for result in runtime.invariant_executions
+        }
+        executable_invariant_ids = {
+            invariant.id
+            for invariant in (
+                runtime.invariants.invariants if runtime.invariants is not None else []
+            )
+            if invariant.executable
+        }
+        invariant_inventory_bound = (
+            bool(expected_harnesses)
+            and all(count == 1 for count in observed_harness_counts.values())
+            and set(observed_harnesses) == set(expected_harnesses)
+            and observed_harnesses == expected_harnesses
+            and executable_invariant_ids == {invariant_id for invariant_id, _ in expected_harnesses}
+            and runtime.invariants is not None
+            and runtime.invariants.executable_count == len(executable_invariant_ids)
+        )
         planned_economic = {
             plan.kind
             for plan in runtime.economic_simulations
@@ -424,6 +505,25 @@ class MaximumAssuranceContract:
         }
         missing_economic = planned_economic - executed_economic
         untyped_economic = planned_economic - typed_economic
+        expected_economic_plans = plan_economic_simulations(runtime.invariants, runtime.graphs)
+
+        def economic_plan_identity(plan: EconomicSimulationPlan) -> tuple[object, ...]:
+            return (
+                plan.kind,
+                plan.applicable,
+                tuple(plan.invariant_ids),
+                plan.typed_harness_available,
+                plan.execution_required,
+                plan.required_transaction_ordering,
+            )
+
+        economic_plan_inventory_bound = sorted(
+            (economic_plan_identity(plan) for plan in runtime.economic_simulations),
+            key=repr,
+        ) == sorted(
+            (economic_plan_identity(plan) for plan in expected_economic_plans),
+            key=repr,
+        )
         attempted_ids = {
             result.candidate_id for result in runtime.reproduction_results if result.attempts > 0
         }
@@ -479,14 +579,64 @@ class MaximumAssuranceContract:
             - runtime.feasible_high_critical_ids
             - runtime.documented_infeasible_ids
         )
-        formal_success = any(run.status is FormalToolStatus.SUCCESS for run in runtime.formal_runs)
-        formal_counterexamples = any(
-            evidence.result_kind is FormalResultKind.COUNTEREXAMPLE
-            for run in runtime.formal_runs
-            for evidence in run.evidence
+        formal_records_by_name: dict[str, list[FormalToolRun]] = {}
+        for run in runtime.formal_runs:
+            formal_records_by_name.setdefault(run.tool, []).append(run)
+        real_property_engines = {
+            tool: records[0]
+            for tool, records in formal_records_by_name.items()
+            if (
+                len(records) == 1
+                and _is_real_property_engine_run(records[0])
+                and _formal_run_matches_config_pin(records[0], self.config)
+                and _formal_run_matches_expected_corpus(records[0], runtime)
+            )
+        }
+        real_formal_proofs = {
+            tool: records[0]
+            for tool, records in formal_records_by_name.items()
+            if tool in CERTIFIED_FORMAL_PROOF_ENGINES
+            and len(records) == 1
+            and _is_real_formal_proof_run(records[0])
+            and _formal_run_matches_config_pin(records[0], self.config)
+            and _formal_run_matches_expected_corpus(records[0], runtime)
+        }
+        expected_replay_components = _expected_replay_components(runtime, expected_harnesses)
+        expected_replay_kinds = {kind for kind, _identifier in expected_replay_components}
+        offline_replay_qualified = offline_replay_is_qualifying(
+            runtime.offline_replay,
+            expected_run_id=runtime.replay_run_id,
+            expected_manifest_sha256=runtime.replay_manifest_sha256,
+            expected_verification_sha256=runtime.replay_verification_sha256,
+            expected_applicable_kinds=expected_replay_kinds,
+            expected_components=expected_replay_components,
         )
+        real_model_records = [
+            record for record in runtime.model_usage if _is_real_model_usage(record, self.config)
+        ]
+        real_model_roles = {record.role for record in real_model_records}
+        real_specialist_roles = {
+            role
+            for request_role in real_model_roles
+            if (role := canonical_specialist_role(request_role)) is not None
+        }
         benchmark_required = (
-            self.config.maximum_assurance.benchmark_gate or self.config.maximum_assurance.ci_mode
+            self.requested
+            or self.config.maximum_assurance.benchmark_gate
+            or self.config.maximum_assurance.ci_mode
+        )
+        benchmark_qualified = (
+            runtime.benchmark_verification is not None
+            and runtime.benchmark_verification.status is CertificateVerificationStatus.CURRENT
+            and runtime.benchmark_repository_git_commit is not None
+            and runtime.benchmark_verification.observed_repository_git_commit
+            == runtime.benchmark_repository_git_commit
+            and runtime.benchmark_verification.origin is CertificateVerificationOrigin.FILE_BACKED
+            and runtime.benchmark_verification.file_backed_evidence is not None
+            and runtime.benchmark_verification.file_backed_evidence.benchmark_profile
+            is AuditProfile.MAXIMUM_ASSURANCE
+            and runtime.benchmark_verification.file_backed_evidence.benchmark_reports_loaded > 0
+            and "benchmark-certificate-verification.json" in runtime.artifacts
         )
         base_roles = {
             "threat_model",
@@ -494,7 +644,7 @@ class MaximumAssuranceContract:
             "business_logic",
             "configuration",
         }
-        completed_specialists = runtime.specialist_roles_completed
+        completed_specialists = runtime.specialist_roles_completed & real_specialist_roles
         missing_investigators = set(SPECIALIST_INVESTIGATOR_ROLES) - completed_specialists
         clauses = [
             _requirement(
@@ -576,40 +726,84 @@ class MaximumAssuranceContract:
             ),
             _requirement(
                 "deterministic_scanners",
-                bool(deterministic_scanners) and not required_scanner_failures,
+                bool(real_scanners),
                 (
-                    f"{len(deterministic_scanners)} deterministic scanner(s) completed"
-                    if deterministic_scanners and not required_scanner_failures
-                    else "required deterministic scanner unavailable, failed, or timed out"
+                    f"{len(real_scanners)} real isolated deterministic scanner(s) completed"
+                    if real_scanners
+                    else "no scanner produced qualifying real isolated execution evidence"
                 ),
                 state=(
                     AnalysisState.SCANNER_SUPPORTED
-                    if deterministic_scanners and not required_scanner_failures
+                    if real_scanners
                     else AnalysisState.ATTEMPTED_FAILED
                 ),
                 artifacts=_present(runtime.artifacts, "scanner-results.json"),
             ),
             _requirement(
+                "slither_execution",
+                real_slither is not None,
+                (
+                    "one exact real isolated Slither execution completed"
+                    if real_slither is not None
+                    else (
+                        f"{len(slither_records)} Slither record(s) exist but exact qualifying "
+                        "real execution evidence is absent or ambiguous"
+                    )
+                ),
+                state=(
+                    AnalysisState.SCANNER_SUPPORTED
+                    if real_slither is not None
+                    else (
+                        AnalysisState.ATTEMPTED_FAILED
+                        if slither_records
+                        else AnalysisState.NOT_ANALYZED
+                    )
+                ),
+                artifacts=_present(runtime.artifacts, "scanner-results.json"),
+            ),
+            _requirement(
+                "foundry_unit_property_invariant_execution",
+                real_foundry_portfolio is not None,
+                (
+                    "one exact real isolated Foundry suite observed non-empty conclusive unit, "
+                    "property/fuzz, and invariant campaigns"
+                    if real_foundry_portfolio is not None
+                    else (
+                        f"{len(foundry_records)} Foundry suite record(s) exist but exact "
+                        "qualifying observed execution evidence is absent or ambiguous"
+                    )
+                ),
+                state=(
+                    AnalysisState.DETERMINISTIC
+                    if real_foundry_portfolio is not None
+                    else (
+                        AnalysisState.ATTEMPTED_FAILED
+                        if foundry_records
+                        else AnalysisState.NOT_ANALYZED
+                    )
+                ),
+                artifacts=_present(runtime.artifacts, "scanner-results.json"),
+            ),
+            _requirement(
                 "multi_agent_review",
-                base_roles <= runtime.model_roles_completed
-                and len(runtime.specialist_roles_completed)
+                base_roles <= real_model_roles
+                and len(completed_specialists)
                 >= self.config.maximum_assurance.minimum_specialist_agents
                 and not missing_investigators,
                 (
-                    f"{len(runtime.specialist_roles_completed)} specialist role(s) completed; "
+                    f"{len(completed_specialists)} real-provider specialist role(s) completed; "
                     f"{self.config.maximum_assurance.minimum_specialist_agents} required; "
                     f"missing investigators={','.join(sorted(missing_investigators)) or 'none'}"
                 ),
                 state=(
-                    AnalysisState.MODEL_ONLY
-                    if runtime.model_roles_completed
-                    else AnalysisState.NOT_ANALYZED
+                    AnalysisState.MODEL_ONLY if real_model_records else AnalysisState.NOT_ANALYZED
                 ),
                 artifacts=_present(runtime.artifacts, "specialist-execution.json"),
             ),
             _requirement(
                 "critical_model_surface_review",
-                runtime.model_review_coverage is not None
+                bool(real_model_records)
+                and runtime.model_review_coverage is not None
                 and runtime.model_review_coverage.applicable
                 and runtime.model_review_coverage.critical_gate_passed,
                 (
@@ -621,7 +815,8 @@ class MaximumAssuranceContract:
                 ),
                 state=(
                     AnalysisState.MODEL_ONLY
-                    if runtime.model_review_coverage is not None
+                    if real_model_records
+                    and runtime.model_review_coverage is not None
                     and runtime.model_review_coverage.applicable
                     else AnalysisState.NOT_ANALYZED
                 ),
@@ -635,31 +830,41 @@ class MaximumAssuranceContract:
             ),
             _requirement(
                 "independent_invariant_review",
-                "invariant_review" in runtime.auxiliary_roles_completed,
+                "invariant_review" in (runtime.auxiliary_roles_completed & real_specialist_roles),
                 (
-                    "dedicated non-finding invariant-review role completed"
-                    if "invariant_review" in runtime.auxiliary_roles_completed
-                    else "dedicated invariant-review role did not complete"
+                    "dedicated real-provider non-finding invariant-review role completed"
+                    if "invariant_review"
+                    in (runtime.auxiliary_roles_completed & real_specialist_roles)
+                    else "dedicated real-provider invariant-review role did not complete"
                 ),
                 state=(
                     AnalysisState.MODEL_ONLY
-                    if "invariant_review" in runtime.auxiliary_roles_completed
+                    if "invariant_review"
+                    in (runtime.auxiliary_roles_completed & real_specialist_roles)
                     else AnalysisState.NOT_ANALYZED
                 ),
                 artifacts=_present(runtime.artifacts, "invariant-review.json"),
             ),
             _requirement(
                 "stateful_invariant_execution",
-                bool(invariant_completed),
+                invariant_inventory_bound
+                and bool(runtime.invariant_executions)
+                and len(real_invariant_executions) == len(runtime.invariant_executions),
                 (
-                    f"{len(invariant_completed)}/{len(runtime.invariant_executions)} "
-                    "typed stateful invariant harness(es) completed"
-                    if runtime.invariant_executions
-                    else "no validated typed stateful invariant harness was configured"
+                    (
+                        f"{len(real_invariant_executions)}/{len(expected_harnesses)} "
+                        "expected typed stateful invariant harness(es) completed with real "
+                        "isolated, replayed campaign evidence"
+                    )
+                    if invariant_inventory_bound
+                    else "stateful invariant results do not exactly match the sealed "
+                    "executable harness inventory"
                 ),
                 state=(
                     AnalysisState.DETERMINISTIC
-                    if invariant_completed
+                    if invariant_inventory_bound
+                    and runtime.invariant_executions
+                    and len(real_invariant_executions) == len(runtime.invariant_executions)
                     else (
                         AnalysisState.ATTEMPTED_FAILED
                         if invariant_attempts
@@ -670,7 +875,7 @@ class MaximumAssuranceContract:
             ),
             _requirement(
                 "protocol_economic_simulation",
-                not missing_economic,
+                economic_plan_inventory_bound and not missing_economic,
                 (
                     f"{len(executed_economic & planned_economic)}/"
                     f"{len(planned_economic)} applicable economic template(s) executed"
@@ -681,11 +886,15 @@ class MaximumAssuranceContract:
                         else ""
                     )
                     if planned_economic
-                    else "no protocol-specific economic simulation was applicable"
+                    else (
+                        "no protocol-specific economic simulation was applicable"
+                        if economic_plan_inventory_bound
+                        else "economic simulation plan does not match deterministic applicability"
+                    )
                 ),
                 state=(
                     AnalysisState.DETERMINISTIC
-                    if not missing_economic
+                    if economic_plan_inventory_bound and not missing_economic
                     else (
                         AnalysisState.NOT_ANALYZED
                         if untyped_economic
@@ -750,22 +959,39 @@ class MaximumAssuranceContract:
             ),
             _requirement(
                 "independent_verifier",
-                runtime.verifier_completed,
+                runtime.verifier_completed
+                and ("verifier" in real_model_roles or not runtime.eligible_high_critical_ids),
                 (
-                    "independent verifier completed"
-                    if runtime.verifier_completed
-                    else "independent verifier did not complete"
+                    "independent real-provider verifier completed"
+                    if (
+                        runtime.verifier_completed
+                        and (
+                            "verifier" in real_model_roles or not runtime.eligible_high_critical_ids
+                        )
+                    )
+                    else "independent real-provider verifier did not complete"
                 ),
             ),
             _requirement(
                 "independent_falsifier",
-                (runtime.falsifier_completed and len(runtime.candidate_falsifier_lineages) >= 2)
+                (
+                    runtime.falsifier_completed
+                    and len(runtime.candidate_falsifier_lineages) >= 2
+                    and any(
+                        role == "falsifier" or role.startswith("candidate_falsifier:")
+                        for role in real_model_roles
+                    )
+                )
                 or not runtime.eligible_high_critical_ids,
                 (
                     "two independent candidate-falsifier lineages completed"
                     if (
                         runtime.falsifier_completed
                         and len(runtime.candidate_falsifier_lineages) >= 2
+                        and any(
+                            role == "falsifier" or role.startswith("candidate_falsifier:")
+                            for role in real_model_roles
+                        )
                     )
                     else (
                         "no eligible high/critical candidate required falsification"
@@ -782,7 +1008,7 @@ class MaximumAssuranceContract:
                 "independent_test_synthesis",
                 (
                     {"test_generation", "exploit_reproduction_planner"}
-                    <= runtime.auxiliary_roles_completed
+                    <= (runtime.auxiliary_roles_completed & real_specialist_roles)
                     or not runtime.eligible_high_critical_ids
                 ),
                 (
@@ -791,7 +1017,7 @@ class MaximumAssuranceContract:
                         "test_generation",
                         "exploit_reproduction_planner",
                     }
-                    <= runtime.auxiliary_roles_completed
+                    <= (runtime.auxiliary_roles_completed & real_specialist_roles)
                     else (
                         "no eligible high/critical candidate required test synthesis"
                         if not runtime.eligible_high_critical_ids
@@ -801,20 +1027,25 @@ class MaximumAssuranceContract:
             ),
             _requirement(
                 "evidence_capped_judge",
-                runtime.judge_completed,
+                runtime.judge_completed
+                and ("judge" in real_model_roles or not runtime.eligible_high_critical_ids),
                 (
-                    "evidence-capped judge completed"
-                    if runtime.judge_completed
-                    else "evidence-capped judge did not complete"
+                    "evidence-capped real-provider judge completed"
+                    if (
+                        runtime.judge_completed
+                        and ("judge" in real_model_roles or not runtime.eligible_high_critical_ids)
+                    )
+                    else "evidence-capped real-provider judge did not complete"
                 ),
             ),
             _requirement(
                 "report_quality_review",
-                "report_quality" in runtime.auxiliary_roles_completed,
+                "report_quality" in (runtime.auxiliary_roles_completed & real_specialist_roles),
                 (
-                    "independent report-quality review completed"
-                    if "report_quality" in runtime.auxiliary_roles_completed
-                    else "independent report-quality review did not complete"
+                    "independent real-provider report-quality review completed"
+                    if "report_quality"
+                    in (runtime.auxiliary_roles_completed & real_specialist_roles)
+                    else "independent real-provider report-quality review did not complete"
                 ),
             ),
             _requirement(
@@ -829,60 +1060,143 @@ class MaximumAssuranceContract:
             ),
             _requirement(
                 "formal_adapter_inventory",
-                bool(runtime.formal_runs),
+                bool(real_property_engines or real_formal_proofs),
                 (
-                    f"{len(runtime.formal_runs)} formal/property adapter result(s) recorded"
-                    if runtime.formal_runs
-                    else "formal/property adapter layer did not record tool availability"
+                    f"{len(real_property_engines) + len(real_formal_proofs)} qualifying real "
+                    "formal/property engine result(s) recorded"
+                    if real_property_engines or real_formal_proofs
+                    else "formal/property adapter layer produced no qualifying real execution"
                 ),
                 state=(
                     AnalysisState.DETERMINISTIC
-                    if runtime.formal_runs
-                    else AnalysisState.NOT_ANALYZED
-                ),
-                artifacts=_present(runtime.artifacts, "formal-results.json"),
-            ),
-            _requirement(
-                "formal_or_symbolic_engine",
-                formal_success,
-                (
-                    f"{sum(run.status is FormalToolStatus.SUCCESS for run in runtime.formal_runs)} "
-                    f"formal/property engine(s) completed; counterexample={formal_counterexamples}"
-                ),
-                state=(
-                    AnalysisState.DETERMINISTIC
-                    if formal_success
+                    if real_property_engines or real_formal_proofs
                     else (
                         AnalysisState.ATTEMPTED_FAILED
                         if runtime.formal_runs
                         else AnalysisState.NOT_ANALYZED
                     )
                 ),
-                required=False,
-                artifacts=_formal_artifacts(runtime.formal_runs),
+                artifacts=_present(runtime.artifacts, "formal-results.json"),
+            ),
+            _requirement(
+                "formal_proof_engine",
+                bool(real_formal_proofs),
+                (
+                    "real isolated formal proof engine(s) completed: "
+                    + ", ".join(sorted(real_formal_proofs))
+                    if real_formal_proofs
+                    else (
+                        "no Certora, Kontrol, or Solidity SMTChecker record contained "
+                        "qualifying real isolated execution evidence"
+                    )
+                ),
+                state=(
+                    AnalysisState.DETERMINISTIC
+                    if real_formal_proofs
+                    else (
+                        AnalysisState.ATTEMPTED_FAILED
+                        if runtime.formal_runs
+                        else AnalysisState.NOT_ANALYZED
+                    )
+                ),
+                artifacts=_formal_artifacts(list(real_formal_proofs.values())),
+            ),
+            _requirement(
+                "isolated_replay_execution",
+                offline_replay_qualified,
+                (
+                    f"{len(runtime.offline_replay.components)} sealed scanner, saved-test, and "
+                    "counterexample replay component(s) matched under real isolation"
+                    if offline_replay_qualified and runtime.offline_replay is not None
+                    else "no qualifying manifest-bound real offline replay was supplied"
+                ),
+                state=(
+                    AnalysisState.REPRODUCED
+                    if offline_replay_qualified
+                    else (
+                        AnalysisState.ATTEMPTED_FAILED
+                        if runtime.offline_replay is not None
+                        else AnalysisState.NOT_ANALYZED
+                    )
+                ),
+                artifacts=_present(runtime.artifacts, "offline-replay.json"),
+            ),
+            _requirement(
+                "real_model_execution",
+                bool(real_model_records),
+                (
+                    f"{len(real_model_records)} validated real-provider model request(s) completed"
+                    if real_model_records
+                    else "no validated real-provider model request completed"
+                ),
+                state=(
+                    AnalysisState.MODEL_ONLY if real_model_records else AnalysisState.NOT_ANALYZED
+                ),
+                artifacts=_present(runtime.artifacts, "specialist-execution.json"),
+            ),
+            _requirement(
+                "certified_execution_isolation",
+                real_slither is not None
+                and real_foundry_portfolio is not None
+                and set(real_property_engines) >= CERTIFIED_PROPERTY_ENGINES
+                and bool(real_formal_proofs)
+                and invariant_inventory_bound
+                and len(real_invariant_executions) == len(expected_harnesses)
+                and offline_replay_qualified,
+                (
+                    "every mandatory scanner, property, proof, invariant, and replay "
+                    "portfolio member has real hardened-isolation evidence"
+                    if (
+                        real_slither is not None
+                        and real_foundry_portfolio is not None
+                        and set(real_property_engines) >= CERTIFIED_PROPERTY_ENGINES
+                        and bool(real_formal_proofs)
+                        and invariant_inventory_bound
+                        and len(real_invariant_executions) == len(expected_harnesses)
+                        and offline_replay_qualified
+                    )
+                    else "one or more mandatory portfolio members lacks real hardened-isolation "
+                    "execution evidence"
+                ),
+                state=(
+                    AnalysisState.DETERMINISTIC
+                    if (
+                        real_slither is not None
+                        and real_foundry_portfolio is not None
+                        and set(real_property_engines) >= CERTIFIED_PROPERTY_ENGINES
+                        and bool(real_formal_proofs)
+                        and invariant_inventory_bound
+                        and len(real_invariant_executions) == len(expected_harnesses)
+                        and offline_replay_qualified
+                    )
+                    else AnalysisState.ATTEMPTED_FAILED
+                ),
             ),
             _requirement(
                 "benchmark_regression_gate",
-                runtime.benchmark_verification is not None
-                and runtime.benchmark_verification.status is CertificateVerificationStatus.CURRENT,
+                benchmark_qualified,
                 (
-                    "benchmark certificate "
+                    "file-backed benchmark certificate "
                     f"{runtime.benchmark_verification.certificate_sha256} is current"
-                    if runtime.benchmark_verification is not None
-                    and runtime.benchmark_verification.status
-                    is CertificateVerificationStatus.CURRENT
+                    if benchmark_qualified and runtime.benchmark_verification is not None
                     else (
                         "benchmark certificate is stale"
                         if runtime.benchmark_verification is not None
-                        else "benchmark gate was not requested"
+                        and runtime.benchmark_verification.status
+                        is CertificateVerificationStatus.STALE
+                        else (
+                            "benchmark verification was not loaded from a sealed "
+                            "maximum-assurance certificate and complete non-empty "
+                            "passed-report files"
+                            if runtime.benchmark_verification is not None
+                            else "benchmark gate was not requested"
+                        )
                     )
                 ),
                 required=benchmark_required,
                 state=(
                     AnalysisState.DETERMINISTIC
-                    if runtime.benchmark_verification is not None
-                    and runtime.benchmark_verification.status
-                    is CertificateVerificationStatus.CURRENT
+                    if benchmark_qualified
                     else (
                         AnalysisState.ATTEMPTED_FAILED
                         if runtime.benchmark_verification is not None
@@ -895,32 +1209,52 @@ class MaximumAssuranceContract:
                 ),
             ),
         ]
-        formal_by_name = {run.tool: run for run in runtime.formal_runs}
         for tool in self.config.formal.required_tools:
-            run = formal_by_name.get(tool)
+            records = formal_records_by_name.get(tool, [])
+            required_run = records[0] if len(records) == 1 else None
+            qualifies = (
+                required_run is not None
+                and (
+                    _is_real_property_engine_run(required_run)
+                    if tool in CERTIFIED_PROPERTY_ENGINES
+                    else (
+                        _is_real_formal_proof_run(required_run)
+                        if tool in CERTIFIED_FORMAL_PROOF_ENGINES
+                        else _is_real_formal_run(required_run)
+                    )
+                )
+                and _formal_run_matches_config_pin(required_run, self.config)
+                and (
+                    tool not in (CERTIFIED_PROPERTY_ENGINES | CERTIFIED_FORMAL_PROOF_ENGINES)
+                    or _formal_run_matches_expected_corpus(required_run, runtime)
+                )
+            )
             clauses.append(
                 _requirement(
                     f"required_formal_tool:{tool}",
-                    run is not None and run.status is FormalToolStatus.SUCCESS,
+                    qualifies,
                     (
-                        f"{tool} completed successfully"
-                        if run is not None and run.status is FormalToolStatus.SUCCESS
+                        f"{tool} completed with qualifying real isolated non-empty evidence"
+                        if qualifies
                         else (
-                            f"{tool} status={run.status.value}"
-                            if run is not None
+                            f"{tool} emitted {len(records)} ambiguous or non-qualifying "
+                            "run record(s)"
+                            if records
                             else f"{tool} did not produce a run record"
                         )
                     ),
                     state=(
                         AnalysisState.DETERMINISTIC
-                        if run is not None and run.status is FormalToolStatus.SUCCESS
+                        if qualifies
                         else (
                             AnalysisState.ATTEMPTED_FAILED
-                            if run is not None
+                            if records
                             else AnalysisState.NOT_ANALYZED
                         )
                     ),
-                    artifacts=_formal_artifacts([run]) if run is not None else [],
+                    artifacts=(
+                        _formal_artifacts([required_run]) if required_run is not None else []
+                    ),
                 )
             )
         return clauses
@@ -965,6 +1299,478 @@ def _requirement(
         state=state or (AnalysisState.DETERMINISTIC if passed else AnalysisState.NOT_ANALYZED),
         detail=detail,
         artifacts=artifacts or [],
+    )
+
+
+def _is_sha256(value: str | None) -> bool:
+    return (
+        value is not None
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _positive_integer(value: int | None) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _positive_integer_at_least(value: int | None, minimum: int) -> bool:
+    return _positive_integer(value) and value is not None and value >= minimum
+
+
+def _formal_execution_observation_matches(run: FormalToolRun) -> bool:
+    return (
+        _is_sha256(run.execution_observation_sha256)
+        and run.execution_observation_sha256 == run.expected_execution_observation_sha256()
+    )
+
+
+def _is_real_scanner_run(run: ScannerRun) -> bool:
+    return (
+        run.status is ScannerStatus.SUCCESS
+        and run.execution_evidence is ExecutionEvidenceKind.REAL
+        and bool(run.version)
+        and _is_sha256(run.executable_sha256)
+        and bool(run.command)
+        and bool(run.raw_output_path)
+        and _is_sha256(run.raw_output_sha256)
+        and run.raw_output_bytes > 0
+        and run.process_exit_code is not None
+        and run.isolation_backend in CERTIFIED_ISOLATION_BACKENDS
+        and _is_sha256(run.isolation_attestation_sha256)
+        and run.finished_at >= run.started_at
+    )
+
+
+def _scanner_execution_observation_matches(run: ScannerRun) -> bool:
+    return (
+        _is_sha256(run.execution_observation_sha256)
+        and run.execution_observation_sha256 == run.expected_execution_observation_sha256()
+    )
+
+
+def _is_real_slither_run(run: ScannerRun) -> bool:
+    return (
+        run.scanner == "slither"
+        and _is_real_scanner_run(run)
+        and run.process_exit_code == 0
+        and run.machine_output_validated
+        and _scanner_execution_observation_matches(run)
+    )
+
+
+def _scanner_matches_trust_pin(
+    run: ScannerRun,
+    *,
+    version: str | None,
+    sha256: str | None,
+) -> bool:
+    return (
+        version is not None
+        and sha256 is not None
+        and run.executable_sha256 == sha256
+        and run.version is not None
+        and re.search(
+            rf"(?<![0-9.]){re.escape(version)}(?![0-9.])",
+            run.version,
+        )
+        is not None
+    )
+
+
+def _formal_run_matches_config_pin(run: FormalToolRun, config: AuditConfig) -> bool:
+    formal = config.formal
+    pins: dict[str, tuple[str | None, str | None]] = {
+        "echidna": (formal.echidna_version, formal.echidna_sha256),
+        "medusa": (formal.medusa_version, formal.medusa_sha256),
+        "halmos": (formal.halmos_version, formal.halmos_sha256),
+        "kontrol": (formal.kontrol_version, formal.kontrol_sha256),
+        "certora": (
+            formal.certora.cli_version if formal.certora.enabled else None,
+            formal.certora.cli_sha256 if formal.certora.enabled else None,
+        ),
+    }
+    expected = pins.get(run.tool)
+    if expected is None:
+        return False
+    version, sha256 = expected
+    if (
+        version is None
+        or sha256 is None
+        or run.executable_sha256 != sha256
+        or run.version is None
+        or re.search(
+            rf"(?<![0-9.]){re.escape(version)}(?![0-9.])",
+            run.version,
+        )
+        is None
+    ):
+        return False
+    if run.tool != "halmos":
+        return True
+    return (
+        formal.halmos_solver_version is not None
+        and formal.halmos_solver_sha256 is not None
+        and len(run.dependencies) == 1
+        and run.dependencies[0].name == "z3"
+        and run.dependencies[0].executable_sha256 == formal.halmos_solver_sha256
+        and run.dependencies[0].version is not None
+        and re.search(
+            rf"(?<![0-9.]){re.escape(formal.halmos_solver_version)}(?![0-9.])",
+            run.dependencies[0].version,
+        )
+        is not None
+    )
+
+
+def _is_real_foundry_portfolio(run: ScannerRun) -> bool:
+    summary = run.foundry_summary
+    if run.scanner != "foundry_fork" or not _is_real_scanner_run(run) or summary is None:
+        return False
+    observed_tests = summary.unit_tests + summary.fuzz_tests + summary.invariant_tests
+    return (
+        run.process_exit_code in {0, 1}
+        and run.machine_output_validated
+        and _scanner_execution_observation_matches(run)
+        and summary.unit_tests > 0
+        and summary.fuzz_tests > 0
+        and summary.invariant_tests > 0
+        and summary.passed_tests + summary.failed_tests == observed_tests
+        and summary.skipped_tests == 0
+        and summary.fuzz_cases > 0
+        and summary.invariant_runs > 0
+        and summary.invariant_calls > 0
+    )
+
+
+def _is_real_formal_run(run: FormalToolRun) -> bool:
+    indexed_sources = run.coverage.get("indexed_sources")
+    return (
+        run.status is FormalToolStatus.SUCCESS
+        and run.execution_evidence is ExecutionEvidenceKind.REAL
+        and bool(run.version)
+        and _is_sha256(run.executable_sha256)
+        and bool(run.command)
+        and run.isolation_backend in CERTIFIED_ISOLATION_BACKENDS
+        and _is_sha256(run.isolation_attestation_sha256)
+        and bool(run.stdout_path)
+        and bool(run.stderr_path)
+        and (
+            run.process_exit_code == 0
+            or (
+                run.tool in (CERTIFIED_PROPERTY_ENGINES | {"kontrol"})
+                and run.process_exit_code == 1
+            )
+        )
+        and _is_sha256(run.stdout_sha256)
+        and _is_sha256(run.stderr_sha256)
+        and (run.result_sha256 is None or _is_sha256(run.result_sha256))
+        and run.stdout_bytes + run.stderr_bytes + run.result_bytes > 0
+        and run.machine_output_validated
+        and _formal_execution_observation_matches(run)
+        and isinstance(indexed_sources, int)
+        and not isinstance(indexed_sources, bool)
+        and indexed_sources > 0
+    )
+
+
+def _is_real_property_engine_run(run: FormalToolRun) -> bool:
+    configured_campaign = run.configured_campaign
+    observed_campaign = run.observed_campaign
+    conclusive_evidence = [
+        evidence
+        for evidence in run.evidence
+        if (
+            evidence.tool == run.tool
+            and evidence.status is FormalToolStatus.SUCCESS
+            and evidence.result_kind
+            in {
+                FormalResultKind.NONE,
+                FormalResultKind.COUNTEREXAMPLE,
+            }
+        )
+    ]
+    conclusive_property_ids = {evidence.property_id for evidence in conclusive_evidence}
+    return (
+        run.tool in CERTIFIED_PROPERTY_ENGINES
+        and _is_real_formal_run(run)
+        and _is_sha256(run.property_corpus_hash)
+        and run.translated_properties > 0
+        and len(run.executed_property_ids) == run.translated_properties
+        and run.observed_property_ids == run.executed_property_ids
+        and conclusive_property_ids == set(run.executed_property_ids)
+        and len(conclusive_evidence) == len(run.executed_property_ids)
+        and len(run.evidence) == len(conclusive_evidence)
+        and configured_campaign is not None
+        and observed_campaign is not None
+        and (
+            (
+                run.tool in {"echidna", "medusa"}
+                and _positive_integer_at_least(
+                    observed_campaign.runs,
+                    configured_campaign.runs,
+                )
+                and _positive_integer_at_least(
+                    observed_campaign.calls,
+                    configured_campaign.runs,
+                )
+                and _positive_integer_at_least(
+                    observed_campaign.depth,
+                    configured_campaign.depth,
+                )
+            )
+            or (
+                run.tool == "halmos"
+                and _positive_integer(observed_campaign.paths)
+                and (
+                    observed_campaign.depth is None
+                    or _positive_integer_at_least(
+                        observed_campaign.depth,
+                        configured_campaign.depth,
+                    )
+                )
+            )
+        )
+        and (
+            run.tool != "halmos"
+            or (
+                len(run.dependencies) == 1
+                and run.dependencies[0].name == "z3"
+                and bool(run.dependencies[0].version)
+                and _is_sha256(run.dependencies[0].executable_sha256)
+            )
+        )
+    )
+
+
+def _formal_run_matches_expected_corpus(
+    run: FormalToolRun,
+    runtime: AssuranceRuntime,
+) -> bool:
+    """Require every mandatory property engine to execute the same sealed corpus."""
+
+    return (
+        _is_sha256(runtime.property_corpus_sha256)
+        and bool(runtime.property_corpus_property_ids)
+        and run.property_corpus_hash == runtime.property_corpus_sha256
+        and set(run.property_corpus_property_ids) == runtime.property_corpus_property_ids
+        and set(run.executed_property_ids) == runtime.property_corpus_property_ids
+        and set(run.observed_property_ids) == runtime.property_corpus_property_ids
+        and run.translated_properties == len(runtime.property_corpus_property_ids)
+        and {binding.corpus_property_id for binding in run.translated_property_bindings}
+        == runtime.property_corpus_property_ids
+        and runtime.property_corpus_property_hashes
+        == {
+            binding.corpus_property_id: binding.property_hash
+            for binding in run.translated_property_bindings
+        }
+    )
+
+
+def _is_real_formal_proof_run(run: FormalToolRun) -> bool:
+    qualifying_results = [
+        evidence
+        for evidence in run.evidence
+        if (
+            evidence.tool == run.tool
+            and evidence.status is FormalToolStatus.SUCCESS
+            and evidence.result_kind in {FormalResultKind.PROOF, FormalResultKind.COUNTEREXAMPLE}
+            and bool(evidence.property_id)
+            and bool(evidence.artifact_paths)
+        )
+    ]
+    return (
+        run.tool in CERTIFIED_FORMAL_PROOF_ENGINES
+        and _is_real_formal_run(run)
+        and bool(qualifying_results)
+        and run.translated_properties > 0
+        and run.observed_property_ids == run.executed_property_ids
+        and {result.property_id for result in qualifying_results} == set(run.executed_property_ids)
+        and len(qualifying_results) == run.translated_properties
+        and len(run.evidence) == len(qualifying_results)
+        and (
+            run.tool != "certora"
+            or (bool(run.specification_artifacts) and bool(run.vacuity_artifacts))
+        )
+    )
+
+
+def _is_real_invariant_execution(
+    result: InvariantExecutionResult,
+    config: AuditConfig,
+) -> bool:
+    completed = {
+        InvariantExecutionStatus.PASSED,
+        InvariantExecutionStatus.COUNTEREXAMPLE,
+    }
+    coverage = result.campaign_coverage
+    return (
+        result.status in completed
+        and result.execution_evidence is ExecutionEvidenceKind.REAL
+        and _is_sha256(result.executable_sha256)
+        and result.executable_sha256 == config.scanners.foundry_fork.sha256
+        and _is_sha256(result.source_sha256)
+        and config.smart_contracts.solc_version is not None
+        and config.smart_contracts.solc_sha256 is not None
+        and result.compiler_version is not None
+        and re.search(
+            rf"(?<![0-9.]){re.escape(config.smart_contracts.solc_version)}(?![0-9.])",
+            result.compiler_version,
+        )
+        is not None
+        and _is_sha256(result.compiler_sha256)
+        and result.compiler_sha256 == config.smart_contracts.solc_sha256
+        and _is_sha256(result.isolation_attestation_sha256)
+        and _is_sha256(result.execution_observation_sha256)
+        and result.execution_observation_sha256 == result.expected_execution_observation_sha256()
+        and bool(result.command)
+        and result.runs > 0
+        and result.depth > 0
+        and result.attempts >= 2
+        and result.successful_attempts == result.attempts
+        and result.replay_confirmed
+        and len(result.attempt_evidence) == result.attempts
+        and all(
+            attempt.fresh_workspace
+            and attempt.status is result.status
+            and attempt.source_sha256 == result.source_sha256
+            and _is_sha256(attempt.stdout_sha256)
+            and _is_sha256(attempt.stderr_sha256)
+            and bool(attempt.stdout_path)
+            and bool(attempt.stderr_path)
+            and attempt.process_exit_code in {0, 1}
+            and attempt.machine_output_validated
+            and attempt.campaign_runs > 0
+            and attempt.campaign_calls > 0
+            for attempt in result.attempt_evidence
+        )
+        and coverage is not None
+        and coverage.attempts_consistent
+        and coverage.sequence_depth_bound == result.depth
+        and coverage.observed_campaign_runs > 0
+        and coverage.observed_campaign_calls > 0
+        and bool(coverage.declared_action_functions)
+        and bool(coverage.observed_action_functions)
+        and set(coverage.observed_action_functions) == set(coverage.declared_action_functions)
+        and bool(coverage.declared_state_properties)
+        and bool(coverage.observed_state_properties)
+        and set(coverage.observed_state_properties) == set(coverage.declared_state_properties)
+        and (
+            result.status is InvariantExecutionStatus.PASSED
+            or bool(coverage.observed_sequence_lengths)
+        )
+        and bool(result.stdout_path)
+        and bool(result.stderr_path)
+        and result.isolation_backend in CERTIFIED_ISOLATION_BACKENDS
+    )
+
+
+def offline_replay_is_qualifying(
+    replay: OfflineReplay | None,
+    *,
+    expected_run_id: str | None,
+    expected_manifest_sha256: str | None,
+    expected_verification_sha256: str | None,
+    expected_applicable_kinds: set[ReplayComponentKind],
+    expected_components: set[tuple[ReplayComponentKind, str]],
+) -> bool:
+    if (
+        replay is None
+        or expected_run_id is None
+        or expected_manifest_sha256 is None
+        or expected_verification_sha256 is None
+        or not expected_applicable_kinds
+        or not expected_components
+    ):
+        return False
+    observed_component_counts = Counter(
+        (component.kind, component.identifier) for component in replay.components
+    )
+    observed_kinds = {
+        component.kind
+        for component in replay.components
+        if (
+            component.status is ReplayComponentStatus.MATCHED
+            and component.executed
+            and component.execution_evidence is ExecutionEvidenceKind.REAL
+            and component.isolation_backend in CERTIFIED_ISOLATION_BACKENDS
+            and _is_sha256(component.isolation_attestation_sha256)
+        )
+    }
+    return (
+        replay.status is OfflineReplayStatus.REPLAYED
+        and replay.run_id == expected_run_id
+        and replay.manifest_sha256 == expected_manifest_sha256
+        and replay.run_verification_sha256 == expected_verification_sha256
+        and set(replay.applicable_kinds) == expected_applicable_kinds
+        and set(observed_component_counts) == expected_components
+        and all(count == 1 for count in observed_component_counts.values())
+        and not replay.missing_kinds
+        and bool(replay.components)
+        and observed_kinds == set(replay.applicable_kinds)
+        and all(
+            component.status is ReplayComponentStatus.MATCHED
+            and component.executed
+            and component.execution_evidence is ExecutionEvidenceKind.REAL
+            and component.isolation_backend in CERTIFIED_ISOLATION_BACKENDS
+            and _is_sha256(component.isolation_attestation_sha256)
+            for component in replay.components
+        )
+    )
+
+
+def _expected_replay_components(
+    runtime: AssuranceRuntime,
+    expected_harnesses: dict[tuple[str, str], str],
+) -> set[tuple[ReplayComponentKind, str]]:
+    """Derive exact replay member obligations from runtime evidence."""
+
+    expected = {(ReplayComponentKind.SCANNER, run.scanner) for run in runtime.scanners}
+    results = {
+        (result.invariant_id, result.harness_name): result
+        for result in runtime.invariant_executions
+    }
+    for identity in expected_harnesses:
+        result = results.get(identity)
+        kind = (
+            ReplayComponentKind.COUNTEREXAMPLE
+            if result is not None and result.status is InvariantExecutionStatus.COUNTEREXAMPLE
+            else ReplayComponentKind.SAVED_TEST
+        )
+        expected.add((kind, f"{identity[0]}/{identity[1]}"))
+    expected.update(
+        (
+            ReplayComponentKind.SAVED_TEST,
+            f"{result.candidate_id}/{result.test_name}",
+        )
+        for result in runtime.reproduction_results
+    )
+    return expected
+
+
+def _is_real_model_usage(record: UsageRecord, config: AuditConfig) -> bool:
+    generation_id = record.routing.get("generation_id")
+    role = canonical_specialist_role(record.role) or record.role
+    try:
+        configured_role = config.models.role(role)
+    except (KeyError, TypeError):
+        return False
+    configured_models = {configured_role.primary, *configured_role.fallbacks}
+    return (
+        record.execution_evidence is ExecutionEvidenceKind.REAL
+        and record.status == "success"
+        and record.returned_model == record.requested_model
+        and record.requested_model in configured_models
+        and bool(record.provider)
+        and isinstance(generation_id, str)
+        and bool(generation_id)
+        and record.routing.get("zdr_requested") is True
+        and record.routing.get("data_collection") == "deny"
+        and _is_sha256(record.prompt_sha256)
+        and _is_sha256(record.response_sha256)
+        and record.prompt_tokens > 0
+        and record.completion_tokens > 0
+        and record.total_tokens >= record.prompt_tokens + record.completion_tokens
     )
 
 

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
+from mmaudit.models.schemas import ExecutionEvidenceKind
 from mmaudit.operator_secrets import RESERVED_OPERATOR_CONTROL_PLANE_NAMES
 
 _DIGEST_PINNED_IMAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}$")
@@ -238,6 +239,10 @@ class RootlessContainerBackend:
     host_gid: int = field(default_factory=_current_gid)
     limits: RootlessContainerLimits = field(default_factory=RootlessContainerLimits)
     name: str = "rootless-container"
+    # The host hashes the selected executable, while the image entrypoint is the
+    # binary that actually runs. Certification remains unavailable until the
+    # digest-pinned image exposes an in-container binary attestation.
+    execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.UNVERIFIED
     supports_local_fork_rpc: bool = False
 
     def __post_init__(self) -> None:

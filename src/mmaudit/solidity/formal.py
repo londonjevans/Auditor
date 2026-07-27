@@ -17,11 +17,19 @@ from pathlib import Path
 from typing import Any
 
 from mmaudit.config import FormalConfig
+from mmaudit.isolation.provenance import (
+    isolation_attestation_sha256,
+    isolation_execution_evidence,
+)
 from mmaudit.models.schemas import (
     DynamicEngineComparison,
     DynamicPropertyOutcome,
+    ExecutionEvidenceKind,
+    FormalCampaignBounds,
+    FormalCampaignObservation,
     FormalDependencyProvenance,
     FormalEvidence,
+    FormalPropertyBinding,
     FormalResultKind,
     FormalToolRun,
     FormalToolStatus,
@@ -203,6 +211,28 @@ class FormalAdapter(ABC):
 
         del machine_output
         return self.parse(stdout, stderr, index)
+
+    def validates_machine_output(
+        self,
+        stdout: str,
+        stderr: str,
+        machine_output: str,
+    ) -> bool:
+        """Return true only for a strict adapter-specific machine-result envelope."""
+
+        del stdout, stderr, machine_output
+        return False
+
+    def parse_observed_campaign(
+        self,
+        stdout: str,
+        stderr: str,
+        machine_output: str,
+    ) -> FormalCampaignObservation | None:
+        """Return only campaign statistics present in strict machine output."""
+
+        del stdout, stderr, machine_output
+        return None
 
     @abstractmethod
     def applicable(
@@ -534,27 +564,65 @@ class EchidnaAdapter(PropertyToolAdapter):
                 if property_name is None:
                     continue
                 status = str(item.get("status") or item.get("result") or item.get("state") or "")
+                normalized_status = status.strip().casefold()
                 serialized = json.dumps(item, sort_keys=True)[:4_000]
                 lowered = f"{status}\n{serialized}".lower()
-                if not any(
-                    token in lowered
-                    for token in ("falsified", "failed", "failure", "counterexample")
-                ):
+                outcome = (
+                    "passed"
+                    if normalized_status in {"passed", "success", "succeeded"}
+                    else (
+                        "counterexample"
+                        if normalized_status in {"falsified", "failed", "failure", "counterexample"}
+                        else None
+                    )
+                )
+                if outcome is None:
                     continue
-                key = (property_name, serialized)
+                key = (property_name, outcome)
                 if key in seen:
                     continue
                 seen.add(key)
                 evidence.append(
-                    _property_counterexample_evidence(
+                    _property_pass_evidence(self.name, property_name, index)
+                    if outcome == "passed"
+                    else _property_counterexample_evidence(
                         self.name,
                         property_name,
-                        _bounded_summary(serialized),
+                        _bounded_summary(lowered),
                         index,
                         counterexample=_echidna_counterexample(item, serialized),
                     )
                 )
         return evidence or super().parse(stdout, stderr, index)
+
+    def validates_machine_output(
+        self,
+        stdout: str,
+        stderr: str,
+        machine_output: str,
+    ) -> bool:
+        del machine_output
+        return _has_strict_property_result(
+            [*_json_documents(stdout), *_json_documents(stderr)],
+            statuses={
+                "passed",
+                "success",
+                "succeeded",
+                "falsified",
+                "failed",
+                "failure",
+                "counterexample",
+            },
+        )
+
+    def parse_observed_campaign(
+        self,
+        stdout: str,
+        stderr: str,
+        machine_output: str,
+    ) -> FormalCampaignObservation | None:
+        del machine_output
+        return _echidna_campaign_observation([*_json_documents(stdout), *_json_documents(stderr)])
 
 
 class MedusaAdapter(PropertyToolAdapter):
@@ -675,25 +743,35 @@ class MedusaAdapter(PropertyToolAdapter):
                 if property_name is None:
                     continue
                 status = str(item.get("status") or item.get("result") or item.get("state") or "")
+                normalized_status = status.strip().casefold()
                 serialized = json.dumps(item, sort_keys=True)[:4_000]
-                lowered = f"{status}\n{serialized}".lower()
-                if not any(
-                    token in lowered
-                    for token in (
-                        "falsified",
-                        "failed",
-                        "failure",
-                        "counterexample",
-                        "property_test_failed",
+                outcome = (
+                    "passed"
+                    if normalized_status
+                    in {"passed", "success", "succeeded", "property_test_passed"}
+                    else (
+                        "counterexample"
+                        if normalized_status
+                        in {
+                            "falsified",
+                            "failed",
+                            "failure",
+                            "counterexample",
+                            "property_test_failed",
+                        }
+                        else None
                     )
-                ):
+                )
+                if outcome is None:
                     continue
-                key = (property_name, serialized)
+                key = (property_name, outcome)
                 if key in seen:
                     continue
                 seen.add(key)
                 evidence.append(
-                    _property_counterexample_evidence(
+                    _property_pass_evidence(self.name, property_name, index)
+                    if outcome == "passed"
+                    else _property_counterexample_evidence(
                         self.name,
                         property_name,
                         _bounded_summary(serialized),
@@ -702,6 +780,37 @@ class MedusaAdapter(PropertyToolAdapter):
                     )
                 )
         return evidence or super().parse(stdout, stderr, index)
+
+    def validates_machine_output(
+        self,
+        stdout: str,
+        stderr: str,
+        machine_output: str,
+    ) -> bool:
+        del machine_output
+        return _has_strict_property_result(
+            [*_json_documents(stdout), *_json_documents(stderr)],
+            statuses={
+                "passed",
+                "success",
+                "succeeded",
+                "property_test_passed",
+                "falsified",
+                "failed",
+                "failure",
+                "counterexample",
+                "property_test_failed",
+            },
+        )
+
+    def parse_observed_campaign(
+        self,
+        stdout: str,
+        stderr: str,
+        machine_output: str,
+    ) -> FormalCampaignObservation | None:
+        del machine_output
+        return _medusa_campaign_observation([*_json_documents(stdout), *_json_documents(stderr)])
 
 
 class FoundryInvariantAdapter(PropertyToolAdapter):
@@ -955,18 +1064,44 @@ class HalmosAdapter(PropertyToolAdapter):
         index: SoliditySymbolIndex,
     ) -> list[FormalEvidence]:
         records = parse_halmos_json(machine_output)
-        if not records:
+        passed = [
+            property_name
+            for property_name, exit_code in _halmos_machine_property_results(machine_output)
+            if exit_code == 0
+        ]
+        if not records and not passed:
             return super().parse_result(stdout, stderr, machine_output, index)
         return [
-            _property_counterexample_evidence(
-                self.name,
-                record.property_name,
-                str(record.counterexample["summary"]),
-                index,
-                counterexample=record.counterexample,
-            )
-            for record in records
+            *[_property_pass_evidence(self.name, property_name, index) for property_name in passed],
+            *[
+                _property_counterexample_evidence(
+                    self.name,
+                    record.property_name,
+                    str(record.counterexample["summary"]),
+                    index,
+                    counterexample=record.counterexample,
+                )
+                for record in records
+            ],
         ]
+
+    def validates_machine_output(
+        self,
+        stdout: str,
+        stderr: str,
+        machine_output: str,
+    ) -> bool:
+        del stdout, stderr
+        return bool(_halmos_machine_property_results(machine_output))
+
+    def parse_observed_campaign(
+        self,
+        stdout: str,
+        stderr: str,
+        machine_output: str,
+    ) -> FormalCampaignObservation | None:
+        del stdout, stderr
+        return _halmos_campaign_observation(machine_output)
 
 
 class CertoraAdapter(FormalAdapter):
@@ -1149,6 +1284,15 @@ class CertoraAdapter(FormalAdapter):
             )
         return evidence
 
+    def validates_machine_output(
+        self,
+        stdout: str,
+        stderr: str,
+        machine_output: str,
+    ) -> bool:
+        del stdout, stderr
+        return bool(machine_output and parse_certora_results(machine_output))
+
 
 class KontrolAdapter(PropertyToolAdapter):
     name = "kontrol"
@@ -1273,16 +1417,43 @@ class KontrolAdapter(PropertyToolAdapter):
         index: SoliditySymbolIndex,
     ) -> list[FormalEvidence]:
         del machine_output
+        combined = "\n".join((stdout, stderr))
+        outcomes = _kontrol_machine_outcomes(combined)
         return [
-            _property_counterexample_evidence(
-                self.name,
-                record.property_name,
-                str(record.counterexample["summary"]),
-                index,
-                counterexample=record.counterexample,
-            )
-            for record in parse_kontrol_output("\n".join((stdout, stderr)))
+            *[
+                _property_proof_evidence(self.name, property_name, index)
+                for property_name, status in outcomes
+                if status in {"passed", "proved", "verified", "success"}
+            ],
+            *[
+                _property_counterexample_evidence(
+                    self.name,
+                    record.property_name,
+                    str(record.counterexample["summary"]),
+                    index,
+                    counterexample=record.counterexample,
+                )
+                for record in parse_kontrol_output(combined)
+            ],
         ]
+
+    def validates_machine_output(
+        self,
+        stdout: str,
+        stderr: str,
+        machine_output: str,
+    ) -> bool:
+        del machine_output
+        return bool(_kontrol_machine_outcomes("\n".join((stdout, stderr))))
+
+    def parse_observed_campaign(
+        self,
+        stdout: str,
+        stderr: str,
+        machine_output: str,
+    ) -> FormalCampaignObservation | None:
+        del machine_output
+        return _kontrol_campaign_observation("\n".join((stdout, stderr)))
 
 
 class FormalRunner:
@@ -1297,20 +1468,33 @@ class FormalRunner:
     ) -> None:
         self.config = config
         self.backend = backend if backend is not None else default_isolation_backend("auto")
-        self.adapters = adapters or [
-            SolcSMTCheckerAdapter(),
-            MythrilAdapter(),
-            EchidnaAdapter(),
-            MedusaAdapter(),
-            FoundryInvariantAdapter(),
-            HalmosAdapter(),
-            CertoraAdapter(),
-            KontrolAdapter(),
-        ]
+        if adapters is None:
+            self.adapters = [
+                SolcSMTCheckerAdapter(),
+                MythrilAdapter(),
+                EchidnaAdapter(),
+                MedusaAdapter(),
+                FoundryInvariantAdapter(),
+                HalmosAdapter(),
+                CertoraAdapter(),
+                KontrolAdapter(),
+            ]
+            self._trusted_adapters = tuple(self.adapters)
+        else:
+            self.adapters = adapters
+            self._trusted_adapters = ()
 
     @property
     def isolation_available(self) -> bool:
-        return self.backend is not None
+        return isolation_execution_evidence(self.backend) is ExecutionEvidenceKind.REAL
+
+    def _execution_evidence(self, adapter: FormalAdapter) -> ExecutionEvidenceKind:
+        evidence = isolation_execution_evidence(self.backend)
+        if evidence is ExecutionEvidenceKind.REAL and not any(
+            adapter is trusted for trusted in self._trusted_adapters
+        ):
+            return ExecutionEvidenceKind.UNVERIFIED
+        return evidence
 
     def run(
         self,
@@ -1339,8 +1523,11 @@ class FormalRunner:
                 for adapter in self.adapters
                 if self._enabled(adapter.name)
             ]
-        return [
-            self._run_adapter(
+        runs: list[FormalToolRun] = []
+        for adapter in self.adapters:
+            if not self._enabled(adapter.name):
+                continue
+            run = self._run_adapter(
                 adapter,
                 repository_root=repository_root,
                 project=project,
@@ -1349,11 +1536,21 @@ class FormalRunner:
                 private_dir=private_dir / adapter.name,
                 property_corpus=property_corpus,
             ).model_copy(
-                update={"isolation_backend": isolation_backend},
+                update={
+                    "isolation_backend": isolation_backend,
+                    "isolation_attestation_sha256": isolation_attestation_sha256(self.backend),
+                }
             )
-            for adapter in self.adapters
-            if self._enabled(adapter.name)
-        ]
+            if run.execution_observation_sha256 is not None:
+                run = run.model_copy(
+                    update={
+                        "execution_observation_sha256": (
+                            run.expected_execution_observation_sha256()
+                        )
+                    }
+                )
+            runs.append(run)
+        return runs
 
     def _enabled(self, name: str) -> bool:
         return {
@@ -1672,6 +1869,16 @@ class FormalRunner:
             if status in {FormalToolStatus.SUCCESS, FormalToolStatus.INCONCLUSIVE}
             else []
         )
+        machine_output_validated = adapter.validates_machine_output(
+            stdout,
+            stderr,
+            machine_output,
+        )
+        observed_campaign = (
+            adapter.parse_observed_campaign(stdout, stderr, machine_output)
+            if machine_output_validated
+            else None
+        )
         if (
             isinstance(preparation, PropertyEngineTranslation)
             and property_corpus is not None
@@ -1708,26 +1915,86 @@ class FormalRunner:
             failure_reason = (
                 "configured Certora output lacked a complete non-vacuous normalized result"
             )
-        return FormalToolRun(
+        redacted_command = _redacted_command(
+            command,
+            workspace=workspace,
+            private_dir=private_dir,
+            dependencies=dependency_specs,
+        )
+        stdout_sha256 = _file_sha256(stdout_path) if stdout_path.is_file() else None
+        stderr_sha256 = _file_sha256(stderr_path) if stderr_path.is_file() else None
+        result_sha256 = _file_sha256(output_path) if output_path.is_file() else None
+        stdout_bytes = stdout_path.stat().st_size if stdout_path.is_file() else 0
+        stderr_bytes = stderr_path.stat().st_size if stderr_path.is_file() else 0
+        result_bytes = output_path.stat().st_size if output_path.is_file() else 0
+        executed_property_ids = (
+            sorted(property_spec.id for property_spec in preparation.property_map.values())
+            if preparation is not None
+            else []
+        )
+        property_corpus_property_ids = (
+            sorted(property_spec.id for property_spec in property_corpus.properties)
+            if preparation is not None and property_corpus is not None
+            else []
+        )
+        translated_property_bindings = (
+            [
+                FormalPropertyBinding(
+                    generated_property_id=generated_property_id,
+                    corpus_property_id=property_spec.id,
+                    property_hash=property_spec.property_hash,
+                )
+                for generated_property_id, property_spec in sorted(preparation.property_map.items())
+            ]
+            if preparation is not None
+            else []
+        )
+        configured_campaign = (
+            FormalCampaignBounds(runs=preparation.runs, depth=preparation.depth)
+            if preparation is not None and preparation.runs > 0 and preparation.depth > 0
+            else None
+        )
+        observed_property_ids = (
+            sorted(
+                {
+                    item.property_id
+                    for item in evidence
+                    if item.property_id in set(executed_property_ids)
+                }
+            )
+            if isinstance(preparation, PropertyEngineTranslation)
+            else []
+        )
+        if (
+            isinstance(preparation, PropertyEngineTranslation)
+            and adapter.name in {"echidna", "medusa", "halmos", "kontrol"}
+            and machine_output_validated
+            and isinstance(result, int)
+            and result in {0, 1}
+            and observed_property_ids == executed_property_ids
+            and len(evidence) == len(executed_property_ids)
+            and all(
+                item.status is FormalToolStatus.SUCCESS
+                and item.result_kind in {FormalResultKind.NONE, FormalResultKind.COUNTEREXAMPLE}
+                for item in evidence
+            )
+        ):
+            status = FormalToolStatus.SUCCESS
+            failure_reason = None
+        formal_run = FormalToolRun(
             tool=adapter.name,
+            execution_evidence=self._execution_evidence(adapter),
             version=version,
             executable_sha256=executable_sha256,
             dependencies=dependency_provenance,
             status=status,
-            command=_redacted_command(
-                command,
-                workspace=workspace,
-                private_dir=private_dir,
-                dependencies=dependency_specs,
-            ),
+            command=redacted_command,
             duration_seconds=time.monotonic() - started,
             evidence=evidence,
             coverage={
                 "indexed_sources": len(set(_safe_source_paths(index))),
                 "properties": len(evidence),
                 "timeout_seconds": self.config.timeout_seconds,
-                "campaign_runs": preparation.runs if preparation is not None else 0,
-                "campaign_depth": preparation.depth if preparation is not None else 0,
                 "vacuity_checks": (
                     preparation.vacuity_checks if isinstance(preparation, CertoraPreparation) else 0
                 ),
@@ -1737,13 +2004,14 @@ class FormalRunner:
                 if preparation is not None and property_corpus is not None
                 else None
             ),
+            property_corpus_property_ids=property_corpus_property_ids,
+            translated_property_bindings=translated_property_bindings,
             campaign_seed=preparation.seed if preparation is not None else None,
+            configured_campaign=configured_campaign,
+            observed_campaign=observed_campaign,
             translated_properties=(len(preparation.property_map) if preparation is not None else 0),
-            executed_property_ids=(
-                sorted(property_spec.id for property_spec in preparation.property_map.values())
-                if preparation is not None
-                else []
-            ),
+            executed_property_ids=executed_property_ids,
+            observed_property_ids=observed_property_ids,
             assumptions=(preparation.assumptions if preparation is not None else []),
             translation_limitations=(preparation.limitations if preparation is not None else []),
             specification_artifacts=_preparation_artifacts(
@@ -1766,6 +2034,19 @@ class FormalRunner:
                 if output_path.is_file()
                 else None
             ),
+            process_exit_code=result if isinstance(result, int) else None,
+            stdout_sha256=stdout_sha256,
+            stderr_sha256=stderr_sha256,
+            result_sha256=result_sha256,
+            stdout_bytes=stdout_bytes,
+            stderr_bytes=stderr_bytes,
+            result_bytes=result_bytes,
+            machine_output_validated=machine_output_validated,
+        )
+        return formal_run.model_copy(
+            update={
+                "execution_observation_sha256": (formal_run.expected_execution_observation_sha256())
+            }
         )
 
 
@@ -2085,6 +2366,305 @@ def _property_counterexample_evidence(
         locations=locations,
         confidence=0.95 if locations else 0.7,
     )
+
+
+def _property_pass_evidence(
+    tool: str,
+    property_name: str,
+    index: SoliditySymbolIndex,
+) -> FormalEvidence:
+    entity = next((item for item in index.entities if item.name == property_name), None)
+    locations = (
+        [
+            Location(
+                path=entity.path,
+                start_line=entity.start_line,
+                end_line=entity.end_line,
+                symbol=entity.name,
+                content_hash=entity.source_hash,
+            )
+        ]
+        if entity
+        else []
+    )
+    return FormalEvidence(
+        tool=tool,
+        property_id=property_name,
+        property_description=f"Bounded property campaign completed for {property_name}",
+        status=FormalToolStatus.SUCCESS,
+        result_kind=FormalResultKind.NONE,
+        assumptions=["Configured bounded property campaign"],
+        locations=locations,
+        confidence=0.9 if locations else 0.6,
+    )
+
+
+def _property_proof_evidence(
+    tool: str,
+    property_name: str,
+    index: SoliditySymbolIndex,
+) -> FormalEvidence:
+    evidence = _property_pass_evidence(tool, property_name, index)
+    return evidence.model_copy(
+        update={
+            "property_description": (f"Bounded formal proof completed for {property_name}"),
+            "result_kind": FormalResultKind.PROOF,
+            "assumptions": ["Configured bounded formal proof"],
+            "confidence": min(0.95, evidence.confidence),
+        }
+    )
+
+
+def _has_strict_property_result(
+    payloads: list[Any],
+    *,
+    statuses: set[str],
+) -> bool:
+    return any(
+        _property_name_from_json(item) is not None
+        and str(item.get("status") or item.get("result") or item.get("state") or "")
+        .strip()
+        .casefold()
+        in statuses
+        for payload in payloads
+        for item in _walk_dicts(payload)
+    )
+
+
+def _machine_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return int(value)
+
+
+def _echidna_campaign_observation(
+    payloads: list[Any],
+) -> FormalCampaignObservation | None:
+    statuses = {
+        "passed",
+        "success",
+        "succeeded",
+        "falsified",
+        "failed",
+        "failure",
+        "counterexample",
+    }
+    if not _has_strict_property_result(payloads, statuses=statuses):
+        return None
+    observations: list[tuple[int | None, int | None, int | None]] = []
+    for payload in payloads:
+        if not isinstance(payload, dict) or not isinstance(payload.get("campaign"), dict):
+            continue
+        campaign = payload["campaign"]
+        observations.append(
+            (
+                _machine_int(campaign.get("runs")),
+                _machine_int(campaign.get("calls")),
+                _machine_int(campaign.get("depth")),
+            )
+        )
+    if not observations or all(all(value is None for value in item) for item in observations):
+        return None
+    return FormalCampaignObservation(
+        runs=max((item[0] for item in observations if item[0] is not None), default=None),
+        calls=max((item[1] for item in observations if item[1] is not None), default=None),
+        depth=max((item[2] for item in observations if item[2] is not None), default=None),
+    )
+
+
+def _medusa_campaign_observation(
+    payloads: list[Any],
+) -> FormalCampaignObservation | None:
+    statuses = {
+        "passed",
+        "success",
+        "succeeded",
+        "property_test_passed",
+        "falsified",
+        "failed",
+        "failure",
+        "counterexample",
+        "property_test_failed",
+    }
+    if not _has_strict_property_result(payloads, statuses=statuses):
+        return None
+    observations: list[tuple[int | None, int | None, int | None]] = []
+    for payload in payloads:
+        if not isinstance(payload, dict) or not isinstance(payload.get("campaign"), dict):
+            continue
+        campaign = payload["campaign"]
+        observations.append(
+            (
+                _machine_int(campaign.get("testCount")),
+                _machine_int(campaign.get("callCount")),
+                _machine_int(campaign.get("maxSequenceLength")),
+            )
+        )
+    if not observations or all(all(value is None for value in item) for item in observations):
+        return None
+    return FormalCampaignObservation(
+        runs=max((item[0] for item in observations if item[0] is not None), default=None),
+        calls=max((item[1] for item in observations if item[1] is not None), default=None),
+        depth=max((item[2] for item in observations if item[2] is not None), default=None),
+    )
+
+
+def _halmos_campaign_observation(raw: str) -> FormalCampaignObservation | None:
+    if not _halmos_machine_property_results(raw):
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict) or not isinstance(payload.get("test_results"), dict):
+        return None
+    path_count = 0
+    saw_paths = False
+    depths: list[int] = []
+    for contract_results in payload["test_results"].values():
+        if not isinstance(contract_results, list):
+            continue
+        for item in contract_results:
+            if not isinstance(item, dict):
+                continue
+            direct_paths = _machine_int(item.get("num_paths"))
+            if direct_paths is not None:
+                path_count += direct_paths
+                saw_paths = True
+            elif isinstance(item.get("num_paths"), list):
+                values = [_machine_int(value) for value in item["num_paths"]]
+                if values and all(value is not None for value in values):
+                    path_count += sum(value for value in values if value is not None)
+                    saw_paths = True
+            depth = _machine_int(item.get("depth"))
+            if depth is not None:
+                depths.append(depth)
+    if not saw_paths and not depths:
+        return None
+    return FormalCampaignObservation(
+        depth=max(depths, default=None),
+        paths=path_count if saw_paths else None,
+    )
+
+
+def _kontrol_campaign_observation(raw: str) -> FormalCampaignObservation | None:
+    accepted_outcomes = set(_kontrol_machine_outcomes(raw))
+    if not accepted_outcomes:
+        return None
+    depths: list[int] = []
+    iterations: list[int] = []
+    nodes: list[int] = []
+    for document in _json_documents(raw):
+        for item in _walk_dicts(document):
+            raw_name = next(
+                (
+                    item.get(key)
+                    for key in ("test", "name", "property", "proof")
+                    if isinstance(item.get(key), str)
+                ),
+                None,
+            )
+            if not isinstance(raw_name, str):
+                continue
+            match = re.search(r"\b(testKontrol_[0-9a-f]{24})\b", raw_name)
+            raw_status = next(
+                (
+                    item.get(key)
+                    for key in ("status", "result", "outcome")
+                    if isinstance(item.get(key), str)
+                ),
+                None,
+            )
+            status = (
+                raw_status.strip().casefold().replace(" ", "_")
+                if isinstance(raw_status, str)
+                else ""
+            )
+            if match is None or (match.group(1), status) not in accepted_outcomes:
+                continue
+            depth = _machine_int(item.get("depth"))
+            iteration_count = _machine_int(item.get("iterations"))
+            node_count = _machine_int(item.get("nodes"))
+            if depth is not None:
+                depths.append(depth)
+            if iteration_count is not None:
+                iterations.append(iteration_count)
+            if node_count is not None:
+                nodes.append(node_count)
+    if not depths and not iterations and not nodes:
+        return None
+    return FormalCampaignObservation(
+        depth=max(depths, default=None),
+        iterations=sum(iterations) if iterations else None,
+        paths=sum(nodes) if nodes else None,
+    )
+
+
+def _halmos_machine_property_results(raw: str) -> list[tuple[str, int]]:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict) or not isinstance(payload.get("test_results"), dict):
+        return []
+    results: set[tuple[str, int]] = set()
+    for contract_results in payload["test_results"].values():
+        if not isinstance(contract_results, list):
+            continue
+        for item in contract_results:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            exit_code = item.get("exitcode")
+            if (
+                not isinstance(name, str)
+                or isinstance(exit_code, bool)
+                or not isinstance(exit_code, int)
+            ):
+                continue
+            property_name = name.split("(", 1)[0]
+            if re.fullmatch(r"(?:check|invariant)_[A-Za-z0-9_]+", property_name):
+                results.add((property_name, exit_code))
+    return sorted(results)
+
+
+def _kontrol_machine_outcomes(raw: str) -> list[tuple[str, str]]:
+    accepted = {
+        "passed",
+        "proved",
+        "verified",
+        "success",
+        "failed",
+        "failure",
+        "counterexample",
+        "violated",
+    }
+    outcomes: set[tuple[str, str]] = set()
+    for document in _json_documents(raw):
+        for item in _walk_dicts(document):
+            raw_name = next(
+                (
+                    item.get(key)
+                    for key in ("test", "name", "property", "proof")
+                    if isinstance(item.get(key), str)
+                ),
+                None,
+            )
+            raw_status = next(
+                (
+                    item.get(key)
+                    for key in ("status", "result", "outcome")
+                    if isinstance(item.get(key), str)
+                ),
+                None,
+            )
+            if not isinstance(raw_name, str) or not isinstance(raw_status, str):
+                continue
+            match = re.search(r"\b(testKontrol_[0-9a-f]{24})\b", raw_name)
+            status = raw_status.strip().casefold().replace(" ", "_")
+            if match is not None and status in accepted:
+                outcomes.add((match.group(1), status))
+    return sorted(outcomes)
 
 
 def _echidna_counterexample(item: dict[str, Any], serialized: str) -> dict[str, Any]:

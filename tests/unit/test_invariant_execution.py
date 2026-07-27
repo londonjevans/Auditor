@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from mmaudit.models.schemas import (
     CrossChainMessageCapability,
     EconomicSimulationKind,
     EconomicSimulationPlan,
+    ExecutionEvidenceKind,
     FinancialAssetKind,
     FinancialSettlementProbeSpec,
     ForkActor,
@@ -51,6 +53,7 @@ from mmaudit.models.schemas import (
 from mmaudit.solidity.invariant_execution import (
     FoundryInvariantRunner,
     _foundry_counterexample_sequence,
+    _structured_foundry_invariant_result,
     normalize_foundry_invariant_output,
     translate_foundry_invariant,
 )
@@ -72,6 +75,13 @@ class TestIsolationBackend:
     ) -> list[str]:
         del workspace, private_dir, rpc_port
         return command
+
+
+class SelfAssertedRealIsolationBackend(TestIsolationBackend):
+    """Adversarial injected backend that must not mint real provenance."""
+
+    name = "sandbox-exec"
+    execution_evidence = ExecutionEvidenceKind.REAL
 
 
 def _specification() -> FoundryInvariantHarnessSpec:
@@ -2948,6 +2958,171 @@ def test_foundry_output_normalization_keeps_counterexample_and_compile_failure_d
     assert summary is None
 
 
+def _forge_invariant_json(
+    *,
+    property_id: str = "AssetsNonzero",
+    status: str = "Success",
+    kind: dict[str, object] | None = None,
+    reason: str | None = None,
+) -> str:
+    if kind is None:
+        invariant_kind: dict[str, object] = {
+            "runs": 32,
+            "calls": 256,
+            "metrics": {
+                "MMAuditHandler.action_Deposit": {"calls": 1 if status == "Failure" else 256}
+            },
+        }
+        kind = {"Invariant": invariant_kind}
+    result: dict[str, object] = {
+        "status": status,
+        "kind": kind,
+    }
+    if reason is not None:
+        result["reason"] = reason
+    if status == "Failure":
+        result["counterexample"] = {
+            "Sequence": [
+                1,
+                [
+                    {
+                        "func_name": "action_Deposit",
+                        "signature": "action_Deposit()",
+                    }
+                ],
+            ]
+        }
+    return json.dumps(
+        {
+            "test/MMAuditInvariant.t.sol:MMAuditInvariant": {
+                "test_results": {f"invariant_{property_id}()": result}
+            }
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("forge_status", "return_code", "expected_status"),
+    [
+        ("Success", 0, InvariantExecutionStatus.PASSED),
+        ("Failure", 1, InvariantExecutionStatus.COUNTEREXAMPLE),
+    ],
+)
+def test_structured_foundry_invariant_accepts_exact_nonempty_campaign(
+    forge_status: str,
+    return_code: int,
+    expected_status: InvariantExecutionStatus,
+) -> None:
+    output = _forge_invariant_json(
+        status=forge_status,
+        reason="declared invariant did not hold" if return_code else None,
+    )
+
+    status, counterexample, structured_text, property_ids, runs, calls = (
+        _structured_foundry_invariant_result(
+            output,
+            return_code=return_code,
+            property_ids={"AssetsNonzero"},
+        )
+    )
+
+    assert status is expected_status
+    assert property_ids == ["AssetsNonzero"]
+    assert (runs, calls) == ((33, 256) if return_code else (32, 256))
+    if return_code:
+        assert counterexample is not None
+        assert "action_Deposit()" in structured_text
+    else:
+        assert counterexample is None
+        assert structured_text == "observed=action_Deposit()"
+
+
+def test_structured_foundry_invariant_does_not_credit_zero_call_actions() -> None:
+    kind = {
+        "Invariant": {
+            "runs": 32,
+            "calls": 256,
+            "metrics": {
+                "MMAuditHandler.action_Deposit": {"calls": 256},
+                "MMAuditHandler.action_Withdraw": {"calls": 0},
+            },
+        }
+    }
+
+    _status, _counterexample, structured_text, _properties, _runs, _calls = (
+        _structured_foundry_invariant_result(
+            _forge_invariant_json(kind=kind),
+            return_code=0,
+            property_ids={"AssetsNonzero"},
+            action_ids={"Deposit", "Withdraw"},
+        )
+    )
+
+    assert structured_text == "observed=action_Deposit()"
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "[PASS] invariant_AssetsNonzero()",
+        '{"test/MMAuditInvariant.t.sol:MMAuditInvariant":',
+        ("[PASS] invariant_AssetsNonzero()\n" + _forge_invariant_json()),
+    ],
+)
+def test_structured_foundry_invariant_rejects_log_spoofing_and_malformed_json(
+    output: str,
+) -> None:
+    with pytest.raises(ValueError):
+        _structured_foundry_invariant_result(
+            output,
+            return_code=0,
+            property_ids={"AssetsNonzero"},
+        )
+
+
+@pytest.mark.parametrize(
+    ("output", "property_ids"),
+    [
+        (
+            _forge_invariant_json(),
+            {"AssetsNonzero", "ClaimsCovered"},
+        ),
+        (
+            _forge_invariant_json(property_id="UnexpectedProperty"),
+            {"AssetsNonzero"},
+        ),
+    ],
+)
+def test_structured_foundry_invariant_requires_exact_property_coverage(
+    output: str,
+    property_ids: set[str],
+) -> None:
+    with pytest.raises(ValueError):
+        _structured_foundry_invariant_result(
+            output,
+            return_code=0,
+            property_ids=property_ids,
+        )
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        {"Unit": {"gas": 123}},
+        {"Invariant": {"runs": 32, "calls": 0}},
+    ],
+)
+def test_structured_foundry_invariant_rejects_wrong_kind_or_empty_campaign(
+    kind: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError):
+        _structured_foundry_invariant_result(
+            _forge_invariant_json(kind=kind),
+            return_code=0,
+            property_ids={"AssetsNonzero"},
+        )
+
+
 def test_invariant_runner_records_erc4626_economic_metrics(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3758,6 +3933,37 @@ def test_invariant_runner_classifies_bounded_execution(
     assert "127.0.0.1" not in " ".join(result.command)
     assert result.source_sha256
     assert not (root / "test").exists()
+
+
+def test_injected_invariant_backend_cannot_self_assert_real(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _repository(tmp_path)
+    forge = _fake_forge(tmp_path / "forge", "exit 0")
+    monkeypatch.setenv("MMAUDIT_FORK_RPC_URL", "http://127.0.0.1:8545")
+    runner = FoundryInvariantRunner(
+        ReproductionConfig(
+            timeout_seconds=2,
+            repetitions=2,
+            expected_chain_id=1,
+            targets={"Vault": "0x2000000000000000000000000000000000000002"},
+        ),
+        SmartContractsConfig(),
+        backend=SelfAssertedRealIsolationBackend(),
+        forge_executable=forge,
+    )
+
+    result = runner.run(
+        repository_root=root,
+        project=_project(),
+        specification=_specification(),
+        private_dir=tmp_path / "private",
+    )
+
+    assert result.status is InvariantExecutionStatus.PASSED
+    assert result.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
+    assert not runner.isolation_available
 
 
 def test_invariant_runner_requires_hardened_isolation(tmp_path: Path) -> None:
