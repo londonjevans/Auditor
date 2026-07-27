@@ -19,8 +19,27 @@ the operator-controlled environment.
 - The configured `execution.budget_usd` must remain equal to the ledger's immutable
   campaign cap. A missing, deleted, moved, malformed, active-reservation, or
   cap-mismatched ledger fails before secret loading and provider access.
+- Candidate qualification requires the exact private `--campaign-journal` and
+  `--portfolio` emitted by `models benchmark`, plus the same dedicated existing
+  `--cost-ledger`. Keep that ledger frozen after campaign sealing: `models qualify`
+  and `models verify-qualification` reopen the journal and ledger and reject any
+  binding, report, diagnostic, usage, snapshot, reservation, or cost drift.
 - Real tests additionally require `MMAUDIT_RUN_REAL_PROVIDER_TESTS=1`, an exact
   model allowlist, and a numeric cost cap. The normal suite never spends money.
+
+## Model lineage approval
+
+- The discovery registry may record exact candidates and benchmark their individual
+  quality while lineage review is pending.
+- Before any candidate is production-eligible, the operator must review the frozen
+  proposed mapping in `docs/models/model_selection.md` against independent ancestry
+  evidence and approve or reject every selected model explicitly.
+- The review artifact must identify the reviewer and review time, explain shared
+  ancestry and alias/mirror/quantization relationships, bind the exact reviewed model
+  IDs and supporting evidence by hash, and be self-hashed.
+- Provider, endpoint, author-name, or quantization diversity alone is not lineage
+  independence. Pending or rejected rows contribute zero independent lineages and
+  keep a certified maximum-assurance ensemble incomplete.
 
 ## Local engines
 

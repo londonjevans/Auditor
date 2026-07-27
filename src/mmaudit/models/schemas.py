@@ -4004,6 +4004,10 @@ class UsageRecord(StrictModel):
     routing: dict[str, Any] = Field(default_factory=dict)
     prompt_sha256: str
     response_sha256: str | None = None
+    validated_response_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     request_body_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     schema_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     openrouter_generation_id: str | None = Field(default=None, max_length=500)
@@ -4038,6 +4042,7 @@ class UsageRecord(StrictModel):
         if self.validation_status is ModelRequestValidationStatus.VALID:
             required = (
                 self.response_sha256,
+                self.validated_response_sha256,
                 self.request_body_sha256,
                 self.schema_sha256,
                 self.openrouter_generation_id,

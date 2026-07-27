@@ -97,6 +97,8 @@ def test_valid_snapshot_exposes_exact_cost_proof_inputs() -> None:
     assert endpoint.operational is True
     assert endpoint.zdr_eligible is True
     assert endpoint.structured_output_parameters == ("response_format",)
+    assert endpoint.max_prompt_tokens_source == "metadata"
+    assert endpoint.max_completion_tokens_source == "metadata"
     assert endpoint.pricing == {
         "completion": "0.000015",
         "image": "0",
@@ -355,6 +357,33 @@ def test_token_limits_must_be_positive_and_internally_bounded() -> None:
     endpoint["max_completion_tokens"] = endpoint["context_length"] + 1
 
     with pytest.raises(EndpointSnapshotValidationError, match="completion limit exceeds"):
+        _validate(endpoint_payload=_endpoint_payload(endpoint))
+
+
+def test_null_live_metadata_limits_use_the_explicit_context_ceiling() -> None:
+    endpoint = _endpoint()
+    endpoint["max_prompt_tokens"] = None
+    endpoint["max_completion_tokens"] = None
+    endpoint["pricing"]["discount"] = 0
+
+    evidence = _validate(
+        endpoint_payload=_endpoint_payload(endpoint),
+        zdr_payload=_zdr_payload(endpoint),
+    ).endpoints[0]
+
+    assert evidence.max_prompt_tokens == endpoint["context_length"]
+    assert evidence.max_completion_tokens == endpoint["context_length"]
+    assert evidence.max_prompt_tokens_source == "context_limit"
+    assert evidence.max_completion_tokens_source == "context_limit"
+    assert "discount" not in evidence.pricing
+
+
+@pytest.mark.parametrize("discount", [-0.01, 1, float("inf"), True, []])
+def test_invalid_or_cost_increasing_discount_metadata_is_rejected(discount: Any) -> None:
+    endpoint = _endpoint()
+    endpoint["pricing"]["discount"] = discount
+
+    with pytest.raises(EndpointSnapshotValidationError, match="discount"):
         _validate(endpoint_payload=_endpoint_payload(endpoint))
 
 

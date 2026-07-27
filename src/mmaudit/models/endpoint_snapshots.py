@@ -17,6 +17,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from mmaudit.models.identifiers import is_exact_openrouter_model_id
+
 _MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
 _ENDPOINT_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
 _PROVIDER_NAME_MAX_LENGTH = 128
@@ -49,6 +51,7 @@ _MAX_ENDPOINTS = 2_048
 _MAX_PARAMETERS = 256
 _MAX_PRICING_FIELDS = 64
 _SNAPSHOT_SCHEMA_VERSION = "1.0"
+_NON_BILLABLE_PRICING_METADATA = frozenset({"discount"})
 
 
 class EndpointSnapshotValidationError(ValueError):
@@ -73,7 +76,9 @@ class OpenRouterEndpointEvidence(BaseModel):
     structured_output_parameters: tuple[str, ...] = Field(min_length=1, max_length=3)
     context_length: int = Field(gt=0)
     max_prompt_tokens: int = Field(gt=0)
+    max_prompt_tokens_source: Literal["metadata", "context_limit"]
     max_completion_tokens: int = Field(gt=0)
+    max_completion_tokens_source: Literal["metadata", "context_limit"]
     pricing: dict[str, str] = Field(min_length=2, max_length=_MAX_PRICING_FIELDS)
     pricing_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     endpoint_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -84,6 +89,7 @@ class OpenRouterEndpointEvidence(BaseModel):
 
     @model_validator(mode="after")
     def evidence_is_canonical_and_self_bound(self) -> OpenRouterEndpointEvidence:
+        _validate_exact_model_id(self.exact_model_id)
         if self.endpoint_tag is None and self.endpoint_slug is None:
             raise ValueError("endpoint evidence requires a tag or slug")
         if self.provider_endpoint not in {self.endpoint_tag, self.endpoint_slug}:
@@ -109,6 +115,16 @@ class OpenRouterEndpointEvidence(BaseModel):
             raise ValueError("endpoint prompt limit exceeds its context length")
         if self.max_completion_tokens > self.context_length:
             raise ValueError("endpoint completion limit exceeds its context length")
+        if (
+            self.max_prompt_tokens_source == "context_limit"
+            and self.max_prompt_tokens != self.context_length
+        ):
+            raise ValueError("derived prompt limit does not match the context ceiling")
+        if (
+            self.max_completion_tokens_source == "context_limit"
+            and self.max_completion_tokens != self.context_length
+        ):
+            raise ValueError("derived completion limit does not match the context ceiling")
         if tuple(self.pricing) != tuple(sorted(self.pricing)):
             raise ValueError("endpoint pricing fields must be sorted")
         if not {"prompt", "completion"}.issubset(self.pricing):
@@ -148,6 +164,7 @@ class OpenRouterEndpointSnapshotEvidence(BaseModel):
 
     @model_validator(mode="after")
     def snapshot_is_complete_and_self_bound(self) -> OpenRouterEndpointSnapshotEvidence:
+        _validate_exact_model_id(self.exact_model_id)
         if len(self.configured_provider_endpoints) != len(set(self.configured_provider_endpoints)):
             raise ValueError("configured provider endpoints must be unique")
         observed = tuple(item.provider_endpoint for item in self.endpoints)
@@ -318,13 +335,10 @@ def validate_openrouter_endpoint_snapshot(
 
 
 def _validate_exact_model_id(model_id: str) -> None:
-    if not isinstance(model_id, str) or re.fullmatch(_MODEL_ID_PATTERN, model_id) is None:
+    if not is_exact_openrouter_model_id(model_id):
         raise EndpointSnapshotValidationError(
-            "endpoint snapshot requires an exact author/model identifier"
+            "endpoint snapshot rejects router or latest aliases and mutable variants"
         )
-    lowered = model_id.casefold()
-    if lowered in {"openrouter/auto", "openrouter/random"} or lowered.endswith(":latest"):
-        raise EndpointSnapshotValidationError("endpoint snapshot rejects router or latest aliases")
 
 
 def _validate_configured_endpoints(values: Sequence[str]) -> tuple[str, ...]:
@@ -538,13 +552,15 @@ def _normalize_endpoint(
         raw_endpoint.get("context_length"),
         "endpoint context length",
     )
-    max_prompt_tokens = _positive_integer(
+    max_prompt_tokens, max_prompt_tokens_source = _effective_token_limit(
         raw_endpoint.get("max_prompt_tokens"),
-        "endpoint prompt limit",
+        context_length=context_length,
+        label="endpoint prompt limit",
     )
-    max_completion_tokens = _positive_integer(
+    max_completion_tokens, max_completion_tokens_source = _effective_token_limit(
         raw_endpoint.get("max_completion_tokens"),
-        "endpoint completion limit",
+        context_length=context_length,
+        label="endpoint completion limit",
     )
     if max_prompt_tokens > context_length:
         raise EndpointSnapshotValidationError("endpoint prompt limit exceeds its context length")
@@ -565,7 +581,9 @@ def _normalize_endpoint(
         "structured_output_parameters": structured,
         "context_length": context_length,
         "max_prompt_tokens": max_prompt_tokens,
+        "max_prompt_tokens_source": max_prompt_tokens_source,
         "max_completion_tokens": max_completion_tokens,
+        "max_completion_tokens_source": max_completion_tokens_source,
         "pricing": pricing,
         "pricing_sha256": _canonical_sha256(pricing),
     }
@@ -607,6 +625,19 @@ def _positive_integer(value: Any, label: str) -> int:
     return int(value)
 
 
+def _effective_token_limit(
+    value: Any,
+    *,
+    context_length: int,
+    label: str,
+) -> tuple[int, Literal["metadata", "context_limit"]]:
+    """Use the context ceiling when OpenRouter publishes a null endpoint limit."""
+
+    if value is None:
+        return context_length, "context_limit"
+    return _positive_integer(value, label), "metadata"
+
+
 def _canonical_pricing(value: Any) -> dict[str, str]:
     if (
         not isinstance(value, dict)
@@ -623,10 +654,28 @@ def _canonical_pricing(value: Any) -> dict[str, str]:
         if not _PRICING_FIELD_PATTERN.fullmatch(field):
             raise EndpointSnapshotValidationError("endpoint pricing field is invalid")
         raw_price = value[field]
+        if field in _NON_BILLABLE_PRICING_METADATA:
+            _validate_non_billable_pricing_metadata(field, raw_price)
+            continue
         if not isinstance(raw_price, str):
             raise EndpointSnapshotValidationError("endpoint prices must be exact decimal strings")
         normalized[field] = _canonical_price(raw_price)
     return normalized
+
+
+def _validate_non_billable_pricing_metadata(field: str, value: Any) -> None:
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        raise EndpointSnapshotValidationError(
+            f"endpoint {field} metadata must be a finite nonnegative fraction"
+        )
+    try:
+        parsed = Decimal(str(value))
+    except InvalidOperation as error:
+        raise EndpointSnapshotValidationError(f"endpoint {field} metadata is invalid") from error
+    if not parsed.is_finite() or not Decimal(0) <= parsed < Decimal(1):
+        raise EndpointSnapshotValidationError(
+            f"endpoint {field} metadata must be a finite nonnegative fraction"
+        )
 
 
 def _canonical_price(value: str) -> str:
@@ -659,7 +708,9 @@ def _validate_zdr_counterpart(
         "structured_output_parameters",
         "context_length",
         "max_prompt_tokens",
+        "max_prompt_tokens_source",
         "max_completion_tokens",
+        "max_completion_tokens_source",
         "pricing",
         "pricing_sha256",
     )

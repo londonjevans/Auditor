@@ -24,8 +24,36 @@ import httpx
 from pydantic import BaseModel, ValidationError
 
 from mmaudit.config import ExecutionConfig, PrivacyConfig, model_family
-from mmaudit.constants import OPENROUTER_DEFAULT_BASE_URL
-from mmaudit.models.endpoint_snapshots import OpenRouterEndpointSnapshotEvidence
+from mmaudit.constants import OPENROUTER_DEFAULT_BASE_URL, VERSION
+from mmaudit.models.discovery import (
+    _TRUSTED_OPENROUTER_DISCOVERY_ISSUER,
+    OPENROUTER_API_IDENTITY,
+    OPENROUTER_CATALOG_QUERY,
+    OPENROUTER_ZDR_QUERY,
+    DiscoveryCandidateRoute,
+    DiscoveryEndpointMetadataBinding,
+    OpenRouterDiscoveryRunProvenance,
+    OpenRouterModelDiscoveryEvidence,
+    OpenRouterModelDiscoveryPayload,
+    _issue_real_openrouter_discovery_run,
+    openrouter_endpoint_query,
+    validate_openrouter_model_discovery,
+)
+from mmaudit.models.endpoint_snapshots import (
+    OpenRouterEndpointSnapshotEvidence,
+    validate_openrouter_endpoint_snapshot,
+)
+from mmaudit.models.generation_evidence import (
+    _TRUSTED_GENERATION_VERIFICATION_ISSUER,
+    GenerationEvidenceValidationError,
+    GenerationVerificationRequest,
+    OpenRouterGenerationEvidence,
+    TrustedGenerationVerification,
+    _issue_trusted_generation_verification,
+    validate_generation_id,
+    validate_openrouter_generation_payload,
+)
+from mmaudit.models.identifiers import is_exact_openrouter_model_id
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     ModelRequestValidationStatus,
@@ -331,6 +359,8 @@ class OpenRouterClient:
         self.provider_policy = provider_policy or OpenRouterProviderPolicy()
         self.reasoning = reasoning
         self._endpoint_pricing: dict[str, _RegisteredEndpointPolicy] = {}
+        self._metadata_observations: dict[str, str] = {}
+        self._authentication_validated = False
         if self.provider_policy.certification and not self.privacy.require_zdr:
             raise OpenRouterPrivacyError("certification requires zero-data-retention routing")
         if self.execution.max_json_repair_attempts:
@@ -419,31 +449,35 @@ class OpenRouterClient:
             raise OpenRouterAuthenticationError(
                 "OpenRouter key validation returned an invalid response"
             )
+        self._authentication_validated = True
 
     async def list_models(self) -> list[dict[str, Any]]:
         response = await self._request_metadata("/models")
-        data = response.get("data")
-        if (
-            not isinstance(data, list)
-            or not data
-            or any(not isinstance(item, dict) for item in data)
-        ):
-            raise OpenRouterModelError("OpenRouter returned an invalid models response")
-        result = list(data)
-        for item in result:
-            model_id = item.get("id")
-            if not isinstance(model_id, str) or not _is_model_slug(model_id):
-                raise OpenRouterModelError("OpenRouter returned invalid model metadata")
-        return result
+        return _validated_model_catalog(response)
+
+    async def list_certification_models(self) -> list[dict[str, Any]]:
+        """Return the current ZDR/structured-output candidate catalog.
+
+        Filtering at the fixed provider route prevents an unrelated malformed or
+        non-chat catalog entry from weakening validation of the exact candidate set.
+        Every returned identifier is still validated locally.
+        """
+
+        response = await self.get_certification_model_metadata()
+        return _validated_model_catalog(response)
+
+    async def get_certification_model_metadata(self) -> dict[str, Any]:
+        """Return the complete fixed-query certification catalog envelope."""
+
+        response = await self._request_metadata(OPENROUTER_CATALOG_QUERY)
+        _validated_model_catalog(response)
+        return response
 
     async def get_model_endpoint_metadata(self, model: str) -> dict[str, Any]:
         """Return the exact-model endpoint response envelope after basic validation."""
 
         _require_exact_model_id(model)
-        author, slug = model.split("/", 1)
-        response = await self._request_metadata(
-            f"/models/{quote(author, safe='')}/{quote(slug, safe=':._-')}/endpoints"
-        )
+        response = await self._request_metadata(openrouter_endpoint_query(model))
         data = response.get("data")
         if not isinstance(data, dict):
             raise OpenRouterModelError("OpenRouter returned invalid endpoint metadata")
@@ -471,7 +505,7 @@ class OpenRouterClient:
         return list(endpoints)
 
     async def list_zdr_endpoints(self) -> dict[str, Any]:
-        response = await self._request_metadata("/endpoints/zdr")
+        response = await self._request_metadata(OPENROUTER_ZDR_QUERY)
         data = response.get("data")
         if (
             not isinstance(data, list)
@@ -480,6 +514,207 @@ class OpenRouterClient:
         ):
             raise OpenRouterPrivacyError("OpenRouter returned invalid ZDR endpoint metadata")
         return response
+
+    def seal_real_model_discovery_run(
+        self,
+        *,
+        run_id: str,
+        retrieved_at: datetime,
+        models_payload: dict[str, Any],
+        zdr_payload: dict[str, Any],
+        endpoint_payloads: Mapping[str, dict[str, Any]],
+        candidate_routes: tuple[DiscoveryCandidateRoute, ...],
+        payloads: tuple[OpenRouterModelDiscoveryPayload, ...],
+    ) -> tuple[
+        OpenRouterDiscoveryRunProvenance,
+        tuple[OpenRouterModelDiscoveryEvidence, ...],
+    ]:
+        """Seal metadata only after exact responses crossed this trusted REAL transport."""
+
+        OpenRouterClient._validate_transport_provenance(self)
+        if (
+            type(self) is not _TRUSTED_OPENROUTER_CLIENT_TYPE
+            or self.execution_evidence is not ExecutionEvidenceKind.REAL
+            or not self._owns_client
+            or not self._authentication_validated
+        ):
+            raise OpenRouterPrivacyError(
+                "REAL discovery evidence requires an authenticated owned provider client"
+            )
+        expected_catalog_hash = _canonical_sha256(models_payload)
+        expected_zdr_hash = _canonical_sha256(zdr_payload)
+        if (
+            self._metadata_observations.get(OPENROUTER_CATALOG_QUERY) != expected_catalog_hash
+            or self._metadata_observations.get(OPENROUTER_ZDR_QUERY) != expected_zdr_hash
+        ):
+            raise OpenRouterPrivacyError(
+                "discovery payloads do not match trusted transport observations"
+            )
+        endpoint_bindings: list[DiscoveryEndpointMetadataBinding] = []
+        route_ids = tuple(route.exact_model_id for route in candidate_routes)
+        if set(endpoint_payloads) != set(route_ids):
+            raise OpenRouterPrivacyError(
+                "endpoint payloads do not exactly cover the discovery candidate set"
+            )
+        supplied_payloads = {payload.exact_model_id: payload for payload in payloads}
+        if len(supplied_payloads) != len(payloads) or set(supplied_payloads) != set(route_ids):
+            raise OpenRouterPrivacyError(
+                "validated payloads do not exactly cover the discovery candidate set"
+            )
+        for model_id in sorted(route_ids):
+            query = openrouter_endpoint_query(model_id)
+            payload = endpoint_payloads[model_id]
+            response_hash = _canonical_sha256(payload)
+            if self._metadata_observations.get(query) != response_hash:
+                raise OpenRouterPrivacyError(
+                    "endpoint payload does not match its trusted transport observation"
+                )
+            endpoint_bindings.append(
+                DiscoveryEndpointMetadataBinding(
+                    exact_model_id=model_id,
+                    api_query=query,
+                    response_snapshot_sha256=response_hash,
+                )
+            )
+            route = next(route for route in candidate_routes if route.exact_model_id == model_id)
+            try:
+                observed_endpoint_snapshot = validate_openrouter_endpoint_snapshot(
+                    exact_model_id=model_id,
+                    configured_provider_endpoints=(route.approved_provider_endpoint,),
+                    provider_policy_mode="only",
+                    endpoint_payload=payload,
+                    require_zdr=True,
+                    zdr_payload=zdr_payload,
+                )
+                observed_payload = validate_openrouter_model_discovery(
+                    exact_model_id=model_id,
+                    models_payload=models_payload,
+                    endpoint_snapshot=observed_endpoint_snapshot,
+                )
+            except (ValueError, ValidationError):
+                raise OpenRouterPrivacyError(
+                    "trusted discovery observations failed structural validation"
+                ) from None
+            if observed_payload != supplied_payloads[model_id]:
+                raise OpenRouterPrivacyError(
+                    "validated discovery payload does not match trusted observations"
+                )
+        client_fingerprint = _canonical_sha256(
+            {
+                "client": "mmaudit.models.openrouter.OpenRouterClient",
+                "httpx_version": httpx.__version__,
+                "mmaudit_version": VERSION,
+            }
+        )
+        provider_fingerprint = _canonical_sha256(
+            {
+                "api_identity": OPENROUTER_API_IDENTITY,
+                "provider": "OpenRouter",
+            }
+        )
+        return _issue_real_openrouter_discovery_run(
+            run_id=run_id,
+            retrieved_at=retrieved_at,
+            client_fingerprint_sha256=client_fingerprint,
+            provider_fingerprint_sha256=provider_fingerprint,
+            catalog_snapshot_sha256=expected_catalog_hash,
+            zdr_snapshot_sha256=expected_zdr_hash,
+            candidate_routes=candidate_routes,
+            endpoint_metadata_bindings=tuple(endpoint_bindings),
+            payloads=payloads,
+            issuer=_TRUSTED_OPENROUTER_DISCOVERY_ISSUER,
+        )
+
+    async def get_generation_evidence(
+        self,
+        generation_id: str,
+    ) -> OpenRouterGenerationEvidence:
+        """Retrieve a bounded, content-free attestation for one generation."""
+
+        try:
+            validated_generation_id = validate_generation_id(generation_id)
+        except GenerationEvidenceValidationError as exc:
+            raise OpenRouterRequestLimitError(str(exc)) from None
+        payload = await OpenRouterClient._request_metadata(
+            self,
+            f"/generation?id={quote(validated_generation_id, safe='')}",
+            max_bytes=1_000_000,
+            exact_decimal_json=True,
+        )
+        try:
+            return validate_openrouter_generation_payload(
+                payload,
+                requested_generation_id=validated_generation_id,
+                retrieved_at=datetime.now(UTC),
+                execution_evidence=self.execution_evidence,
+            )
+        except (GenerationEvidenceValidationError, ValidationError):
+            raise OpenRouterSchemaError("OpenRouter returned invalid generation metadata") from None
+
+    async def create_trusted_generation_verification(
+        self,
+        requests: tuple[GenerationVerificationRequest, ...],
+    ) -> TrustedGenerationVerification:
+        """Authenticate and freshly re-fetch an exact generation set without completions."""
+
+        if not _openrouter_generation_verification_callables_are_pristine():
+            raise OpenRouterPrivacyError(
+                "trusted generation verification client callables are not pristine"
+            )
+        OpenRouterClient._validate_transport_provenance(self)
+        if not requests:
+            raise OpenRouterRequestLimitError(
+                "trusted generation verification requires at least one request"
+            )
+        normalized = tuple(
+            GenerationVerificationRequest(
+                benchmark_report_sha256=request.benchmark_report_sha256,
+                case_id=request.case_id,
+                exact_model_id=request.exact_model_id,
+                expected_provider_name=request.expected_provider_name,
+                usage_record=request.usage_record,
+            )
+            for request in requests
+        )
+        generation_ids = tuple(
+            request.usage_record.openrouter_generation_id for request in normalized
+        )
+        if None in generation_ids or len(set(generation_ids)) != len(generation_ids):
+            raise OpenRouterRequestLimitError(
+                "trusted generation verification rejects replayed generation IDs"
+            )
+        if (
+            type(self) is not _TRUSTED_OPENROUTER_CLIENT_TYPE
+            or self.execution_evidence is not ExecutionEvidenceKind.REAL
+            or not self._owns_client
+        ):
+            raise OpenRouterPrivacyError(
+                "trusted generation verification requires an owned REAL provider client"
+            )
+        verification_started_at = datetime.now(UTC)
+        await OpenRouterClient.validate_authentication(self)
+        OpenRouterClient._validate_transport_provenance(self)
+        if not self._authentication_validated:
+            raise OpenRouterAuthenticationError("OpenRouter authentication was not validated")
+        attestations = tuple(
+            [
+                await OpenRouterClient.get_generation_evidence(self, generation_id)
+                for generation_id in generation_ids
+                if generation_id is not None
+            ]
+        )
+        OpenRouterClient._validate_transport_provenance(self)
+        try:
+            return _issue_trusted_generation_verification(
+                requests=normalized,
+                attestations=attestations,
+                verification_started_at=verification_started_at,
+                issuer=_TRUSTED_GENERATION_VERIFICATION_ISSUER,
+            )
+        except GenerationEvidenceValidationError:
+            raise OpenRouterSchemaError(
+                "OpenRouter generation metadata did not reconcile benchmark usage"
+            ) from None
 
     def register_certification_endpoint_snapshot(
         self,
@@ -577,7 +812,13 @@ class OpenRouterClient:
             endpoints=tuple(registered),
         )
 
-    async def _request_metadata(self, path: str) -> dict[str, Any]:
+    async def _request_metadata(
+        self,
+        path: str,
+        *,
+        max_bytes: int = 20_000_000,
+        exact_decimal_json: bool = False,
+    ) -> dict[str, Any]:
         attempts = 0
         while True:
             attempts += 1
@@ -585,7 +826,7 @@ class OpenRouterClient:
                 response = await self._bounded_request(
                     "GET",
                     path,
-                    max_bytes=20_000_000,
+                    max_bytes=max_bytes,
                 )
             except (httpx.TimeoutException, httpx.NetworkError):
                 if attempts >= self.execution.max_model_retries + 1:
@@ -619,12 +860,23 @@ class OpenRouterClient:
                 )
             break
         try:
-            payload = response.json()
+            payload = (
+                json.loads(
+                    response.content,
+                    parse_float=Decimal,
+                    parse_constant=_reject_nonfinite_json_constant,
+                    object_pairs_hook=_unique_json_object,
+                )
+                if exact_decimal_json
+                else response.json()
+            )
         except ValueError:
             payload = None
         if not isinstance(payload, dict):
             raise OpenRouterModelError("OpenRouter metadata response was not a valid object")
         self._ensure_no_credential_in_value(payload)
+        observation_path = "/" + path.lstrip("/")
+        self._metadata_observations[observation_path] = _canonical_sha256(payload)
         return payload
 
     async def _bounded_request(
@@ -672,6 +924,18 @@ class OpenRouterClient:
         raise OpenRouterSchemaError("model transport failed safely")
 
     def _validate_transport_provenance(self) -> None:
+        if any(
+            name in vars(self)
+            for name in (
+                "validate_authentication",
+                "get_generation_evidence",
+                "create_trusted_generation_verification",
+                "_request_metadata",
+                "_bounded_request",
+                "_validate_transport_provenance",
+            )
+        ):
+            raise OpenRouterPrivacyError("provider client callables changed after validation")
         if (
             self._client is not self._client_identity
             or getattr(self._client, "_transport", None) is not self._transport_identity
@@ -1016,6 +1280,7 @@ class OpenRouterClient:
                 _ensure_all_fields_supplied(parsed)
             except (ValidationError, ValueError):
                 raise OpenRouterSchemaError("model returned invalid structured data") from None
+            validated_response_hash = _canonical_sha256(parsed.model_dump(mode="json"))
             await finalize_active(active_actual_cost)
             ended_at = datetime.now(UTC)
             latency_ms = max(0, round((time.perf_counter() - started_clock) * 1_000))
@@ -1046,6 +1311,7 @@ class OpenRouterClient:
                     routing=routing,
                     prompt_sha256=prompt_hash,
                     response_sha256=response_hash,
+                    validated_response_sha256=validated_response_hash,
                     request_body_sha256=request_body_hash,
                     schema_sha256=schema_hash,
                     openrouter_generation_id=envelope.generation_id,
@@ -1365,6 +1631,32 @@ class OpenRouterClient:
             raise OpenRouterPrivacyError("operator credential appeared in provider data")
 
 
+_TRUSTED_OPENROUTER_CLIENT_TYPE = OpenRouterClient
+_TRUSTED_VALIDATE_AUTHENTICATION = OpenRouterClient.validate_authentication
+_TRUSTED_GET_GENERATION_EVIDENCE = OpenRouterClient.get_generation_evidence
+_TRUSTED_CREATE_GENERATION_VERIFICATION = OpenRouterClient.create_trusted_generation_verification
+_TRUSTED_REQUEST_METADATA = OpenRouterClient._request_metadata
+_TRUSTED_BOUNDED_REQUEST = OpenRouterClient._bounded_request
+_TRUSTED_VALIDATE_TRANSPORT_PROVENANCE = OpenRouterClient._validate_transport_provenance
+
+
+def _openrouter_generation_verification_callables_are_pristine() -> bool:
+    return (
+        OpenRouterClient.validate_authentication is _TRUSTED_VALIDATE_AUTHENTICATION
+        and OpenRouterClient.get_generation_evidence is _TRUSTED_GET_GENERATION_EVIDENCE
+        and (
+            OpenRouterClient.create_trusted_generation_verification
+            is _TRUSTED_CREATE_GENERATION_VERIFICATION
+        )
+        and OpenRouterClient._request_metadata is _TRUSTED_REQUEST_METADATA
+        and OpenRouterClient._bounded_request is _TRUSTED_BOUNDED_REQUEST
+        and (
+            OpenRouterClient._validate_transport_provenance
+            is _TRUSTED_VALIDATE_TRANSPORT_PROVENANCE
+        )
+    )
+
+
 def _uses_closed_httpx_mock_transport(client: httpx.AsyncClient | None) -> bool:
     """Recognize only httpx's exact in-memory test transport as mock execution."""
 
@@ -1404,9 +1696,29 @@ def _debug_json_default(value: Any) -> str:
     raise TypeError("unsupported debug JSON value")
 
 
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
+
+
+def _reject_nonfinite_json_constant(_value: str) -> None:
+    raise ValueError("non-finite JSON number")
+
+
 def _canonical_sha256(value: Any) -> str:
     return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+            default=_debug_json_default,
+        ).encode()
     ).hexdigest()
 
 
@@ -1450,18 +1762,24 @@ def _routing_max_price(
     return result
 
 
+def _validated_model_catalog(response: dict[str, Any]) -> list[dict[str, Any]]:
+    data = response.get("data")
+    if not isinstance(data, list) or not data or any(not isinstance(item, dict) for item in data):
+        raise OpenRouterModelError("OpenRouter returned an invalid models response")
+    result = list(data)
+    for item in result:
+        model_id = item.get("id")
+        if not isinstance(model_id, str) or not _is_model_slug(model_id):
+            raise OpenRouterModelError("OpenRouter returned invalid model metadata")
+    return result
+
+
 def _is_model_slug(model: str) -> bool:
     return bool(_EXACT_MODEL_ID_PATTERN.fullmatch(model))
 
 
 def _is_exact_model_id(model: str) -> bool:
-    if not _is_model_slug(model):
-        return False
-    author, slug = model.casefold().split("/", 1)
-    alias_parts = {part for part in re.split(r"[-_:.]", slug) if part}
-    if author == "openrouter" and alias_parts & {"auto", "free", "random", "router"}:
-        return False
-    return not bool(alias_parts & {"auto", "latest", "random"})
+    return is_exact_openrouter_model_id(model)
 
 
 def _require_exact_model_id(model: str) -> None:

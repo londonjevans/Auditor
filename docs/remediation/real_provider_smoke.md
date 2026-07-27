@@ -9,7 +9,7 @@ present:
 - `MMAUDIT_REAL_PROVIDER_COST_CAP_USD` set to a plain positive decimal no greater
   than the remediation-wide USD 250 cap;
 - `MMAUDIT_OPENROUTER_COST_LEDGER` set to the absolute path of the existing
-cumulative remediation ledger created once with
+  cumulative remediation ledger created once with
   `mmaudit models init-cost-ledger --cost-ledger PATH`;
 - `MMAUDIT_REAL_PROVIDER_MODEL_ID` set to one exact non-placeholder
   `author/model` ID;

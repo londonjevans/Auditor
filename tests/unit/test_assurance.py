@@ -399,6 +399,9 @@ def _real_model_usage(now: datetime) -> list[UsageRecord]:
             },
             prompt_sha256=hashlib.sha256(f"{role}:prompt".encode()).hexdigest(),
             response_sha256=hashlib.sha256(f"{role}:response".encode()).hexdigest(),
+            validated_response_sha256=hashlib.sha256(
+                f"{role}:validated-response".encode()
+            ).hexdigest(),
             request_body_sha256=hashlib.sha256(f"{role}:request".encode()).hexdigest(),
             schema_sha256="d" * 64,
             openrouter_generation_id=f"generation-{index:02d}",

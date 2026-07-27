@@ -105,9 +105,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   minimum certified ensemble counts are enforced from completed real requests.
 - **Dependencies:** `REM-OPENROUTER-001`.
 - **Status:** `IN_PROGRESS`
-- **Next action:** Freeze the exact candidate-registry and qualification schemas,
-  then implement non-empty, artifact-bound discovery, benchmark, qualification,
-  and verification commands before any paid model call.
+- **Next action:** Finish final no-spend validation and checkpoint the hardened
+  scorer, non-zero fixture denominators, crash-safe journal, reconciled cost
+  accounting, and actual-journal qualification capability before any paid model
+  call.
 
 ## EVAL-DEFECT-005 — Context delivery is credited as model review
 

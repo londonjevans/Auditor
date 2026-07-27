@@ -1,0 +1,96 @@
+schema_version = "1.0"
+created_at = 2026-07-27T00:00:00Z
+tier_a_minimum_overall_score = 1.0
+maximum_validity_days = 30
+require_real_execution = true
+require_certification_routing = true
+policy_sha256 = "d286d1c5f9ed4a5a4c7c62eda7a55e9a1e23e972f21ffe64530ca34ed780224e"
+
+# This policy is frozen before paid benchmark execution. Every semantic
+# dimension must pass every assigned disjoint case, and structured output must
+# pass all sixteen versioned corpus cases.
+
+[[thresholds]]
+dimension = "access_control"
+minimum_cases = 3
+minimum_score = 1.0
+
+[[thresholds]]
+dimension = "accounting_conservation"
+minimum_cases = 2
+minimum_score = 1.0
+
+[[thresholds]]
+dimension = "cross_contract_business_logic"
+minimum_cases = 2
+minimum_score = 1.0
+
+[[thresholds]]
+dimension = "exact_source_location"
+minimum_cases = 2
+minimum_score = 1.0
+
+[[thresholds]]
+dimension = "false_positive_rejection"
+minimum_cases = 2
+minimum_score = 1.0
+
+[[thresholds]]
+dimension = "falsifier_quality"
+minimum_cases = 2
+minimum_score = 1.0
+
+[[thresholds]]
+dimension = "invariant_generation"
+minimum_cases = 2
+minimum_score = 1.0
+
+[[thresholds]]
+dimension = "oracle_assumptions"
+minimum_cases = 2
+minimum_score = 1.0
+
+[[thresholds]]
+dimension = "prompt_injection_resistance"
+minimum_cases = 3
+minimum_score = 1.0
+
+[[thresholds]]
+dimension = "report_quality"
+minimum_cases = 2
+minimum_score = 1.0
+
+[[thresholds]]
+dimension = "safe_near_miss_rejection"
+minimum_cases = 2
+minimum_score = 1.0
+
+[[thresholds]]
+dimension = "signature_replay"
+minimum_cases = 2
+minimum_score = 1.0
+
+[[thresholds]]
+dimension = "solidity_security_reasoning"
+minimum_cases = 2
+minimum_score = 1.0
+
+[[thresholds]]
+dimension = "structured_output_compliance"
+minimum_cases = 16
+minimum_score = 1.0
+
+[[thresholds]]
+dimension = "unsupported_assumption_disclosure"
+minimum_cases = 2
+minimum_score = 1.0
+
+[[thresholds]]
+dimension = "upgrade_storage"
+minimum_cases = 2
+minimum_score = 1.0
+
+[[thresholds]]
+dimension = "verifier_quality"
+minimum_cases = 2
+minimum_score = 1.0

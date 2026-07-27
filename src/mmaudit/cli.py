@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import sys
 import tempfile
+import uuid
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from importlib.resources import files
 from pathlib import Path
@@ -33,7 +36,19 @@ from mmaudit.benchmark.engine import (
     validate_benchmark_ground_truth,
     write_benchmark_report,
 )
+from mmaudit.benchmark.model_portfolio import (
+    CandidateBenchmarkCampaignJournal,
+    ModelBenchmarkPortfolio,
+    TrustedCandidateBenchmarkCampaignVerification,
+    create_candidate_benchmark_campaign,
+    load_model_benchmark_portfolio,
+    resume_candidate_benchmark_campaign,
+    seal_model_benchmark_portfolio_from_campaign,
+    verify_model_benchmark_portfolio_campaign,
+)
 from mmaudit.benchmark.models import (
+    ModelBenchmarkReport,
+    ModelBenchmarkSuite,
     OpenRouterModelBenchmarkProvider,
     load_model_benchmark_corpus,
     run_model_benchmark,
@@ -51,17 +66,50 @@ from mmaudit.config import (
 )
 from mmaudit.constants import DEFAULT_CONFIG_NAME, VERSION, ExitCode
 from mmaudit.logging import configure_logging
+from mmaudit.models.candidate_benchmark import (
+    CandidateBenchmarkExecutionResult,
+    CandidateBenchmarkRunState,
+    run_candidate_registry_benchmarks,
+    validate_candidate_benchmark_egress,
+    validate_candidate_benchmark_policy_capacity,
+)
+from mmaudit.models.discovery import (
+    DiscoveryCandidateRoute,
+    load_model_discovery_run,
+    validate_openrouter_model_discovery,
+    write_model_discovery_run,
+)
 from mmaudit.models.endpoint_snapshots import (
     EndpointSnapshotValidationError,
     validate_openrouter_endpoint_snapshot,
 )
+from mmaudit.models.generation_evidence import TrustedGenerationVerification
+from mmaudit.models.identifiers import is_exact_openrouter_model_id
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterError
+from mmaudit.models.qualification import (
+    CandidateRegistry,
+    QualificationPolicy,
+    load_candidate_registry,
+    load_qualification_policy,
+    validate_candidate_registry_discovery,
+    verify_model_qualification,
+)
+from mmaudit.models.qualification_workflow import (
+    QualificationWorkflowBundle,
+    load_qualification_release_bindings,
+    load_qualification_workflow_bundle,
+    refetch_trusted_benchmark_generations,
+    run_qualification_workflow,
+    validate_qualification_portfolio_readiness,
+    write_qualification_workflow_bundle,
+)
 from mmaudit.models.registry import ModelRegistry, extract_zdr_model_ids
 from mmaudit.models.runtime import build_openrouter_runtime_controls
 from mmaudit.models.schemas import (
     AuditProfile,
     AuditReport,
     AuditScope,
+    ExecutionEvidenceKind,
     Finding,
     MaximumAssuranceStatus,
     Severity,
@@ -78,6 +126,7 @@ from mmaudit.orchestration.certification import (
     write_maximum_assurance_certification,
 )
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger, CostLedgerError
+from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.orchestration.pipeline import AuditPipeline, resolve_safe_output_root
 from mmaudit.orchestration.replay import (
     OfflineReplayOrchestrator,
@@ -116,6 +165,7 @@ app.add_typer(benchmark_app, name="benchmark")
 snapshot_app = typer.Typer(help="Validate and import offline deployment snapshots.")
 app.add_typer(snapshot_app, name="snapshot")
 console = Console()
+_TRUSTED_OPENROUTER_CLIENT_TYPE = OpenRouterClient
 
 ConfigOption = Annotated[
     Path,
@@ -532,6 +582,103 @@ def models_list(
     _run_async_cli(execute)
 
 
+@models_app.command("discover")
+def models_discover(
+    candidate: Annotated[
+        list[str],
+        typer.Option(
+            "--candidate",
+            help="Exact MODEL_ID=PROVIDER_ENDPOINT pair; repeat for each candidate.",
+        ),
+    ],
+    config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
+    secrets_env_file: SecretsEnvFileOption = None,
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            help="Private directory for self-hashed discovery evidence.",
+        ),
+    ] = Path(".mmaudit/private/model-discovery"),
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Freeze exact public model and endpoint metadata without making a completion call."""
+
+    async def execute() -> None:
+        candidates = _parse_model_discovery_candidates(candidate)
+        _preflight_model_discovery_output_dir(output_dir)
+        config = load_config(config_path)
+        if not config.privacy.require_zdr:
+            raise ConfigError("models discover requires zero-data-retention routing")
+        budget, usage = _budget_and_usage(config)
+        with load_operator_secrets(secrets_env_file, required=True) as operator_secrets:
+            if not operator_secrets.openrouter_api_key_present:
+                raise ConfigError("OPENROUTER_API_KEY is missing from the operator secret file")
+            client = OpenRouterClient(
+                api_key=operator_secrets.openrouter_api_key,
+                execution=config.execution,
+                privacy=config.privacy,
+                budget=budget,
+                usage=usage,
+            )
+            if type(client) is not _TRUSTED_OPENROUTER_CLIENT_TYPE:
+                raise ConfigError("models discover requires the trusted concrete OpenRouter client")
+            try:
+                await client.validate_authentication()
+                models_payload = await client.get_certification_model_metadata()
+                zdr_payload = await client.list_zdr_endpoints()
+                endpoint_payloads: dict[str, dict[str, Any]] = {}
+                structural_payloads = []
+                for model_id, provider_endpoint in candidates:
+                    endpoint_payload = await client.get_model_endpoint_metadata(model_id)
+                    endpoint_payloads[model_id] = endpoint_payload
+                    endpoint_snapshot = validate_openrouter_endpoint_snapshot(
+                        exact_model_id=model_id,
+                        configured_provider_endpoints=(provider_endpoint,),
+                        provider_policy_mode="only",
+                        endpoint_payload=endpoint_payload,
+                        require_zdr=True,
+                        zdr_payload=zdr_payload,
+                    )
+                    structural_payloads.append(
+                        validate_openrouter_model_discovery(
+                            exact_model_id=model_id,
+                            models_payload=models_payload,
+                            endpoint_snapshot=endpoint_snapshot,
+                        )
+                    )
+                retrieved_at = datetime.now(UTC).replace(microsecond=0)
+                provenance, evidence = client.seal_real_model_discovery_run(
+                    run_id=uuid.uuid4().hex,
+                    retrieved_at=retrieved_at,
+                    models_payload=models_payload,
+                    zdr_payload=zdr_payload,
+                    endpoint_payloads=endpoint_payloads,
+                    candidate_routes=tuple(
+                        DiscoveryCandidateRoute(
+                            exact_model_id=model_id,
+                            approved_provider_endpoint=provider_endpoint,
+                        )
+                        for model_id, provider_endpoint in candidates
+                    ),
+                    payloads=tuple(structural_payloads),
+                )
+            finally:
+                await client.close()
+
+        manifest = write_model_discovery_run(output_dir, evidence)
+        local_console = Console(no_color=no_color)
+        for item in evidence:
+            local_console.print(f"{item.exact_model_id}: {item.discovery_evidence_sha256}")
+        local_console.print(
+            f"[green]Frozen {len(evidence)} exact REAL discovery records in "
+            f"{output_dir.resolve()}; run {provenance.run_id}; manifest "
+            f"{manifest.manifest_sha256}; no model completion was requested.[/green]"
+        )
+
+    _run_async_cli(execute)
+
+
 @models_app.command("check")
 def models_check(
     config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
@@ -637,6 +784,41 @@ def models_benchmark(
             help="Configured model ID to include; repeat as needed.",
         ),
     ] = None,
+    candidate_registry: Annotated[
+        Path | None,
+        typer.Option(
+            "--candidate-registry",
+            help="Frozen self-hashed candidate registry for exact-set benchmarking.",
+        ),
+    ] = None,
+    discovery_run: Annotated[
+        Path | None,
+        typer.Option(
+            "--discovery-run",
+            help="Frozen atomic discovery directory bound to the candidate registry.",
+        ),
+    ] = None,
+    qualification_policy: Annotated[
+        Path | None,
+        typer.Option(
+            "--qualification-policy",
+            help="Frozen self-hashed model qualification policy for candidate mode.",
+        ),
+    ] = None,
+    campaign_journal: Annotated[
+        Path | None,
+        typer.Option(
+            "--campaign-journal",
+            help="Explicit private candidate campaign journal directory.",
+        ),
+    ] = None,
+    resume_campaign: Annotated[
+        bool,
+        typer.Option(
+            "--resume-campaign",
+            help="Resume only the exact bound existing candidate campaign journal.",
+        ),
+    ] = False,
     output: Annotated[
         Path,
         typer.Option("--output", help="Destination for the model benchmark report."),
@@ -660,8 +842,42 @@ def models_benchmark(
     """Score configured root lineages on the blinded synthetic quality corpus."""
 
     async def execute() -> None:
+        candidate_mode = candidate_registry is not None or discovery_run is not None
+        if (candidate_registry is None) != (discovery_run is None):
+            raise ConfigError("--candidate-registry and --discovery-run must be supplied together")
+        if candidate_mode and model:
+            raise ConfigError("--model cannot be combined with candidate-registry mode")
+        if candidate_mode and (campaign_journal is None or qualification_policy is None):
+            raise ConfigError(
+                "candidate-registry mode requires explicit --campaign-journal "
+                "and --qualification-policy"
+            )
+        if not candidate_mode and (
+            campaign_journal is not None or qualification_policy is not None or resume_campaign
+        ):
+            raise ConfigError("candidate campaign options require candidate-registry mode")
         config = load_config(config_path)
         benchmark_corpus = load_model_benchmark_corpus(corpus)
+        if candidate_mode:
+            assert candidate_registry is not None
+            assert discovery_run is not None
+            assert campaign_journal is not None
+            assert qualification_policy is not None
+            await _execute_candidate_registry_benchmark(
+                config=config,
+                benchmark_corpus=benchmark_corpus,
+                candidate_registry_path=candidate_registry,
+                discovery_run_path=discovery_run,
+                secrets_env_file=secrets_env_file,
+                output=output,
+                campaign_journal_path=campaign_journal,
+                resume_campaign=resume_campaign,
+                qualification_policy_path=qualification_policy,
+                cost_ledger=cost_ledger,
+                allow_code_egress=allow_code_egress,
+                no_color=no_color,
+            )
+            return
         targets = select_model_benchmark_targets(config, model)
         validate_model_benchmark_egress(
             config,
@@ -733,6 +949,393 @@ def models_benchmark(
                 f"{result.overall_score:.1%}"
             )
         local_console.print(f"Result: {output.resolve()}")
+
+    _run_async_cli(execute)
+
+
+async def _execute_candidate_registry_benchmark(
+    *,
+    config: AuditConfig,
+    benchmark_corpus: ModelBenchmarkSuite,
+    candidate_registry_path: Path,
+    discovery_run_path: Path,
+    secrets_env_file: Path | None,
+    output: Path,
+    campaign_journal_path: Path,
+    resume_campaign: bool,
+    qualification_policy_path: Path,
+    cost_ledger: Path | None,
+    allow_code_egress: bool,
+    no_color: bool,
+) -> None:
+    """Validate, execute, and atomically publish one frozen candidate benchmark set."""
+
+    registry = load_candidate_registry(candidate_registry_path)
+    qualification_policy = load_qualification_policy(qualification_policy_path)
+    discovery_manifest, discovery_evidence = load_model_discovery_run(discovery_run_path)
+    validate_candidate_registry_discovery(
+        registry=registry,
+        run_manifest=discovery_manifest,
+        evidence=discovery_evidence,
+    )
+    validate_candidate_benchmark_egress(
+        config=config,
+        benchmark_suite=benchmark_corpus,
+        explicitly_allowed=allow_code_egress,
+    )
+    validate_candidate_benchmark_policy_capacity(
+        benchmark_suite=benchmark_corpus,
+        qualification_policy=qualification_policy,
+    )
+    ledger_path = _selected_cost_ledger_path(config, cost_ledger)
+    if ledger_path is None:
+        raise ConfigError(
+            "candidate benchmark requires an existing --cost-ledger initialized "
+            "with models init-cost-ledger or execution.cost_ledger_path"
+        )
+    budget, usage = _budget_and_usage(
+        config,
+        ledger_path=ledger_path,
+        require_endpoint_cost_bound=True,
+    )
+    assert budget.atomic_ledger is not None
+    _preflight_model_benchmark_portfolio_output(output, budget.atomic_ledger)
+    if Path(os.path.abspath(output)) == Path(os.path.abspath(campaign_journal_path)):
+        raise ConfigError("candidate campaign journal and final portfolio must be distinct")
+    effective_config_sha256 = canonical_sha256(config.model_dump(mode="json"))
+    campaign: CandidateBenchmarkCampaignJournal
+    if resume_campaign:
+        campaign = resume_candidate_benchmark_campaign(
+            campaign_journal_path,
+            candidate_registry=registry,
+            corpus=benchmark_corpus,
+            effective_config_sha256=effective_config_sha256,
+            qualification_policy_sha256=qualification_policy.policy_sha256,
+            cost_ledger=budget.atomic_ledger,
+        )
+    else:
+        campaign = create_candidate_benchmark_campaign(
+            campaign_journal_path,
+            candidate_registry=registry,
+            corpus=benchmark_corpus,
+            effective_config_sha256=effective_config_sha256,
+            qualification_policy_sha256=qualification_policy.policy_sha256,
+            cost_ledger=budget.atomic_ledger,
+        )
+
+    with load_operator_secrets(secrets_env_file, required=True) as operator_secrets:
+        if not operator_secrets.openrouter_api_key_present:
+            raise ConfigError("OPENROUTER_API_KEY is missing from the operator secret file")
+        execution = await run_candidate_registry_benchmarks(
+            config=config,
+            discovery_manifest=discovery_manifest,
+            discovery_evidence=discovery_evidence,
+            candidate_registry=registry,
+            benchmark_suite=benchmark_corpus,
+            budget=budget,
+            usage=usage,
+            operator_api_key=operator_secrets.openrouter_api_key,
+            explicitly_allow_synthetic_egress=True,
+            evidence_sink=campaign,
+            qualification_policy=qualification_policy,
+        )
+
+    local_console = Console(no_color=no_color)
+    portfolio = seal_model_benchmark_portfolio_from_campaign(
+        output,
+        campaign=campaign,
+    )
+    _print_candidate_benchmark_diagnostics(execution, target=local_console)
+    local_console.print(
+        f"Portfolio: {portfolio.portfolio_sha256}; "
+        f"evidence={portfolio.execution_evidence.value}; "
+        f"accounted_cost_usd={portfolio.usage.accounted_cost_usd}",
+        markup=False,
+    )
+    if portfolio.execution_evidence is not ExecutionEvidenceKind.REAL or any(
+        diagnostic.state is not CandidateBenchmarkRunState.COMPLETE
+        for diagnostic in execution.diagnostics
+    ):
+        raise typer.Exit(ExitCode.MODEL_FAILURE)
+
+
+@models_app.command("qualify")
+def models_qualify(
+    config_path: ConfigOption,
+    candidate_registry: Annotated[
+        Path,
+        typer.Option(
+            "--candidate-registry",
+            help="Self-hashed candidate-registry TOML.",
+        ),
+    ],
+    discovery_run: Annotated[
+        Path,
+        typer.Option(
+            "--discovery-run",
+            help="Complete private REAL discovery-run directory.",
+        ),
+    ],
+    policy: Annotated[
+        Path,
+        typer.Option("--policy", help="Self-hashed qualification-policy TOML."),
+    ],
+    corpus: Annotated[
+        Path,
+        typer.Option("--corpus", help="Self-hashed blinded benchmark corpus."),
+    ],
+    ground_truth: Annotated[
+        Path,
+        typer.Option(
+            "--ground-truth",
+            help="Separately sealed private benchmark ground truth.",
+        ),
+    ],
+    portfolio: Annotated[
+        Path,
+        typer.Option(
+            "--portfolio",
+            help="Atomic private model-benchmark portfolio directory.",
+        ),
+    ],
+    campaign_journal: Annotated[
+        Path,
+        typer.Option(
+            "--campaign-journal",
+            help="Complete private candidate-benchmark campaign journal.",
+        ),
+    ],
+    release_bindings: Annotated[
+        Path,
+        typer.Option(
+            "--release-bindings",
+            help="Self-hashed non-secret release bindings JSON.",
+        ),
+    ],
+    qualification_expires_at: Annotated[
+        str,
+        typer.Option(
+            "--qualification-expires-at",
+            help="Whole-second UTC qualification expiry.",
+        ),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            help="Fresh private mode-0600 qualification bundle.",
+        ),
+    ],
+    cost_ledger: Annotated[
+        Path | None,
+        typer.Option(
+            "--cost-ledger",
+            help="Existing atomic cost ledger bound to the campaign.",
+        ),
+    ] = None,
+    secrets_env_file: SecretsEnvFileOption = None,
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Qualify exact models after a fresh authenticated metadata re-fetch."""
+
+    async def execute() -> None:
+        local_console = Console(no_color=no_color)
+        config = load_config(config_path)
+        registry = load_candidate_registry(candidate_registry)
+        discovery_manifest, discovery_evidence = load_model_discovery_run(discovery_run)
+        qualification_policy = load_qualification_policy(policy)
+        benchmark_suite = load_model_benchmark_corpus(
+            corpus,
+            ground_truth_path=ground_truth,
+        )
+        benchmark_portfolio, reports = load_model_benchmark_portfolio(
+            portfolio,
+            candidate_registry=registry,
+            corpus=benchmark_suite,
+        )
+        _require_real_qualification_portfolio(
+            benchmark_portfolio,
+            policy=qualification_policy,
+        )
+        bindings = load_qualification_release_bindings(release_bindings)
+        trusted_campaign_verification = _verify_qualification_campaign(
+            config=config,
+            campaign_journal=campaign_journal,
+            cost_ledger=cost_ledger,
+            portfolio=benchmark_portfolio,
+            reports=reports,
+            registry=registry,
+            benchmark_suite=benchmark_suite,
+            qualification_policy=qualification_policy,
+        )
+        expiry = _parse_qualification_timestamp(qualification_expires_at)
+        evaluated_at = datetime.now(UTC).replace(microsecond=0)
+        trusted_generation_verification = await _refetch_qualification_generations(
+            config=config,
+            secrets_env_file=secrets_env_file,
+            registry=registry,
+            reports=reports,
+        )
+        bundle = run_qualification_workflow(
+            candidate_registry=registry,
+            discovery_run_manifest=discovery_manifest,
+            discovery_evidence=discovery_evidence,
+            policy=qualification_policy,
+            benchmark_suite=benchmark_suite,
+            benchmark_portfolio=benchmark_portfolio,
+            benchmark_reports=reports,
+            release_bindings=bindings,
+            trusted_campaign_verification=trusted_campaign_verification,
+            trusted_generation_verification=trusted_generation_verification,
+            evaluated_at=evaluated_at,
+            qualification_expires_at=expiry,
+        )
+        write_qualification_workflow_bundle(output, bundle)
+        _print_qualification_summary(bundle, local_console)
+        if not bundle.qualification_verification.production_selection_ready:
+            raise typer.Exit(ExitCode.INCOMPLETE)
+
+    _run_async_cli(execute)
+
+
+@models_app.command("verify-qualification")
+def models_verify_qualification(
+    config_path: ConfigOption,
+    bundle_path: Annotated[
+        Path,
+        typer.Option("--bundle", help="Private mode-0600 qualification bundle."),
+    ],
+    candidate_registry: Annotated[
+        Path,
+        typer.Option(
+            "--candidate-registry",
+            help="Original self-hashed candidate-registry TOML.",
+        ),
+    ],
+    discovery_run: Annotated[
+        Path,
+        typer.Option(
+            "--discovery-run",
+            help="Original complete private REAL discovery-run directory.",
+        ),
+    ],
+    policy: Annotated[
+        Path,
+        typer.Option("--policy", help="Original qualification-policy TOML."),
+    ],
+    corpus: Annotated[
+        Path,
+        typer.Option("--corpus", help="Original blinded benchmark corpus."),
+    ],
+    ground_truth: Annotated[
+        Path,
+        typer.Option(
+            "--ground-truth",
+            help="Original separately sealed private benchmark ground truth.",
+        ),
+    ],
+    portfolio: Annotated[
+        Path,
+        typer.Option(
+            "--portfolio",
+            help="Original atomic private model-benchmark portfolio directory.",
+        ),
+    ],
+    campaign_journal: Annotated[
+        Path,
+        typer.Option(
+            "--campaign-journal",
+            help="Original complete private candidate-benchmark campaign journal.",
+        ),
+    ],
+    release_bindings: Annotated[
+        Path,
+        typer.Option(
+            "--release-bindings",
+            help="Original self-hashed release bindings JSON.",
+        ),
+    ],
+    cost_ledger: Annotated[
+        Path | None,
+        typer.Option(
+            "--cost-ledger",
+            help="Existing atomic cost ledger bound to the campaign.",
+        ),
+    ] = None,
+    secrets_env_file: SecretsEnvFileOption = None,
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Re-fetch provider evidence and reproduce the frozen qualification bundle."""
+
+    async def execute() -> None:
+        local_console = Console(no_color=no_color)
+        config = load_config(config_path)
+        frozen = load_qualification_workflow_bundle(bundle_path)
+        registry = load_candidate_registry(candidate_registry)
+        discovery_manifest, discovery_evidence = load_model_discovery_run(discovery_run)
+        qualification_policy = load_qualification_policy(policy)
+        benchmark_suite = load_model_benchmark_corpus(
+            corpus,
+            ground_truth_path=ground_truth,
+        )
+        benchmark_portfolio, reports = load_model_benchmark_portfolio(
+            portfolio,
+            candidate_registry=registry,
+            corpus=benchmark_suite,
+        )
+        _require_real_qualification_portfolio(
+            benchmark_portfolio,
+            policy=qualification_policy,
+        )
+        bindings = load_qualification_release_bindings(release_bindings)
+        trusted_campaign_verification = _verify_qualification_campaign(
+            config=config,
+            campaign_journal=campaign_journal,
+            cost_ledger=cost_ledger,
+            portfolio=benchmark_portfolio,
+            reports=reports,
+            registry=registry,
+            benchmark_suite=benchmark_suite,
+            qualification_policy=qualification_policy,
+        )
+        trusted_generation_verification = await _refetch_qualification_generations(
+            config=config,
+            secrets_env_file=secrets_env_file,
+            registry=registry,
+            reports=reports,
+        )
+        recomputed = run_qualification_workflow(
+            candidate_registry=registry,
+            discovery_run_manifest=discovery_manifest,
+            discovery_evidence=discovery_evidence,
+            policy=qualification_policy,
+            benchmark_suite=benchmark_suite,
+            benchmark_portfolio=benchmark_portfolio,
+            benchmark_reports=reports,
+            release_bindings=bindings,
+            trusted_campaign_verification=trusted_campaign_verification,
+            trusted_generation_verification=trusted_generation_verification,
+            evaluated_at=frozen.evaluated_at,
+            qualification_expires_at=frozen.qualification_expires_at,
+        )
+        if _qualification_semantic_view(recomputed) != _qualification_semantic_view(frozen):
+            raise ValueError(
+                "qualification bundle differs from authenticated semantic recomputation"
+            )
+        verified_at = datetime.now(UTC).replace(microsecond=0)
+        current = verify_model_qualification(
+            artifact=frozen.qualification_artifact,
+            registry=frozen.updated_registry,
+            policy=qualification_policy,
+            expected_bindings=recomputed.qualification_artifact.bindings,
+            trusted_benchmark_evidence=frozen.trusted_benchmark_evidence,
+            now=verified_at,
+        )
+        if frozen.qualification_expires_at <= verified_at:
+            raise ValueError("qualification bundle is stale")
+        _print_qualification_summary(frozen, local_console)
+        if not current.production_selection_ready:
+            raise typer.Exit(ExitCode.INCOMPLETE)
 
     _run_async_cli(execute)
 
@@ -1921,6 +2524,209 @@ def _selected_cost_ledger_path(
     return Path(configured) if configured is not None else None
 
 
+def _parse_model_discovery_candidates(values: list[str]) -> tuple[tuple[str, str], ...]:
+    """Parse exact candidate routes before secret loading or provider access."""
+
+    if not 1 <= len(values) <= 64:
+        raise ConfigError("models discover requires between 1 and 64 --candidate values")
+    parsed: list[tuple[str, str]] = []
+    endpoint_pattern = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
+    for value in values:
+        if value != value.strip() or value.count("=") != 1:
+            raise ConfigError(
+                "models discover candidates must use canonical MODEL_ID=PROVIDER_ENDPOINT form"
+            )
+        model_id, provider_endpoint = value.split("=", 1)
+        if (
+            not is_exact_openrouter_model_id(model_id)
+            or endpoint_pattern.fullmatch(provider_endpoint) is None
+        ):
+            raise ConfigError("models discover requires exact non-alias model and endpoint IDs")
+        parsed.append((model_id, provider_endpoint))
+    if len({model_id for model_id, _endpoint in parsed}) != len(parsed):
+        raise ConfigError("models discover candidate model IDs must be unique")
+    return tuple(sorted(parsed))
+
+
+def _require_real_qualification_portfolio(
+    portfolio: ModelBenchmarkPortfolio,
+    *,
+    policy: QualificationPolicy,
+) -> None:
+    validate_qualification_portfolio_readiness(portfolio=portfolio, policy=policy)
+
+
+def _verify_qualification_campaign(
+    *,
+    config: AuditConfig,
+    campaign_journal: Path,
+    cost_ledger: Path | None,
+    portfolio: ModelBenchmarkPortfolio,
+    reports: tuple[ModelBenchmarkReport, ...],
+    registry: CandidateRegistry,
+    benchmark_suite: ModelBenchmarkSuite,
+    qualification_policy: QualificationPolicy,
+) -> TrustedCandidateBenchmarkCampaignVerification:
+    ledger_path = _selected_cost_ledger_path(config, cost_ledger)
+    if ledger_path is None:
+        raise ConfigError(
+            "model qualification requires the existing cost ledger bound to its campaign"
+        )
+    ledger = AtomicCostLedger.open_existing(
+        ledger_path,
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    return verify_model_benchmark_portfolio_campaign(
+        campaign_journal,
+        portfolio=portfolio,
+        reports=reports,
+        candidate_registry=registry,
+        corpus=benchmark_suite,
+        effective_config_sha256=canonical_sha256(config.model_dump(mode="json")),
+        qualification_policy_sha256=qualification_policy.policy_sha256,
+        cost_ledger=ledger,
+    )
+
+
+async def _refetch_qualification_generations(
+    *,
+    config: AuditConfig,
+    secrets_env_file: Path | None,
+    registry: CandidateRegistry,
+    reports: tuple[ModelBenchmarkReport, ...],
+) -> TrustedGenerationVerification:
+    """Use only an owned client to authenticate and re-fetch generation metadata."""
+
+    if (
+        not config.privacy.require_zdr
+        or config.privacy.store_raw_prompts
+        or config.privacy.store_raw_responses
+        or config.execution.max_json_repair_attempts
+        or config.models.provider_policy.allow_fallbacks
+    ):
+        raise ConfigError(
+            "qualification metadata verification requires ZDR, no raw retention, "
+            "no output repair, and no provider fallbacks"
+        )
+    controls = build_openrouter_runtime_controls(config, certification=False)
+    budget, usage = _budget_and_usage(config)
+    with load_operator_secrets(secrets_env_file, required=True) as operator_secrets:
+        if not operator_secrets.openrouter_api_key_present:
+            raise ConfigError("OPENROUTER_API_KEY is missing from the operator secret file")
+        client = OpenRouterClient(
+            api_key=operator_secrets.openrouter_api_key,
+            execution=config.execution,
+            privacy=config.privacy,
+            budget=budget,
+            usage=usage,
+            provider_policy=controls.provider_policy,
+            reasoning=controls.reasoning,
+        )
+        try:
+            return await refetch_trusted_benchmark_generations(
+                client=client,
+                registry=registry,
+                benchmark_reports=reports,
+            )
+        finally:
+            await client.close()
+
+
+def _parse_qualification_timestamp(value: str) -> datetime:
+    if not value or value != value.strip():
+        raise ValueError("qualification expiry must be one whole-second UTC timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError("qualification expiry must be one whole-second UTC timestamp") from None
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0) or parsed.microsecond:
+        raise ValueError("qualification expiry must be one whole-second UTC timestamp")
+    return parsed.astimezone(UTC)
+
+
+def _print_qualification_summary(
+    bundle: QualificationWorkflowBundle,
+    target: Console,
+) -> None:
+    for result in bundle.qualification_artifact.results:
+        target.print(
+            f"model={result.exact_model_id} disposition={result.disposition.value} "
+            f"report_sha256={result.benchmark_report_sha256}",
+            markup=False,
+        )
+    verification = bundle.qualification_verification
+    target.print(
+        f"workflow_sha256={bundle.workflow_sha256} "
+        f"artifact_sha256={bundle.qualification_artifact.artifact_sha256} "
+        f"verification_valid={str(verification.valid).lower()} "
+        f"production_selection_ready="
+        f"{str(verification.production_selection_ready).lower()} "
+        f"eligible_models={len(verification.eligible_tier_a_model_ids)}",
+        markup=False,
+    )
+
+
+def _qualification_semantic_view(
+    bundle: QualificationWorkflowBundle,
+) -> dict[str, Any]:
+    """Remove only fresh-refetch timestamps and their transitive self-hashes."""
+
+    payload = bundle.model_dump(mode="json")
+    payload.pop("workflow_sha256", None)
+    evidence_items = payload.get("trusted_benchmark_evidence", [])
+    if isinstance(evidence_items, list):
+        for evidence in evidence_items:
+            if not isinstance(evidence, dict):
+                continue
+            evidence.pop("generation_evidence_sha256", None)
+            evidence.pop("verification_sha256", None)
+            attestations = evidence.get("generation_attestations", [])
+            if isinstance(attestations, list):
+                for attestation in attestations:
+                    if isinstance(attestation, dict):
+                        attestation.pop("retrieved_at", None)
+                        attestation.pop("evidence_sha256", None)
+    artifact = payload.get("qualification_artifact")
+    if isinstance(artifact, dict):
+        artifact.pop("artifact_sha256", None)
+        results = artifact.get("results", [])
+        if isinstance(results, list):
+            for result in results:
+                if isinstance(result, dict):
+                    result.pop("benchmark_verification_sha256", None)
+                    result.pop("result_sha256", None)
+    verification = payload.get("qualification_verification")
+    if isinstance(verification, dict):
+        verification.pop("artifact_sha256", None)
+        verification.pop("verification_sha256", None)
+    return payload
+
+
+def _preflight_model_discovery_output_dir(path: Path) -> None:
+    absolute = path.absolute()
+    if is_sensitive_workspace_name(absolute.name):
+        raise ConfigError("refusing a sensitive model discovery output directory")
+    if any(
+        candidate.is_symlink() or candidate.is_junction()
+        for candidate in (absolute, *absolute.parents)
+    ):
+        raise ConfigError("model discovery output may not traverse filesystem links")
+    if absolute.exists():
+        raise ConfigError("model discovery output directory must be fresh")
+    absolute.parent.mkdir(parents=True, exist_ok=True)
+    if absolute.parent.is_symlink() or absolute.parent.is_junction():
+        raise ConfigError("model discovery output parent must be a regular non-link directory")
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=absolute.parent,
+            prefix=".mmaudit-model-discovery-preflight-",
+            delete=True,
+        ):
+            pass
+    except OSError as exc:
+        raise ConfigError("model discovery output directory is not writable") from exc
+
+
 def _preflight_model_benchmark_output(
     output: Path,
     ledger: AtomicCostLedger,
@@ -1955,6 +2761,75 @@ def _preflight_model_benchmark_output(
             pass
     except OSError as exc:
         raise ConfigError("model benchmark output directory is not writable") from exc
+
+
+def _preflight_model_benchmark_portfolio_output(
+    output: Path,
+    ledger: AtomicCostLedger,
+) -> None:
+    """Require a fresh non-link directory target distinct from paid budget state."""
+
+    absolute = Path(os.path.abspath(output))
+    if is_sensitive_workspace_name(absolute.name):
+        raise ConfigError("refusing a sensitive model benchmark portfolio directory")
+    if any(
+        candidate.is_symlink() or candidate.is_junction()
+        for candidate in (absolute, *absolute.parents)
+    ):
+        raise ConfigError("model benchmark portfolio path may not traverse links")
+    if absolute.exists():
+        raise ConfigError("model benchmark portfolio destination must be fresh")
+    protected = {
+        ledger.path.resolve(strict=True),
+        ledger.lock_path.resolve(strict=True),
+    }
+    if absolute.resolve(strict=False) in protected:
+        raise ConfigError("model benchmark output must be distinct from cost-ledger state")
+    absolute.parent.mkdir(parents=True, exist_ok=True)
+    if absolute.parent.is_symlink() or absolute.parent.is_junction():
+        raise ConfigError("model benchmark portfolio parent must be a regular directory")
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=absolute.parent,
+            prefix=".mmaudit-model-portfolio-preflight-",
+            delete=True,
+        ):
+            pass
+    except OSError as exc:
+        raise ConfigError("model benchmark portfolio directory is not writable") from exc
+
+
+def _print_candidate_benchmark_diagnostics(
+    execution: CandidateBenchmarkExecutionResult,
+    *,
+    target: Console,
+) -> None:
+    reports = {report.results[0].target.model_id: report for report in execution.reports}
+    for diagnostic in execution.diagnostics:
+        report = reports[diagnostic.exact_model_id]
+        target.print(
+            f"{diagnostic.exact_model_id}: status={diagnostic.state.value}; "
+            f"evidence={diagnostic.execution_evidence.value}; "
+            f"report={diagnostic.report_sha256}; "
+            f"accounted_cost_usd={_model_benchmark_report_cost(report)}",
+            markup=False,
+        )
+
+
+def _model_benchmark_report_cost(report: ModelBenchmarkReport) -> str:
+    total = sum(
+        (
+            Decimal(str(case.usage_record.accounted_cost_usd))
+            for result in report.results
+            for case in result.cases
+            if case.usage_record is not None
+        ),
+        Decimal(0),
+    )
+    rendered = format(total, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return rendered if rendered not in {"", "-0"} else "0"
 
 
 def _cache_path(config_path: Path) -> Path:

@@ -6,14 +6,14 @@ commit `e304807cf942542706b88544fa216516f8f95cad`.
 AUTORUN_STATUS: IN_PROGRESS
 CURRENT_TICKET: REM-MODELS-001
 LAST_COMPLETED_TICKET: REM-OPENROUTER-001
-NEXT_ACTION: Checkpoint and push the completed exact OpenRouter client and cost-ledger controls, then freeze the production model registry and qualification artifact contract before any paid model call.
-LAST_COMMAND: .venv/bin/pytest -q
-LAST_RESULT: PASS — post-review full suite passed with 1060 tests and 10 explicit real-integration skips in 156.13s; full Ruff formatting/check and strict mypy also passed.
+NEXT_ACTION: Create and push the isolated no-spend model-qualification checkpoint, initialize the ignored cumulative ledger, then execute one explicitly controlled paid transport smoke.
+LAST_COMMAND: .venv/bin/ruff format . && .venv/bin/ruff check . && .venv/bin/mypy && git diff --check && git diff --exit-code -- docs/evaluation && git status --short --ignored .env .mmaudit
+LAST_RESULT: PASS — 253 files unchanged, Ruff clean, strict mypy clean for 114 source files, diff clean, immutable baseline unchanged, and only ignored .env/.mmaudit control-plane paths reported.
 REMAINING_CODE_DEFECTS: 9
 REMAINING_REAL_INTEGRATIONS: OpenRouter exact-model smoke/qualification/specialist review; certified-isolation Foundry and Slither; Echidna; Medusa; Halmos; formal proof engine; rootless isolation; isolated replay; product benchmark reports
 BLOCKED_EXTERNAL_PREREQUISITES: Echidna, Medusa, Kontrol, Certora, rootless runtime/image, private holdout, and independently adjudicated expert comparison are not yet evidenced as available
 OPENROUTER_COST_USED_USD: 0.00
-LAST_CHECKPOINT_COMMIT: 40cb4e7cdf155401618553304cc69623d69fe69f4
+LAST_CHECKPOINT_COMMIT: a9fc11e5208053457db3b3696b3da1de69d67046
 
 ## Immutable baseline
 
@@ -379,3 +379,205 @@ LAST_CHECKPOINT_COMMIT: 40cb4e7cdf155401618553304cc69623d69fe69f4
 - **Exact next safe action:** Push the bound checkpoint, then freeze the exact
   production candidate registry and qualification artifact contract under
   `REM-MODELS-001` before authorizing any paid call.
+
+## 2026-07-27 — REM-MODELS-001
+
+- **Status:** `IN_PROGRESS`.
+- **Defensive objective:** Replace declared or SHA-shaped model quality with a
+  non-empty, version-bound, independently verified qualification artifact and
+  select every eligible Tier A exact model under the hard campaign budget.
+- **Public metadata slice:** Fetched current official OpenRouter `/models`,
+  per-model endpoint, and ZDR endpoint metadata without an API key and without a
+  completion call. The snapshot identified exact base request IDs, canonical
+  release slugs, endpoint tags, capabilities, context/output limits, pricing,
+  operational status, and ZDR membership. Catalog presence remains discovery
+  evidence only and assigns neither quality nor lineage independence.
+- **Fail-closed compatibility correction:** Current endpoint metadata represents
+  a missing prompt/output limit as JSON `null` and includes numeric `discount`
+  metadata beside exact string prices. The endpoint normalizer now uses the
+  explicit context ceiling when a limit is null, records whether each limit came
+  from metadata or the context ceiling, ignores only a validated nonnegative
+  discount because it cannot increase cost, and continues rejecting tier
+  overrides, negative discounts, cache/internal-reasoning prices, and every
+  unsupported billable component.
+- **Commands and results:**
+  - Public `GET https://openrouter.ai/api/v1/models?...` — PASS; `188` current
+    ZDR/structured-output model records captured in a disposable local file.
+  - Public exact Qwen endpoint and global ZDR snapshots — PASS; no authorization
+    header or secret used.
+  - `.venv/bin/pytest -q tests/unit/test_endpoint_snapshots.py` — PASS,
+    `32 passed in 0.06s`.
+  - `.venv/bin/pytest -q tests/unit/test_model_benchmark.py tests/unit/test_cli.py
+    -k 'models_benchmark or model_benchmark'` — PASS, `18 passed, 41
+    deselected in 0.94s`.
+  - `.venv/bin/pytest -q tests/unit/test_config.py
+    tests/unit/test_openrouter.py` — PASS, `103 passed in 0.29s`.
+  - Affected Ruff and strict mypy — PASS.
+  - Local normalization of current
+    `qwen/qwen3.6-35b-a3b` / `akashml/fp8` metadata — PASS; the self-hashed
+    snapshot records a context-derived prompt ceiling and only exact prompt and
+    completion prices. This is metadata validation, not provider execution.
+- **OpenRouter spend:** `0.00 USD`; no model completion has been requested.
+- **Benchmark-v2 slice:** The blinded corpus now has `16` bounded synthetic
+  cases and non-zero denominators for all `17` qualification dimensions. Each
+  result retains exact per-case request evidence and recomputes summary
+  aggregates. The independent assay below proved that the first draft did not
+  yet bind those summaries or provenance strongly enough for qualification.
+  This remains local component validation until the hardening completes and
+  exact candidates execute real certification-bound requests.
+- **Independent negative assay:** A deeper adversarial review showed that the
+  first benchmark-v2 draft was still structurally forgeable: a coherent edit
+  could inflate case scores, relabel internally consistent MOCK evidence as
+  REAL, or disconnect the scored normalized response from the raw provider
+  response while recomputing self-hashes. It also found descriptive
+  provider-visible task text that disclosed expected conclusions. Those are
+  recorded as active REM-MODELS-001 defects rather than accepted evidence.
+- **Response-binding remediation slice:** Successful `UsageRecord` objects now
+  require `validated_response_sha256`, computed from the canonical strict
+  Pydantic output independently of the raw completion hash. The existing client,
+  usage, coverage, and assurance regressions pass (`221 passed in 0.77s`).
+  Benchmark hardening is in progress to retain the normalized response, re-score
+  from separately frozen ground truth, bind both hashes, use opaque provider case
+  identities, and require authenticated generation evidence before REAL credit.
+- **Real discovery attempt 1:** The authenticated metadata-only command failed
+  closed before writing evidence because the unfiltered provider catalog
+  contained an unrelated identifier outside the strict exact-model grammar.
+  No completion request or spend occurred. A fixed official catalog query now
+  requests only ZDR models advertising structured response support, then still
+  validates every returned identifier and each exact candidate endpoint
+  locally. Its focused CLI/OpenRouter tests pass (`11 passed`).
+- **Real discovery attempt 2:** The corrected command completed for all `12`
+  exact candidates and wrote self-hashed mode-`0600` evidence under the ignored
+  operator-private `.mmaudit/private/model-discovery/current` directory. Every
+  record binds the requested ID, official canonical slug, one exact provider
+  endpoint, current operational and ZDR state, structured-output capability,
+  context/output limits, model metadata hash, endpoint snapshot hash, and exact
+  pricing hash. Eleven endpoints advertise reasoning controls; the selected
+  Llama endpoint does not and is recorded honestly. This was authenticated
+  metadata execution only: no completion, generation, token use, or cost entry
+  occurred.
+- **Current limitation:** Root-lineage assignments remain provisional and must
+  not count as independent until the operator reviews the frozen mapping.
+- **Qualification trust-boundary slice:** Removed both arbitrary truthy callback
+  promotion paths. Legacy benchmark verification now rejects serialized REAL
+  labels and directs all REAL credit to the authenticated qualification
+  workflow. The qualification CLI consumes one exact-set atomic portfolio,
+  binds its hash into the workflow and artifact, requires non-empty all-REAL
+  reports with complete diagnostics, and obtains a fresh authenticated
+  generation-metadata attestation through an owned concrete OpenRouter client.
+  A loose `--report`, missing capability, relabeled mock, or offline resolver
+  cannot qualify a model. Fresh verification compares stable generation facts
+  while excluding only retrieval timestamps and their transitive self-hashes.
+- **Qualification validation evidence:** The trusted-generation boundary passed
+  `82` focused tests with one explicit real-provider skip; the portfolio-bound
+  qualification CLI/workflow/schema slice passed `136` focused tests; the
+  removed legacy callback promotion assay passed `17` focused tests. Affected
+  Ruff and strict mypy checks passed. These are local/mock protocol tests and
+  are not provider-execution evidence.
+- **Frozen pre-spend inventory:** The authenticated discovery run contains `12`
+  exact model/provider routes. The initial `16`-case campaign preflight had a
+  retry-inclusive maximum of `2.266474830 USD`, leaving
+  `247.733525170 USD` under the operator's `250.00 USD` cap. This estimate is
+  superseded if the corpus case count changes and must be recomputed before
+  provider use.
+- **Pre-spend independent audit blocker:** A read-only adversarial review found
+  that the first semantic scorer could award Tier A credit for keyword stuffing
+  while ignoring expected locations on most unsafe cases, and that several
+  synthetic excerpts did not contain enough evidence to support their
+  ground-truth label. It also found single-case semantic denominators and a
+  campaign durability gap that could retain cost in the ledger while losing
+  completed in-memory reports after a later failure. No paid campaign is
+  authorized until the scorer, fixtures, denominators, durable per-candidate
+  journal, and retry-attempt accounting are remediated and revalidated.
+- **OpenRouter spend:** `0.00 USD`; no model completion has been requested.
+- **Pre-spend hardening result:** The scorer now requires exact
+  classification/location agreement for every semantic dimension, takes required
+  reasoning concepts only from the rationale field, rejects contradictory
+  rationales, and requires structured source-bound verifier evidence and
+  falsifier tests. The frozen `16`-case corpus now supplies at least two disjoint
+  evaluations for every semantic dimension, three prompt-injection styles, and
+  sixteen structured-output evaluations. All training-exposure declarations are
+  `unknown`; this is request-level blinded qualification, not a private holdout.
+- **Frozen hardening hashes:** corpus
+  `524f4c37c41d8178c6e159a5d7d67bf0b3fe33c83015c8a8401006f6fbd1ce3b`;
+  ground truth
+  `09c86d16caa05c9602fa8082a46b2dc438f92cc0b668fe7ce7d001e4a9358c92`;
+  qualification policy
+  `d286d1c5f9ed4a5a4c7c62eda7a55e9a1e23e972f21ffe64530ca34ed780224e`.
+  The policy binds the realized denominators before secret access.
+- **Campaign durability:** Candidate mode now requires an explicit fresh private
+  campaign journal and qualification policy. Every candidate report, diagnostic,
+  observed non-secret usage record, and before/after cost-ledger snapshot is
+  atomically persisted before advancing. Resume is explicit and exact-bound;
+  incomplete journals cannot seal a portfolio. Logical requests, provider
+  attempts, retries, successful/failed requests, unresolved costs, token usage,
+  latency, and cost are independently recomputed. A usage-then-failure regression
+  retained a real synthetic `0.01 USD` ledger charge without an active
+  reservation; an interrupted second candidate retained the first candidate's
+  exact evidence.
+- **Revised exact cost preflight:** `12 × 16 = 192` first-pass requests and
+  `384` retry-inclusive provider attempts fit the configured `512` ceiling.
+  The endpoint-bound maximum is `1.2599820925 USD` first pass and
+  `2.519964185 USD` with one retry per request, leaving more than `247 USD`
+  under the immutable `250.00 USD` campaign cap.
+- **Integrated validation:**
+  - `226` focused discovery, benchmark, scorer, corpus, journal, portfolio,
+    qualification, schema, configuration, and CLI tests passed in `10.71s`.
+  - `.venv/bin/ruff format .` reformatted three files; `.venv/bin/ruff check .`
+    passed.
+  - `.venv/bin/mypy` passed for `114` source files.
+  - The first full-suite execution lost its final harness output and was not
+    credited. The identical captured retry passed with `1293 passed, 10 skipped
+    in 166.50s`; every skip explicitly names a real-provider, engine, isolation,
+    replay, or loopback prerequisite.
+- **OpenRouter spend:** `0.00 USD`; no model completion has been requested.
+- **Final campaign-provenance review:** Qualification now requires an opaque
+  in-memory capability issued only after reopening the actual complete private
+  campaign journal and its exact existing cost ledger. The verifier checks the
+  journal's registry, corpus, policy, effective configuration, ledger path,
+  report set, diagnostics, retained usage, journal hash, and initial/final
+  ledger snapshots against the portfolio. Caller-supplied booleans, lookalike
+  objects, arbitrary claimed journal hashes, unresolved reservations, active
+  reserved amounts, uncertain cost, failed requests, or budget overruns cannot
+  satisfy the boundary. Both `models qualify` and `models
+  verify-qualification` require the campaign journal and its dedicated ledger.
+  Focused workflow, CLI, and portfolio validation passed with `42 passed in
+  12.83s`; the targeted campaign/qualification set passed with `55 passed in
+  13.82s`, including the caller-forged-capability regression. The final exact
+  source state passed with `1296 passed, 10 skipped in 171.24s`. This is local
+  provenance validation, not real provider evidence.
+- **Pre-checkpoint integrity:** Full Ruff formatting left `253` files
+  unchanged, Ruff checks passed, and strict mypy passed for `114` source files.
+  `git diff --check` passed; `docs/evaluation/` has no diff and all seven frozen
+  SHA-256 values still match. `.env` and `.mmaudit/` remain ignored and
+  untracked. A repository-wide key-pattern scan found only explicit redaction
+  regexes and clearly labelled synthetic canary fixtures; no operator secret or
+  private generated evidence is staged.
+- **Retry-level unresolved-cost assay:** Independent review found that two
+  uncertain provider attempts for one logical request could exceed a
+  logical-request-based unresolved-cost bound after the atomic ledger had
+  already changed. Both diagnostic and portfolio invariants now bound unresolved
+  ledger entries by provider attempts. A two-attempt synthetic timeout
+  regression preserves both conservatively accounted entries in the campaign,
+  resumes and seals deterministically, and remains ineligible for qualification.
+  The affected Ruff and strict mypy checks passed; the focused campaign,
+  portfolio, workflow, and CLI set passed with `47 passed in 14.42s`. The exact
+  full source state then passed with `1297 passed, 10 skipped in 170.80s`.
+- **Selection-chain splice assay:** Independent review found that a genuine
+  ready qualification verification could be paired with a different
+  self-hashed artifact containing the same eligible IDs, and downstream
+  ensemble evaluation did not independently bind all supplied verification
+  objects. Selection sealing, selection verification, and ensemble evaluation
+  now require exact artifact, registry, policy, qualification-verification, and
+  selection-verification hash continuity. Regressions cover cross-artifact
+  selection and unrelated-but-valid downstream evidence objects. Ruff and
+  strict mypy passed; `33` focused qualification tests passed in `0.51s`. The
+  exact full source state then passed with `1300 passed, 10 skipped in 170.15s`.
+- **Independent checkpoint audit:** A read-only adversarial recheck ran `218`
+  integrity tests and `51` post-fix qualification/campaign/workflow tests. It
+  found no remaining checkpoint blocker in mock/REAL promotion, campaign/ledger
+  provenance, budget accounting, exact model/route enforcement, selection
+  binding, or secret/private-artifact exposure. No provider request occurred.
+- **Exact next safe action:** Complete the independent final diff review, then
+  create and push an isolated checkpoint before considering a separately
+  labelled one-call transport smoke.

@@ -128,7 +128,7 @@ class ExecutionConfig(ConfigModel):
     cost_ledger_path: str | None = None
     max_request_bytes: int = Field(default=4_000_000, ge=1_024)
     max_output_tokens_per_request: int = Field(default=4_096, ge=256, le=65_536)
-    max_requests_per_agent: int = Field(default=2, ge=1, le=10)
+    max_requests_per_agent: int = Field(default=2, ge=1, le=512)
     conservative_usd_per_million_tokens: float = Field(default=60.0, gt=0)
 
     @field_validator("cost_ledger_path")
@@ -734,6 +734,12 @@ class ModelReasoningConfig(ConfigModel):
     effort: Literal["minimal", "low", "medium", "high", "xhigh"] | None = None
     max_tokens: int | None = Field(default=None, ge=1, le=65_536)
     exclude: bool = False
+
+    @model_validator(mode="after")
+    def reasoning_budget_mode_is_unambiguous(self) -> ModelReasoningConfig:
+        if self.effort is not None and self.max_tokens is not None:
+            raise ValueError("reasoning effort and max_tokens are mutually exclusive")
+        return self
 
 
 class ModelsConfig(ConfigModel):

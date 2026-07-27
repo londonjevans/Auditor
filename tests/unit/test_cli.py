@@ -80,8 +80,18 @@ def test_models_benchmark_help_lists_blinded_corpus_and_egress_controls() -> Non
     assert result.exit_code == 0
     assert "--corpus" in result.stdout
     assert "--model" in result.stdout
+    assert "--candidate-registry" in result.stdout
+    assert "--discovery-run" in result.stdout
     assert "--allow-code-egress" in result.stdout
     assert "--cost-ledger" in result.stdout
+
+
+def test_models_discover_help_lists_exact_route_and_private_output_controls() -> None:
+    result = runner.invoke(app, ["models", "discover", "--help"])
+    assert result.exit_code == 0
+    assert "--candidate" in result.stdout
+    assert "--output-dir" in result.stdout
+    assert "--secrets-env-file" in result.stdout
 
 
 @pytest.mark.parametrize(
@@ -89,6 +99,7 @@ def test_models_benchmark_help_lists_blinded_corpus_and_egress_controls() -> Non
     [
         ["doctor", "--help"],
         ["models", "list", "--help"],
+        ["models", "discover", "--help"],
         ["models", "check", "--help"],
         ["models", "benchmark", "--help"],
         ["scan", "--help"],
@@ -133,6 +144,115 @@ def test_models_benchmark_requires_explicit_egress_before_provider_access(
     assert with_approval.exit_code == ExitCode.CONFIGURATION
     assert "--cost-ledger" in with_approval.stdout
     assert not (tmp_path / "model-benchmark.json").exists()
+
+
+def test_models_discover_rejects_alias_before_secret_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("operator secrets must not be accessed")
+
+    monkeypatch.setattr("mmaudit.cli.load_operator_secrets", forbidden_secret_access)
+    result = runner.invoke(
+        app,
+        [
+            "models",
+            "discover",
+            "--candidate",
+            "openrouter/auto=approved-provider/fp8",
+            "--config",
+            str(tmp_path / "missing.toml"),
+            "--output-dir",
+            str(tmp_path / "private"),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "exact non-alias" in result.stdout
+    assert not secret_accessed
+
+
+def test_models_discover_rejects_synthetic_client_without_real_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    model_id = "alpha/atlas-secure"
+    provider_endpoint = "approved-provider/fp8"
+    canary = "synthetic-provider-canary"
+    config = config_factory()
+    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+    secret_file = tmp_path / "operator-secrets.env"
+    secret_file.write_text(f"OPENROUTER_API_KEY={canary}\n", encoding="utf-8")
+    secret_file.chmod(0o600)
+
+    class SyntheticMetadataClient:
+        def __init__(self, *, api_key: str, **_kwargs: object) -> None:
+            assert api_key == canary
+
+    monkeypatch.setattr("mmaudit.cli.OpenRouterClient", SyntheticMetadataClient)
+    output = tmp_path / "private" / "discovery"
+    result = runner.invoke(
+        app,
+        [
+            "models",
+            "discover",
+            "--candidate",
+            f"{model_id}={provider_endpoint}",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--secrets-env-file",
+            str(secret_file),
+            "--output-dir",
+            str(output),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "trusted concrete OpenRouter" in result.stdout
+    assert not output.exists()
+    assert canary not in result.stdout
+
+
+def test_models_discover_rejects_reused_output_before_secret_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "existing"
+    output.mkdir()
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("operator secrets must not be accessed")
+
+    monkeypatch.setattr("mmaudit.cli.load_operator_secrets", forbidden_secret_access)
+    result = runner.invoke(
+        app,
+        [
+            "models",
+            "discover",
+            "--candidate",
+            "alpha/atlas-secure=approved-provider/fp8",
+            "--config",
+            str(tmp_path / "missing.toml"),
+            "--output-dir",
+            str(output),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "must be fresh" in result.stdout
+    assert not secret_accessed
 
 
 def test_models_cost_ledger_initialization_is_explicit_and_one_time(

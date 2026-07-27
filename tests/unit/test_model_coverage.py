@@ -262,6 +262,7 @@ def _usage(role: str, model_id: str, request_id: str) -> UsageRecord:
         },
         prompt_sha256="c" * 64,
         response_sha256="d" * 64,
+        validated_response_sha256="f" * 64,
         request_body_sha256="a" * 64,
         schema_sha256=schema_sha256,
         openrouter_generation_id=generation_id,

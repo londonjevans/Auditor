@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict
 
 from mmaudit.config import ExecutionConfig, PrivacyConfig
 from mmaudit.models.endpoint_snapshots import validate_openrouter_endpoint_snapshot
+from mmaudit.models.generation_evidence import GenerationVerificationRequest
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterProviderPolicy
 from mmaudit.models.schemas import ExecutionEvidenceKind, ModelRequestValidationStatus
 from mmaudit.models.usage import UsageLedger
@@ -105,7 +106,7 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
             )
             async with client:
                 await client.validate_authentication()
-                models = await client.list_models()
+                models = await client.list_certification_models()
                 if settings.model_id not in {
                     item.get("id") for item in models if isinstance(item.get("id"), str)
                 }:
@@ -146,6 +147,30 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     response_model=_SyntheticProviderSmokeResponse,
                     schema_name="mmaudit_real_provider_smoke_v1",
                 )
+                record = usage.records[0]
+                selected_provider_name = record.routing.get("selected_provider_name")
+                if not isinstance(selected_provider_name, str):
+                    raise AssertionError("provider response omitted its selected provider")
+                trusted_generation_verification = (
+                    await client.create_trusted_generation_verification(
+                        (
+                            GenerationVerificationRequest(
+                                benchmark_report_sha256="1" * 64,
+                                case_id="synthetic-provider-smoke",
+                                exact_model_id=settings.model_id,
+                                expected_provider_name=selected_provider_name,
+                                usage_record=record,
+                            ),
+                        )
+                    )
+                )
+                refetched_generation = trusted_generation_verification.attestation_for(
+                    benchmark_report_sha256="1" * 64,
+                    case_id="synthetic-provider-smoke",
+                    exact_model_id=settings.model_id,
+                    usage_record=record,
+                    expected_provider_name=selected_provider_name,
+                )
     finally:
         api_key = None
 
@@ -166,6 +191,7 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
     assert record.reported_cost_usd is not None
     assert record.latency_ms is not None
     assert record.openrouter_generation_id
+    assert refetched_generation.generation_id == record.openrouter_generation_id
     assert record.routing["endpoint_snapshot_sha256"] == endpoint_snapshot.snapshot_sha256
     assert not record.fallback_used
     assert not record.substitution_detected

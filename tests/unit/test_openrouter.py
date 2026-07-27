@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import hashlib
 import json
 import traceback
 from collections.abc import Callable
@@ -1014,6 +1015,9 @@ async def test_structured_request_and_usage(config_factory) -> None:
     assert usage.records[0].finish_reason == "stop"
     assert usage.records[0].validation_status.value == "valid"
     assert usage.records[0].schema_sha256 == body["metadata"]["mmaudit_schema_sha256"]
+    assert (
+        usage.records[0].validated_response_sha256 == hashlib.sha256(b'{"answer":"ok"}').hexdigest()
+    )
 
 
 @pytest.mark.asyncio
@@ -1394,6 +1398,29 @@ async def test_models_metadata_shape(config_factory) -> None:
     finally:
         await http_client.aclose()
     assert models[0]["id"] == "alpha/atlas-secure"
+
+
+@pytest.mark.asyncio
+async def test_certification_catalog_uses_fixed_zdr_structured_output_filters(
+    config_factory,
+) -> None:
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(200, json={"data": [{"id": "alpha/atlas-secure"}]})
+
+    client, http_client, _usage = _client(config_factory(), handler)
+    try:
+        assert await client.list_certification_models() == [{"id": "alpha/atlas-secure"}]
+    finally:
+        await http_client.aclose()
+
+    assert observed[0].url.path == "/api/v1/models"
+    assert dict(observed[0].url.params) == {
+        "zdr": "true",
+        "supported_parameters": "response_format",
+    }
 
 
 @pytest.mark.asyncio

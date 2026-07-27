@@ -1,0 +1,307 @@
+schema_version = "1.0"
+created_at = 2026-07-27T20:46:08Z
+discovery_run_sha256 = "b4401140169223fb4d16b89671e0ab63fb7f448aa456885b68e056dcf48f9dca"
+registry_sha256 = "c61f857cbe44206aede6608855b30c00d38e44f77f8767d7310564825d63d5e7"
+
+# These role permissions are conditional on a current Tier A result. They do not
+# make a pending candidate qualified, and pending lineage review blocks selection.
+
+[[candidates]]
+exact_model_id = "deepcogito/cogito-v2.1-671b"
+canonical_model_slug = "deepcogito/cogito-v2.1-671b-20251118"
+discovery_evidence_sha256 = "842e0bc602ebe5fe6398f9aaec4e72940b5d0b6bf6ee6d9f6583405ebce5aa33"
+approved_provider_endpoint = "together"
+approved_provider_name = "Together"
+endpoint_snapshot_sha256 = "13c71122d334efaddbd7f91ccf2be3f752ee42ce814909fae27176efccb191c5"
+model_metadata_snapshot_sha256 = "cda5ab1f935445d66b1ab89bb5e7455281be08d4d7cafe423dc2b9bd756cab3e"
+pricing_snapshot_sha256 = "7633ff510f36681d39581e0bc1da35eaa9867934f7ea9cb8b8b8e9a252a215fa"
+context_size = 128000
+output_limit = 128000
+structured_output_supported = true
+reasoning_supported = true
+zdr_eligible = true
+data_collection_deny_eligible = true
+operational_status = "available"
+benchmark_status = "pending"
+approved_roles = ["access_control", "accounting_invariant", "amm_dex_liquidity", "cross_chain_bridge", "denial_of_service_griefing", "dependency_supply_chain", "economic_game_theory", "erc4626_vault", "exploit_reproduction_planner", "false_negative_hunter", "falsifier", "formal_methods_property", "governance_timelock", "initialization_deployment", "invariant_review", "lending_liquidation", "mev_ordering", "oracle_price_manipulation", "precision_rounding", "reentrancy_control_flow", "report_quality", "signature_permit_replay", "test_generation", "token_standard", "upgradeability_storage", "whole_protocol_review"]
+
+[candidates.lineage_review]
+status = "pending"
+reviewed_model_ids = ["deepcogito/cogito-v2.1-671b"]
+rationale = "Pending independent operator review of root-model lineage evidence."
+review_sha256 = "44153c93af81a044f5a550d37c2b74d972460462d6e7fe0f3f2c1cefbfdec9b3"
+
+[[candidates]]
+exact_model_id = "deepseek/deepseek-v3.2-exp"
+canonical_model_slug = "deepseek/deepseek-v3.2-exp"
+discovery_evidence_sha256 = "4aeb510611eeca8e55f668686fceb1b1769c4ccf966791a30c88b80142248d1c"
+approved_provider_endpoint = "novita/fp8"
+approved_provider_name = "Novita"
+endpoint_snapshot_sha256 = "a8990cbfbef192348df5095375e024af79d55439bb990b1ac5e6cf44cf63c795"
+model_metadata_snapshot_sha256 = "3ca721256d1820a3009b3cd2c439682cfb11a831305a0e04bc52f93e182f4389"
+pricing_snapshot_sha256 = "a74bee6212bf29d5c7e569509a215e04143191e1d4e8ceecfea6b9eb0fcf60ab"
+context_size = 163840
+output_limit = 65536
+structured_output_supported = true
+reasoning_supported = true
+zdr_eligible = true
+data_collection_deny_eligible = true
+operational_status = "available"
+benchmark_status = "pending"
+approved_roles = ["access_control", "accounting_invariant", "amm_dex_liquidity", "cross_chain_bridge", "denial_of_service_griefing", "dependency_supply_chain", "economic_game_theory", "erc4626_vault", "exploit_reproduction_planner", "false_negative_hunter", "falsifier", "formal_methods_property", "governance_timelock", "initialization_deployment", "invariant_review", "lending_liquidation", "mev_ordering", "oracle_price_manipulation", "precision_rounding", "reentrancy_control_flow", "report_quality", "signature_permit_replay", "test_generation", "token_standard", "upgradeability_storage", "whole_protocol_review"]
+
+[candidates.lineage_review]
+status = "pending"
+reviewed_model_ids = ["deepseek/deepseek-v3.2-exp"]
+rationale = "Pending independent operator review of root-model lineage evidence."
+review_sha256 = "249108123eab41a7e807c8ef20c55d3922fbd327b6669e918e3bd4a238213055"
+
+[[candidates]]
+exact_model_id = "google/gemma-4-26b-a4b-it"
+canonical_model_slug = "google/gemma-4-26b-a4b-it-20260403"
+discovery_evidence_sha256 = "c22d421d83abe6608e69f582eddefff368f5357095df3881c816568690e4f132"
+approved_provider_endpoint = "google-vertex/global"
+approved_provider_name = "Google"
+endpoint_snapshot_sha256 = "bd1c14e4e4052e6932cee2beb4e1ee18bb216d4a83ade9f5b8383b57f98242fe"
+model_metadata_snapshot_sha256 = "1bfd66b07d5e8b816661ec77e5c79b7e055e260c680a7c68636286ba6c501435"
+pricing_snapshot_sha256 = "0cd1e9f68d6b5b8f37af29da73b04e5db2fa37bd6c5b6a1fab489f5fe845edeb"
+context_size = 262144
+output_limit = 262144
+structured_output_supported = true
+reasoning_supported = true
+zdr_eligible = true
+data_collection_deny_eligible = true
+operational_status = "available"
+benchmark_status = "pending"
+approved_roles = ["access_control", "accounting_invariant", "amm_dex_liquidity", "cross_chain_bridge", "denial_of_service_griefing", "dependency_supply_chain", "economic_game_theory", "erc4626_vault", "exploit_reproduction_planner", "false_negative_hunter", "falsifier", "formal_methods_property", "governance_timelock", "initialization_deployment", "invariant_review", "lending_liquidation", "mev_ordering", "oracle_price_manipulation", "precision_rounding", "reentrancy_control_flow", "report_quality", "signature_permit_replay", "test_generation", "token_standard", "upgradeability_storage", "whole_protocol_review"]
+
+[candidates.lineage_review]
+status = "pending"
+reviewed_model_ids = ["google/gemma-4-26b-a4b-it"]
+rationale = "Pending independent operator review of root-model lineage evidence."
+review_sha256 = "afb86f3a7fe0224fcd5677887725414b00759a4cb8143025d4954b64c7a50880"
+
+[[candidates]]
+exact_model_id = "meta-llama/llama-4-maverick"
+canonical_model_slug = "meta-llama/llama-4-maverick-17b-128e-instruct"
+discovery_evidence_sha256 = "e153647135ae0664666f100934b8d958c31536f8aa90772e2ee42585fb4dbb13"
+approved_provider_endpoint = "deepinfra/base"
+approved_provider_name = "DeepInfra"
+endpoint_snapshot_sha256 = "66cc31c9dfb1110756c0c23e5b37236f4507f7087cdfaf0e112a1d779a759468"
+model_metadata_snapshot_sha256 = "a7cae63c445c2998507ad5c5c808d8694f08a7116c482805479550d8c8d7182d"
+pricing_snapshot_sha256 = "b122e1e291346dfefbdd44a8f45d6c712dc7f63dc3c72d53f786fbd28d500466"
+context_size = 1048576
+output_limit = 16384
+structured_output_supported = true
+reasoning_supported = false
+zdr_eligible = true
+data_collection_deny_eligible = true
+operational_status = "available"
+benchmark_status = "pending"
+approved_roles = ["access_control", "accounting_invariant", "amm_dex_liquidity", "cross_chain_bridge", "denial_of_service_griefing", "dependency_supply_chain", "economic_game_theory", "erc4626_vault", "exploit_reproduction_planner", "false_negative_hunter", "falsifier", "formal_methods_property", "governance_timelock", "initialization_deployment", "invariant_review", "lending_liquidation", "mev_ordering", "oracle_price_manipulation", "precision_rounding", "reentrancy_control_flow", "report_quality", "signature_permit_replay", "test_generation", "token_standard", "upgradeability_storage", "whole_protocol_review"]
+
+[candidates.lineage_review]
+status = "pending"
+reviewed_model_ids = ["meta-llama/llama-4-maverick"]
+rationale = "Pending independent operator review of root-model lineage evidence."
+review_sha256 = "64f3fd1f133addd6cded422f23c86b99f125478c2af04c19b596360e384b1736"
+
+[[candidates]]
+exact_model_id = "minimax/minimax-m3"
+canonical_model_slug = "minimax/minimax-m3-20260531"
+discovery_evidence_sha256 = "4e111ffd684dfa9fa68893fcc26b91e9cbefb5d7e444cbc85aed1adefdf90401"
+approved_provider_endpoint = "morph"
+approved_provider_name = "Morph"
+endpoint_snapshot_sha256 = "dfa8eb7acefa7e69ff25d95d3c6cc0db5b42a4729f4dc5432e170bea3d7a9da4"
+model_metadata_snapshot_sha256 = "dc8a9f95dff1ca987d3469786c712c8cb94159800fa0e13062c67c80e67dbba2"
+pricing_snapshot_sha256 = "b77e33ec7bccd625b687cdd0fc14665967f8ba56dfe5c3e0281938236d6acc09"
+context_size = 256000
+output_limit = 256000
+structured_output_supported = true
+reasoning_supported = true
+zdr_eligible = true
+data_collection_deny_eligible = true
+operational_status = "available"
+benchmark_status = "pending"
+approved_roles = ["access_control", "accounting_invariant", "amm_dex_liquidity", "cross_chain_bridge", "denial_of_service_griefing", "dependency_supply_chain", "economic_game_theory", "erc4626_vault", "exploit_reproduction_planner", "false_negative_hunter", "falsifier", "formal_methods_property", "governance_timelock", "initialization_deployment", "invariant_review", "lending_liquidation", "mev_ordering", "oracle_price_manipulation", "precision_rounding", "reentrancy_control_flow", "report_quality", "signature_permit_replay", "test_generation", "token_standard", "upgradeability_storage", "whole_protocol_review"]
+
+[candidates.lineage_review]
+status = "pending"
+reviewed_model_ids = ["minimax/minimax-m3"]
+rationale = "Pending independent operator review of root-model lineage evidence."
+review_sha256 = "dc56d8615b6935926d70a7606f857561b613bd228a3e17c5bd9a337ea03bf945"
+
+[[candidates]]
+exact_model_id = "mistralai/mistral-small-2603"
+canonical_model_slug = "mistralai/mistral-small-2603"
+discovery_evidence_sha256 = "7d7cd66f43a4189c94a834fde06a1a68c1eab3a3bc5e9d4b88647b7d8b779ce0"
+approved_provider_endpoint = "venice/fp8"
+approved_provider_name = "Venice"
+endpoint_snapshot_sha256 = "e05584405d6b10ddd098933f60f82bc8f7aebf0c43476abbce25fe21ad8d2b99"
+model_metadata_snapshot_sha256 = "8e9a5dab4149969c1cf5cf62f5e789f264f5881e97c9d1a0fecccc8d3ae6965b"
+pricing_snapshot_sha256 = "3a35985066edf80c590d936277dcd26abe7e86394b4c291684f387e6111f372d"
+context_size = 256000
+output_limit = 65536
+structured_output_supported = true
+reasoning_supported = true
+zdr_eligible = true
+data_collection_deny_eligible = true
+operational_status = "available"
+benchmark_status = "pending"
+approved_roles = ["access_control", "accounting_invariant", "amm_dex_liquidity", "cross_chain_bridge", "denial_of_service_griefing", "dependency_supply_chain", "economic_game_theory", "erc4626_vault", "exploit_reproduction_planner", "false_negative_hunter", "falsifier", "formal_methods_property", "governance_timelock", "initialization_deployment", "invariant_review", "lending_liquidation", "mev_ordering", "oracle_price_manipulation", "precision_rounding", "reentrancy_control_flow", "report_quality", "signature_permit_replay", "test_generation", "token_standard", "upgradeability_storage", "whole_protocol_review"]
+
+[candidates.lineage_review]
+status = "pending"
+reviewed_model_ids = ["mistralai/mistral-small-2603"]
+rationale = "Pending independent operator review of root-model lineage evidence."
+review_sha256 = "915993bf0d2ff68b85596bc0988076dfa3311560e53118d46761b6f00ac8d546"
+
+[[candidates]]
+exact_model_id = "moonshotai/kimi-k2-thinking"
+canonical_model_slug = "moonshotai/kimi-k2-thinking-20251106"
+discovery_evidence_sha256 = "5fa13be39c444ce94cdd58e0d4f60f0258ec17cc1d8cad6941cb36b2c44949c0"
+approved_provider_endpoint = "google-vertex"
+approved_provider_name = "Google"
+endpoint_snapshot_sha256 = "6dd54b31b041d8071131079783768bde2b69bcbb39ffdd9f818a005e3e5cb023"
+model_metadata_snapshot_sha256 = "f00b5a260eed4663fb2abe203e571178f1b9f01385c429541d1330df77dbed24"
+pricing_snapshot_sha256 = "5f43d6feb77251d7efbc1fc9ceee5397784d14797cf1ca97ed072917aec181b3"
+context_size = 262144
+output_limit = 262144
+structured_output_supported = true
+reasoning_supported = true
+zdr_eligible = true
+data_collection_deny_eligible = true
+operational_status = "available"
+benchmark_status = "pending"
+approved_roles = ["access_control", "accounting_invariant", "amm_dex_liquidity", "cross_chain_bridge", "denial_of_service_griefing", "dependency_supply_chain", "economic_game_theory", "erc4626_vault", "exploit_reproduction_planner", "false_negative_hunter", "falsifier", "formal_methods_property", "governance_timelock", "initialization_deployment", "invariant_review", "lending_liquidation", "mev_ordering", "oracle_price_manipulation", "precision_rounding", "reentrancy_control_flow", "report_quality", "signature_permit_replay", "test_generation", "token_standard", "upgradeability_storage", "whole_protocol_review"]
+
+[candidates.lineage_review]
+status = "pending"
+reviewed_model_ids = ["moonshotai/kimi-k2-thinking"]
+rationale = "Pending independent operator review of root-model lineage evidence."
+review_sha256 = "e171df418d83c9997f8c33c625266684e796d40235a3e269cf72f116070ad841"
+
+[[candidates]]
+exact_model_id = "nvidia/nemotron-3-super-120b-a12b"
+canonical_model_slug = "nvidia/nemotron-3-super-120b-a12b-20230311"
+discovery_evidence_sha256 = "8506e8a0af6bd4b383836f7eaf8dfedf147b1b8a4cf7f6933cdf81af040ecca8"
+approved_provider_endpoint = "nebius/fp4"
+approved_provider_name = "Nebius"
+endpoint_snapshot_sha256 = "74776d505062a38011c713f2a26dea05e273e692a8b9a156132fc6be72024ac7"
+model_metadata_snapshot_sha256 = "864a07c88180cd8f5d42f7ec82a25b3e5c441b8a2210f1ee11436036a0284363"
+pricing_snapshot_sha256 = "b6b8ae847dc2ff0febd4b7e2865a10370c0b9801fea7e1b5cafa9c6d67a1bad7"
+context_size = 262144
+output_limit = 262144
+structured_output_supported = true
+reasoning_supported = true
+zdr_eligible = true
+data_collection_deny_eligible = true
+operational_status = "available"
+benchmark_status = "pending"
+approved_roles = ["access_control", "accounting_invariant", "amm_dex_liquidity", "cross_chain_bridge", "denial_of_service_griefing", "dependency_supply_chain", "economic_game_theory", "erc4626_vault", "exploit_reproduction_planner", "false_negative_hunter", "falsifier", "formal_methods_property", "governance_timelock", "initialization_deployment", "invariant_review", "lending_liquidation", "mev_ordering", "oracle_price_manipulation", "precision_rounding", "reentrancy_control_flow", "report_quality", "signature_permit_replay", "test_generation", "token_standard", "upgradeability_storage", "whole_protocol_review"]
+
+[candidates.lineage_review]
+status = "pending"
+reviewed_model_ids = ["nvidia/nemotron-3-super-120b-a12b"]
+rationale = "Pending independent operator review of root-model lineage evidence."
+review_sha256 = "dd920a3db659421286e0fd29469a97ecf03b482968682738282c9df31d8b79b4"
+
+[[candidates]]
+exact_model_id = "openai/gpt-oss-120b"
+canonical_model_slug = "openai/gpt-oss-120b"
+discovery_evidence_sha256 = "fde8f27ef9909a1f36a5cc327a7b74e9313e4f775d089f0ef4a916790a6b2894"
+approved_provider_endpoint = "google-vertex/global"
+approved_provider_name = "Google"
+endpoint_snapshot_sha256 = "abf5bff0477129e53d7494a7661d9fdc1d0413847000ee65da67c0b718bc2774"
+model_metadata_snapshot_sha256 = "e43b409a00e88841afedc9b3e43fc09a928f5f27f002711a8fa56f59e65ceba2"
+pricing_snapshot_sha256 = "b4f71d8aa9a0dbd6e6c4ee90a2a9260290076800269e76329551cf5a92bd7684"
+context_size = 131072
+output_limit = 131072
+structured_output_supported = true
+reasoning_supported = true
+zdr_eligible = true
+data_collection_deny_eligible = true
+operational_status = "available"
+benchmark_status = "pending"
+approved_roles = ["access_control", "accounting_invariant", "amm_dex_liquidity", "cross_chain_bridge", "denial_of_service_griefing", "dependency_supply_chain", "economic_game_theory", "erc4626_vault", "exploit_reproduction_planner", "false_negative_hunter", "falsifier", "formal_methods_property", "governance_timelock", "initialization_deployment", "invariant_review", "lending_liquidation", "mev_ordering", "oracle_price_manipulation", "precision_rounding", "reentrancy_control_flow", "report_quality", "signature_permit_replay", "test_generation", "token_standard", "upgradeability_storage", "whole_protocol_review"]
+
+[candidates.lineage_review]
+status = "pending"
+reviewed_model_ids = ["openai/gpt-oss-120b"]
+rationale = "Pending independent operator review of root-model lineage evidence."
+review_sha256 = "4dc66ce8215a62dfec6af29fbe3cfc11883c292433b0bc8b27b30c99a9fc323b"
+
+[[candidates]]
+exact_model_id = "qwen/qwen3.6-35b-a3b"
+canonical_model_slug = "qwen/qwen3.6-35b-a3b-20260415"
+discovery_evidence_sha256 = "0f9034b596ba6b63e10c73cb33f3a1379e77441bff9ae1674025430bd191616f"
+approved_provider_endpoint = "akashml/fp8"
+approved_provider_name = "AkashML"
+endpoint_snapshot_sha256 = "366a6d4b7dedee8ffe9f80a6687fc8b071e5b2d24e43f94255f561ba255cc1b5"
+model_metadata_snapshot_sha256 = "f544fdabc6d224718df55ceb177b1f751cc7df45a29bc7e8b6f348c8467ee77a"
+pricing_snapshot_sha256 = "5fd691fdb00f3f31cb5f2ec515b20a64badc47599233504324a0f321346434ca"
+context_size = 262144
+output_limit = 262144
+structured_output_supported = true
+reasoning_supported = true
+zdr_eligible = true
+data_collection_deny_eligible = true
+operational_status = "available"
+benchmark_status = "pending"
+approved_roles = ["access_control", "accounting_invariant", "amm_dex_liquidity", "cross_chain_bridge", "denial_of_service_griefing", "dependency_supply_chain", "economic_game_theory", "erc4626_vault", "exploit_reproduction_planner", "false_negative_hunter", "falsifier", "formal_methods_property", "governance_timelock", "initialization_deployment", "invariant_review", "lending_liquidation", "mev_ordering", "oracle_price_manipulation", "precision_rounding", "reentrancy_control_flow", "report_quality", "signature_permit_replay", "test_generation", "token_standard", "upgradeability_storage", "whole_protocol_review"]
+
+[candidates.lineage_review]
+status = "pending"
+reviewed_model_ids = ["qwen/qwen3.6-35b-a3b"]
+rationale = "Pending independent operator review of root-model lineage evidence."
+review_sha256 = "be653e47375ccf9751d4ecc9f27e7101f5b9b2256728db1d5076dd8bd9727592"
+
+[[candidates]]
+exact_model_id = "tencent/hunyuan-a13b-instruct"
+canonical_model_slug = "tencent/hunyuan-a13b-instruct"
+discovery_evidence_sha256 = "c795be27dd045ae06b3daaef38e1029108a697d31ada7606ca24c72c8b1de10d"
+approved_provider_endpoint = "siliconflow/fp8"
+approved_provider_name = "SiliconFlow"
+endpoint_snapshot_sha256 = "fd46929cf3d17f3399a998028c75fb3e78ba52de3735699c4659967725ce2dbf"
+model_metadata_snapshot_sha256 = "665f5a00b1ff621bbe748029eee33ac7d1ff3709edea34815d90704de6053501"
+pricing_snapshot_sha256 = "f2f0ff1ca737c10f0703b46e81785ff5aab6f395f23b6a080fdfb1af58f8f2e2"
+context_size = 131072
+output_limit = 131072
+structured_output_supported = true
+reasoning_supported = true
+zdr_eligible = true
+data_collection_deny_eligible = true
+operational_status = "available"
+benchmark_status = "pending"
+approved_roles = ["access_control", "accounting_invariant", "amm_dex_liquidity", "cross_chain_bridge", "denial_of_service_griefing", "dependency_supply_chain", "economic_game_theory", "erc4626_vault", "exploit_reproduction_planner", "false_negative_hunter", "falsifier", "formal_methods_property", "governance_timelock", "initialization_deployment", "invariant_review", "lending_liquidation", "mev_ordering", "oracle_price_manipulation", "precision_rounding", "reentrancy_control_flow", "report_quality", "signature_permit_replay", "test_generation", "token_standard", "upgradeability_storage", "whole_protocol_review"]
+
+[candidates.lineage_review]
+status = "pending"
+reviewed_model_ids = ["tencent/hunyuan-a13b-instruct"]
+rationale = "Pending independent operator review of root-model lineage evidence."
+review_sha256 = "f2a3ae0390bc0c74e409361cb17992c8f1088e0ad74142d0cb79c77b8f7d8d77"
+
+[[candidates]]
+exact_model_id = "z-ai/glm-4.7"
+canonical_model_slug = "z-ai/glm-4.7-20251222"
+discovery_evidence_sha256 = "25bc1483412e6a100eeacad708eabe235190186f520b46263108cabeb5538908"
+approved_provider_endpoint = "google-vertex"
+approved_provider_name = "Google"
+endpoint_snapshot_sha256 = "16be59dea43afcbb94f718f6a76efa437fac8b3fc85051a9d61e949ec7660a06"
+model_metadata_snapshot_sha256 = "227c8bc7e5216a67e2181e672d6eabafeb3eeed583579e1a2ab41a2c5b259e2c"
+pricing_snapshot_sha256 = "1c7f98499527f41e847c523c620af43cff8aca32b4b93889c35b88588cca8ef1"
+context_size = 200000
+output_limit = 128000
+structured_output_supported = true
+reasoning_supported = true
+zdr_eligible = true
+data_collection_deny_eligible = true
+operational_status = "available"
+benchmark_status = "pending"
+approved_roles = ["access_control", "accounting_invariant", "amm_dex_liquidity", "cross_chain_bridge", "denial_of_service_griefing", "dependency_supply_chain", "economic_game_theory", "erc4626_vault", "exploit_reproduction_planner", "false_negative_hunter", "falsifier", "formal_methods_property", "governance_timelock", "initialization_deployment", "invariant_review", "lending_liquidation", "mev_ordering", "oracle_price_manipulation", "precision_rounding", "reentrancy_control_flow", "report_quality", "signature_permit_replay", "test_generation", "token_standard", "upgradeability_storage", "whole_protocol_review"]
+
+[candidates.lineage_review]
+status = "pending"
+reviewed_model_ids = ["z-ai/glm-4.7"]
+rationale = "Pending independent operator review of root-model lineage evidence."
+review_sha256 = "418df6b694163a9a8f0104aad278d36313d6bb12e2b5227e98dd1db2323f743d"

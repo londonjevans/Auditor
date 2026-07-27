@@ -1,0 +1,361 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmaudit.local/schemas/model_qualification.schema.json",
+  "$defs": {
+    "ModelBenchmarkDimension": {
+      "description": "Independent quality dimensions; aggregates never replace these scores.",
+      "enum": [
+        "solidity_security_reasoning",
+        "cross_contract_business_logic",
+        "accounting_conservation",
+        "access_control",
+        "oracle_assumptions",
+        "upgrade_storage",
+        "signature_replay",
+        "invariant_generation",
+        "false_positive_rejection",
+        "safe_near_miss_rejection",
+        "exact_source_location",
+        "structured_output_compliance",
+        "prompt_injection_resistance",
+        "unsupported_assumption_disclosure",
+        "verifier_quality",
+        "falsifier_quality",
+        "report_quality"
+      ],
+      "title": "ModelBenchmarkDimension",
+      "type": "string"
+    },
+    "ModelQualificationResult": {
+      "additionalProperties": false,
+      "description": "Deterministic qualification conclusion for one exact candidate.",
+      "properties": {
+        "exact_model_id": {
+          "maxLength": 300,
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "canonical_model_slug": {
+          "maxLength": 300,
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Canonical Model Slug",
+          "type": "string"
+        },
+        "root_lineage": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Root Lineage"
+        },
+        "approved_provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$",
+          "title": "Approved Provider Endpoint",
+          "type": "string"
+        },
+        "approved_provider_name": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._:/()&+-]{0,199}$",
+          "title": "Approved Provider Name",
+          "type": "string"
+        },
+        "endpoint_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Snapshot Sha256",
+          "type": "string"
+        },
+        "model_metadata_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Model Metadata Snapshot Sha256",
+          "type": "string"
+        },
+        "pricing_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Pricing Snapshot Sha256",
+          "type": "string"
+        },
+        "benchmark_report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Benchmark Report Sha256",
+          "type": "string"
+        },
+        "benchmark_verification_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Benchmark Verification Sha256"
+        },
+        "disposition": {
+          "$ref": "#/$defs/QualificationDisposition"
+        },
+        "dimensions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/QualificationDimensionResult"
+          },
+          "maxItems": 17,
+          "title": "Dimensions",
+          "type": "array"
+        },
+        "overall_score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Overall Score",
+          "type": "number"
+        },
+        "approved_roles": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "title": "Approved Roles",
+          "type": "array"
+        },
+        "evaluated_at": {
+          "format": "date-time",
+          "title": "Evaluated At",
+          "type": "string"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expires At"
+        },
+        "failure_reasons": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Failure Reasons",
+          "type": "array"
+        },
+        "scored_by": {
+          "const": "mmaudit-deterministic-qualification",
+          "default": "mmaudit-deterministic-qualification",
+          "title": "Scored By",
+          "type": "string"
+        },
+        "result_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Result Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "canonical_model_slug",
+        "approved_provider_endpoint",
+        "approved_provider_name",
+        "endpoint_snapshot_sha256",
+        "model_metadata_snapshot_sha256",
+        "pricing_snapshot_sha256",
+        "benchmark_report_sha256",
+        "disposition",
+        "overall_score",
+        "evaluated_at",
+        "result_sha256"
+      ],
+      "title": "ModelQualificationResult",
+      "type": "object"
+    },
+    "QualificationBindings": {
+      "additionalProperties": false,
+      "description": "Every mutable input that can change a qualification conclusion.",
+      "properties": {
+        "source_commit": {
+          "pattern": "^[0-9a-f]{40}(?:[0-9a-f]{24})?$",
+          "title": "Source Commit",
+          "type": "string"
+        },
+        "source_tree_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Tree Sha256",
+          "type": "string"
+        },
+        "effective_config_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Effective Config Sha256",
+          "type": "string"
+        },
+        "prompt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prompt Sha256",
+          "type": "string"
+        },
+        "response_schema_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Response Schema Sha256",
+          "type": "string"
+        },
+        "toolchain_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Toolchain Sha256",
+          "type": "string"
+        },
+        "isolation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Isolation Sha256",
+          "type": "string"
+        },
+        "benchmark_corpus_version": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Benchmark Corpus Version",
+          "type": "string"
+        },
+        "benchmark_corpus_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Benchmark Corpus Sha256",
+          "type": "string"
+        },
+        "benchmark_ground_truth_version": {
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Benchmark Ground Truth Version",
+          "type": "string"
+        },
+        "benchmark_ground_truth_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Benchmark Ground Truth Sha256",
+          "type": "string"
+        },
+        "benchmark_portfolio_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Benchmark Portfolio Sha256",
+          "type": "string"
+        },
+        "candidate_registry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Candidate Registry Sha256",
+          "type": "string"
+        },
+        "qualification_policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Qualification Policy Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_commit",
+        "source_tree_sha256",
+        "effective_config_sha256",
+        "prompt_sha256",
+        "response_schema_sha256",
+        "toolchain_sha256",
+        "isolation_sha256",
+        "benchmark_corpus_version",
+        "benchmark_corpus_sha256",
+        "benchmark_ground_truth_version",
+        "benchmark_ground_truth_sha256",
+        "benchmark_portfolio_sha256",
+        "candidate_registry_sha256",
+        "qualification_policy_sha256"
+      ],
+      "title": "QualificationBindings",
+      "type": "object"
+    },
+    "QualificationDimensionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "dimension": {
+          "$ref": "#/$defs/ModelBenchmarkDimension"
+        },
+        "passed": {
+          "minimum": 0,
+          "title": "Passed",
+          "type": "integer"
+        },
+        "evaluated": {
+          "minimum": 1,
+          "title": "Evaluated",
+          "type": "integer"
+        },
+        "score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Score",
+          "type": "number"
+        }
+      },
+      "required": [
+        "dimension",
+        "passed",
+        "evaluated",
+        "score"
+      ],
+      "title": "QualificationDimensionResult",
+      "type": "object"
+    },
+    "QualificationDisposition": {
+      "enum": [
+        "tier_a",
+        "not_qualified",
+        "inconclusive"
+      ],
+      "title": "QualificationDisposition",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "bindings": {
+      "$ref": "#/$defs/QualificationBindings"
+    },
+    "results": {
+      "items": {
+        "$ref": "#/$defs/ModelQualificationResult"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "title": "Results",
+      "type": "array"
+    },
+    "artifact_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Artifact Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "created_at",
+    "bindings",
+    "results",
+    "artifact_sha256"
+  ],
+  "title": "mmaudit model qualification artifact",
+  "type": "object"
+}

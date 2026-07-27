@@ -1,0 +1,76 @@
+version = 1
+profile = "standard"
+
+# Qualification-only runtime configuration. This file contains no credential,
+# lineage approval, quality measurement, or production-selection claim.
+[repository]
+root = ".."
+
+[privacy]
+# Synthetic benchmark source still requires the CLI's explicit egress flag.
+allow_code_egress = false
+require_zdr = true
+redact_secrets = true
+fail_on_detected_secret = true
+store_raw_prompts = false
+store_raw_responses = false
+maximum_model_retention = "zero"
+approved_model_lineages = []
+
+[execution]
+concurrency = 3
+request_timeout_seconds = 180
+scanner_timeout_seconds = 900
+max_model_retries = 1
+max_json_repair_attempts = 0
+budget_usd = 250.0
+# The persistent cost ledger is deliberately not selected here. Paid qualification
+# requires an explicit existing operator-controlled ledger at invocation time.
+max_request_bytes = 4000000
+max_output_tokens_per_request = 4096
+# Covers the 12-candidate x 16-case inventory plus one bounded retry per case.
+max_requests_per_agent = 512
+conservative_usd_per_million_tokens = 60.0
+
+[models]
+minimum_distinct_families = 3
+minimum_high_quality_slots = 0
+# The repeated role model only satisfies the base AuditConfig wiring. It is not an
+# independence, lineage, quality, retention, or production-eligibility assertion.
+allow_non_independent_models = true
+registry = []
+
+[models.provider_policy]
+# Qualification binds each discovered candidate to one exact endpoint dynamically.
+only = []
+order = []
+allow_fallbacks = false
+
+[models.reasoning]
+# Candidate callers must suppress reasoning when frozen metadata says it is unsupported.
+max_tokens = 4096
+exclude = false
+
+[models.threat_model]
+primary = "qwen/qwen3.6-35b-a3b"
+fallbacks = []
+
+[models.source_audit]
+primary = "qwen/qwen3.6-35b-a3b"
+fallbacks = []
+
+[models.business_logic]
+primary = "qwen/qwen3.6-35b-a3b"
+fallbacks = []
+
+[models.configuration]
+primary = "qwen/qwen3.6-35b-a3b"
+fallbacks = []
+
+[models.verifier]
+primary = "qwen/qwen3.6-35b-a3b"
+fallbacks = []
+
+[models.judge]
+primary = "qwen/qwen3.6-35b-a3b"
+fallbacks = []

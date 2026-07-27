@@ -65,6 +65,7 @@ def is_creditable_usage_record(
         for value in (
             record.prompt_sha256,
             record.response_sha256,
+            record.validated_response_sha256,
             record.request_body_sha256,
             record.schema_sha256,
         )
