@@ -42,6 +42,7 @@ def test_real_rootless_container_enforces_read_only_source_and_private_output(
                 "if printf changed >> source.txt 2>/dev/null; then exit 30; fi; "
                 'test "$HOME" = /home/mmaudit; '
                 'test -z "${OPENROUTER_API_KEY+x}"; '
+                'test -z "${MMAUDIT_SECRETS_ENV_FILE+x}"; '
                 "test ! -e /var/run/docker.sock; "
                 "printf isolated > /mmaudit-output/result.txt"
             ),

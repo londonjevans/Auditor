@@ -14,7 +14,7 @@ from mmaudit.models.schemas import EconomicSimulationKind, StrictModel
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.reporting.json_report import stable_json
 from mmaudit.repository.ignore import normalize_relative_path
-from mmaudit.repository.secrets import is_sensitive_workspace_name
+from mmaudit.repository.secrets import is_sensitive_workspace_name, is_sensitive_workspace_path
 
 _MAX_MANIFEST_BYTES = 2_000_000
 _MAX_FIXTURE_FILE_BYTES = 10_000_000
@@ -49,7 +49,7 @@ class EconomicAcceptanceCase(StrictModel):
         normalized = normalize_relative_path(value)
         if not normalized.startswith("tests/fixtures/solidity/economic_"):
             raise ValueError("economic acceptance fixtures must use the synthetic fixture tree")
-        if any(is_sensitive_workspace_name(part) for part in PurePosixPath(normalized).parts):
+        if is_sensitive_workspace_path(normalized, is_dir=True):
             raise ValueError("economic acceptance fixture path is sensitive")
         return normalized
 
@@ -60,7 +60,7 @@ class EconomicAcceptanceCase(StrictModel):
         if (
             normalized == "."
             or not normalized.endswith(".sol")
-            or any(is_sensitive_workspace_name(part) for part in PurePosixPath(normalized).parts)
+            or is_sensitive_workspace_path(normalized)
         ):
             raise ValueError("economic acceptance fixture file must be relative Solidity")
         return normalized

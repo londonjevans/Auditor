@@ -101,6 +101,17 @@ def test_snapshot_withholds_secret_bearing_fields_and_filenames(tmp_path: Path) 
         DeploymentSnapshotPayload.model_validate(payload)
 
 
+def test_snapshot_loader_allows_auditable_generic_parent_directory(tmp_path: Path) -> None:
+    snapshot_path = tmp_path / "wallet" / "deployment.json"
+    snapshot_path.parent.mkdir()
+    snapshot_path.write_text(
+        (FIXTURES / "valid.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    assert load_deployment_snapshot(snapshot_path).snapshot_sha256
+
+
 def test_snapshot_loader_and_writer_refuse_links(tmp_path: Path) -> None:
     outside = tmp_path / "outside.json"
     outside.write_text(

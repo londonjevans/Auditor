@@ -4,6 +4,7 @@ import json
 import shutil
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from mmaudit.benchmark.certificate import (
@@ -77,6 +78,23 @@ def test_models_benchmark_help_lists_blinded_corpus_and_egress_controls() -> Non
     assert "--allow-code-egress" in result.stdout
 
 
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["doctor", "--help"],
+        ["models", "list", "--help"],
+        ["models", "check", "--help"],
+        ["models", "benchmark", "--help"],
+        ["scan", "--help"],
+        ["run", "--help"],
+    ],
+)
+def test_provider_commands_expose_explicit_secret_file_option(arguments: list[str]) -> None:
+    result = runner.invoke(app, arguments, env={"COLUMNS": "240"})
+    assert result.exit_code == 0
+    assert "--secrets-env-file" in result.stdout
+
+
 def test_models_benchmark_requires_explicit_egress_before_provider_access(
     tmp_path: Path,
     monkeypatch,
@@ -84,7 +102,7 @@ def test_models_benchmark_requires_explicit_egress_before_provider_access(
 ) -> None:
     config = config_factory(privacy={"allow_code_egress": False})
     monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("MMAUDIT_SECRETS_ENV_FILE", raising=False)
     model_id = config.models.threat_model.primary
     arguments = [
         "models",
@@ -107,7 +125,7 @@ def test_models_benchmark_requires_explicit_egress_before_provider_access(
     assert "explicit synthetic-source egress" in without_approval.stdout
     assert "approval" in without_approval.stdout
     assert with_approval.exit_code == ExitCode.CONFIGURATION
-    assert "OPENROUTER_API_KEY is not set" in with_approval.stdout
+    assert "operator secret file is not selected" in with_approval.stdout
     assert not (tmp_path / "model-benchmark.json").exists()
 
 
@@ -806,7 +824,9 @@ def test_init_force_does_not_write_through_hardlink(tmp_path: Path) -> None:
 
 
 def test_doctor_without_credentials_fails_safely(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    canary = "sk-or-v1-ambient-value-must-be-ignored"
+    monkeypatch.setenv("OPENROUTER_API_KEY", canary)
+    monkeypatch.delenv("MMAUDIT_SECRETS_ENV_FILE", raising=False)
     config = tmp_path / "mmaudit.toml"
     shutil.copy2(ROOT / "mmaudit.example.toml", config)
     result = runner.invoke(
@@ -823,14 +843,68 @@ def test_doctor_without_credentials_fails_safely(tmp_path: Path, monkeypatch) ->
         ],
     )
     assert result.exit_code == ExitCode.CONFIGURATION
-    assert "missing (value never printed)" in result.stdout
+    assert "Operator secret file" in result.stdout
+    assert "rejected" in result.stdout
+    assert "missing" in result.stdout
+    assert "invalid" in result.stdout
+    assert canary not in result.stdout
     assert "replace-with-an-openrouter-key" not in result.stdout
+
+
+@pytest.mark.parametrize(("authenticated", "status"), [(True, "valid"), (False, "invalid")])
+def test_doctor_reports_only_secret_and_authentication_state(
+    tmp_path: Path,
+    monkeypatch,
+    authenticated: bool,
+    status: str,
+) -> None:
+    canary = "sk-or-v1-synthetic-doctor-canary"
+    secret_file = tmp_path / "operator.env"
+    secret_file.write_text(f"OPENROUTER_API_KEY={canary}\n", encoding="utf-8")
+    secret_file.chmod(0o600)
+    config = tmp_path / "mmaudit.toml"
+    shutil.copy2(ROOT / "mmaudit.example.toml", config)
+    observed: list[str] = []
+
+    def validate(_config, api_key: str) -> bool:
+        observed.append(api_key)
+        return authenticated
+
+    monkeypatch.setattr("mmaudit.cli._openrouter_authentication_valid", validate)
+    result = runner.invoke(
+        app,
+        [
+            "doctor",
+            "--config",
+            str(config),
+            "--secrets-env-file",
+            str(secret_file),
+            "--repo",
+            str(tmp_path),
+            "--output",
+            str(tmp_path / "output"),
+            "--no-color",
+        ],
+    )
+
+    assert observed == [canary]
+    assert "Operator secret file" in result.stdout
+    assert "accepted" in result.stdout
+    assert "present" in result.stdout
+    assert status in result.stdout
+    assert canary not in result.stdout
+    assert str(secret_file) not in result.stdout
 
 
 def test_scanner_only_cli_never_requires_api_key(
     tmp_path: Path, vulnerable_repo: Path, monkeypatch
 ) -> None:
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    canary = "sk-or-v1-scanner-only-artifact-canary"
+    secret_file = tmp_path / "operator.env"
+    secret_file.write_text(f"OPENROUTER_API_KEY={canary}\n", encoding="utf-8")
+    secret_file.chmod(0o600)
+    monkeypatch.setenv("OPENROUTER_API_KEY", canary)
+    monkeypatch.setenv("MMAUDIT_SECRETS_ENV_FILE", str(secret_file))
     config = tmp_path / "mmaudit.toml"
     shutil.copy2(ROOT / "mmaudit.example.toml", config)
     output = tmp_path / "reports"
@@ -840,6 +914,8 @@ def test_scanner_only_cli_never_requires_api_key(
             "scan",
             "--config",
             str(config),
+            "--secrets-env-file",
+            str(secret_file),
             "--repo",
             str(vulnerable_repo),
             "--output",
@@ -852,12 +928,20 @@ def test_scanner_only_cli_never_requires_api_key(
     assert result.exit_code == 0, result.stdout
     assert (output / "latest" / "scanner-results.json").is_file()
     assert (output / "latest" / "audit-results.sarif").is_file()
+    serialized = result.stdout + result.stderr
+    serialized += "".join(
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in output.rglob("*")
+        if path.is_file()
+    )
+    assert canary not in serialized
 
 
-def test_models_check_requires_environment_key(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+def test_models_check_requires_operator_secret_file(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "ambient-value-must-be-ignored")
+    monkeypatch.delenv("MMAUDIT_SECRETS_ENV_FILE", raising=False)
     config = tmp_path / "mmaudit.toml"
     shutil.copy2(ROOT / "mmaudit.example.toml", config)
     result = runner.invoke(app, ["models", "check", "--config", str(config)])
     assert result.exit_code == ExitCode.CONFIGURATION
-    assert "OPENROUTER_API_KEY is not set" in result.stdout
+    assert "operator secret file is not selected" in result.stdout

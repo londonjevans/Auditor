@@ -9,6 +9,7 @@ import json
 import logging
 import random
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -76,7 +77,11 @@ def safe_headers(headers: dict[str, str]) -> dict[str, str]:
     """Return headers safe for diagnostics."""
 
     return {
-        key: ("[REDACTED]" if key.lower() in {"authorization", "x-api-key"} else value)
+        key: (
+            "[REDACTED]"
+            if key.lower() in {"authorization", "proxy-authorization", "x-api-key"}
+            else value
+        )
         for key, value in headers.items()
     }
 
@@ -120,8 +125,13 @@ class OpenRouterClient:
         logger: logging.Logger | None = None,
         random_seed: int = 0,
     ) -> None:
-        if not api_key:
-            raise OpenRouterAuthenticationError("OPENROUTER_API_KEY is not set")
+        if (
+            not api_key
+            or len(api_key.encode("utf-8")) > 4_096
+            or not api_key.isascii()
+            or any(not 33 <= ord(character) <= 126 for character in api_key)
+        ):
+            raise OpenRouterAuthenticationError("operator API credential is missing or invalid")
         self.execution = execution
         self.privacy = privacy
         self.budget = budget
@@ -130,6 +140,7 @@ class OpenRouterClient:
         self.logger = logger or logging.getLogger("mmaudit.openrouter")
         self._random = random.Random(random_seed)
         self._owns_client = http_client is None
+        self._credential = bytearray(api_key.encode("utf-8"))
         self._headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -137,7 +148,7 @@ class OpenRouterClient:
             "X-Title": "mmaudit",
         }
         self._client = http_client or httpx.AsyncClient(
-            base_url=base_url.rstrip("/"),
+            base_url=base_url.rstrip("/") + "/",
             timeout=httpx.Timeout(execution.request_timeout_seconds),
             headers=self._headers,
             trust_env=False,
@@ -150,8 +161,24 @@ class OpenRouterClient:
         await self.close()
 
     async def close(self) -> None:
+        self.clear_credentials()
         if self._owns_client:
             await self._client.aclose()
+
+    def clear_credentials(self) -> None:
+        """Drop retained authorization values without serializing them."""
+
+        authorization = self._headers.get("Authorization")
+        self._credential[:] = b"\x00" * len(self._credential)
+        self._credential.clear()
+        self._headers.clear()
+        if self._owns_client and self._client.headers.get("Authorization") == authorization:
+            self._client.headers.pop("Authorization", None)
+
+    async def validate_authentication(self) -> None:
+        """Validate the current bearer credential without returning key metadata."""
+
+        await self._request_metadata("/key")
 
     async def list_models(self) -> list[dict[str, Any]]:
         response = await self._request_metadata("/models")
@@ -173,11 +200,15 @@ class OpenRouterClient:
                     path,
                     max_bytes=20_000_000,
                 )
-            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            except (httpx.TimeoutException, httpx.NetworkError):
                 if attempts >= self.execution.max_model_retries + 1:
-                    raise OpenRouterTransientError("OpenRouter metadata request failed") from exc
+                    raise OpenRouterTransientError("OpenRouter metadata request failed") from None
                 await self._backoff(attempts, None)
                 continue
+            except httpx.HTTPError:
+                raise OpenRouterModelError(
+                    "OpenRouter metadata transport response was invalid"
+                ) from None
             if response.status_code in {401, 403}:
                 raise OpenRouterAuthenticationError("OpenRouter rejected the API credentials")
             if is_retryable_status(response.status_code):
@@ -194,10 +225,11 @@ class OpenRouterClient:
             break
         try:
             payload = response.json()
-        except ValueError as exc:
-            raise OpenRouterModelError("OpenRouter metadata response was not JSON") from exc
+        except ValueError:
+            payload = None
         if not isinstance(payload, dict):
-            raise OpenRouterModelError("OpenRouter metadata response had an invalid shape")
+            raise OpenRouterModelError("OpenRouter metadata response was not a valid object")
+        self._ensure_no_credential_in_value(payload)
         return payload
 
     async def _bounded_request(
@@ -210,27 +242,33 @@ class OpenRouterClient:
     ) -> httpx.Response:
         chunks: list[bytes] = []
         total = 0
-        async with self._client.stream(
-            method,
-            path,
-            json=json_body,
-            headers=self._headers,
-            timeout=httpx.Timeout(self.execution.request_timeout_seconds),
-        ) as response:
-            async for chunk in response.aiter_bytes():
-                total += len(chunk)
-                if total > max_bytes:
-                    raise OpenRouterSchemaError(
-                        "provider response exceeded the configured safety limit"
-                    )
-                chunks.append(chunk)
-            return httpx.Response(
-                status_code=response.status_code,
-                headers=response.headers,
-                content=b"".join(chunks),
-                request=response.request,
-                extensions=response.extensions,
-            )
+        relative_path = path.lstrip("/")
+        try:
+            async with self._client.stream(
+                method,
+                relative_path,
+                json=json_body,
+                headers=self._headers,
+                timeout=httpx.Timeout(self.execution.request_timeout_seconds),
+            ) as response:
+                async for chunk in response.aiter_bytes():
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise OpenRouterSchemaError(
+                            "provider response exceeded the configured safety limit"
+                        )
+                    chunks.append(chunk)
+                safe_request = httpx.Request(method, response.request.url)
+                return httpx.Response(
+                    status_code=response.status_code,
+                    headers=_decoded_response_headers(response.headers),
+                    content=b"".join(chunks),
+                    request=safe_request,
+                )
+        except httpx.HTTPError as exc:
+            if exc.request is not None:
+                exc.request = httpx.Request(method, self._client.base_url.join(relative_path))
+            raise
 
     def build_request(
         self,
@@ -374,11 +412,13 @@ class OpenRouterClient:
                             self.execution.max_output_tokens_per_request * 32,
                         ),
                     )
-                except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                except (httpx.TimeoutException, httpx.NetworkError):
                     if attempts >= self.execution.max_model_retries + 1:
-                        raise OpenRouterTransientError("model request timed out") from exc
+                        raise OpenRouterTransientError("model request timed out") from None
                     await self._backoff(attempts, None)
                     continue
+                except httpx.HTTPError:
+                    raise OpenRouterSchemaError("model transport response was invalid") from None
                 if response.status_code in {401, 403}:
                     raise OpenRouterAuthenticationError("OpenRouter rejected the API credentials")
                 if response.status_code == 402:
@@ -400,8 +440,11 @@ class OpenRouterClient:
 
             try:
                 payload = response.json()
-            except ValueError as exc:
-                raise OpenRouterSchemaError("model provider returned non-JSON data") from exc
+            except ValueError:
+                payload = None
+            if not isinstance(payload, dict):
+                raise OpenRouterSchemaError("model provider returned invalid JSON data")
+            self._ensure_no_credential_in_value(payload)
             if self.privacy.store_raw_responses:
                 self._store_debug(request_id, "response.json", payload)
             content = self._extract_content(payload)
@@ -412,9 +455,9 @@ class OpenRouterClient:
             try:
                 parsed = response_model.model_validate_json(content)
                 _ensure_all_fields_supplied(parsed)
-            except (ValidationError, ValueError) as exc:
+            except (ValidationError, ValueError):
                 if self.execution.max_json_repair_attempts == 0:
-                    raise OpenRouterSchemaError("model returned invalid structured data") from exc
+                    raise OpenRouterSchemaError("model returned invalid structured data") from None
                 repair = await self._repair_once(
                     request_id=request_id,
                     role=role,
@@ -588,40 +631,46 @@ class OpenRouterClient:
                     self.execution.max_output_tokens_per_request * 32,
                 ),
             )
-        except httpx.HTTPError as exc:
-            raise OpenRouterSchemaError("bounded JSON repair request failed") from exc
+        except httpx.HTTPError:
+            raise OpenRouterSchemaError("bounded JSON repair request failed") from None
         if response.status_code >= 400:
             raise OpenRouterSchemaError(
                 f"bounded JSON repair failed with HTTP {response.status_code}"
             )
         try:
             payload = response.json()
+        except ValueError:
+            payload = None
+        if not isinstance(payload, dict):
+            raise OpenRouterSchemaError("model repair returned invalid structured data")
+        self._ensure_no_credential_in_value(payload)
+        try:
             content = self._extract_content(payload)
             parsed = response_model.model_validate_json(content)
             _ensure_all_fields_supplied(parsed)
-            if self.privacy.store_raw_responses:
-                self._store_debug(
-                    f"{request_id}-repair",
-                    "response.json",
-                    payload,
-                )
-            return RepairResponse(
-                parsed=parsed,
-                payload=payload,
-                content=content,
-                prompt_hash=hashlib.sha256(repair_prompt.encode()).hexdigest(),
+        except (ValueError, ValidationError, KeyError, TypeError):
+            raise OpenRouterSchemaError("model repair returned invalid structured data") from None
+        if self.privacy.store_raw_responses:
+            self._store_debug(
+                f"{request_id}-repair",
+                "response.json",
+                payload,
             )
-        except (ValueError, ValidationError, KeyError, TypeError) as exc:
-            raise OpenRouterSchemaError("model repair returned invalid structured data") from exc
+        return RepairResponse(
+            parsed=parsed,
+            payload=payload,
+            content=content,
+            prompt_hash=hashlib.sha256(repair_prompt.encode()).hexdigest(),
+        )
 
     @staticmethod
     def _extract_content(payload: Any) -> str:
         try:
             content = payload["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise OpenRouterSchemaError("model response omitted structured content") from exc
+        except (KeyError, IndexError, TypeError):
+            content = None
         if not isinstance(content, str):
-            raise OpenRouterSchemaError("model response content was not text")
+            raise OpenRouterSchemaError("model response omitted structured text content")
         return content
 
     async def _backoff(self, attempt: int, retry_after: str | None) -> None:
@@ -637,21 +686,51 @@ class OpenRouterClient:
     def _store_debug(self, request_id: str, filename: str, value: Any) -> None:
         if self.run_dir is None:
             raise OpenRouterPrivacyError("debug storage requested without a private run directory")
+        self._ensure_no_credential_in_value(value)
         debug_dir = self.run_dir / "debug" / request_id
         debug_dir.mkdir(parents=True, exist_ok=True)
         path = debug_dir / filename
         path.write_text(json.dumps(value, sort_keys=True, indent=2), encoding="utf-8")
 
     def _ensure_request_size(self, body: dict[str, Any]) -> None:
-        size = len(json.dumps(body, sort_keys=True, ensure_ascii=True).encode("utf-8"))
+        self._ensure_no_credential_in_value(body)
+        serialized = json.dumps(body, sort_keys=True, ensure_ascii=True)
+        size = len(serialized.encode("utf-8"))
         if size > self.execution.max_request_bytes:
             raise OpenRouterRequestLimitError(
                 f"serialized model request exceeds {self.execution.max_request_bytes} byte limit"
             )
 
+    def _ensure_no_credential_in_value(self, value: Any) -> None:
+        credential = bytes(self._credential).decode("utf-8")
+        if credential and any(credential in item for item in _nested_string_values(value)):
+            raise OpenRouterPrivacyError("operator credential appeared in provider data")
+
 
 def _optional_string(value: Any) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _decoded_response_headers(headers: httpx.Headers) -> dict[str, str]:
+    removed = {"content-encoding", "content-length", "transfer-encoding"}
+    return {
+        name: value
+        for name, value in safe_headers(dict(headers)).items()
+        if name.lower() not in removed
+    }
+
+
+def _nested_string_values(value: Any) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for key, child in value.items():
+            if isinstance(key, str):
+                yield key
+            yield from _nested_string_values(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _nested_string_values(child)
 
 
 def _optional_float(value: Any) -> float | None:

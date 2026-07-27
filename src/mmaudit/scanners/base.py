@@ -28,7 +28,7 @@ from mmaudit.models.schemas import (
     ScannerStatus,
     Severity,
 )
-from mmaudit.repository.secrets import is_sensitive_workspace_name
+from mmaudit.repository.secrets import is_sensitive_workspace_path
 from mmaudit.repository.workspace import validate_copyable_workspace
 
 _MAX_WORKSPACE_FILES = 100_000
@@ -449,7 +449,7 @@ def _workspace_path_excluded(path: Path, root: Path, private_dir: Path) -> bool:
         return True
     if any(part.lower() in _EXCLUDED_WORKSPACE_DIRECTORIES for part in relative.parts):
         return True
-    return is_sensitive_workspace_name(path.name)
+    return is_sensitive_workspace_path(relative, is_dir=path.is_dir())
 
 
 def isolated_executable_version(

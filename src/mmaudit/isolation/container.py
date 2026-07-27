@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
+from mmaudit.operator_secrets import RESERVED_OPERATOR_CONTROL_PLANE_NAMES
+
 _DIGEST_PINNED_IMAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}$")
 _CONTAINER_WORKSPACE = Path("/workspace")
 _CONTAINER_WRITABLE = Path("/mmaudit-output")
@@ -168,12 +170,17 @@ def isolation_host_environment(
 
     provider = getattr(backend, "host_environment", None)
     if not callable(provider):
-        return fallback
-    environment = provider(private_dir)
-    if not isinstance(environment, dict) or any(
-        not isinstance(key, str) or not isinstance(value, str) for key, value in environment.items()
-    ):
-        raise ValueError("isolation backend returned an invalid host environment")
+        environment = dict(fallback)
+    else:
+        environment = provider(private_dir)
+        if not isinstance(environment, dict) or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in environment.items()
+        ):
+            raise ValueError("isolation backend returned an invalid host environment")
+        environment = dict(environment)
+    for name in RESERVED_OPERATOR_CONTROL_PLANE_NAMES:
+        environment.pop(name, None)
     return environment
 
 

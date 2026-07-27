@@ -15,7 +15,7 @@ from pydantic import Field, field_validator, model_validator
 
 from mmaudit.models.schemas import StrictModel
 from mmaudit.orchestration.manifest import canonical_sha256
-from mmaudit.repository.secrets import is_sensitive_workspace_name
+from mmaudit.repository.secrets import is_sensitive_workspace_path
 from mmaudit.snapshots.schema import (
     ConfigurationValueKind,
     DeploymentSnapshot,
@@ -251,7 +251,7 @@ def seal_snapshot_import_plan(payload: SnapshotImportPlanPayload) -> SnapshotImp
 
 
 def load_snapshot_import_plan(path: Path) -> SnapshotImportPlan:
-    if is_sensitive_workspace_name(path.name):
+    if is_sensitive_workspace_path(path):
         raise ValueError("refusing to read a sensitive snapshot import plan")
     if path.is_symlink() or path.is_junction() or not path.is_file():
         raise ValueError("snapshot import plan must be a regular non-link file")

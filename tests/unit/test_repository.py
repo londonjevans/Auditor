@@ -76,6 +76,62 @@ def test_permanent_git_and_key_exclusions_cannot_be_negated() -> None:
     assert matcher.ignored(".config/gcloud/application_default_credentials.json")
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".ENV",
+        ".Env.Local",
+        "nested/Credentials.json",
+        "nested/KEYS.json",
+        "nested/Wallet.json",
+        "nested/Mnemonic.txt",
+        "nested/Seed.toml",
+        "nested/.env.sol",
+    ],
+)
+def test_control_plane_and_wallet_artifacts_are_case_insensitively_excluded(
+    path: str,
+) -> None:
+    matcher = IgnoreMatcher([f"!{path}"])
+    assert matcher.ignored(path)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "contracts/Wallet.sol",
+        "contracts/Seed.sol",
+        "contracts/KeyStore.sol",
+        "src/Credentials.py",
+        "src/public_key.py",
+        "audit/wallet-audit.json",
+    ],
+)
+def test_sensitive_name_near_misses_do_not_hide_auditable_source(path: str) -> None:
+    assert not IgnoreMatcher().ignored(path)
+
+
+@pytest.mark.parametrize("directory", ["wallet", "keys", "credentials", "seed"])
+def test_generic_security_named_source_directories_remain_auditable(
+    tmp_path: Path,
+    config_factory,
+    directory: str,
+) -> None:
+    source = tmp_path / "contracts" / directory / "Vault.sol"
+    source.parent.mkdir(parents=True)
+    source.write_text("contract Vault {}\n", encoding="utf-8")
+
+    discovery = discover_repository(tmp_path, config_factory().repository, IgnoreMatcher())
+    relative = f"contracts/{directory}/Vault.sol"
+
+    assert relative in {item.relative_path for item in discovery.files}
+    validation = validate_location(
+        tmp_path,
+        Location(path=relative, start_line=1, end_line=1),
+    )
+    assert validation.valid
+
+
 def test_permanent_directory_negation_never_enables_traversal(
     tmp_path: Path, config_factory
 ) -> None:
@@ -93,6 +149,23 @@ def test_permanent_directory_negation_never_enables_traversal(
 def test_ignore_file_cannot_escape_repository(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         safe_ignore_file(tmp_path, "../outside-ignore")
+
+
+def test_ignore_file_cannot_be_sensitive_or_linked(tmp_path: Path) -> None:
+    secret = tmp_path / ".env"
+    secret.write_text("synthetic", encoding="utf-8")
+    with pytest.raises(ValueError, match="sensitive"):
+        safe_ignore_file(tmp_path, ".env")
+
+    target = tmp_path / "rules"
+    target.write_text("*.tmp\n", encoding="utf-8")
+    link = tmp_path / "linked-rules"
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    with pytest.raises(ValueError, match="link"):
+        safe_ignore_file(tmp_path, "linked-rules")
 
 
 @pytest.mark.parametrize(
@@ -200,6 +273,51 @@ def test_symlink_escape_is_excluded(tmp_path: Path, config_factory) -> None:
     )
     assert not result.files
     assert any("symlink excluded" in item for item in result.omitted)
+
+
+def test_safe_named_symlink_to_sensitive_file_is_excluded(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    secret = tmp_path / ".env"
+    secret.write_text("OPENROUTER_API_KEY=synthetic-canary\n", encoding="utf-8")
+    alias = tmp_path / "apparently-safe.py"
+    try:
+        alias.symlink_to(secret)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+
+    result = discover_repository(
+        tmp_path,
+        config_factory(repository={"follow_symlinks": True}).repository,
+        IgnoreMatcher(),
+    )
+
+    assert result.files == ()
+    assert any("sensitive symlink target excluded" in item for item in result.omitted)
+
+
+def test_location_validation_rejects_sensitive_paths_and_link_aliases(tmp_path: Path) -> None:
+    secret = tmp_path / ".env"
+    secret.write_text("OPENROUTER_API_KEY=synthetic-canary\n", encoding="utf-8")
+    direct = validate_location(
+        tmp_path,
+        Location(path=".env", start_line=1, end_line=1),
+    )
+    assert not direct.valid
+    assert "sensitive repository path rejected" in direct.errors
+
+    alias = tmp_path / "apparently-safe.sol"
+    try:
+        alias.symlink_to(secret)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    linked = validate_location(
+        tmp_path,
+        Location(path=alias.name, start_line=1, end_line=1),
+    )
+    assert not linked.valid
+    assert "linked repository path rejected" in linked.errors
 
 
 def test_hardlink_is_excluded_from_repository_content(tmp_path: Path, config_factory) -> None:

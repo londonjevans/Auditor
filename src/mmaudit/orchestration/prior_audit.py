@@ -28,17 +28,7 @@ from mmaudit.repository.discovery import DiscoveryResult
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.locations import validate_location
 from mmaudit.repository.redaction import SecretSafetyError, redact_text
-
-_FORBIDDEN_INPUT_NAMES = frozenset(
-    {
-        ".env",
-        "credentials.json",
-        "key.json",
-        "keystore.json",
-        "secrets.json",
-        "wallet.json",
-    }
-)
+from mmaudit.repository.secrets import is_sensitive_workspace_path
 
 
 def withhold_prior_audit_from_discovery(
@@ -189,7 +179,7 @@ def _load_prior_audit(
 ) -> tuple[PriorAuditCorpus, str]:
     assert config.path is not None
     relative = normalize_relative_path(config.path)
-    if PurePosixPath(relative).name.lower() in _FORBIDDEN_INPUT_NAMES:
+    if is_sensitive_workspace_path(relative):
         raise ValueError("prior-audit input uses a forbidden credential-like filename")
     root = repository_root.resolve(strict=True)
     candidate = root

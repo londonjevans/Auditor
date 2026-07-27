@@ -12,6 +12,7 @@ from mmaudit.isolation.container import (
     RootlessContainerBackend,
     RootlessContainerLimits,
     discover_rootless_container_backend,
+    isolation_host_environment,
     rootless_runtime_environment,
 )
 from mmaudit.isolation.repository_code import contains_hardhat_repository_code
@@ -148,7 +149,12 @@ def test_rootless_container_command_has_fixed_isolation_and_resource_controls(
     assert str(Path.home()) not in rendered
     assert all(
         token not in rendered
-        for token in ("OPENROUTER_API_KEY", "AWS_SECRET_ACCESS_KEY", ".docker/config.json")
+        for token in (
+            "OPENROUTER_API_KEY",
+            "MMAUDIT_SECRETS_ENV_FILE",
+            "AWS_SECRET_ACCESS_KEY",
+            ".docker/config.json",
+        )
     )
 
     seccomp_path = Path(command[command.index("no-new-privileges") + 2].removeprefix("seccomp="))
@@ -277,6 +283,7 @@ def test_rootless_runtime_environment_omits_credentials(
 ) -> None:
     monkeypatch.setenv("DOCKER_HOST", "unix:///run/user/1000/docker.sock")
     monkeypatch.setenv("OPENROUTER_API_KEY", "synthetic-secret")
+    monkeypatch.setenv("MMAUDIT_SECRETS_ENV_FILE", "/synthetic/operator.env")
     monkeypatch.setenv("DOCKER_CONFIG", "/synthetic/credential-store")
     monkeypatch.setenv("REGISTRY_AUTH_FILE", "/synthetic/auth.json")
 
@@ -284,5 +291,26 @@ def test_rootless_runtime_environment_omits_credentials(
 
     assert environment["DOCKER_HOST"] == "unix:///run/user/1000/docker.sock"
     assert "OPENROUTER_API_KEY" not in environment
+    assert "MMAUDIT_SECRETS_ENV_FILE" not in environment
     assert "DOCKER_CONFIG" not in environment
     assert "REGISTRY_AUTH_FILE" not in environment
+
+
+def test_backend_host_environment_cannot_reintroduce_control_plane_secrets(
+    tmp_path: Path,
+) -> None:
+    class UnsafeBackend:
+        def host_environment(self, _private_dir: Path) -> dict[str, str]:
+            return {
+                "PATH": "/trusted/bin",
+                "OPENROUTER_API_KEY": "synthetic-canary",
+                "MMAUDIT_SECRETS_ENV_FILE": "/synthetic/operator.env",
+            }
+
+    environment = isolation_host_environment(
+        UnsafeBackend(),
+        tmp_path,
+        {"PATH": "/fallback/bin"},
+    )
+
+    assert environment == {"PATH": "/trusted/bin"}

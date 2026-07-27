@@ -27,7 +27,7 @@ from mmaudit.models.schemas import (
     SolidityProjectMetadata,
     SolidityProjectType,
 )
-from mmaudit.repository.secrets import is_sensitive_workspace_name
+from mmaudit.repository.secrets import is_sensitive_workspace_path
 from mmaudit.repository.workspace import validate_copyable_workspace
 from mmaudit.scanners.base import sanitized_scanner_environment
 from mmaudit.solidity.reproduction import (
@@ -553,6 +553,7 @@ def _copy_project(
         excluded=lambda path: _compilation_workspace_path_excluded(
             PurePosixPath(path.relative_to(source).as_posix()),
             exclusions,
+            is_dir=path.is_dir(),
         ),
     )
     shutil.copytree(
@@ -631,17 +632,25 @@ def _dynamic_workspace_ignore(
         else PurePosixPath(directory_relative.as_posix())
     )
     return {
-        name for name in names if _compilation_workspace_path_excluded(prefix / name, exclusions)
+        name
+        for name in names
+        if _compilation_workspace_path_excluded(
+            prefix / name,
+            exclusions,
+            is_dir=(Path(directory) / name).is_dir(),
+        )
     }
 
 
 def _compilation_workspace_path_excluded(
     relative: PurePosixPath,
     exclusions: frozenset[PurePosixPath],
+    *,
+    is_dir: bool,
 ) -> bool:
     return (
         any(part.lower() in _EXCLUDED_DYNAMIC_WORKSPACE_NAMES for part in relative.parts)
-        or any(is_sensitive_workspace_name(part) for part in relative.parts)
+        or is_sensitive_workspace_path(relative, is_dir=is_dir)
         or any(relative == exclusion or exclusion in relative.parents for exclusion in exclusions)
     )
 

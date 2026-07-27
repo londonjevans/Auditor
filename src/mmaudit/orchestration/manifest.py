@@ -6,7 +6,7 @@ import hashlib
 import json
 import stat
 from importlib.resources import files
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_validator
@@ -16,7 +16,7 @@ from mmaudit.constants import ALL_MODEL_ROLES, VERSION
 from mmaudit.models.schemas import AuditReport, StrictModel
 from mmaudit.reporting.json_report import write_json
 from mmaudit.repository.ignore import normalize_relative_path
-from mmaudit.repository.secrets import is_sensitive_workspace_name
+from mmaudit.repository.secrets import is_sensitive_workspace_name, is_sensitive_workspace_path
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _MAX_MANIFEST_FILES = 100_000
@@ -35,11 +35,7 @@ class ManifestFileBinding(StrictModel):
     @classmethod
     def path_is_normalized(cls, value: str) -> str:
         normalized = normalize_relative_path(value)
-        if (
-            not normalized
-            or normalized == "."
-            or any(is_sensitive_workspace_name(part) for part in PurePosixPath(normalized).parts)
-        ):
+        if not normalized or normalized == "." or is_sensitive_workspace_path(normalized):
             raise ValueError("manifest file path must identify a file")
         return normalized
 
@@ -724,7 +720,7 @@ def _collect_artifacts(run_dir: Path) -> list[ManifestFileBinding]:
         relative = normalize_relative_path(candidate.relative_to(run_dir))
         if relative == "run-evidence-manifest.json":
             continue
-        if any(is_sensitive_workspace_name(part) for part in PurePosixPath(relative).parts):
+        if is_sensitive_workspace_path(relative, is_dir=candidate.is_dir()):
             raise ValueError("run artifacts may not include sensitive filenames")
         if candidate.is_symlink() or candidate.is_junction():
             raise ValueError("run artifacts may not contain links")

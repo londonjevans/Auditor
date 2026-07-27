@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import gzip
 import json
+import traceback
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -12,9 +15,12 @@ from mmaudit.models.openrouter import (
     OpenRouterAuthenticationError,
     OpenRouterClient,
     OpenRouterModelError,
+    OpenRouterPrivacyError,
     OpenRouterRequestLimitError,
     OpenRouterSchemaError,
+    OpenRouterTransientError,
     is_retryable_status,
+    safe_headers,
     strict_json_schema,
 )
 from mmaudit.models.usage import UsageLedger
@@ -52,9 +58,15 @@ def _completion(content: str, *, cost: float | None = 0.01) -> dict[str, Any]:
 def _client(
     config,
     handler: Callable[[httpx.Request], httpx.Response],
+    *,
+    api_key: str = "synthetic-key",
+    run_dir: Path | None = None,
 ) -> tuple[OpenRouterClient, httpx.AsyncClient, UsageLedger]:
     transport = httpx.MockTransport(handler)
-    http_client = httpx.AsyncClient(transport=transport, base_url="https://fake.test")
+    http_client = httpx.AsyncClient(
+        transport=transport,
+        base_url="https://fake.test/api/v1/",
+    )
     usage = UsageLedger()
     budget = BudgetManager(
         total_usd=config.execution.budget_usd,
@@ -63,12 +75,13 @@ def _client(
         max_requests_per_agent=config.execution.max_requests_per_agent,
     )
     client = OpenRouterClient(
-        api_key="synthetic-key",
+        api_key=api_key,
         execution=config.execution,
         privacy=config.privacy,
         budget=budget,
         usage=usage,
         http_client=http_client,
+        run_dir=run_dir,
     )
     return client, http_client, usage
 
@@ -96,6 +109,7 @@ async def test_structured_request_and_usage(config_factory) -> None:
         await http_client.aclose()
     assert result.answer == "ok"
     body = json.loads(observed[0].content)
+    assert "synthetic-key" not in json.dumps(body)
     assert body["response_format"]["type"] == "json_schema"
     assert body["response_format"]["json_schema"]["strict"] is True
     assert body["provider"] == {
@@ -107,6 +121,22 @@ async def test_structured_request_and_usage(config_factory) -> None:
     assert observed[0].headers["Authorization"] == "Bearer synthetic-key"
     assert usage.records[0].reported_cost_usd == 0.01
     assert usage.records[0].returned_model == "alpha/atlas-secure"
+
+
+def test_safe_headers_redacts_every_authorization_header() -> None:
+    assert safe_headers(
+        {
+            "Authorization": "Bearer synthetic-canary",
+            "Proxy-Authorization": "Bearer proxy-canary",
+            "X-API-Key": "synthetic-api-key",
+            "Content-Type": "application/json",
+        }
+    ) == {
+        "Authorization": "[REDACTED]",
+        "Proxy-Authorization": "[REDACTED]",
+        "X-API-Key": "[REDACTED]",
+        "Content-Type": "application/json",
+    }
 
 
 @pytest.mark.parametrize(
@@ -339,6 +369,253 @@ async def test_models_metadata_shape(config_factory) -> None:
     finally:
         await http_client.aclose()
     assert models[0]["id"] == "alpha/atlas-secure"
+
+
+@pytest.mark.asyncio
+async def test_authentication_validation_uses_key_endpoint(config_factory) -> None:
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(200, json={"data": {"label": "synthetic"}})
+
+    client, http_client, _usage = _client(config_factory(), handler)
+    try:
+        await client.validate_authentication()
+    finally:
+        await http_client.aclose()
+
+    assert observed[0].url.path == "/api/v1/key"
+
+
+@pytest.mark.asyncio
+async def test_decoded_metadata_does_not_retain_compression_headers(config_factory) -> None:
+    encoded = gzip.compress(b'{"data":{"label":"synthetic"}}')
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=encoded,
+            headers={"Content-Encoding": "gzip"},
+        )
+
+    client, http_client, _usage = _client(config_factory(), handler)
+    try:
+        await client.validate_authentication()
+    finally:
+        await http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_authentication_validation_rejects_invalid_key(config_factory) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": "invalid"})
+
+    client, http_client, _usage = _client(config_factory(), handler)
+    try:
+        with pytest.raises(OpenRouterAuthenticationError):
+            await client.validate_authentication()
+    finally:
+        await http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_clear_credentials_does_not_mutate_caller_owned_authorization(
+    config_factory,
+) -> None:
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200)),
+        base_url="https://fake.test",
+        headers={"Authorization": "Bearer caller-owned"},
+    )
+    budget = BudgetManager(
+        total_usd=20,
+        max_output_tokens=1_000,
+        conservative_usd_per_million_tokens=1,
+        max_requests_per_agent=10,
+    )
+    client = OpenRouterClient(
+        api_key="synthetic-mmaudit-key",
+        execution=config_factory().execution,
+        privacy=config_factory().privacy,
+        budget=budget,
+        usage=UsageLedger(),
+        http_client=http_client,
+    )
+
+    client.clear_credentials()
+
+    assert http_client.headers["Authorization"] == "Bearer caller-owned"
+    assert client._headers == {}
+    assert client._credential == bytearray()
+    await http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_request_response_and_timeout_diagnostics_do_not_retain_key(
+    config_factory,
+) -> None:
+    canary = "sk-or-v1-synthetic-timeout-canary"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("synthetic timeout", request=request)
+
+    client, http_client, usage = _client(
+        config_factory(execution={"max_model_retries": 0}),
+        handler,
+        api_key=canary,
+    )
+    try:
+        with pytest.raises(OpenRouterTransientError) as captured:
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    rendered = "".join(traceback.format_exception(captured.value))
+    chained = captured.value.__context__
+    assert canary not in rendered
+    assert canary not in repr(chained)
+    serialized_usage = json.dumps(
+        [record.model_dump(mode="json") for record in usage.records],
+        sort_keys=True,
+        default=str,
+    )
+    assert canary not in serialized_usage
+
+
+@pytest.mark.asyncio
+async def test_key_in_prompt_or_response_is_rejected_without_debug_artifacts(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    canary = "sk-or-v1-synthetic-payload-canary"
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            headers={"Authorization": canary},
+            json=_completion(json.dumps({"answer": canary})),
+        )
+
+    config = config_factory(
+        execution={"max_model_retries": 0},
+        privacy={"store_raw_responses": True},
+    )
+    client, http_client, _usage = _client(
+        config,
+        handler,
+        api_key=canary,
+        run_dir=tmp_path,
+    )
+    try:
+        with pytest.raises(OpenRouterPrivacyError):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+            )
+        with pytest.raises(OpenRouterPrivacyError):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt=f"accidental value: {canary}",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 1
+    assert not (tmp_path / "debug").exists()
+
+
+@pytest.mark.asyncio
+async def test_key_in_provider_mapping_key_is_rejected_before_debug_storage(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    canary = "sk-or-v1-synthetic-mapping-key-canary"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = _completion('{"answer":"safe"}')
+        payload[canary] = "provider-controlled-key"
+        return httpx.Response(200, json=payload)
+
+    config = config_factory(
+        execution={"max_model_retries": 0},
+        privacy={"store_raw_responses": True},
+    )
+    client, http_client, _usage = _client(
+        config,
+        handler,
+        api_key=canary,
+        run_dir=tmp_path,
+    )
+    try:
+        with pytest.raises(OpenRouterPrivacyError):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert not (tmp_path / "debug").exists()
+
+
+@pytest.mark.asyncio
+async def test_malformed_echoed_response_has_secretless_exception(
+    config_factory,
+) -> None:
+    canary = "sk-or-v1-synthetic-malformed-canary"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == f"Bearer {canary}"
+        return httpx.Response(
+            200,
+            content=f"not-json:{canary}".encode(),
+            headers={"Authorization": canary},
+        )
+
+    client, http_client, _usage = _client(
+        config_factory(execution={"max_json_repair_attempts": 0}),
+        handler,
+        api_key=canary,
+    )
+    try:
+        with pytest.raises(OpenRouterSchemaError) as captured:
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    rendered = "".join(traceback.format_exception(captured.value))
+    assert canary not in rendered
+    assert canary not in repr(captured.value.__context__)
 
 
 @pytest.mark.asyncio

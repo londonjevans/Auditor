@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from enum import StrEnum
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Literal, overload
 
 from pydantic import Field, field_validator, model_validator
@@ -31,7 +31,7 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.repository.ignore import normalize_relative_path
-from mmaudit.repository.secrets import is_sensitive_workspace_name
+from mmaudit.repository.secrets import is_sensitive_workspace_path
 
 _MAXIMUM_ASSURANCE_REQUIRED_COVERAGE_METRICS = (
     "public_external_entry_points_reviewed",
@@ -70,9 +70,7 @@ class BenchmarkRepository(StrictModel):
     @classmethod
     def source_root_is_normalized(cls, value: str) -> str:
         normalized = normalize_relative_path(value)
-        if normalized in {"", "."} or any(
-            is_sensitive_workspace_name(part) for part in PurePosixPath(normalized).parts
-        ):
+        if normalized in {"", "."} or is_sensitive_workspace_path(normalized, is_dir=True):
             raise ValueError("benchmark source root must identify a repository directory")
         return normalized
 
@@ -95,9 +93,7 @@ class BenchmarkCase(StrictModel):
     @classmethod
     def path_is_normalized(cls, value: str) -> str:
         normalized = normalize_relative_path(value)
-        if normalized in {"", "."} or any(
-            is_sensitive_workspace_name(part) for part in PurePosixPath(normalized).parts
-        ):
+        if normalized in {"", "."} or is_sensitive_workspace_path(normalized):
             raise ValueError("benchmark case path must identify a source file")
         return normalized
 

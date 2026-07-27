@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0",
+  "status_kind": "remediation_candidate_status",
+  "baseline_commit": "e304807cf942542706b88544fa216516f8f95cad",
+  "remediation_start_commit": "9e0237b352606d3fcddca998a9777c4011ef41fb",
+  "candidate_commit": null,
+  "evaluation_state": "IN_PROGRESS",
+  "verdicts": {
+    "FIT_FOR_PURPOSE": "FAIL",
+    "MAXIMUM_ASSURANCE_IMPLEMENTATION": "FAILED",
+    "SUPERIORITY_STATUS": "NOT_EVALUATED"
+  },
+  "openrouter": {
+    "budget_cap_usd": 250.0,
+    "cost_used_usd": 0.0,
+    "real_calls": 0,
+    "invalid_calls": 0,
+    "credential_validation": {
+      "status": "PASSED_REAL",
+      "endpoint": "https://openrouter.ai/api/v1/key",
+      "successful_checks": 1,
+      "transport_failures_before_fix": 1,
+      "cost_usd": 0.0
+    },
+    "qualified_models": []
+  },
+  "secret_boundary": {
+    "status": "COMPLETE",
+    "explicit_loading": true,
+    "ambient_key_ignored": true,
+    "real_authentication_validated": true,
+    "canary_artifact_validation": "PASSED",
+    "model_completion_cost_usd": 0.0,
+    "checkpoint_commit": null
+  },
+  "defects": {
+    "total": 13,
+    "fixed": 0,
+    "remaining": 13
+  },
+  "release_status": "NOT_A_RELEASE_CANDIDATE",
+  "independent_evaluation_handoff": null,
+  "reason": "Remediation has begun; the immutable baseline verdict remains authoritative until a fresh independent evaluation."
+}

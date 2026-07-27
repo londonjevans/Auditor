@@ -8,6 +8,7 @@ import unicodedata
 from pathlib import Path, PurePosixPath
 
 from mmaudit.constants import DEFAULT_EXCLUSIONS, PERMANENT_EXCLUSIONS
+from mmaudit.repository.secrets import is_sensitive_workspace_path
 
 
 def normalize_relative_path(path: str | Path) -> str:
@@ -70,6 +71,8 @@ class IgnoreMatcher:
 
     def ignored(self, path: str | Path, *, is_dir: bool = False) -> bool:
         normalized = normalize_relative_path(path)
+        if is_sensitive_workspace_path(normalized, is_dir=is_dir):
+            return True
         ignored = False
         for raw_rule in self.rules:
             negated = raw_rule.startswith("!")
@@ -84,6 +87,8 @@ class IgnoreMatcher:
         """Return whether a negation could re-include something below a directory."""
 
         directory = normalize_relative_path(path).rstrip("/")
+        if is_sensitive_workspace_path(directory, is_dir=True):
+            return False
         if any(_matches(directory, pattern, is_dir=True) for pattern in PERMANENT_EXCLUSIONS):
             return False
         normalized = directory + "/"
@@ -111,8 +116,15 @@ def safe_ignore_file(root: Path, configured_path: str) -> Path:
     """Resolve an optional ignore file without permitting repository escape."""
 
     relative = normalize_relative_path(configured_path)
+    if is_sensitive_workspace_path(relative):
+        raise ValueError("ignore file may not use a sensitive path")
     repository_root = root.resolve(strict=True)
     candidate = repository_root.joinpath(*PurePosixPath(relative).parts)
+    cursor = repository_root
+    for part in PurePosixPath(relative).parts:
+        cursor /= part
+        if cursor.is_symlink() or cursor.is_junction():
+            raise ValueError("ignore file may not traverse a link")
     try:
         resolved = candidate.resolve(strict=candidate.exists())
         resolved.relative_to(repository_root)

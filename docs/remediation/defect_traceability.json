@@ -1,0 +1,138 @@
+{
+  "schema_version": "1.0",
+  "baseline_commit": "e304807cf942542706b88544fa216516f8f95cad",
+  "remediation_start_commit": "9e0237b352606d3fcddca998a9777c4011ef41fb",
+  "baseline_artifacts_immutable": true,
+  "defects": [
+    {
+      "id": "EVAL-DEFECT-001",
+      "summary": "Compilation failure can satisfy maximum assurance.",
+      "baseline_path": "src/mmaudit/orchestration/assurance.py",
+      "status": "IN_PROGRESS",
+      "regression_test": null,
+      "runtime_artifact": null,
+      "acceptance_command": null,
+      "completion_commit": null
+    },
+    {
+      "id": "EVAL-DEFECT-002",
+      "summary": "Unsuccessful high or critical reproduction can satisfy maximum assurance.",
+      "baseline_path": "src/mmaudit/orchestration/assurance.py",
+      "status": "QUEUED",
+      "regression_test": null,
+      "runtime_artifact": null,
+      "acceptance_command": null,
+      "completion_commit": null
+    },
+    {
+      "id": "EVAL-DEFECT-003",
+      "summary": "Complementary fuzz and formal engines are not mandatory by default.",
+      "baseline_path": "src/mmaudit/orchestration/assurance.py",
+      "status": "QUEUED",
+      "regression_test": null,
+      "runtime_artifact": null,
+      "acceptance_command": null,
+      "completion_commit": null
+    },
+    {
+      "id": "EVAL-DEFECT-004",
+      "summary": "Missing Slither can be hidden by another scanner.",
+      "baseline_path": "src/mmaudit/orchestration/assurance.py",
+      "status": "QUEUED",
+      "regression_test": null,
+      "runtime_artifact": null,
+      "acceptance_command": null,
+      "completion_commit": null
+    },
+    {
+      "id": "EVAL-DEFECT-005",
+      "summary": "Model surface coverage measures supplied context rather than substantive review.",
+      "baseline_path": "src/mmaudit/orchestration/model_coverage.py",
+      "status": "QUEUED",
+      "regression_test": null,
+      "runtime_artifact": null,
+      "acceptance_command": null,
+      "completion_commit": null
+    },
+    {
+      "id": "EVAL-DEFECT-006",
+      "summary": "Model quality hashes are not resolved against passing benchmark artifacts.",
+      "baseline_path": "src/mmaudit/config.py",
+      "status": "QUEUED",
+      "regression_test": null,
+      "runtime_artifact": null,
+      "acceptance_command": null,
+      "completion_commit": null
+    },
+    {
+      "id": "EVAL-DEFECT-007",
+      "summary": "verify-run cannot reproduce effective CLI profile overrides.",
+      "baseline_path": "src/mmaudit/cli.py",
+      "status": "QUEUED",
+      "regression_test": null,
+      "runtime_artifact": null,
+      "acceptance_command": null,
+      "completion_commit": null
+    },
+    {
+      "id": "EVAL-DEFECT-008",
+      "summary": "Empty-report benchmark subgates pass vacuously.",
+      "baseline_path": "src/mmaudit/benchmark/engine.py",
+      "status": "QUEUED",
+      "regression_test": null,
+      "runtime_artifact": null,
+      "acceptance_command": null,
+      "completion_commit": null
+    },
+    {
+      "id": "EVAL-DEFECT-009",
+      "summary": "Release validation trusts declared artifact names rather than emitted artifacts.",
+      "baseline_path": "scripts/validate_release_evidence.py",
+      "status": "QUEUED",
+      "regression_test": null,
+      "runtime_artifact": null,
+      "acceptance_command": null,
+      "completion_commit": null
+    },
+    {
+      "id": "EVAL-DEFECT-010",
+      "summary": "The release report is stale and not commit-bound.",
+      "baseline_path": "docs/release_gate_report.json",
+      "status": "QUEUED",
+      "regression_test": null,
+      "runtime_artifact": null,
+      "acceptance_command": null,
+      "completion_commit": null
+    },
+    {
+      "id": "EVAL-DEFECT-011",
+      "summary": "Only part of the required mutation portfolio exists and no real kill score runs.",
+      "baseline_path": "src/mmaudit/benchmark/mutations.py",
+      "status": "QUEUED",
+      "regression_test": null,
+      "runtime_artifact": null,
+      "acceptance_command": null,
+      "completion_commit": null
+    },
+    {
+      "id": "EVAL-DEFECT-012",
+      "summary": "Reproduction identity does not independently compare deployed runtime bytecode with compiled audited source.",
+      "baseline_path": "src/mmaudit/orchestration/reproduction_integrity.py",
+      "status": "QUEUED",
+      "regression_test": null,
+      "runtime_artifact": null,
+      "acceptance_command": null,
+      "completion_commit": null
+    },
+    {
+      "id": "EVAL-DEFECT-013",
+      "summary": "Rejected-finding Markdown omits complete evidence.",
+      "baseline_path": "src/mmaudit/reporting/markdown.py",
+      "status": "QUEUED",
+      "regression_test": null,
+      "runtime_artifact": null,
+      "acceptance_command": null,
+      "completion_commit": null
+    }
+  ]
+}

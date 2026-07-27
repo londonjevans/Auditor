@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 
 from mmaudit.models.schemas import CandidateFinding, Location, LocationValidation, SourceSink
 from mmaudit.repository.ignore import normalize_relative_path
+from mmaudit.repository.secrets import is_sensitive_workspace_path
 
 
 def _resolve_location(root: Path, relative: str) -> tuple[Path | None, str | None]:
@@ -16,12 +17,21 @@ def _resolve_location(root: Path, relative: str) -> tuple[Path | None, str | Non
     except ValueError:
         return None, "path traversal or absolute path rejected"
     pure = PurePosixPath(normalized)
-    candidate = root.joinpath(*pure.parts)
+    if is_sensitive_workspace_path(pure):
+        return None, "sensitive repository path rejected"
+    repository_root = root.resolve(strict=True)
+    candidate = repository_root
+    for part in pure.parts:
+        candidate /= part
+        if candidate.is_symlink() or candidate.is_junction():
+            return None, "linked repository path rejected"
     try:
         resolved = candidate.resolve(strict=True)
-        resolved.relative_to(root.resolve(strict=True))
+        resolved_relative = resolved.relative_to(repository_root)
     except (OSError, ValueError):
         return None, "path does not exist inside repository"
+    if is_sensitive_workspace_path(resolved_relative):
+        return None, "sensitive repository path rejected"
     if not resolved.is_file():
         return None, "path is not a regular file"
     try:

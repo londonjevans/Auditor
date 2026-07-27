@@ -123,6 +123,25 @@ def test_prior_findings_are_withheld_then_rediscovered_with_unresolved_state(
     assert PriorAuditComparison.model_validate_json(comparison.model_dump_json()) == comparison
 
 
+def test_prior_audit_allows_auditable_generic_parent_directory(
+    config_factory: Callable[..., AuditConfig],
+    tmp_path: Path,
+) -> None:
+    path = "credentials/prior.json"
+    _write_corpus(tmp_path / path, [])
+    config = config_factory(prior_audit={"path": path})
+    discovery = discover_repository(tmp_path, config.repository, IgnoreMatcher())
+    discovery, withheld = withhold_prior_audit_from_discovery(
+        discovery,
+        config.prior_audit.path,
+    )
+
+    comparison = _comparison(tmp_path, config.prior_audit, discovery)
+
+    assert withheld
+    assert comparison.loaded
+
+
 def test_remediation_and_discovery_states_are_independent_and_source_validated(
     config_factory: Callable[..., AuditConfig],
     tmp_path: Path,

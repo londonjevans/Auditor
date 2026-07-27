@@ -7,6 +7,7 @@ import json
 import os
 import re
 import tomllib
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
@@ -27,6 +28,7 @@ from mmaudit.models.schemas import (
     OracleInfluenceCapability,
     TransactionOrderingCapability,
 )
+from mmaudit.operator_secrets import RESERVED_OPERATOR_CONTROL_PLANE_NAMES
 
 
 class ConfigError(ValueError):
@@ -228,6 +230,8 @@ class SmartContractsConfig(ConfigModel):
         value = value.strip()
         if not re.fullmatch(r"[A-Z_][A-Z0-9_]{0,127}", value):
             raise ValueError("fork_rpc_url_env must be an uppercase environment variable name")
+        if value in RESERVED_OPERATOR_CONTROL_PLANE_NAMES:
+            raise ValueError("fork_rpc_url_env cannot select an operator control-plane variable")
         return value
 
     @field_validator("foundry_match_path")
@@ -429,6 +433,13 @@ class CertoraConfig(ConfigModel):
         default="CERTORAKEY",
         pattern=r"^[A-Z][A-Z0-9_]{0,63}$",
     )
+
+    @field_validator("api_key_env_var")
+    @classmethod
+    def api_key_cannot_select_openrouter_control_plane_secret(cls, value: str) -> str:
+        if value in RESERVED_OPERATOR_CONTROL_PLANE_NAMES:
+            raise ValueError("Certora cannot use an operator control-plane variable")
+        return value
 
     @field_validator("source")
     @classmethod
@@ -1055,7 +1066,7 @@ def _set_nested(data: dict[str, Any], path: tuple[str, ...], value: Any) -> None
     current[path[-1]] = value
 
 
-def _environment_overrides(data: dict[str, Any], environ: dict[str, str]) -> None:
+def _environment_overrides(data: dict[str, Any], environ: Mapping[str, str]) -> None:
     mappings: dict[str, tuple[tuple[str, ...], type[Any]]] = {
         "MMAUDIT_BUDGET_USD": (("execution", "budget_usd"), float),
         "MMAUDIT_CONCURRENCY": (("execution", "concurrency"), int),
@@ -1128,7 +1139,7 @@ def load_config(
             raw: dict[str, Any] = tomllib.load(handle)
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise ConfigError(f"cannot read configuration: {exc}") from exc
-    _environment_overrides(raw, dict(os.environ if environ is None else environ))
+    _environment_overrides(raw, os.environ if environ is None else environ)
     try:
         return AuditConfig.model_validate(raw).effective()
     except ValidationError as exc:

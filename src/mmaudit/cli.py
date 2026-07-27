@@ -54,6 +54,11 @@ from mmaudit.models.openrouter import OpenRouterClient, OpenRouterError
 from mmaudit.models.registry import ModelRegistry, extract_zdr_model_ids
 from mmaudit.models.schemas import AuditProfile, AuditReport, AuditScope, Finding, Severity
 from mmaudit.models.usage import UsageLedger
+from mmaudit.operator_secrets import (
+    OperatorSecretError,
+    OperatorSecrets,
+    load_operator_secrets,
+)
 from mmaudit.orchestration.budgets import BudgetManager
 from mmaudit.orchestration.pipeline import AuditPipeline, resolve_safe_output_root
 from mmaudit.orchestration.replay import (
@@ -96,6 +101,13 @@ console = Console()
 ConfigOption = Annotated[
     Path,
     typer.Option("--config", help="Path to mmaudit TOML configuration."),
+]
+SecretsEnvFileOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--secrets-env-file",
+        help="Explicit operator control-plane dotenv file; never target input.",
+    ),
 ]
 DEFAULT_BENCHMARK_MANIFEST = (
     Path(__file__).resolve().parents[2] / "benchmarks" / "corpus" / "manifest.json"
@@ -173,6 +185,7 @@ def init_command(
 @app.command("doctor")
 def doctor_command(
     config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
+    secrets_env_file: SecretsEnvFileOption = None,
     repo: Annotated[
         Path | None,
         typer.Option("--repo", help="Repository root override."),
@@ -234,6 +247,22 @@ def doctor_command(
     except ValueError as exc:
         local_console.print(f"[red]Output directory invalid:[/red] {exc}")
         raise typer.Exit(ExitCode.CONFIGURATION) from exc
+    operator_secrets = OperatorSecrets()
+    try:
+        try:
+            operator_secrets = load_operator_secrets(secrets_env_file, required=True)
+            secret_file_accepted = True
+        except OperatorSecretError:
+            secret_file_accepted = False
+        key_present = operator_secrets.openrouter_api_key_present
+        authentication_valid = (
+            _openrouter_authentication_valid(config, operator_secrets.openrouter_api_key)
+            if key_present
+            else False
+        )
+    finally:
+        operator_secrets.clear()
+
     checks: list[tuple[str, bool, str, bool]] = []
     checks.append(
         (
@@ -253,9 +282,20 @@ def doctor_command(
     checks.append(("Configuration", True, str(config_path.resolve()), True))
     checks.append(
         (
-            "OPENROUTER_API_KEY",
-            bool(os.environ.get("OPENROUTER_API_KEY")),
-            "present" if os.environ.get("OPENROUTER_API_KEY") else "missing (value never printed)",
+            "Operator secret file",
+            secret_file_accepted,
+            "accepted" if secret_file_accepted else "rejected",
+            True,
+        )
+    )
+    checks.append(
+        ("OPENROUTER_API_KEY", key_present, "present" if key_present else "missing", True)
+    )
+    checks.append(
+        (
+            "OpenRouter authentication",
+            authentication_valid,
+            "valid" if authentication_valid else "invalid",
             True,
         )
     )
@@ -439,6 +479,7 @@ def doctor_command(
 @models_app.command("list")
 def models_list(
     config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
+    secrets_env_file: SecretsEnvFileOption = None,
     refresh: Annotated[bool, typer.Option("--refresh", help="Ignore cached metadata.")] = False,
     no_color: Annotated[bool, typer.Option("--no-color")] = False,
 ) -> None:
@@ -446,7 +487,13 @@ def models_list(
 
     async def execute() -> None:
         config = load_config(config_path)
-        metadata = await _model_metadata(config, config_path, refresh=refresh)
+        with load_operator_secrets(secrets_env_file, required=True) as operator_secrets:
+            metadata = await _model_metadata(
+                config,
+                config_path,
+                api_key=operator_secrets.openrouter_api_key,
+                refresh=refresh,
+            )
         table = Table(title="OpenRouter models", show_lines=False)
         table.add_column("ID")
         table.add_column("Name")
@@ -469,6 +516,7 @@ def models_list(
 @models_app.command("check")
 def models_check(
     config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
+    secrets_env_file: SecretsEnvFileOption = None,
     refresh: Annotated[bool, typer.Option("--refresh", help="Ignore cached metadata.")] = False,
     no_color: Annotated[bool, typer.Option("--no-color")] = False,
 ) -> None:
@@ -477,38 +525,38 @@ def models_check(
     async def execute() -> None:
         config = load_config(config_path)
         errors = validate_model_independence(config)
-        api_key = os.environ.get("OPENROUTER_API_KEY", "")
-        if not api_key:
-            raise ConfigError("OPENROUTER_API_KEY is not set")
-        budget, usage = _budget_and_usage(config)
-        client = OpenRouterClient(
-            api_key=api_key,
-            execution=config.execution,
-            privacy=config.privacy,
-            budget=budget,
-            usage=usage,
-        )
-        try:
-            registry = ModelRegistry(_cache_path(config_path))
-            metadata = None if refresh else registry.load_cache()
-            if metadata is None:
-                metadata = await client.list_models()
-                registry.save_cache(metadata)
-            zdr_ids = None
-            if config.privacy.require_zdr:
-                zdr_ids = extract_zdr_model_ids(await client.list_zdr_endpoints())
-                if not zdr_ids:
-                    errors.append("ZDR endpoint eligibility could not be verified")
-            errors.extend(
-                registry.validate(
-                    config,
-                    metadata,
-                    zdr_model_ids=zdr_ids,
-                    source_egress_requested=True,
-                )
+        with load_operator_secrets(secrets_env_file, required=True) as operator_secrets:
+            if not operator_secrets.openrouter_api_key_present:
+                raise ConfigError("OPENROUTER_API_KEY is missing from the operator secret file")
+            budget, usage = _budget_and_usage(config)
+            client = OpenRouterClient(
+                api_key=operator_secrets.openrouter_api_key,
+                execution=config.execution,
+                privacy=config.privacy,
+                budget=budget,
+                usage=usage,
             )
-        finally:
-            await client.close()
+            try:
+                registry = ModelRegistry(_cache_path(config_path))
+                metadata = None if refresh else registry.load_cache()
+                if metadata is None:
+                    metadata = await client.list_models()
+                    registry.save_cache(metadata)
+                zdr_ids = None
+                if config.privacy.require_zdr:
+                    zdr_ids = extract_zdr_model_ids(await client.list_zdr_endpoints())
+                    if not zdr_ids:
+                        errors.append("ZDR endpoint eligibility could not be verified")
+                errors.extend(
+                    registry.validate(
+                        config,
+                        metadata,
+                        zdr_model_ids=zdr_ids,
+                        source_egress_requested=True,
+                    )
+                )
+            finally:
+                await client.close()
         if errors:
             raise ConfigError("; ".join(errors))
         Console(no_color=no_color).print(
@@ -522,6 +570,7 @@ def models_check(
 @models_app.command("benchmark")
 def models_benchmark(
     config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
+    secrets_env_file: SecretsEnvFileOption = None,
     corpus: Annotated[
         Path,
         typer.Option("--corpus", help="Self-hashed blinded model benchmark corpus."),
@@ -557,25 +606,25 @@ def models_benchmark(
             targets,
             explicitly_allowed=allow_code_egress,
         )
-        api_key = os.environ.get("OPENROUTER_API_KEY", "")
-        if not api_key:
-            raise ConfigError("OPENROUTER_API_KEY is not set")
-        budget, usage = _budget_and_usage(config)
-        client = OpenRouterClient(
-            api_key=api_key,
-            execution=config.execution,
-            privacy=config.privacy,
-            budget=budget,
-            usage=usage,
-        )
-        try:
-            report = await run_model_benchmark(
-                corpus=benchmark_corpus,
-                targets=targets,
-                provider=OpenRouterModelBenchmarkProvider(client),
+        with load_operator_secrets(secrets_env_file, required=True) as operator_secrets:
+            if not operator_secrets.openrouter_api_key_present:
+                raise ConfigError("OPENROUTER_API_KEY is missing from the operator secret file")
+            budget, usage = _budget_and_usage(config)
+            client = OpenRouterClient(
+                api_key=operator_secrets.openrouter_api_key,
+                execution=config.execution,
+                privacy=config.privacy,
+                budget=budget,
+                usage=usage,
             )
-        finally:
-            await client.close()
+            try:
+                report = await run_model_benchmark(
+                    corpus=benchmark_corpus,
+                    targets=targets,
+                    provider=OpenRouterModelBenchmarkProvider(client),
+                )
+            finally:
+                await client.close()
         write_model_benchmark_report(output, report)
         local_console = Console(no_color=no_color)
         for result in report.results:
@@ -591,6 +640,7 @@ def models_benchmark(
 @app.command("scan")
 def scan_command(
     config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
+    secrets_env_file: SecretsEnvFileOption = None,
     repo: Annotated[Path | None, typer.Option("--repo")] = None,
     output: Annotated[Path | None, typer.Option("--output")] = None,
     skip_codeql: Annotated[bool, typer.Option("--skip-codeql")] = False,
@@ -712,6 +762,7 @@ def scan_command(
 
     _execute_audit(
         config_path=config_path,
+        secrets_env_file=secrets_env_file,
         repo=repo,
         output=output,
         budget_usd=None,
@@ -757,6 +808,7 @@ def scan_command(
 @app.command("run")
 def run_command(
     config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
+    secrets_env_file: SecretsEnvFileOption = None,
     repo: Annotated[Path | None, typer.Option("--repo")] = None,
     output: Annotated[Path | None, typer.Option("--output")] = None,
     budget_usd: Annotated[float | None, typer.Option("--budget-usd", min=0.01)] = None,
@@ -889,6 +941,7 @@ def run_command(
 
     _execute_audit(
         config_path=config_path,
+        secrets_env_file=secrets_env_file,
         repo=repo,
         output=output,
         budget_usd=budget_usd,
@@ -1321,6 +1374,7 @@ def snapshot_import_command(
 def _execute_audit(
     *,
     config_path: Path,
+    secrets_env_file: Path | None,
     repo: Path | None,
     output: Path | None,
     budget_usd: float | None,
@@ -1359,7 +1413,11 @@ def _execute_audit(
     verbose: bool,
     no_color: bool,
 ) -> None:
+    operator_secrets = OperatorSecrets()
+    pipeline: AuditPipeline | None = None
     try:
+        if not scanner_only:
+            operator_secrets = load_operator_secrets(secrets_env_file, required=True)
         config = load_config(config_path)
         config = _apply_overrides(
             config,
@@ -1430,6 +1488,7 @@ def _execute_audit(
             config,
             repo=repo_path,
             output=output_path,
+            api_key=operator_secrets.openrouter_api_key,
             logger=logger,
         )
         result = asyncio.run(
@@ -1452,6 +1511,12 @@ def _execute_audit(
     except SecretlessErrors as exc:
         Console(no_color=no_color).print(f"[red]mmaudit failed safely:[/red] {exc}")
         raise typer.Exit(ExitCode.CONFIGURATION) from exc
+    finally:
+        if pipeline is not None:
+            clear_credentials = getattr(pipeline, "clear_credentials", None)
+            if callable(clear_credentials):
+                clear_credentials()
+        operator_secrets.clear()
 
 
 SecretlessErrors = (ConfigError, RepositorySafetyError, OpenRouterError, OSError, ValueError)
@@ -1609,11 +1674,11 @@ async def _model_metadata(
     config: AuditConfig,
     config_path: Path,
     *,
+    api_key: str,
     refresh: bool,
 ) -> list[dict[str, Any]]:
-    api_key = os.environ.get("OPENROUTER_API_KEY", "")
     if not api_key:
-        raise ConfigError("OPENROUTER_API_KEY is not set")
+        raise ConfigError("OPENROUTER_API_KEY is missing from the operator secret file")
     registry = ModelRegistry(_cache_path(config_path))
     cached = None if refresh else registry.load_cache()
     if cached is not None:
@@ -1632,6 +1697,30 @@ async def _model_metadata(
         await client.close()
     registry.save_cache(metadata)
     return metadata
+
+
+def _openrouter_authentication_valid(config: AuditConfig, api_key: str) -> bool:
+    async def validate() -> bool:
+        budget, usage = _budget_and_usage(config)
+        client = OpenRouterClient(
+            api_key=api_key,
+            execution=config.execution,
+            privacy=config.privacy,
+            budget=budget,
+            usage=usage,
+        )
+        try:
+            await client.validate_authentication()
+            return True
+        except OpenRouterError:
+            return False
+        finally:
+            await client.close()
+
+    try:
+        return asyncio.run(validate())
+    except (OSError, ValueError):
+        return False
 
 
 def _run_async_cli(function: Any) -> None:

@@ -84,6 +84,8 @@ PERMANENT_EXCLUSIONS = (
     ".env.*",
     "**/.env",
     "**/.env.*",
+    "*.keystore",
+    "**/*.keystore",
     "*.pem",
     "*.key",
     "**/*.pem",

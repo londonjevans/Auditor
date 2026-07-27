@@ -250,6 +250,10 @@ def test_repository_local_formal_binary_is_rejected(
 
 def test_formal_runner_does_not_copy_secret_files_to_workspace(tmp_path: Path) -> None:
     root = _repository(tmp_path)
+    for directory in ("wallet", "keys", "credentials"):
+        source = root / directory / "Auditable.sol"
+        source.parent.mkdir()
+        source.write_text("contract Auditable {}\n", encoding="utf-8")
     (root / ".env").write_text("PRIVATE_KEY=synthetic\n", encoding="utf-8")
     (root / "wallet.pem").write_text("synthetic pem\n", encoding="utf-8")
     (root / "signing.key").write_text("synthetic key\n", encoding="utf-8")
@@ -270,7 +274,10 @@ def test_formal_runner_does_not_copy_secret_files_to_workspace(tmp_path: Path) -
         'test ! -e "wallet.json"\n'
         'test ! -e ".ENV.PROD"\n'
         'test ! -e "WALLET.PEM"\n'
-        'test ! -e "ID_ED25519"\n',
+        'test ! -e "ID_ED25519"\n'
+        'test -e "wallet/Auditable.sol"\n'
+        'test -e "keys/Auditable.sol"\n'
+        'test -e "credentials/Auditable.sol"\n',
         encoding="utf-8",
     )
     executable.chmod(0o700)

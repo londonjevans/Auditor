@@ -402,6 +402,10 @@ def discover_repository(
                 if not config.follow_symlinks or not _contained(root, resolved):
                     omitted.append(f"{relative}: symlink excluded")
                     continue
+                resolved_relative = normalize_relative_path(resolved.relative_to(root))
+                if matcher.ignored(resolved_relative, is_dir=True):
+                    omitted.append(f"{relative}: sensitive symlink target excluded")
+                    continue
                 if resolved in visited_directories:
                     omitted.append(f"{relative}: symlink cycle or duplicate directory excluded")
                     continue
@@ -426,6 +430,10 @@ def discover_repository(
                     continue
                 if not config.follow_symlinks or not _contained(root, resolved):
                     omitted.append(f"{relative}: symlink excluded")
+                    continue
+                resolved_relative = normalize_relative_path(resolved.relative_to(root))
+                if matcher.ignored(resolved_relative):
+                    omitted.append(f"{relative}: sensitive symlink target excluded")
                     continue
             else:
                 resolved = candidate.resolve()

@@ -30,7 +30,7 @@ from mmaudit.models.schemas import (
     SolidityProjectMetadata,
     SolidityProjectType,
 )
-from mmaudit.repository.secrets import is_sensitive_workspace_name
+from mmaudit.repository.secrets import is_sensitive_workspace_path
 
 _LIFECYCLE_SCRIPTS = frozenset(
     {
@@ -661,7 +661,7 @@ def _inventory_dependency_tree(
                 "offline package source must contain unique regular files only"
             )
         relative = candidate.relative_to(root)
-        if any(is_sensitive_workspace_name(part) for part in relative.parts):
+        if is_sensitive_workspace_path(relative):
             raise _PreparationRejected("offline package source contains a sensitive filename")
         size = candidate.stat().st_size
         if size > max_file_bytes:

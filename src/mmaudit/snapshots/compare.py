@@ -15,7 +15,7 @@ from mmaudit.models.schemas import StrictModel
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.reporting.json_report import write_json
 from mmaudit.repository.ignore import normalize_relative_path
-from mmaudit.repository.secrets import is_sensitive_workspace_name
+from mmaudit.repository.secrets import is_sensitive_workspace_path
 from mmaudit.snapshots.schema import (
     DeploymentSnapshot,
     SnapshotCompilerBinding,
@@ -90,7 +90,7 @@ class CompilerContractArtifact(StrictModel):
         normalized = normalize_relative_path(value)
         if normalized in {"", "."} or PurePosixPath(normalized).suffix.lower() != ".json":
             raise ValueError("compiler artifact path must be a normalized JSON path")
-        if any(is_sensitive_workspace_name(part) for part in PurePosixPath(normalized).parts):
+        if is_sensitive_workspace_path(normalized):
             raise ValueError("compiler artifact path is sensitive")
         return normalized
 
@@ -274,7 +274,7 @@ def load_compiler_contract_artifacts(
     for relative, path in normalized_inputs:
         if (
             not path.is_file()
-            or is_sensitive_workspace_name(path.name)
+            or is_sensitive_workspace_path(path)
             or path.stat().st_size > _MAX_ARTIFACT_BYTES
         ):
             raise ValueError("compiler artifact is sensitive, missing, or oversized")
@@ -832,7 +832,7 @@ def _normalized_solidity_path(value: str) -> str:
     if (
         normalized in {"", "."}
         or path.suffix.lower() != ".sol"
-        or any(is_sensitive_workspace_name(part) for part in path.parts)
+        or is_sensitive_workspace_path(path)
     ):
         raise ValueError("compiler source path must be a non-sensitive Solidity path")
     return normalized

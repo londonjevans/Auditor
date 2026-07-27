@@ -56,6 +56,7 @@ from mmaudit.models.schemas import (
     TransactionOrderingCapability,
 )
 from mmaudit.models.usage import UsageLedger
+from mmaudit.operator_secrets import load_operator_secrets
 from mmaudit.orchestration.budgets import BudgetManager
 from mmaudit.orchestration.manifest import (
     RunEvidenceManifest,
@@ -161,7 +162,12 @@ def _current_benchmark_verification() -> BenchmarkCertificateVerification:
     return BenchmarkCertificateVerification.model_validate(payload)
 
 
-def _provider(config, fake: FakeOpenRouter) -> tuple[OpenRouterClient, httpx.AsyncClient]:
+def _provider(
+    config,
+    fake: FakeOpenRouter,
+    *,
+    api_key: str = "synthetic-test-key",
+) -> tuple[OpenRouterClient, httpx.AsyncClient]:
     http_client = httpx.AsyncClient(
         transport=httpx.MockTransport(fake.handler),
         base_url="https://fake.openrouter.test",
@@ -175,7 +181,7 @@ def _provider(config, fake: FakeOpenRouter) -> tuple[OpenRouterClient, httpx.Asy
     )
     return (
         OpenRouterClient(
-            api_key="synthetic-test-key",
+            api_key=api_key,
             execution=config.execution,
             privacy=config.privacy,
             budget=budget,
@@ -573,6 +579,61 @@ async def test_successful_multi_agent_audit(
         getattr(manifest.bindings, category)
         for category in manifest.bindings.__class__.model_fields
     )
+
+
+@pytest.mark.asyncio
+async def test_loaded_operator_credential_is_absent_from_emitted_audit_artifacts(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    canary = "sk-or-v1-loaded-artifact-canary"
+    secret_file = tmp_path / "operator-control.env"
+    secret_file.write_text(f"OPENROUTER_API_KEY={canary}\n", encoding="utf-8")
+    secret_file.chmod(0o600)
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    fake = FakeOpenRouter()
+
+    with load_operator_secrets(secret_file, environ={}) as secrets:
+        client, http_client = _provider(
+            config,
+            fake,
+            api_key=secrets.openrouter_api_key,
+        )
+        pipeline = AuditPipeline(
+            config,
+            repo=vulnerable_repo,
+            output=tmp_path / "output",
+            client=client,
+            scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+        )
+        try:
+            result = await pipeline.run(allow_code_egress=True)
+        finally:
+            await http_client.aclose()
+
+    required_artifacts = {
+        "audit-report.md",
+        "audit-results.sarif",
+        "final-findings.json",
+        "maximum_assurance_traceability.json",
+        "run-evidence-manifest.json",
+    }
+    emitted = {path.name for path in result.run_dir.iterdir() if path.is_file()}
+    assert required_artifacts <= emitted
+    assert fake.chat_calls > 0
+    for path in result.run_dir.rglob("*"):
+        if path.is_file():
+            assert canary.encode() not in path.read_bytes()
+            assert str(secret_file).encode() not in path.read_bytes()
+    captured = capsys.readouterr()
+    assert canary not in captured.out
+    assert canary not in captured.err
+    assert canary not in caplog.text
+    assert client._credential == bytearray()
+    assert secrets.cleared
 
 
 @pytest.mark.asyncio

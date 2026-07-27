@@ -30,7 +30,7 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.repository.chunking import line_range_hash
 from mmaudit.repository.ignore import normalize_relative_path
-from mmaudit.repository.secrets import is_sensitive_workspace_name
+from mmaudit.repository.secrets import is_sensitive_workspace_path
 from mmaudit.repository.workspace import validate_copyable_workspace
 
 REPRODUCTION_WORKSPACE_EXCLUDED_NAMES = frozenset(
@@ -104,9 +104,8 @@ def reproduction_workspace_path_excluded(path: Path, source: Path) -> bool:
 
     relative = path.relative_to(source)
     return any(
-        part.lower() in REPRODUCTION_WORKSPACE_EXCLUDED_NAMES or is_sensitive_workspace_name(part)
-        for part in relative.parts
-    )
+        part.lower() in REPRODUCTION_WORKSPACE_EXCLUDED_NAMES for part in relative.parts
+    ) or is_sensitive_workspace_path(relative, is_dir=path.is_dir())
 
 
 def verify_reproduction_integrity(

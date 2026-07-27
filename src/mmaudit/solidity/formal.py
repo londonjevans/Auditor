@@ -32,7 +32,7 @@ from mmaudit.models.schemas import (
     SoliditySymbolIndex,
 )
 from mmaudit.repository.ignore import normalize_relative_path
-from mmaudit.repository.secrets import is_sensitive_workspace_name
+from mmaudit.repository.secrets import is_sensitive_workspace_path
 from mmaudit.repository.workspace import validate_copyable_workspace
 from mmaudit.scanners.base import sanitized_scanner_environment
 from mmaudit.solidity.engines.certora import (
@@ -1892,20 +1892,23 @@ def _copy_project(
     shutil.copytree(source, workspace, ignore=_dynamic_workspace_ignore)
 
 
-def _dynamic_workspace_ignore(_directory: str, names: list[str]) -> set[str]:
+def _dynamic_workspace_ignore(directory: str, names: list[str]) -> set[str]:
     return {
         name
         for name in names
-        if name.lower() in _EXCLUDED_DYNAMIC_WORKSPACE_NAMES or is_sensitive_workspace_name(name)
+        if name.lower() in _EXCLUDED_DYNAMIC_WORKSPACE_NAMES
+        or is_sensitive_workspace_path(
+            Path(directory) / name,
+            is_dir=(Path(directory) / name).is_dir(),
+        )
     }
 
 
 def _dynamic_workspace_path_excluded(path: Path, source: Path) -> bool:
     relative = path.relative_to(source)
     return any(
-        part.lower() in _EXCLUDED_DYNAMIC_WORKSPACE_NAMES or is_sensitive_workspace_name(part)
-        for part in relative.parts
-    )
+        part.lower() in _EXCLUDED_DYNAMIC_WORKSPACE_NAMES for part in relative.parts
+    ) or is_sensitive_workspace_path(relative, is_dir=path.is_dir())
 
 
 def _preparation_artifacts(

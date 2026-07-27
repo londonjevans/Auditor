@@ -221,9 +221,11 @@ def test_scanner_commands_are_fixed_argument_arrays(tmp_path: Path) -> None:
 
 def test_scanner_environment_drops_unrelated_secrets(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "should-not-propagate")
+    monkeypatch.setenv("MMAUDIT_SECRETS_ENV_FILE", "/synthetic/operator.env")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "should-not-propagate")
     environment = sanitized_scanner_environment(tmp_path)
     assert "OPENROUTER_API_KEY" not in environment
+    assert "MMAUDIT_SECRETS_ENV_FILE" not in environment
     assert "AWS_SECRET_ACCESS_KEY" not in environment
     assert environment["HOME"].startswith(str(tmp_path))
 

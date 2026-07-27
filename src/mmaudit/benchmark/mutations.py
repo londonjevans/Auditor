@@ -17,7 +17,7 @@ from pydantic import Field, field_validator, model_validator
 
 from mmaudit.models.schemas import StrictModel
 from mmaudit.repository.ignore import normalize_relative_path
-from mmaudit.repository.secrets import is_sensitive_workspace_name
+from mmaudit.repository.secrets import is_sensitive_workspace_path
 from mmaudit.repository.workspace import validate_copyable_workspace
 
 _EXCLUDED_WORKSPACE_NAMES = frozenset(
@@ -637,9 +637,8 @@ def _copy_ignored_names(directory: Path, names: list[str], source: Path) -> set[
 def _workspace_path_excluded(path: Path, root: Path) -> bool:
     relative = path.relative_to(root)
     return any(
-        part.lower() in _EXCLUDED_WORKSPACE_NAMES or is_sensitive_workspace_name(part)
-        for part in relative.parts
-    )
+        part.lower() in _EXCLUDED_WORKSPACE_NAMES for part in relative.parts
+    ) or is_sensitive_workspace_path(relative, is_dir=path.is_dir())
 
 
 def _sha256(content: bytes) -> str:

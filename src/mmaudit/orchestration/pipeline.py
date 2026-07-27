@@ -231,7 +231,7 @@ class AuditPipeline:
         self.repo_input = safe_repository_root(repo)
         self.output = resolve_safe_output_root(output)
         self.client = client
-        self.api_key = api_key if api_key is not None else os.environ.get("OPENROUTER_API_KEY", "")
+        self.api_key = api_key or ""
         self.logger = logger or logging.getLogger("mmaudit.pipeline")
         self.reproduction_runner = reproduction_runner or ForkReproductionRunner(
             self.config.reproduction,
@@ -248,7 +248,51 @@ class AuditPipeline:
         self.formal_runner = formal_runner or FormalRunner(self.config.formal)
         self._owns_client = False
 
+    def clear_credentials(self) -> None:
+        """Drop operator credentials retained by pipeline/provider objects."""
+
+        self.api_key = ""
+        if self.client is not None:
+            self.client.clear_credentials()
+
     async def run(
+        self,
+        *,
+        scanner_only: bool = False,
+        allow_code_egress: bool = False,
+        skip_codeql: bool = False,
+        changed_since: str | None = None,
+        severity_threshold: Severity = Severity.INFORMATIONAL,
+        refresh_models: bool = False,
+        allow_fork_probing: bool = False,
+        require_maximum_assurance: bool | None = None,
+        allow_maximum_assurance_downgrade: bool | None = None,
+        benchmark_verification: BenchmarkCertificateVerification | None = None,
+    ) -> PipelineResult:
+        """Execute one audit and always clear provider credentials afterward."""
+
+        try:
+            return await self._run_with_provider(
+                scanner_only=scanner_only,
+                allow_code_egress=allow_code_egress,
+                skip_codeql=skip_codeql,
+                changed_since=changed_since,
+                severity_threshold=severity_threshold,
+                refresh_models=refresh_models,
+                allow_fork_probing=allow_fork_probing,
+                require_maximum_assurance=require_maximum_assurance,
+                allow_maximum_assurance_downgrade=allow_maximum_assurance_downgrade,
+                benchmark_verification=benchmark_verification,
+            )
+        finally:
+            self.api_key = ""
+            if self.client is not None:
+                if self._owns_client:
+                    await self.client.close()
+                else:
+                    self.client.clear_credentials()
+
+    async def _run_with_provider(
         self,
         *,
         scanner_only: bool = False,
@@ -752,7 +796,7 @@ class AuditPipeline:
                     incomplete.extend(model_errors)
                     terminal_code = ExitCode.CONFIGURATION
                 elif not self.api_key and self.client is None:
-                    incomplete.append("OPENROUTER_API_KEY is not set")
+                    incomplete.append("operator OpenRouter credential is unavailable")
                     terminal_code = ExitCode.MODEL_FAILURE
 
         if scanner_only:
@@ -795,6 +839,7 @@ class AuditPipeline:
                     logger=self.logger,
                 )
                 self._owns_client = True
+                self.api_key = ""
             try:
                 await self._validate_models(
                     run_dir,
@@ -1853,8 +1898,6 @@ class AuditPipeline:
             reproductions=reproductions,
             falsifications=falsifications,
         )
-        if self._owns_client and self.client is not None:
-            await self.client.close()
         self.logger.removeHandler(log_handler)
         log_handler.close()
         return PipelineResult(report=report, run_dir=run_dir, exit_code=terminal_code)

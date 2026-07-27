@@ -20,7 +20,7 @@ from mmaudit.models.schemas import StrictModel
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.reporting.json_report import stable_json
 from mmaudit.repository.ignore import normalize_relative_path
-from mmaudit.repository.secrets import is_sensitive_workspace_name
+from mmaudit.repository.secrets import is_sensitive_workspace_name, is_sensitive_workspace_path
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _LINEAGE_PATTERN = r"^sha256:[0-9a-f]{64}$"
@@ -68,11 +68,7 @@ class ModelBenchmarkLocation(StrictModel):
     def path_is_normalized_source(cls, value: str) -> str:
         normalized = normalize_relative_path(value)
         parts = PurePosixPath(normalized).parts
-        if (
-            normalized in {"", "."}
-            or not parts
-            or any(is_sensitive_workspace_name(part) for part in parts)
-        ):
+        if normalized in {"", "."} or not parts or is_sensitive_workspace_path(normalized):
             raise ValueError("model benchmark locations must be non-sensitive local paths")
         return normalized
 

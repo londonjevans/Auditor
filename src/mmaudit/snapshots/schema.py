@@ -14,7 +14,7 @@ from mmaudit.models.schemas import StrictModel
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.reporting.json_report import write_json
 from mmaudit.repository.ignore import normalize_relative_path
-from mmaudit.repository.secrets import is_sensitive_workspace_name
+from mmaudit.repository.secrets import is_sensitive_workspace_path
 
 _ADDRESS_PATTERN = r"^0x[0-9a-f]{40}$"
 _BYTES32_PATTERN = r"^0x[0-9a-f]{64}$"
@@ -486,7 +486,7 @@ def seal_deployment_snapshot(payload: DeploymentSnapshotPayload) -> DeploymentSn
 def load_deployment_snapshot(path: Path) -> DeploymentSnapshot:
     """Load one bounded local snapshot without following links or sensitive filenames."""
 
-    if is_sensitive_workspace_name(path.name):
+    if is_sensitive_workspace_path(path):
         raise ValueError("refusing to read a sensitive snapshot filename")
     if path.is_symlink() or path.is_junction() or not path.is_file():
         raise ValueError("deployment snapshot must be a regular non-link file")
@@ -498,7 +498,7 @@ def load_deployment_snapshot(path: Path) -> DeploymentSnapshot:
 def write_deployment_snapshot(path: Path, snapshot: DeploymentSnapshot) -> None:
     """Write a canonical snapshot without following a link or shared hardlink."""
 
-    if is_sensitive_workspace_name(path.name):
+    if is_sensitive_workspace_path(path):
         raise ValueError("refusing to write a sensitive snapshot filename")
     if path.is_symlink() or path.is_junction():
         raise ValueError("deployment snapshot destination may not be a link")
@@ -526,7 +526,7 @@ def _normalized_solidity_path(value: str) -> str:
     if (
         normalized in {"", "."}
         or normalized_path.suffix.lower() != ".sol"
-        or any(is_sensitive_workspace_name(part) for part in normalized_path.parts)
+        or is_sensitive_workspace_path(normalized_path)
     ):
         raise ValueError("snapshot source binding must identify a non-sensitive Solidity path")
     return normalized

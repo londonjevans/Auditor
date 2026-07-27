@@ -16,7 +16,7 @@ from mmaudit.models.schemas import AuditProfile, StrictModel
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.reporting.json_report import write_json
 from mmaudit.repository.ignore import normalize_relative_path
-from mmaudit.repository.secrets import is_sensitive_workspace_name
+from mmaudit.repository.secrets import is_sensitive_workspace_name, is_sensitive_workspace_path
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _GIT_COMMIT_PATTERN = r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$"
@@ -758,10 +758,6 @@ def _file_sha256(path: Path) -> str:
 def _normalized_component_path(value: str) -> str:
     normalized = normalize_relative_path(value)
     parts = PurePosixPath(normalized).parts
-    if (
-        normalized in {"", "."}
-        or not parts
-        or any(is_sensitive_workspace_name(part) for part in parts)
-    ):
+    if normalized in {"", "."} or not parts or is_sensitive_workspace_path(normalized):
         raise ValueError("certificate component path is empty or sensitive")
     return normalized

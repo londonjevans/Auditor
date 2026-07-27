@@ -111,6 +111,20 @@ def test_invalid_environment_boolean_fails(tmp_path: Path) -> None:
         load_config(path, environ={"MMAUDIT_REQUIRE_ZDR": "perhaps"})
 
 
+def test_control_plane_secret_environment_is_not_configuration_input(tmp_path: Path) -> None:
+    path = tmp_path / "mmaudit.toml"
+    _write_config(path)
+    baseline = load_config(path, environ={})
+    observed = load_config(
+        path,
+        environ={
+            "OPENROUTER_API_KEY": "synthetic-canary",
+            "MMAUDIT_SECRETS_ENV_FILE": "/not/read/by/config",
+        },
+    )
+    assert observed.stable_hash() == baseline.stable_hash()
+
+
 def test_missing_config_fails(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="not found"):
         load_config(tmp_path / "missing.toml", environ={})
@@ -231,3 +245,17 @@ def test_smart_contract_path_and_env_validation(config_factory) -> None:
         config_factory(smart_contracts={"project_root": "../outside"})
     with pytest.raises(ValueError):
         config_factory(smart_contracts={"fork_rpc_url_env": "not-safe"})
+
+
+@pytest.mark.parametrize(
+    "reserved_name",
+    ["OPENROUTER_API_KEY", "MMAUDIT_SECRETS_ENV_FILE"],
+)
+def test_control_plane_names_cannot_be_forwarded_to_engines(
+    config_factory,
+    reserved_name: str,
+) -> None:
+    with pytest.raises(ValueError, match="control-plane"):
+        config_factory(smart_contracts={"fork_rpc_url_env": reserved_name})
+    with pytest.raises(ValueError, match="control-plane"):
+        config_factory(formal={"certora": {"api_key_env_var": reserved_name}})
