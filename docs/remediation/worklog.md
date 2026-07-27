@@ -7,13 +7,13 @@ AUTORUN_STATUS: IN_PROGRESS
 CURRENT_TICKET: REM-MODELS-001
 LAST_COMPLETED_TICKET: REM-OPENROUTER-001
 NEXT_ACTION: Create and push the isolated no-spend model-qualification checkpoint, initialize the ignored cumulative ledger, then execute one explicitly controlled paid transport smoke.
-LAST_COMMAND: .venv/bin/ruff format . && .venv/bin/ruff check . && .venv/bin/mypy && git diff --check && git diff --exit-code -- docs/evaluation && git status --short --ignored .env .mmaudit
-LAST_RESULT: PASS — 253 files unchanged, Ruff clean, strict mypy clean for 114 source files, diff clean, immutable baseline unchanged, and only ignored .env/.mmaudit control-plane paths reported.
+LAST_COMMAND: git commit -m "Add fail-closed model qualification"
+LAST_RESULT: PASS — isolated no-spend implementation checkpoint a946ae6a6b1cee37e0a0994df64dacd30f3a8889 created from the fully validated source state.
 REMAINING_CODE_DEFECTS: 9
 REMAINING_REAL_INTEGRATIONS: OpenRouter exact-model smoke/qualification/specialist review; certified-isolation Foundry and Slither; Echidna; Medusa; Halmos; formal proof engine; rootless isolation; isolated replay; product benchmark reports
 BLOCKED_EXTERNAL_PREREQUISITES: Echidna, Medusa, Kontrol, Certora, rootless runtime/image, private holdout, and independently adjudicated expert comparison are not yet evidenced as available
 OPENROUTER_COST_USED_USD: 0.00
-LAST_CHECKPOINT_COMMIT: a9fc11e5208053457db3b3696b3da1de69d67046
+LAST_CHECKPOINT_COMMIT: a946ae6a6b1cee37e0a0994df64dacd30f3a8889
 
 ## Immutable baseline
 
