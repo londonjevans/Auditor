@@ -21,6 +21,7 @@ from mmaudit.models.schemas import (
     AuditProfile,
     AuditScope,
     AuditScopeAssessment,
+    CandidateReproductionResolution,
     CompilationStatus,
     EconomicSimulationPlan,
     FormalResultKind,
@@ -33,7 +34,10 @@ from mmaudit.models.schemas import (
     MaximumAssuranceRequirement,
     MaximumAssuranceStatus,
     ModelReviewCoverage,
+    ReproductionIntegrityStatus,
+    ReproductionResolutionKind,
     ReproductionResult,
+    ReproductionState,
     ScannerRun,
     ScannerStatus,
     ScopeEvidenceStatus,
@@ -90,6 +94,7 @@ class AssuranceRuntime:
     economic_simulations: list[EconomicSimulationPlan] = field(default_factory=list)
     formal_runs: list[FormalToolRun] = field(default_factory=list)
     reproduction_results: list[ReproductionResult] = field(default_factory=list)
+    reproduction_resolutions: list[CandidateReproductionResolution] = field(default_factory=list)
     eligible_high_critical_ids: set[str] = field(default_factory=set)
     feasible_high_critical_ids: set[str] = field(default_factory=set)
     documented_infeasible_ids: set[str] = field(default_factory=set)
@@ -422,7 +427,53 @@ class MaximumAssuranceContract:
         attempted_ids = {
             result.candidate_id for result in runtime.reproduction_results if result.attempts > 0
         }
-        missing_reproduction = runtime.feasible_high_critical_ids - attempted_ids
+        resolution_counts = Counter(
+            resolution.candidate_id for resolution in runtime.reproduction_resolutions
+        )
+        duplicate_resolutions = {
+            candidate_id for candidate_id, count in resolution_counts.items() if count != 1
+        }
+        bound_reproduction_refs: dict[str, set[str]] = {}
+        for result in runtime.reproduction_results:
+            if (
+                result.state
+                in {
+                    ReproductionState.REPRODUCED,
+                    ReproductionState.REPRODUCED_AND_MINIMIZED,
+                }
+                and result.attempts > 0
+                and result.successful_attempts == result.attempts
+                and result.integrity is not None
+                and result.integrity.status is ReproductionIntegrityStatus.VERIFIED
+            ):
+                bound_reproduction_refs.setdefault(result.candidate_id, set()).add(
+                    f"reproduction:{result.integrity.integrity_sha256}"
+                )
+        qualifying_resolution_ids = {
+            resolution.candidate_id
+            for resolution in runtime.reproduction_resolutions
+            if resolution.kind is ReproductionResolutionKind.REPRODUCED
+            and bool(resolution.evidence_refs)
+            and set(resolution.evidence_refs)
+            <= bound_reproduction_refs.get(resolution.candidate_id, set())
+            and resolution.candidate_id not in duplicate_resolutions
+        }
+        unbound_resolution_ids = {
+            resolution.candidate_id
+            for resolution in runtime.reproduction_resolutions
+            if resolution.kind is ReproductionResolutionKind.REPRODUCED
+            and resolution.candidate_id not in qualifying_resolution_ids
+        }
+        inconclusive_resolution_ids = {
+            resolution.candidate_id
+            for resolution in runtime.reproduction_resolutions
+            if resolution.kind is ReproductionResolutionKind.INCONCLUSIVE
+        }
+        missing_reproduction = (
+            (runtime.feasible_high_critical_ids - qualifying_resolution_ids)
+            | (runtime.feasible_high_critical_ids & duplicate_resolutions)
+            | (runtime.feasible_high_critical_ids & unbound_resolution_ids)
+        )
         undocumented_impossible = (
             runtime.eligible_high_critical_ids
             - runtime.feasible_high_critical_ids
@@ -651,10 +702,49 @@ class MaximumAssuranceContract:
                 "critical_high_reproduction",
                 not missing_reproduction and not undocumented_impossible,
                 (
-                    f"{len(attempted_ids & runtime.feasible_high_critical_ids)}/"
+                    f"{len(qualifying_resolution_ids & runtime.feasible_high_critical_ids)}/"
                     f"{len(runtime.feasible_high_critical_ids)} feasible high/critical "
-                    "candidate(s) received an executable attempt; "
-                    f"{len(undocumented_impossible)} impossible candidate(s) lacked a reason"
+                    "candidate(s) received qualifying terminal resolutions"
+                    + (
+                        f"; {len(missing_reproduction)} feasible candidate(s) remain unresolved"
+                        if missing_reproduction
+                        else ""
+                    )
+                    + (
+                        f"; {len(inconclusive_resolution_ids & runtime.feasible_high_critical_ids)} "
+                        "feasible candidate(s) are explicitly inconclusive"
+                        if inconclusive_resolution_ids & runtime.feasible_high_critical_ids
+                        else ""
+                    )
+                    + (
+                        f"; {len(duplicate_resolutions)} candidate(s) have ambiguous resolutions"
+                        if duplicate_resolutions
+                        else ""
+                    )
+                    + (
+                        f"; {len(unbound_resolution_ids)} reproduced resolution(s) are not "
+                        "bound to qualifying raw runtime evidence"
+                        if unbound_resolution_ids
+                        else ""
+                    )
+                    + (
+                        f"; {len(undocumented_impossible)} infeasible candidate(s) lacked a reason"
+                        if undocumented_impossible
+                        else ""
+                    )
+                ),
+                state=(
+                    AnalysisState.DETERMINISTIC
+                    if not runtime.feasible_high_critical_ids and not undocumented_impossible
+                    else (
+                        AnalysisState.REPRODUCED
+                        if not missing_reproduction and not undocumented_impossible
+                        else (
+                            AnalysisState.ATTEMPTED_FAILED
+                            if attempted_ids or runtime.reproduction_resolutions
+                            else AnalysisState.NOT_ANALYZED
+                        )
+                    )
                 ),
                 artifacts=_present(runtime.artifacts, "reproduction-results.json"),
             ),

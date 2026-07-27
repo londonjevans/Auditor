@@ -140,6 +140,13 @@ class ReproductionState(StrEnum):
     DISPROVEN = "disproven"
 
 
+class ReproductionResolutionKind(StrEnum):
+    """Typed terminal adjudication for one high/critical candidate."""
+
+    REPRODUCED = "reproduced"
+    INCONCLUSIVE = "inconclusive"
+
+
 class VerificationVerdict(StrEnum):
     VERIFIED = "verified"
     PLAUSIBLE = "plausible"
@@ -1266,6 +1273,32 @@ class ReproductionResult(StrictModel):
             and not self.financial_settlement_verified
         ):
             raise ValueError("positive financial reproduction requires verified settlement")
+        return self
+
+
+class CandidateReproductionResolution(StrictModel):
+    """Evidence references supporting the terminal state of one candidate."""
+
+    candidate_id: str = Field(min_length=1, max_length=160)
+    kind: ReproductionResolutionKind
+    evidence_refs: list[str] = Field(default_factory=list, max_length=100)
+    detail: str = Field(min_length=1, max_length=2_000)
+
+    @model_validator(mode="after")
+    def evidence_is_canonical_and_present_for_qualifying_outcomes(
+        self,
+    ) -> CandidateReproductionResolution:
+        if self.evidence_refs != sorted(set(self.evidence_refs)):
+            raise ValueError("candidate resolution evidence references must be unique and sorted")
+        if any(
+            not reference
+            or len(reference) > 500
+            or any(ord(character) < 32 or ord(character) == 127 for character in reference)
+            for reference in self.evidence_refs
+        ):
+            raise ValueError("candidate resolution evidence references must be bounded text")
+        if self.kind is not ReproductionResolutionKind.INCONCLUSIVE and not self.evidence_refs:
+            raise ValueError("a qualifying candidate resolution requires evidence references")
         return self
 
 

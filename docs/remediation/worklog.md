@@ -4,12 +4,12 @@ The seven files under `docs/evaluation/` are immutable baseline evidence from
 commit `e304807cf942542706b88544fa216516f8f95cad`.
 
 AUTORUN_STATUS: IN_PROGRESS
-CURRENT_TICKET: EVAL-DEFECT-002
-LAST_COMPLETED_TICKET: EVAL-DEFECT-001
-NEXT_ACTION: Add the failed_reproduction_attempt assay and require a typed qualifying resolution for every feasible high/critical candidate.
-LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_assurance.py tests/unit/test_solidity.py tests/integration/test_pipeline.py::test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete
-LAST_RESULT: PASS — 56 tests passed in 3.78s after Ruff and strict mypy passed on the affected implementation.
-REMAINING_CODE_DEFECTS: 12
+CURRENT_TICKET: EVAL-DEFECT-003
+LAST_COMPLETED_TICKET: EVAL-DEFECT-002
+NEXT_ACTION: Require qualifying real, non-empty execution provenance for the exact certified engine portfolio.
+LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_assurance.py tests/unit/test_reproduction.py tests/unit/test_reproduction_integrity.py tests/integration/test_pipeline.py
+LAST_RESULT: PASS — 110 tests passed in 42.49s; affected Ruff and strict mypy gates passed; independent code review found no remaining EVAL-DEFECT-002 blocker.
+REMAINING_CODE_DEFECTS: 11
 REMAINING_REAL_INTEGRATIONS: OpenRouter exact-model smoke/qualification/specialist review; Slither; Echidna; Medusa; Halmos; formal proof engine; rootless isolation; isolated replay; product benchmark reports
 BLOCKED_EXTERNAL_PREREQUISITES: Echidna, Medusa, Kontrol, Certora, rootless runtime/image, private holdout, and independently adjudicated expert comparison are not yet evidenced as available
 OPENROUTER_COST_USED_USD: 0.00
@@ -187,8 +187,56 @@ LAST_CHECKPOINT_COMMIT: f2a782b7319ccad848df392f5d40da45fcc63283
 
 ## 2026-07-27 — EVAL-DEFECT-002
 
-- **Status:** `IN_PROGRESS`
+- **Status:** `COMPLETE`
 - **Defensive objective:** Prevent an attempted but unsuccessful high/critical
   reproduction from satisfying maximum assurance.
-- **Exact next safe action:** Add the permanent failed-attempt assay and map every
-  feasible high/critical candidate to a qualifying typed outcome.
+- **Completed changes:** Added a strict per-candidate resolution schema and a
+  deterministic pipeline adjudicator. The assurance denominator now includes
+  every source-valid high/critical candidate, including verifier-rejected
+  candidates and candidates omitted by the bounded reproduction planner. A
+  candidate qualifies only when its reproduced resolution resolves back to a
+  complete, integrity-verified successful raw `ReproductionResult` for that same
+  candidate.
+- **Fail-closed behavior:** Missing, inconclusive, duplicate, stale, forged, or
+  unbound resolutions block the candidate clause. An attempt count has no credit
+  by itself. Unbound falsification, unvalidated severity reduction, and formal
+  evidence without candidate-semantic real-execution provenance remain
+  `INCONCLUSIVE`. Typed resolutions are serialized in
+  `reproduction-results.json` and independently cross-checked by the assurance
+  contract.
+- **Commands run:**
+  - Affected Ruff formatting/checks — PASS.
+  - Strict mypy on the schema, assurance contract, and pipeline — PASS.
+  - Focused failed-attempt and synthetic maximum-assurance pipeline command —
+    PASS, `28 passed in 2.22s`.
+  - `.venv/bin/pytest -q tests/unit/test_assurance.py
+    tests/unit/test_reproduction.py tests/unit/test_reproduction_integrity.py
+    tests/integration/test_pipeline.py` — PASS, `110 passed in 42.49s`.
+  - `.venv/bin/pytest -q
+    tests/integration/test_financial_settlement_foundry.py` — PASS, `1 passed in
+    0.27s`; real local generated witness compilation/execution with a sanitized
+    child environment.
+  - `.venv/bin/pytest -q
+    tests/integration/test_economic_acceptance_foundry.py` — PASS, `1 passed in
+    29.85s`; real local paired unsafe/safe Foundry controls were distinguished.
+- **Runtime artifact:**
+  `docs/remediation/runtime/eval_defect_002.json`.
+- **Limitation:** Pipeline denominator and resolution serialization are covered
+  with typed synthetic integration doubles. Real local Foundry controls executed,
+  but not through the unavailable certified rootless replay backend; they are not
+  credited as real maximum-assurance replay. Formal candidate resolution remains
+  fail-closed until its property semantics and execution artifacts can be
+  independently bound.
+- **Result:** `COMPLETE` for the false-COMPLETE code defect. Certified isolated
+  replay remains an explicit external integration blocker.
+- **Exact next safe action:** Checkpoint this ticket, record its commit, and
+  continue `EVAL-DEFECT-003`.
+
+## 2026-07-27 — EVAL-DEFECT-003
+
+- **Status:** `IN_PROGRESS`
+- **Defensive objective:** Require the exact real engine portfolio, non-empty
+  execution evidence, hardened isolation, replay, real model review, and a current
+  benchmark for certified maximum assurance.
+- **Exact next safe action:** Add explicit execution provenance and permanent
+  missing-engine negative assays before changing portfolio defaults.

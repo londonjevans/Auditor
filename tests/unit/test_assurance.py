@@ -20,6 +20,7 @@ from mmaudit.models.schemas import (
     AuditReport,
     AuditScope,
     AuditScopeAssessment,
+    CandidateReproductionResolution,
     CompilationStatus,
     CoverageMetric,
     CoverageProvenance,
@@ -39,6 +40,16 @@ from mmaudit.models.schemas import (
     ModelReviewSurface,
     ModelReviewSurfaceKind,
     RepositoryMap,
+    ReproductionIntegrityAssessment,
+    ReproductionIntegrityCheck,
+    ReproductionIntegrityCheckKind,
+    ReproductionIntegrityStatus,
+    ReproductionMinimizationEvidence,
+    ReproductionResolutionKind,
+    ReproductionResult,
+    ReproductionSettlementEvidence,
+    ReproductionSettlementStatus,
+    ReproductionState,
     ScannerRun,
     ScannerStatus,
     ScopeComponent,
@@ -332,6 +343,39 @@ def _current_benchmark_verification() -> BenchmarkCertificateVerification:
     }
     payload["verification_sha256"] = canonical_sha256(payload)
     return BenchmarkCertificateVerification.model_validate(payload)
+
+
+def _verified_reproduction_integrity() -> ReproductionIntegrityAssessment:
+    payload: dict[str, object] = {
+        "schema_version": "1.0",
+        "status": ReproductionIntegrityStatus.VERIFIED,
+        "repository_sha256": "a" * 64,
+        "targets": [],
+        "reachability": [],
+        "settlement": ReproductionSettlementEvidence(
+            status=ReproductionSettlementStatus.ASSERTIONS_SATISFIED,
+            assertions_sha256="b" * 64,
+            assertion_count=1,
+            verified_attempts=1,
+        ).model_dump(mode="json"),
+        "minimization": ReproductionMinimizationEvidence(
+            original_step_ids=["SyntheticStep"],
+            retained_step_ids=["SyntheticStep"],
+            strategy="single_step_trivial",
+            proven_minimal=True,
+        ).model_dump(mode="json"),
+        "checks": [
+            ReproductionIntegrityCheck(
+                check=check,
+                passed=True,
+                detail="synthetic integrity evidence",
+                evidence_sha256=canonical_sha256({"check": check.value}),
+            ).model_dump(mode="json")
+            for check in ReproductionIntegrityCheckKind
+        ],
+    }
+    payload["integrity_sha256"] = canonical_sha256(payload)
+    return ReproductionIntegrityAssessment.model_validate(payload)
 
 
 def test_maximum_assurance_rejects_missing_model_families(config_factory) -> None:
@@ -773,6 +817,153 @@ def test_critical_reproduction_impossibility_requires_a_reason(config_factory) -
         if requirement.engine == "critical_high_reproduction"
     )
     assert explained_gate.passed
+
+
+@pytest.mark.parametrize("include_inconclusive_resolution", [False, True])
+def test_failed_reproduction_attempt_never_satisfies_maximum_assurance(
+    config_factory,
+    include_inconclusive_resolution: bool,
+) -> None:
+    candidate_id = "critical-failed-reproduction"
+    runtime = replace(
+        _complete_runtime(),
+        eligible_high_critical_ids={candidate_id},
+        feasible_high_critical_ids={candidate_id},
+        reproduction_results=[
+            ReproductionResult(
+                candidate_id=candidate_id,
+                test_name="test_failed_reproduction",
+                state=ReproductionState.NOT_REPRODUCED,
+                specification_sha256="a" * 64,
+                attempts=1,
+                successful_attempts=0,
+            )
+        ],
+        reproduction_resolutions=(
+            [
+                CandidateReproductionResolution(
+                    candidate_id=candidate_id,
+                    kind=ReproductionResolutionKind.INCONCLUSIVE,
+                    detail="attempt completed without a qualifying terminal outcome",
+                )
+            ]
+            if include_inconclusive_resolution
+            else []
+        ),
+    )
+
+    assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(runtime)
+    gate = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "critical_high_reproduction"
+    )
+
+    assert assessment.status is MaximumAssuranceStatus.INCONCLUSIVE
+    assert not gate.passed
+    assert gate.state is AnalysisState.ATTEMPTED_FAILED
+    assert "remain unresolved" in gate.detail
+
+
+def test_integrity_bound_reproduction_resolution_satisfies_candidate_clause(
+    config_factory,
+) -> None:
+    candidate_id = "critical-resolved"
+    integrity = _verified_reproduction_integrity()
+    runtime = replace(
+        _complete_runtime(),
+        eligible_high_critical_ids={candidate_id},
+        feasible_high_critical_ids={candidate_id},
+        reproduction_results=[
+            ReproductionResult(
+                candidate_id=candidate_id,
+                test_name="test_resolved_reproduction",
+                state=ReproductionState.REPRODUCED,
+                specification_sha256="a" * 64,
+                attempts=1,
+                successful_attempts=1,
+                integrity=integrity,
+            )
+        ],
+        reproduction_resolutions=[
+            CandidateReproductionResolution(
+                candidate_id=candidate_id,
+                kind=ReproductionResolutionKind.REPRODUCED,
+                evidence_refs=[f"reproduction:{integrity.integrity_sha256}"],
+                detail="synthetic integrity-bound qualifying resolution",
+            )
+        ],
+        falsifier_completed=True,
+        candidate_falsifier_lineages={
+            "sha256:" + ("a" * 64),
+            "sha256:" + ("b" * 64),
+        },
+    )
+
+    assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(runtime)
+    gate = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "critical_high_reproduction"
+    )
+
+    assert gate.passed
+    assert gate.state is AnalysisState.REPRODUCED
+
+
+def test_unbound_reproduced_resolution_fails_closed(config_factory) -> None:
+    candidate_id = "critical-unbound-resolution"
+    runtime = replace(
+        _complete_runtime(),
+        eligible_high_critical_ids={candidate_id},
+        feasible_high_critical_ids={candidate_id},
+        reproduction_results=[],
+        reproduction_resolutions=[
+            CandidateReproductionResolution(
+                candidate_id=candidate_id,
+                kind=ReproductionResolutionKind.REPRODUCED,
+                evidence_refs=["reproduction:" + ("a" * 64)],
+                detail="synthetic stale derived resolution",
+            )
+        ],
+    )
+
+    assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(runtime)
+    gate = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "critical_high_reproduction"
+    )
+
+    assert assessment.status is MaximumAssuranceStatus.INCONCLUSIVE
+    assert not gate.passed
+    assert "not bound to qualifying raw runtime evidence" in gate.detail
+
+
+def test_duplicate_candidate_resolutions_fail_closed(config_factory) -> None:
+    candidate_id = "critical-duplicate-resolution"
+    resolution = CandidateReproductionResolution(
+        candidate_id=candidate_id,
+        kind=ReproductionResolutionKind.REPRODUCED,
+        evidence_refs=["runtime-evidence:" + ("a" * 64)],
+        detail="synthetic duplicated resolution",
+    )
+    runtime = replace(
+        _complete_runtime(),
+        eligible_high_critical_ids={candidate_id},
+        feasible_high_critical_ids={candidate_id},
+        reproduction_resolutions=[resolution, resolution],
+    )
+
+    assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(runtime)
+    gate = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "critical_high_reproduction"
+    )
+
+    assert not gate.passed
+    assert "ambiguous resolutions" in gate.detail
 
 
 def test_high_critical_cross_examination_requires_two_lineages(config_factory) -> None:

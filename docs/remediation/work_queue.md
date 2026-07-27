@@ -45,9 +45,8 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   validated severity reduction, or explicit `INCONCLUSIVE`; unresolved candidates
   block `COMPLETE`; the baseline `failed_reproduction_attempt` assay fails closed.
 - **Dependencies:** `EVAL-DEFECT-001`.
-- **Status:** `IN_PROGRESS`
-- **Next action:** Add the `failed_reproduction_attempt` negative assay and require
-  a typed qualifying resolution for every feasible high/critical candidate.
+- **Status:** `COMPLETE`
+- **Next action:** None; continue with `EVAL-DEFECT-003`.
 
 ## EVAL-DEFECT-003 — Complementary engines are optional by default
 
@@ -58,7 +57,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   review, and the current benchmark gate are mandatory; unavailable, skipped,
   mocked, timed-out, unisolated, or empty evidence fails closed.
 - **Dependencies:** `EVAL-DEFECT-002`.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
+- **Next action:** Define and enforce real, non-empty provenance for the exact
+  certified engine portfolio while preserving explicit external blockers.
 
 ## EVAL-DEFECT-004 — Missing Slither can be hidden
 

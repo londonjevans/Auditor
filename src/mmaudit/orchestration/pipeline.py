@@ -66,6 +66,7 @@ from mmaudit.models.schemas import (
     AuditScopeAssessment,
     CandidateCrossExaminationDecision,
     CandidateFinding,
+    CandidateReproductionResolution,
     CompilationStatus,
     ContextPackage,
     DependencyPreparationStatus,
@@ -96,6 +97,7 @@ from mmaudit.models.schemas import (
     QualityGateResult,
     ReportQualityReview,
     ReproductionIntegrityStatus,
+    ReproductionResolutionKind,
     ReproductionResult,
     ReproductionState,
     ScannerFinding,
@@ -341,6 +343,7 @@ class AuditPipeline:
         budget_halted = False
         candidates: list[CandidateFinding] = []
         verifications = VerificationBatch(decisions=[])
+        decisions: dict[str, VerificationDecision] = {}
         cross_examinations: list[CandidateCrossExaminationDecision] = []
         candidate_falsifier_context: ContextPackage | None = None
         final_findings: list[Finding] = []
@@ -374,6 +377,7 @@ class AuditPipeline:
         model_review_coverage: ModelReviewCoverage | None = None
         generated_tests: list[GeneratedFoundryTestSpec] = []
         reproductions: list[ReproductionResult] = []
+        reproduction_resolutions: list[CandidateReproductionResolution] = []
         falsifications = FalsificationBatch(decisions=[])
         eligible_for_reproduction: list[CandidateFinding] = []
         quality_gates: list[QualityGateResult] = []
@@ -1493,6 +1497,17 @@ class AuditPipeline:
                 ):
                     final_findings.append(finding)
 
+        assurance_high_critical_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.severity in {Severity.HIGH, Severity.CRITICAL}
+            and (validation := validations.get(candidate.candidate_id)) is not None
+            and validation.valid
+        ]
+        reproduction_resolutions = _build_candidate_reproduction_resolutions(
+            candidates=assurance_high_critical_candidates,
+            results=reproductions,
+        )
         unchanged = _repository_unchanged(discovery)
         if not unchanged:
             incomplete.append("audited source changed during the run")
@@ -1730,14 +1745,10 @@ class AuditPipeline:
                 f"quality gate failed: {gate.gate}: {gate.detail}" for gate in failed_required_gates
             )
             terminal_code = ExitCode.INCOMPLETE
-        high_critical = {
-            candidate.candidate_id
-            for candidate in eligible_for_reproduction
-            if candidate.severity in {Severity.HIGH, Severity.CRITICAL}
-        }
+        high_critical = {candidate.candidate_id for candidate in assurance_high_critical_candidates}
         feasible_high_critical = {
             candidate.candidate_id
-            for candidate in eligible_for_reproduction
+            for candidate in assurance_high_critical_candidates
             if candidate.candidate_id in high_critical
             and _project_for_candidate(candidate, solidity_projects) is not None
             and fork_acknowledged
@@ -1782,6 +1793,7 @@ class AuditPipeline:
                 economic_simulations=economic_simulations,
                 formal_runs=formal_runs,
                 reproduction_results=reproductions,
+                reproduction_resolutions=reproduction_resolutions,
                 eligible_high_critical_ids=high_critical,
                 feasible_high_critical_ids=feasible_high_critical,
                 documented_infeasible_ids=documented_infeasible,
@@ -1896,6 +1908,7 @@ class AuditPipeline:
             prior_audit_comparison=prior_audit_comparison,
             generated_tests=generated_tests,
             reproductions=reproductions,
+            reproduction_resolutions=reproduction_resolutions,
             falsifications=falsifications,
         )
         self.logger.removeHandler(log_handler)
@@ -2326,6 +2339,7 @@ class AuditPipeline:
         prior_audit_comparison: PriorAuditComparison,
         generated_tests: list[GeneratedFoundryTestSpec],
         reproductions: list[ReproductionResult],
+        reproduction_resolutions: list[CandidateReproductionResolution],
         falsifications: FalsificationBatch,
     ) -> None:
         write_json(
@@ -2450,6 +2464,9 @@ class AuditPipeline:
                     specification.model_dump(mode="json") for specification in generated_tests
                 ],
                 "results": [reproduction.model_dump(mode="json") for reproduction in reproductions],
+                "candidate_resolutions": [
+                    resolution.model_dump(mode="json") for resolution in reproduction_resolutions
+                ],
                 "falsification_decisions": [
                     decision.model_dump(mode="json") for decision in falsifications.decisions
                 ],
@@ -3179,6 +3196,65 @@ def _apply_reproduction_results(
         ],
         updated_decisions,
     )
+
+
+def _build_candidate_reproduction_resolutions(
+    *,
+    candidates: list[CandidateFinding],
+    results: list[ReproductionResult],
+) -> list[CandidateReproductionResolution]:
+    """Derive one fail-closed terminal resolution per high/critical candidate."""
+
+    results_by_candidate: dict[str, list[ReproductionResult]] = {}
+    for result in results:
+        results_by_candidate.setdefault(result.candidate_id, []).append(result)
+    resolutions: list[CandidateReproductionResolution] = []
+    for candidate in sorted(candidates, key=lambda item: item.candidate_id):
+        if candidate.severity not in {Severity.HIGH, Severity.CRITICAL}:
+            continue
+        candidate_results = results_by_candidate.get(candidate.candidate_id, [])
+        reproduced_refs: set[str] = set()
+        for result in candidate_results:
+            if (
+                result.state
+                in {
+                    ReproductionState.REPRODUCED,
+                    ReproductionState.REPRODUCED_AND_MINIMIZED,
+                }
+                and result.attempts > 0
+                and result.successful_attempts == result.attempts
+                and result.integrity is not None
+                and result.integrity.status is ReproductionIntegrityStatus.VERIFIED
+            ):
+                reproduced_refs.add(f"reproduction:{result.integrity.integrity_sha256}")
+        if reproduced_refs:
+            resolutions.append(
+                CandidateReproductionResolution(
+                    candidate_id=candidate.candidate_id,
+                    kind=ReproductionResolutionKind.REPRODUCED,
+                    evidence_refs=sorted(reproduced_refs),
+                    detail="verified deterministic reproduction resolved candidate",
+                )
+            )
+            continue
+
+        attempted_states = sorted(
+            {result.state.value for result in candidate_results if result.attempts > 0}
+        )
+        resolutions.append(
+            CandidateReproductionResolution(
+                candidate_id=candidate.candidate_id,
+                kind=ReproductionResolutionKind.INCONCLUSIVE,
+                evidence_refs=[],
+                detail=(
+                    "attempted reproduction did not produce a qualifying terminal outcome: "
+                    + ", ".join(attempted_states)
+                    if attempted_states
+                    else "no qualifying integrity-bound deterministic reproduction evidence"
+                ),
+            )
+        )
+    return resolutions
 
 
 def _evaluate_quality_gates(

@@ -899,6 +899,29 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
         "audit-results.sarif",
     ):
         assert (result.run_dir / artifact).is_file()
+    reproduction_payload = json.loads(
+        (result.run_dir / "reproduction-results.json").read_text(encoding="utf-8")
+    )
+    resolutions = {
+        item["candidate_id"]: item["kind"] for item in reproduction_payload["candidate_resolutions"]
+    }
+    assert resolutions
+    rejected_safe_control_ids = {
+        candidate_id
+        for finding in result.report.rejected_findings
+        if any(location.path == "src/SafeControls.sol" for location in finding.locations)
+        for candidate_id in finding.contributing_candidate_ids
+    }
+    assert rejected_safe_control_ids
+    assert rejected_safe_control_ids <= resolutions.keys()
+    assert all(
+        resolutions[candidate_id] == "inconclusive" for candidate_id in rejected_safe_control_ids
+    )
+    for reproduction in reproduction_payload["results"]:
+        if reproduction["state"] in {"reproduced", "reproduced_and_minimized"}:
+            assert resolutions[reproduction["candidate_id"]] == "reproduced"
+        elif reproduction["state"] == "not_reproduced":
+            assert resolutions[reproduction["candidate_id"]] == "inconclusive"
     property_payload = json.loads(
         (result.run_dir / "property-corpus.json").read_text(encoding="utf-8")
     )
