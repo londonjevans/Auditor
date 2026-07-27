@@ -1,0 +1,73 @@
+{
+  "schema_version": "1.0",
+  "ticket_id": "EVAL-DEFECT-005",
+  "baseline_commit": "e304807cf942542706b88544fa216516f8f95cad",
+  "implementation_commit": "6da9cec718a43e2ead4790f3e2b7f40f43f63bca",
+  "executed_at": "2026-07-27T23:52:27Z",
+  "implementation": [
+    {
+      "path": "src/mmaudit/models/schemas.py",
+      "sha256": "14f5a52f87d94952eb3fda26c5c421f0fd4ebfb0200d1919d49d09d8d6927558"
+    },
+    {
+      "path": "src/mmaudit/models/openrouter.py",
+      "sha256": "4c71520503e517071d7329e56f63af5b09057c4dd4b3aef502d31f45ada897cf"
+    },
+    {
+      "path": "src/mmaudit/orchestration/model_review_evidence.py",
+      "sha256": "eead9adab5a3100cbbbdba3d447783a7998df31d4e3ed227b333baffa9f30aba"
+    },
+    {
+      "path": "src/mmaudit/orchestration/model_coverage.py",
+      "sha256": "bdfb9ab06fb6e33ba388e1caa6f4bad0677abd8c70402d82a79f8d353be3e167"
+    },
+    {
+      "path": "src/mmaudit/orchestration/assurance.py",
+      "sha256": "d41c3610fd3613f53852edd3a8bb18a1b325d1277640fe7736d20f880450ff74"
+    },
+    {
+      "path": "src/mmaudit/orchestration/pipeline.py",
+      "sha256": "1030353129856200cb9c815bf3665fe621bec805e7ed58fbd94316e736d2a42a"
+    },
+    {
+      "path": "src/mmaudit/solidity/coverage.py",
+      "sha256": "72cec7b25960231d440fa20416a422d655f8438911f80e188132eedf0dd3ad9c"
+    }
+  ],
+  "regression": {
+    "test": "tests/unit/test_model_coverage.py::test_context_delivery_or_successful_usage_without_response_earns_no_credit",
+    "acceptance_command": ".venv/bin/pytest -q tests/unit/test_assurance.py tests/unit/test_model_surface_review_schema.py tests/unit/test_model_coverage.py tests/unit/test_context.py tests/unit/test_model_review_evidence.py tests/unit/test_solidity_model_review_coverage.py tests/integration/test_pipeline.py tests/unit/test_scanners_reporting.py",
+    "acceptance_result": "PASS",
+    "acceptance_tests_passed": 276,
+    "acceptance_duration_seconds": 49.59,
+    "full_command": ".venv/bin/ruff format --check . && .venv/bin/ruff check . && .venv/bin/mypy && .venv/bin/pytest -q",
+    "full_result": "PASS",
+    "full_tests_passed": 1370,
+    "full_tests_skipped": 10,
+    "full_pytest_duration_seconds": 173.11
+  },
+  "negative_assays": {
+    "context_delivery_without_response_credit": false,
+    "mock_response_credit": false,
+    "not_reviewed_credit": false,
+    "inconclusive_credit": false,
+    "invalid_location_credit": false,
+    "duplicate_alias_independence_credit": false,
+    "unapproved_lineage_credit": false,
+    "missing_record_credit": false,
+    "aggregate_only_assurance_pass": false,
+    "mismatched_artifact_assurance_pass": false
+  },
+  "evidence_boundary": {
+    "normalized_review_artifacts": "private/model-review-artifacts.json",
+    "public_coverage_artifact": "model-review-coverage.json",
+    "private_artifact_manifest_bound": true,
+    "latest_public_copy_contains_private_artifacts": false,
+    "raw_prompts_or_completions_persisted_publicly": false
+  },
+  "real_integration_boundary": {
+    "status": "INCONCLUSIVE",
+    "reason": "The response-accounting implementation is complete, but no exact production model has a successful benchmark qualification or credited real specialist review. Mock pipeline execution remained explicitly no-credit.",
+    "tracking_ticket": "REM-MODELS-001"
+  }
+}

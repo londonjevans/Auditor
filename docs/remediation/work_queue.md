@@ -135,10 +135,12 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Dependencies:** The safe identity/qualification infrastructure portion of
   `REM-MODELS-001` is satisfied. Real paid qualification remains deferred and
   cannot receive coverage credit.
-- **Status:** `IN_PROGRESS`
-- **Next action:** Replace context-token credit with exact requested-surface
-  response records, deterministic sealing and source/symbol validation, then invert
-  the old context-only regression.
+- **Status:** `COMPLETE`
+- **Evidence:** `docs/remediation/runtime/eval_defect_005.json`; implementation
+  checkpoint `6da9cec718a43e2ead4790f3e2b7f40f43f63bca`; full validation
+  `1370 passed, 10 skipped`.
+- **Next action:** Preserve response-backed coverage as a prerequisite while
+  resolving model quality designations against real qualification artifacts.
 
 ## EVAL-DEFECT-006 — Quality hashes are not benchmark-resolved
 
@@ -147,7 +149,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Acceptance criteria:** Shape-only hashes fail; source/config/prompt/schema/model/
   tool/isolation bindings, expiry, non-empty cases, and thresholds verify.
 - **Dependencies:** `EVAL-DEFECT-005`.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
+- **Next action:** Replace shape-only quality labels with verified, current,
+  non-empty qualification capabilities bound to the exact production selection.
 
 ## EVAL-DEFECT-007 — verify-run loses effective CLI overrides
 

@@ -48,17 +48,17 @@
       "id": "EVAL-DEFECT-005",
       "summary": "Model surface coverage measures supplied context rather than substantive review.",
       "baseline_path": "src/mmaudit/orchestration/model_coverage.py",
-      "status": "IN_PROGRESS",
-      "regression_test": null,
-      "runtime_artifact": null,
-      "acceptance_command": null,
-      "completion_commit": null
+      "status": "COMPLETE",
+      "regression_test": "tests/unit/test_model_coverage.py::test_context_delivery_or_successful_usage_without_response_earns_no_credit",
+      "runtime_artifact": "docs/remediation/runtime/eval_defect_005.json",
+      "acceptance_command": ".venv/bin/pytest -q tests/unit/test_assurance.py tests/unit/test_model_surface_review_schema.py tests/unit/test_model_coverage.py tests/unit/test_context.py tests/unit/test_model_review_evidence.py tests/unit/test_solidity_model_review_coverage.py tests/integration/test_pipeline.py tests/unit/test_scanners_reporting.py",
+      "completion_commit": "6da9cec718a43e2ead4790f3e2b7f40f43f63bca"
     },
     {
       "id": "EVAL-DEFECT-006",
       "summary": "Model quality hashes are not resolved against passing benchmark artifacts.",
       "baseline_path": "src/mmaudit/config.py",
-      "status": "QUEUED",
+      "status": "IN_PROGRESS",
       "regression_test": null,
       "runtime_artifact": null,
       "acceptance_command": null,

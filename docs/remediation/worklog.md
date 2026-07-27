@@ -4,16 +4,16 @@ The seven files under `docs/evaluation/` are immutable baseline evidence from
 commit `e304807cf942542706b88544fa216516f8f95cad`.
 
 AUTORUN_STATUS: IN_PROGRESS
-CURRENT_TICKET: EVAL-DEFECT-005
-LAST_COMPLETED_TICKET: REM-OPENROUTER-001
-NEXT_ACTION: Replace context-delivery credit with exact, validated, response-authored per-surface records and preserve explicit no-credit outcomes.
-LAST_COMMAND: .venv/bin/ruff format --check . && .venv/bin/ruff check . && .venv/bin/mypy
-LAST_RESULT: PASS — 254 files were formatted, Ruff passed, and strict mypy passed for 114 source files after the full suite passed with 1328 tests and 10 explicit external-integration skips.
-REMAINING_CODE_DEFECTS: 9
+CURRENT_TICKET: EVAL-DEFECT-006
+LAST_COMPLETED_TICKET: EVAL-DEFECT-005
+NEXT_ACTION: Resolve every production model quality designation against a current, passing, non-empty qualification artifact and fail shape-only hashes closed.
+LAST_COMMAND: .venv/bin/ruff format --check . && .venv/bin/ruff check . && .venv/bin/mypy && .venv/bin/pytest -q
+LAST_RESULT: PASS — 258 files were formatted, Ruff passed, strict mypy passed for 115 source files, and pytest passed 1370 tests with 10 explicit environment-bound skips in 173.11s.
+REMAINING_CODE_DEFECTS: 8
 REMAINING_REAL_INTEGRATIONS: OpenRouter exact-model smoke/qualification/specialist review; certified-isolation Foundry and Slither; Echidna; Medusa; Halmos; formal proof engine; rootless isolation; isolated replay; product benchmark reports
 BLOCKED_EXTERNAL_PREREQUISITES: Operator-reviewed production model lineage mapping; Echidna; Medusa; Kontrol; Certora; rootless runtime/image; private holdout; and independently adjudicated expert comparison are not yet evidenced as available
 OPENROUTER_COST_USED_USD: 0.00118674
-LAST_CHECKPOINT_COMMIT: e219c0fe208dc48fbc2969590b11099d7d15fe34
+LAST_CHECKPOINT_COMMIT: 6da9cec718a43e2ead4790f3e2b7f40f43f63bca
 
 ## Immutable baseline
 
@@ -657,3 +657,46 @@ LAST_CHECKPOINT_COMMIT: e219c0fe208dc48fbc2969590b11099d7d15fe34
 - **Exact next safe action:** Add deterministic requested-surface descriptors,
   an evidence-returning completion API, response batches, local artifact sealing,
   and response-only coverage accounting.
+- **Implemented slice:** Reviewer responses now contain one strict record per
+  requested stable surface. The provider client returns the exact normalized
+  usage record with each structured completion; the local sealer validates the
+  exact surface set, role, source/symbol citation, prompt/response/schema hashes,
+  and writes normalized evidence under the private run directory.
+- **Coverage correction:** The denominator is the complete deterministic Solidity
+  surface inventory. Review requests are deterministically distributed across
+  independently registered and operator-approved root lineages; aliases do not
+  inflate independence. Only completed, strict, non-truncated, validated
+  `CANDIDATE` or `REVIEWED_NO_ISSUE` records from real approved usage can earn
+  credit. `NOT_REVIEWED`, `INCONCLUSIVE`, mocks, missing records, invalid
+  locations, role/hash/model mismatches, duplicate evidence, and unapproved
+  lineages remain visible but earn no credit.
+- **Fail-closed join:** Maximum assurance independently reconciles every credited
+  surface reference with exactly one certification-grade usage record and one
+  sealed artifact/record. Aggregate role or context claims without that exact
+  join cannot satisfy the clause.
+- **Focused validation:** Ruff and strict mypy passed. The combined schema,
+  provider, context, evidence-sealer, coverage, Solidity-projection, assurance,
+  reporting, and pipeline checks passed in focused groups, including `276 passed
+  in 49.59s` and the end-to-end maximum-assurance negative-control audit.
+- **Exact next safe action:** Run the full repository validation gate and inspect
+  the final diff and emitted private/public artifact boundary.
+- **Final validation:** `.venv/bin/ruff format --check .` — PASS, `258` files;
+  `.venv/bin/ruff check .` — PASS; `.venv/bin/mypy` — PASS, `115` source files;
+  `.venv/bin/pytest -q` — PASS, `1370 passed, 10 skipped in 173.11s`.
+- **Immutable baseline check:** All seven recorded `docs/evaluation/` SHA-256
+  digests still match the frozen baseline, and no evaluation file changed.
+- **Runtime evidence:** `docs/remediation/runtime/eval_defect_005.json`.
+- **Result:** `COMPLETE` at implementation checkpoint
+  `6da9cec718a43e2ead4790f3e2b7f40f43f63bca`. Real paid model qualification
+  remains independently `INCONCLUSIVE`; no mock or context-only record received
+  real-review credit.
+
+## 2026-07-27 — EVAL-DEFECT-006
+
+- **Status:** `IN_PROGRESS`
+- **Defensive objective:** Prevent SHA-256-shaped quality labels or stale,
+  unrelated benchmark documents from authorizing production model execution.
+- **Exact next safe action:** Trace the private qualification bundle, selection
+  policy, effective configuration, runtime usage, assurance clause, and manifest;
+  then introduce an opaque verified-qualification capability with negative
+  regressions for shape-only, stale, empty, and binding-mismatched artifacts.
