@@ -32,7 +32,7 @@
       "regression_test": "tests/unit/test_assurance.py::test_exact_maximum_assurance_portfolio_fails_closed",
       "runtime_artifact": "docs/remediation/runtime/eval_defect_003.json",
       "acceptance_command": ".venv/bin/pytest -q tests/unit/test_assurance.py tests/unit/test_certification.py tests/unit/test_replay.py tests/unit/test_invariant_execution.py tests/unit/test_isolation.py tests/unit/test_isolation_provenance.py tests/unit/test_scanners_reporting.py tests/unit/test_formal.py tests/unit/test_echidna.py tests/unit/test_medusa.py tests/unit/test_halmos.py tests/unit/test_kontrol.py tests/integration/test_pipeline.py",
-      "completion_commit": "PENDING_CHECKPOINT"
+      "completion_commit": "f9dc2e3c96e0eb64a9e13a3f22b9d18192bddfd1"
     },
     {
       "id": "EVAL-DEFECT-004",
