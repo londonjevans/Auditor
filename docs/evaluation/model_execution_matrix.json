@@ -1,0 +1,333 @@
+{
+  "schema_version": "1.0",
+  "evaluation_type": "independent_fit_for_purpose_acceptance",
+  "source_commit": "e304807cf942542706b88544fa216516f8f95cad",
+  "matrix_status": "BLOCKED",
+  "actual_execution": {
+    "model_calls_attempted": 0,
+    "successful_responses": 0,
+    "invalid_responses": 0,
+    "retries": 0,
+    "substitutions": 0,
+    "exact_model_ids_called": [],
+    "providers_called": [],
+    "root_lineages_called": [],
+    "provider_fingerprints": [],
+    "roles_executed": [],
+    "source_surfaces_supplied": [],
+    "validated_output_locations": [],
+    "cost_usd": null,
+    "average_latency_seconds": null,
+    "worst_latency_seconds": null,
+    "classification": "BLOCKED",
+    "reason": "The release candidate contains no committed mmaudit.toml model selection, no immutable non-placeholder registry, and no provider credentials or real-provider runtime artifacts. No model call was made during this credential-free evaluation."
+  },
+  "release_configuration": {
+    "committed_runtime_config": null,
+    "committed_runtime_config_status": "ABSENT",
+    "illustrative_config_path": "mmaudit.example.toml",
+    "illustrative_config_is_executable_release_selection": false,
+    "registered_model_entries": 0,
+    "approved_model_lineages": [],
+    "commented_example_registry": {
+      "canonical_model_id": "PROVIDER_A/MODEL_ID_A",
+      "root_lineage": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "aliases": [
+        "MIRROR_PROVIDER/MODEL_ALIAS_A"
+      ],
+      "classification": "NOT_APPLICABLE_WITH_EVIDENCE",
+      "reason": "This registry entry is commented illustrative text and is not loaded configuration."
+    },
+    "ci_real_provider_path": {
+      "path": ".github/workflows/mmaudit.yml",
+      "classification": "IMPLEMENTED_NOT_EXECUTED",
+      "reason": "The conditional job requires provider secrets and checks for mmaudit.toml after checkout; the evaluated commit does not contain that file."
+    }
+  },
+  "configured_placeholders": [
+    {
+      "role": "threat_model",
+      "configured_value": "PROVIDER_A/MODEL_ID_A"
+    },
+    {
+      "role": "source_audit",
+      "configured_value": "PROVIDER_B/MODEL_ID_B"
+    },
+    {
+      "role": "business_logic",
+      "configured_value": "PROVIDER_C/MODEL_ID_C"
+    },
+    {
+      "role": "configuration",
+      "configured_value": "PROVIDER_D/MODEL_ID_D"
+    },
+    {
+      "role": "verifier",
+      "configured_value": "PROVIDER_E/MODEL_ID_E"
+    },
+    {
+      "role": "judge",
+      "configured_value": "PROVIDER_F/MODEL_ID_F"
+    },
+    {
+      "role": "specialists.access_control",
+      "configured_value": "PROVIDER_G/MODEL_ACCESS_CONTROL"
+    },
+    {
+      "role": "specialists.reentrancy_control_flow",
+      "configured_value": "PROVIDER_H/MODEL_REENTRANCY"
+    },
+    {
+      "role": "specialists.economic_game_theory",
+      "configured_value": "PROVIDER_ECONOMIC/MODEL_GAME_THEORY"
+    },
+    {
+      "role": "specialists.oracle_price_manipulation",
+      "configured_value": "PROVIDER_I/MODEL_ORACLE"
+    },
+    {
+      "role": "specialists.accounting_invariant",
+      "configured_value": "PROVIDER_J/MODEL_ACCOUNTING"
+    },
+    {
+      "role": "specialists.token_standard",
+      "configured_value": "PROVIDER_K/MODEL_TOKEN_STANDARD"
+    },
+    {
+      "role": "specialists.erc4626_vault",
+      "configured_value": "PROVIDER_L/MODEL_ERC4626"
+    },
+    {
+      "role": "specialists.amm_dex_liquidity",
+      "configured_value": "PROVIDER_M/MODEL_AMM"
+    },
+    {
+      "role": "specialists.lending_liquidation",
+      "configured_value": "PROVIDER_N/MODEL_LENDING"
+    },
+    {
+      "role": "specialists.governance_timelock",
+      "configured_value": "PROVIDER_O/MODEL_GOVERNANCE"
+    },
+    {
+      "role": "specialists.upgradeability_storage",
+      "configured_value": "PROVIDER_P/MODEL_UPGRADEABILITY"
+    },
+    {
+      "role": "specialists.initialization_deployment",
+      "configured_value": "PROVIDER_DEPLOYMENT/MODEL_INITIALIZATION"
+    },
+    {
+      "role": "specialists.signature_permit_replay",
+      "configured_value": "PROVIDER_Q/MODEL_SIGNATURES"
+    },
+    {
+      "role": "specialists.mev_ordering",
+      "configured_value": "PROVIDER_R/MODEL_MEV"
+    },
+    {
+      "role": "specialists.denial_of_service_griefing",
+      "configured_value": "PROVIDER_DOS/MODEL_GRIEFING"
+    },
+    {
+      "role": "specialists.precision_rounding",
+      "configured_value": "PROVIDER_PRECISION/MODEL_ROUNDING"
+    },
+    {
+      "role": "specialists.cross_chain_bridge",
+      "configured_value": "PROVIDER_S/MODEL_CROSS_CHAIN"
+    },
+    {
+      "role": "specialists.dependency_supply_chain",
+      "configured_value": "PROVIDER_SUPPLY_CHAIN/MODEL_DEPENDENCIES"
+    },
+    {
+      "role": "specialists.formal_methods_property",
+      "configured_value": "PROVIDER_T/MODEL_FORMAL"
+    },
+    {
+      "role": "specialists.false_negative_hunter",
+      "configured_value": "PROVIDER_U/MODEL_FALSE_NEGATIVE"
+    },
+    {
+      "role": "specialists.invariant_review",
+      "configured_value": "PROVIDER_V/MODEL_INVARIANT_REVIEW"
+    },
+    {
+      "role": "specialists.test_generation",
+      "configured_value": "PROVIDER_W/MODEL_TEST_GENERATION"
+    },
+    {
+      "role": "specialists.exploit_reproduction_planner",
+      "configured_value": "PROVIDER_X/MODEL_REPRODUCTION_PLANNER"
+    },
+    {
+      "role": "specialists.falsifier",
+      "configured_value": "PROVIDER_Y/MODEL_FALSIFIER"
+    },
+    {
+      "role": "specialists.report_quality",
+      "configured_value": "PROVIDER_Z/MODEL_REPORT_REVIEW"
+    }
+  ],
+  "placeholder_interpretation": {
+    "placeholder_count": 31,
+    "counted_as_models": 0,
+    "counted_as_independent_lineages": 0,
+    "counted_as_completed_reviews": 0,
+    "reason": "Illustrative provider/model strings are neither exact production model IDs nor runtime calls."
+  },
+  "ensemble_controls": [
+    {
+      "requirement": "Aliases are not counted as independent models",
+      "classification": "PROVEN_MOCK_ONLY",
+      "implementation_paths": [
+        "src/mmaudit/models/registry.py"
+      ],
+      "tests": [
+        "tests/unit/test_model_registry.py"
+      ],
+      "runtime_artifact": null,
+      "actual_release_run_result": "NOT_EVALUATED"
+    },
+    {
+      "requirement": "Provider mirrors are not counted as independent root lineages",
+      "classification": "PROVEN_MOCK_ONLY",
+      "implementation_paths": [
+        "src/mmaudit/models/registry.py",
+        "src/mmaudit/agents/verifier.py",
+        "src/mmaudit/orchestration/pipeline.py"
+      ],
+      "tests": [
+        "tests/unit/test_model_registry.py",
+        "tests/unit/test_cross_examination.py"
+      ],
+      "runtime_artifact": null,
+      "actual_release_run_result": "NOT_EVALUATED"
+    },
+    {
+      "requirement": "Failed calls do not count as completed reviews",
+      "classification": "PROVEN_MOCK_ONLY",
+      "implementation_paths": [
+        "src/mmaudit/orchestration/model_coverage.py"
+      ],
+      "tests": [
+        "tests/unit/test_model_coverage.py"
+      ],
+      "runtime_artifact": null,
+      "actual_release_run_result": "NOT_EVALUATED"
+    },
+    {
+      "requirement": "Generic summaries do not count as per-surface review",
+      "classification": "UNIMPLEMENTED",
+      "implementation_paths": [
+        "src/mmaudit/orchestration/model_coverage.py"
+      ],
+      "tests": [
+        "tests/unit/test_model_coverage.py"
+      ],
+      "runtime_artifact": null,
+      "actual_release_run_result": "NOT_EVALUATED",
+      "limitation": "A successful request is credited for every deterministic surface included in its context; response content is not checked for substantive review of each surface."
+    },
+    {
+      "requirement": "Every critical surface receives the configured minimum independent review",
+      "classification": "PARTIALLY_PROVEN",
+      "implementation_paths": [
+        "src/mmaudit/orchestration/model_coverage.py",
+        "src/mmaudit/orchestration/pipeline.py"
+      ],
+      "tests": [
+        "tests/unit/test_model_coverage.py"
+      ],
+      "runtime_artifact": null,
+      "actual_release_run_result": "BLOCKED",
+      "limitation": "Coverage accounting and failure behavior are tested with fake providers, but zero critical surfaces received real model review in this evaluation."
+    },
+    {
+      "requirement": "Blind discovery occurs before cross-examination",
+      "classification": "PROVEN_MOCK_ONLY",
+      "implementation_paths": [
+        "src/mmaudit/orchestration/pipeline.py"
+      ],
+      "tests": [
+        "tests/unit/test_cross_examination.py"
+      ],
+      "runtime_artifact": null,
+      "actual_release_run_result": "NOT_EVALUATED"
+    },
+    {
+      "requirement": "Verifier and falsifier cannot create findings",
+      "classification": "PROVEN_MOCK_ONLY",
+      "implementation_paths": [
+        "src/mmaudit/agents/verifier.py",
+        "src/mmaudit/orchestration/pipeline.py"
+      ],
+      "tests": [
+        "tests/unit/test_consensus.py",
+        "tests/unit/test_cross_examination.py"
+      ],
+      "runtime_artifact": null,
+      "actual_release_run_result": "NOT_EVALUATED"
+    },
+    {
+      "requirement": "Judge cannot exceed the deterministic evidence cap",
+      "classification": "PROVEN_MOCK_ONLY",
+      "implementation_paths": [
+        "src/mmaudit/orchestration/consensus.py"
+      ],
+      "tests": [
+        "tests/unit/test_consensus.py"
+      ],
+      "runtime_artifact": null,
+      "actual_release_run_result": "NOT_EVALUATED"
+    },
+    {
+      "requirement": "Model agreement alone cannot confirm a finding",
+      "classification": "PROVEN_MOCK_ONLY",
+      "implementation_paths": [
+        "src/mmaudit/orchestration/consensus.py"
+      ],
+      "tests": [
+        "tests/unit/test_consensus.py"
+      ],
+      "runtime_artifact": null,
+      "actual_release_run_result": "NOT_EVALUATED"
+    }
+  ],
+  "model_benchmark": {
+    "manifest_path": "benchmarks/model_corpus/manifest.json",
+    "corpus_sha256": "0215c11598cddbf8fd17f978a9c2b272d6014b6d58d96650ddc5ed9bd957c3d7",
+    "case_count": 4,
+    "corpus_kind": "synthetic",
+    "dimensions": [
+      "economic_invariant_quality",
+      "injection_resistance",
+      "location_accuracy",
+      "rejection"
+    ],
+    "real_provider_execution": false,
+    "classification": "PROVEN_MOCK_ONLY",
+    "reason": "The benchmark evaluator is covered with fake-provider responses; there is no completed real-provider benchmark artifact."
+  },
+  "independence_and_quality_gaps": [
+    "Configured family diversity can be inferred from provider/model string heuristics without independently verified immutable root lineage.",
+    "A registry quality_measurement is validated as a SHA-256-shaped value but is not resolved against a passed model benchmark artifact.",
+    "Illustrative placeholder providers are syntactically distinct but provide no real independence evidence."
+  ],
+  "validation_evidence": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/private/tmp/mmaudit-eval-subagent.4jCjCg/src /Users/josevans/dev/Auditor/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/test_benchmark.py tests/unit/test_benchmark_claims.py tests/unit/test_mutations.py tests/integration/test_mutation_compilation.py tests/unit/test_model_benchmark.py tests/unit/test_model_registry.py tests/unit/test_model_coverage.py tests/unit/test_consensus.py tests/unit/test_cross_examination.py tests/unit/test_reproduction.py tests/unit/test_reproduction_integrity.py tests/integration/test_financial_settlement_foundry.py tests/unit/test_adversarial_repository.py tests/unit/test_adversarial_acceptance.py tests/integration/test_adversarial_acceptance_fail_closed.py tests/integration/test_adversarial_repository_isolation.py tests/integration/test_rootless_container.py tests/unit/test_scanners_reporting.py",
+      "result": "199 passed, 3 skipped in 5.06s",
+      "interpretation": "The model-related tests in this command use deterministic fake providers and do not constitute real model execution."
+    }
+  ],
+  "limitations": [
+    "No exact production model identity was selected or called.",
+    "No provider fingerprint or root-lineage evidence was produced at runtime.",
+    "No successful or invalid real response, retry, or substitution was observed.",
+    "No real source surface was supplied to a model.",
+    "No model output location, cost, or latency artifact exists.",
+    "Independence, review coverage, blind sequencing, and evidence-cap behavior remain unproven against real providers."
+  ]
+}

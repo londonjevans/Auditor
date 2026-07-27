@@ -1,0 +1,408 @@
+{
+  "schema_version": "1.0",
+  "evaluation_id": "fit-for-purpose-e304807-20260727",
+  "evaluation_kind": "independent_release_candidate_acceptance",
+  "evaluation_start_utc": "2026-07-27T11:41:33Z",
+  "evaluation_end_utc": "2026-07-27T12:21:37Z",
+  "evaluated_build": {
+    "git_commit": "e304807cf942542706b88544fa216516f8f95cad",
+    "git_tree": "5709cc28f76856e98b18dfb1daeb955ee969d53a",
+    "branch_at_freeze": "main",
+    "dirty_tree_at_freeze": false,
+    "snapshot_method": "git archive of the clean commit, with separate read-only and disposable extracted trees",
+    "snapshot_archive_sha256": "299b1b3ef5707d60be73bcfbd7af47bbf8b71a03a5a26c496758538ca7d13e3a",
+    "source_file_count": 447,
+    "source_sha256_manifest_sha256": "be3e307f29780e15108e2cef06010f47cfb3130cbe11d9f206911c9a44ad5464",
+    "frozen_snapshot_path": "/private/tmp/mmaudit-fit-e304807.QF2xx6/frozen",
+    "disposable_execution_snapshot_path": "/private/tmp/mmaudit-fit-e304807.QF2xx6/run",
+    "production_implementation_modified_during_evaluation": false
+  },
+  "configuration_fingerprints": {
+    "mmaudit.example.toml": "9772a68e007fc11c60c146273378549106c0e19d996e6d5bfc04dde50eef8304",
+    "src/mmaudit/templates/mmaudit.example.toml": "9772a68e007fc11c60c146273378549106c0e19d996e6d5bfc04dde50eef8304",
+    "pyproject.toml": "db6bb0f8d4a77b459757e515283d5a8510c94226dc7884767d61e00382c114e6",
+    "Dockerfile": "848d1b523c6bfa09366168bb33a100a37230dd7e9ffd88b75dd409d518796a4a",
+    "model_selection_ordered_list_sha256": "05de45c23943626a02abbb2d9b6563eae548ea90f345a201a187354f28935570",
+    "configured_model_registry_entries": 0,
+    "configured_exact_production_model_ids": 0,
+    "container_image_digest": null
+  },
+  "prompt_fingerprints": {
+    "aggregate_sha256": "455221ae6589c13dc0e978bcd1d2219b1aceeb3ee2290262414425e0755114b1",
+    "files": {
+      "__init__.py": "33aa182bd59b74a747004d3f6635ad46ce2809cc8af792529dfd8863dbdd3046",
+      "business_logic.md": "1ea01eb8446f11b30f2652732b625752ca61669b9cc28dd7b3a659634d4fecb1",
+      "configuration.md": "e32906a17156884c201ccacfb4983cc5527b90ffccd906cb0502031a085839c6",
+      "cross_examination.md": "7540b28833b51dda5c381b3c1b7fd5885d863d19c70c0ca379c01835241c5b8c",
+      "exploit_test.md": "51f7a22adc0138d85e2d3b369aaaee904324cb5167a480f7b533ac04f6fa5868",
+      "falsifier.md": "0092f9665813610008d91b11fad94f74428451891e729911c82a499146df3797",
+      "invariant_review.md": "17f5b834369a87df9f8d5e76d741feb8eef197fae8e7a3ea7af6aeb0eaeb7cc7",
+      "judge.md": "a9dd7cd1e48c097f12901915c8311c6d007d22001d9076b645c662206c9dba8f",
+      "report_quality.md": "f6acea1e6b0a84fbffabe90a70b4dbfaed12094795de69d7b757b26e8af74dbe",
+      "shared_security_rules.md": "168565e48c48e6d7c396c0146fbe628d6da97e0036d25fade2ef93b7be8245ab",
+      "source_audit.md": "522280ffea8d6390a00c8dea264438ed34e73237129b5e9e7fffd9ef750eb7d8",
+      "specialist.md": "b47a6bd3d797724454db8d4e7c59bd99a53df688d8986f1286459d98c8b77fe1",
+      "threat_model.md": "9d95807e7e5d42081861f00db289cfa43a7d7ab1eb09254f5c29fcd0f9a601f3",
+      "verifier.md": "f1b07a36361555ed00bd254f4770cc750fe463d8af18d87873704f1195a45bda"
+    }
+  },
+  "schema_fingerprints": {
+    "aggregate_sha256": "39c246e30dfb6087d8e9b77ae536f829a51ccbb9ba1670da6b9c9a4572e4e8bd",
+    "files": {
+      "adversarial_acceptance_manifest.schema.json": "fc8e3a4b47b749d7977c44907f5cb7d65c3db3d136120af28bd3449f89c7f46c",
+      "adversarial_acceptance_report.schema.json": "6ed37785b184b72fe8ef2e0cf91c6fc7a3c6f2923b998fb5ed52a97698c23b81",
+      "benchmark_certificate.schema.json": "3eab45e49ccd9492e8d2c6ae38719e44e19d1dcd3476bc7feb09bda980ec6538",
+      "benchmark_manifest.schema.json": "5010ee904bd378a777cd466b90a3bab2ccc36cfd160accc0413bc332444c0989",
+      "dependency_sbom.schema.json": "20f36cdf0315836c364e7090cb5d0f616e8a6f632ae7a5ad8e0e833fe7b5c39c",
+      "dependency_snapshot.schema.json": "6dd514b0a3a2d7b9e4de37bf0c1c8aa484755ecc508c115df9414520ee4a99e5",
+      "deployment_snapshot.schema.json": "9f0fb182f8758631cbba4def0250ac2adf8fb0513ea749b57e74bb54a9775371",
+      "economic_acceptance_manifest.schema.json": "d52a3826b7166a5d4bfb8571901381b312f0b29ad010b91aebbc26223699033d",
+      "economic_acceptance_report.schema.json": "bcfc3835d0f5e2c41eec0a96fa925e3e131f8e06e50a94d58bd92b882fbb0000",
+      "full_protocol_acceptance_manifest.schema.json": "115c1ed3892f342fa4a92db7a6d3fd67ed3fd3570f5d2209e3bf3d4601234c31",
+      "full_protocol_acceptance_report.schema.json": "9f9d27b05ef69f3a9af7c67c14c6024be8a2c1a495d5f9634fb6be49cb4abc04",
+      "human_comparison_evidence.schema.json": "c5a65901594de73cb1cf3585d169d539fac14421c4ed0b101b3f6d875d75a5bd",
+      "maximum_assurance_traceability.schema.json": "d5a3894268f7496d6b449076265254038b1f18dc512beef1491d0f953a9770ac",
+      "offline_replay.schema.json": "fac83774e3403a6cb6f5e72dd7726ab4826112fc43f8a79ad81a3513327fda6f",
+      "prior_audit.schema.json": "9d0a981be6a351e8b592bf913218cbff3221243375dcb72b3651d78e85d3becb",
+      "release_gate_report.schema.json": "4b579415abb8c40d67db8ddb7d06fbed672607fdb982a472f61cb4cb47008ebb",
+      "run_evidence_manifest.schema.json": "d375a33f5411ad38226e3dd3212b90a5b703e75277314906367b597f54ea5f4f",
+      "run_verification.schema.json": "1361feb6586660f95262e83c464274389bc615b21cc364c130497b8881facfe4"
+    }
+  },
+  "benchmark_fingerprints": {
+    "corpus_name": "mmaudit synthetic Solidity benchmark",
+    "corpus_schema_version": "2.0",
+    "corpus_sha256": "186534e1d0d263920d42041e39b05fd6fb4acc57f5e7e4c9c1321a403756845b",
+    "manifest_file_sha256": "5ef918abfbe9989b0857f9aa07e51ecf0ef6a80ded4249cd4502b78ee2f3df2b",
+    "ground_truth_version": null,
+    "ground_truth_note": "Ground truth is committed inside the corpus manifest and has no separately versioned, independently held artifact.",
+    "repositories": 2,
+    "cases": 28,
+    "unsafe_cases": 13,
+    "safe_cases": 15,
+    "model_corpus_schema_version": "1.0",
+    "model_corpus_sha256": "0215c11598cddbf8fd17f978a9c2b272d6014b6d58d96650ddc5ed9bd957c3d7",
+    "model_manifest_file_sha256": "87a28a7174d89c7533aa02537f597ee6e6f4d5e9af05ced03ff5dd1f66b80d1d",
+    "model_corpus_cases": 4,
+    "economic_manifest_sha256": "afd1b18d0e47daeb744b9512d605f25830c844b52312d57aa63c85f56121afde",
+    "economic_manifest_file_sha256": "3cb7c0011365a16dc1fff57f88c6ba2ec3a3a19bbf6af324973c5c48b88a9ff5"
+  },
+  "environment": {
+    "operating_system": "macOS 26.5.2 build 25F84",
+    "kernel": "Darwin 25.5.0 arm64",
+    "python": "3.13.4",
+    "project_declared_python": "Python 3.12+",
+    "mmaudit_version": "0.1.0",
+    "isolation_backend_selected": "none",
+    "rootless_container_runtime": null,
+    "pinned_container_image": null,
+    "public_network_used": false,
+    "provider_credentials_used": false,
+    "provider_calls_made": 0
+  },
+  "verdicts": {
+    "FIT_FOR_PURPOSE": "FAIL",
+    "MAXIMUM_ASSURANCE_IMPLEMENTATION": "FAILED",
+    "SUPERIORITY_STATUS": "NOT_EVALUATED",
+    "fit_for_purpose_reason": "The release candidate cannot perform the stated maximum-assurance audit as frozen: no real model ensemble is configured, all but Foundry lack real vulnerable/safe control execution, hardened isolation is unavailable, no audit benchmark reports exist, and the assurance contract admits false COMPLETE states for failed compilation and failed reproduction.",
+    "maximum_assurance_reason": "A real maximum-assurance invocation exited 2 and persisted INCONCLUSIVE, while direct contract assays additionally showed material fail-closed violations.",
+    "superiority_reason": "No private holdout or blind, identical-commit, independently adjudicated professional comparison was available."
+  },
+  "observed_maximum_assurance_run": {
+    "run_id": "20260727T114638Z-5641e2ed",
+    "exit_code": 2,
+    "completed": false,
+    "quality_status": "failed",
+    "maximum_assurance_status": "INCONCLUSIVE",
+    "model_usage_usd": 0.0,
+    "model_calls": 0,
+    "scanner_runs": 0,
+    "formal_runs": 0,
+    "compilation_status": "skipped",
+    "incomplete_reason": "hardened dynamic isolation unavailable",
+    "runtime_artifacts": {
+      "final-findings.json": "0678ac1cc645c6b3e338579a02f772b92f5f72a361dfc8c657f3c2317a33ad73",
+      "maximum_assurance_traceability.json": "2624976ffb20a0fcc9459941f178d152fba4ce1a919f3e92278a991fb68b9e09",
+      "run-evidence-manifest.json": "f1fe03ce21394356d685a0403e5cafe16241cd60419bc52d21684a23e652dbc1"
+    },
+    "verification": {
+      "exit_code": 6,
+      "status": "STALE",
+      "mismatch_count": 4,
+      "reason": "The CLI profile override changes effective configuration hashes, but verify-run has no matching profile override input."
+    }
+  },
+  "assurance_contract_checks": [
+    {
+      "prerequisite": "missing model key",
+      "result": "FAILED_AS_EXPECTED",
+      "evidence": "credential-free doctor exited 2 before provider access"
+    },
+    {
+      "prerequisite": "too few model families",
+      "result": "FAILED_AS_EXPECTED",
+      "evidence": "deterministic independence test rejects repeated families"
+    },
+    {
+      "prerequisite": "unavailable model",
+      "result": "PARTIALLY_PROVEN",
+      "evidence": "placeholder IDs are rejected locally; unavailable-provider responses are fake-provider tested only"
+    },
+    {
+      "prerequisite": "missing fuzzer",
+      "result": "FAIL_CLOSED_VIOLATION",
+      "evidence": "baseline_no_echidna_medusa returned COMPLETE unless the operator separately listed Echidna as required"
+    },
+    {
+      "prerequisite": "missing formal engine",
+      "result": "FAIL_CLOSED_VIOLATION",
+      "evidence": "an UNAVAILABLE formal record returned COMPLETE; formal success is optional by default"
+    },
+    {
+      "prerequisite": "stale or missing benchmark certificate",
+      "result": "FAIL_CLOSED_VIOLATION",
+      "evidence": "configured benchmark gating rejects stale evidence, but missing_benchmark_default returned COMPLETE because the gate is disabled by default"
+    },
+    {
+      "prerequisite": "missing isolation backend",
+      "result": "FAILED_AS_EXPECTED",
+      "evidence": "direct assay returned FAILED and real maximum-assurance preflight stopped"
+    },
+    {
+      "prerequisite": "unpinned image",
+      "result": "FAILED_AS_EXPECTED_IN_UNIT_TEST",
+      "evidence": "rootless configuration validation rejects a mutable image reference; no real rootless run occurred"
+    },
+    {
+      "prerequisite": "network-enabled untrusted execution",
+      "result": "PARTIALLY_PROVEN",
+      "evidence": "command construction and fail-closed static tests deny network, but no real rootless backend executed"
+    },
+    {
+      "prerequisite": "missing economic harness",
+      "result": "FAILED_AS_EXPECTED_IN_UNIT_TEST",
+      "evidence": "untyped/missing economic template assurance tests fail the applicable clause"
+    },
+    {
+      "prerequisite": "failed reproduction",
+      "result": "FAIL_CLOSED_VIOLATION",
+      "evidence": "NOT_REPRODUCED with attempts=1 returned COMPLETE"
+    },
+    {
+      "prerequisite": "invalid source location",
+      "result": "FAILED_AS_EXPECTED_IN_UNIT_TEST",
+      "evidence": "location validator and SARIF projection reject invalid locations"
+    },
+    {
+      "prerequisite": "compilation failure",
+      "result": "FAIL_CLOSED_VIOLATION",
+      "evidence": "FAILED compilation with retained runtime evidence returned COMPLETE"
+    },
+    {
+      "prerequisite": "incomplete scope manifest",
+      "result": "FAILED_AS_EXPECTED",
+      "evidence": "full-protocol scope clause returned FAILED"
+    }
+  ],
+  "genuinely_proven": [
+    "The clean frozen source passes 636 deterministic, mocked, and conditional tests; nine unavailable real integrations remain skipped.",
+    "Foundry and solc execute 43 bounded known-fixture economic property harnesses: 21 unsafe controls produce deterministic counterexamples twice and 22 safe controls pass.",
+    "Typed schemas, source hashing, bounded copying, invalid-location rejection, evidence caps, and several fail-closed local validation paths execute deterministically.",
+    "The empty-report benchmark correctly refuses overall certification and reports the superiority claim as not evaluated."
+  ],
+  "merely_attempted": [
+    "Real multi-provider model review and cross-examination",
+    "Real Slither target analysis under production isolation",
+    "Real Echidna, Medusa, Halmos, Kontrol, Certora, SMTChecker, and Mythril target analysis",
+    "General confirmed-finding reproduction and isolated replay",
+    "Real rootless hostile-repository containment",
+    "Blind public time-split, private holdout, and professional comparison benchmarks"
+  ],
+  "mock_only_or_synthetic": [
+    "All model-provider execution, retry, cross-examination, verifier, falsifier, judge, and report-quality flows",
+    "Echidna, Medusa, Halmos, Kontrol, and Certora adapter orchestration",
+    "The maximum-assurance end-to-end pipeline test",
+    "Most replay orchestration and isolation boundary tests",
+    "Benchmark metric arithmetic with findings constructed from known ground truth"
+  ],
+  "blocked": [
+    "Real model ensemble: no production mmaudit.toml, immutable model registry, exact model IDs, provider fingerprints, or credential",
+    "Echidna, Medusa, Kontrol, Certora, Mythril, and several scanners: binaries absent",
+    "Slither, Halmos, SMTChecker, isolated Foundry replay, and hostile-repository containment: no hardened backend",
+    "Container isolation: Docker, Podman, and bwrap absent; no pinned image digest",
+    "Superiority evaluation: no operator holdout or identical-scope independently adjudicated expert baseline"
+  ],
+  "observed_strengths": [
+    "Bounded synthetic accounting, rounding, state-ordering, ERC-4626, oracle, liquidation, rewards, governance, upgrade, signature, bridge, callback, resource-growth, and token-return property regressions",
+    "Evidence typing, source binding, invalid-location rejection, evidence-tier caps, and safe control pairing",
+    "Fail-closed preflight when hardened dynamic isolation is wholly absent"
+  ],
+  "unmeasured_or_missed_classes": [
+    "Automated discovery recall for every vulnerability class",
+    "Cross-contract and cross-chain semantic completeness",
+    "Real symbolic counterexample and formal proof effectiveness",
+    "Six of eleven requested security mutation classes and all real mutation kill rates",
+    "Real provider/model surface-review coverage",
+    "Deployment-bytecode versus compiled-source equivalence",
+    "Cross-asset settlement, realistic liquidity/gas, and explicit victim/protocol loss",
+    "Real hostile-repository isolation escape resistance"
+  ],
+  "material_defects": [
+    {
+      "id": "EVAL-DEFECT-001",
+      "severity": "critical",
+      "summary": "Compilation failure can satisfy maximum assurance because the clause tests compilation attempted rather than compilation succeeded.",
+      "path": "src/mmaudit/orchestration/assurance.py"
+    },
+    {
+      "id": "EVAL-DEFECT-002",
+      "severity": "critical",
+      "summary": "A failed high/critical reproduction attempt can satisfy maximum assurance because the clause checks attempts rather than successful, integrity-validated reproduction.",
+      "path": "src/mmaudit/orchestration/assurance.py"
+    },
+    {
+      "id": "EVAL-DEFECT-003",
+      "severity": "high",
+      "summary": "Mandatory complementary fuzzer/formal engine presence is not enforced by default; an unavailable formal record can satisfy inventory.",
+      "path": "src/mmaudit/orchestration/assurance.py"
+    },
+    {
+      "id": "EVAL-DEFECT-004",
+      "severity": "high",
+      "summary": "The standalone scanner clause can pass without a Slither record when another scanner succeeds.",
+      "path": "src/mmaudit/orchestration/assurance.py"
+    },
+    {
+      "id": "EVAL-DEFECT-005",
+      "severity": "high",
+      "summary": "Model surface coverage credits supplied context to any successful response without proving substantive review of each surface.",
+      "path": "src/mmaudit/orchestration/model_coverage.py"
+    },
+    {
+      "id": "EVAL-DEFECT-006",
+      "severity": "high",
+      "summary": "Model quality measurement hashes are shape-validated but not resolved against passed benchmark artifacts.",
+      "path": "src/mmaudit/config.py"
+    },
+    {
+      "id": "EVAL-DEFECT-007",
+      "severity": "high",
+      "summary": "verify-run reports a valid CLI profile-overridden run stale because it cannot reproduce the effective profile override hashes.",
+      "path": "src/mmaudit/cli.py"
+    },
+    {
+      "id": "EVAL-DEFECT-008",
+      "severity": "medium",
+      "summary": "The empty-report benchmark vacuously passes semantic-coverage and safe-control subgates even though overall status is incomplete.",
+      "path": "src/mmaudit/benchmark/engine.py"
+    },
+    {
+      "id": "EVAL-DEFECT-009",
+      "severity": "high",
+      "summary": "The release evidence validator manufactures declared traceability artifact names instead of proving emitted runtime artifacts.",
+      "path": "scripts/validate_release_evidence.py"
+    },
+    {
+      "id": "EVAL-DEFECT-010",
+      "severity": "high",
+      "summary": "The current release-gate report is stale, unbound to the evaluated commit, and records only eight of twelve gates passed.",
+      "path": "docs/release_gate_report.json"
+    },
+    {
+      "id": "EVAL-DEFECT-011",
+      "severity": "medium",
+      "summary": "Mutation support covers five of the eleven required classes and has no real end-to-end property kill evidence.",
+      "path": "src/mmaudit/benchmark/mutations.py"
+    },
+    {
+      "id": "EVAL-DEFECT-012",
+      "severity": "high",
+      "summary": "Reproduction identity evidence does not independently compare deployed runtime bytecode with the compiled audited source.",
+      "path": "src/mmaudit/orchestration/reproduction_integrity.py"
+    },
+    {
+      "id": "EVAL-DEFECT-013",
+      "severity": "medium",
+      "summary": "Rejected findings in the human-readable report omit the full per-finding evidence, verifier, falsifier, remediation, and uncertainty fields available elsewhere.",
+      "path": "src/mmaudit/reporting/markdown.py"
+    }
+  ],
+  "commands": [
+    {
+      "id": "CMD-FREEZE",
+      "command": "git status --short --branch; git diff; git archive e304807cf942542706b88544fa216516f8f95cad; SHA-256 manifest generation over the extracted archive",
+      "result": "clean main branch; no diff; 447-file snapshot frozen"
+    },
+    {
+      "id": "CMD-FOCUSED",
+      "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/private/tmp/mmaudit-eval-subagent.4jCjCg/src /Users/josevans/dev/Auditor/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/test_benchmark.py tests/unit/test_benchmark_claims.py tests/unit/test_mutations.py tests/integration/test_mutation_compilation.py tests/unit/test_model_benchmark.py tests/unit/test_model_registry.py tests/unit/test_model_coverage.py tests/unit/test_consensus.py tests/unit/test_cross_examination.py tests/unit/test_reproduction.py tests/unit/test_reproduction_integrity.py tests/integration/test_financial_settlement_foundry.py tests/unit/test_adversarial_repository.py tests/unit/test_adversarial_acceptance.py tests/integration/test_adversarial_acceptance_fail_closed.py tests/integration/test_adversarial_repository_isolation.py tests/integration/test_rootless_container.py tests/unit/test_scanners_reporting.py",
+      "result": "199 passed, 3 skipped in 5.06s; all skips required an unconfigured real rootless image"
+    },
+    {
+      "id": "CMD-ECONOMIC",
+      "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/private/tmp/mmaudit-eval-subagent.4jCjCg/src /Users/josevans/dev/Auditor/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_economic_acceptance_foundry.py tests/integration/test_full_protocol_offline_acceptance.py",
+      "result": "2 passed in 27.12s; 43 real local Foundry harnesses executed"
+    },
+    {
+      "id": "CMD-FULL-SUITE",
+      "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/private/tmp/mmaudit-fit-e304807.QF2xx6/run/src /Users/josevans/dev/Auditor/.venv/bin/python -m pytest -q -p no:cacheprovider",
+      "result": "636 passed, 9 skipped in 134.66s"
+    },
+    {
+      "id": "CMD-ASSURANCE-ASSAY",
+      "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/private/tmp/mmaudit-fit-e304807.QF2xx6/run/src /Users/josevans/dev/Auditor/.venv/bin/python -c <the exact newline-joined inline_python value below>",
+      "inline_python": [
+        "import runpy",
+        "from dataclasses import replace",
+        "from mmaudit.config import AuditConfig",
+        "from mmaudit.models.schemas import CompilationStatus, FormalToolRun, FormalToolStatus, ReproductionResult, ReproductionState",
+        "helpers=runpy.run_path(\"tests/unit/test_assurance.py\")",
+        "conf=runpy.run_path(\"tests/conftest.py\")",
+        "def config(**ma):",
+        " d=conf[\"base_config_data\"](); d[\"profile\"]=\"maximum-assurance\"; d[\"maximum_assurance\"]={\"allow_downgrade\":False, **ma}; d[\"models\"][\"specialists\"]=helpers[\"_specialists\"](); return AuditConfig.model_validate(d).effective()",
+        "def assess(label,cfg,rt):",
+        " a=helpers[\"MaximumAssuranceContract\"](cfg).evaluate(rt); failed=[r.engine for r in a.requirements if r.required and not r.passed]; print(label, a.status.value, \"failed=\", \",\".join(failed) or \"none\")",
+        "base=helpers[\"_complete_runtime\"]()",
+        "assess(\"baseline_no_echidna_medusa\",config(),base)",
+        "failed_comp=base.compilations[0].model_copy(update={\"status\":CompilationStatus.FAILED,\"errors\":[\"synthetic compilation failure\"]})",
+        "assess(\"compilation_failed\",config(),replace(base,compilations=[failed_comp]))",
+        "assess(\"formal_only_unavailable_record\",config(),replace(base,formal_runs=[FormalToolRun(tool=\"echidna\",status=FormalToolStatus.UNAVAILABLE,failure_reason=\"synthetic unavailable\")]))",
+        "assess(\"formal_inventory_missing\",config(),replace(base,formal_runs=[]))",
+        "repro=ReproductionResult(candidate_id=\"critical-1\",test_name=\"SyntheticFailed\",state=ReproductionState.NOT_REPRODUCED,specification_sha256=\"a\"*64,attempts=1,successful_attempts=0)",
+        "repro_rt=replace(base,eligible_high_critical_ids={\"critical-1\"},feasible_high_critical_ids={\"critical-1\"},reproduction_results=[repro],candidate_falsifier_lineages={\"sha256:\"+\"a\"*64,\"sha256:\"+\"b\"*64})",
+        "assess(\"failed_reproduction_attempt\",config(),repro_rt)",
+        "assess(\"missing_isolation\",config(),replace(base,isolation_available=False))",
+        "assess(\"missing_model_reviews\",config(),replace(base,model_roles_completed=set(),specialist_roles_completed=set(),model_review_coverage=None))",
+        "assess(\"missing_benchmark_default\",config(),base)",
+        "assess(\"missing_benchmark_when_opted_in\",config(benchmark_gate=True),base)",
+        "assess(\"required_echidna_missing\",config(),base)",
+        "required_cfg=config(); required_cfg=required_cfg.model_copy(update={\"formal\":required_cfg.formal.model_copy(update={\"required_tools\":[\"echidna\"]})}); assess(\"required_echidna_explicit\",required_cfg,base)"
+      ],
+      "result": "COMPLETE for baseline without Echidna/Medusa, FAILED compilation, UNAVAILABLE formal record, NOT_REPRODUCED attempt, missing benchmark by default, and missing Echidna unless separately required; FAILED for missing isolation, model review, formal inventory, opted-in benchmark, and explicitly required Echidna"
+    },
+    {
+      "id": "CMD-DOCTOR",
+      "command": "env -u OPENROUTER_API_KEY PYTHONDONTWRITEBYTECODE=1 .venv/bin/mmaudit doctor --config mmaudit.example.toml --repo . --output /private/tmp/mmaudit-eval-engine-doctor --allow-code-egress --no-color",
+      "result": "exit 2; missing key, placeholders, and unavailable isolation; no provider call"
+    },
+    {
+      "id": "CMD-MAXIMUM-RUN",
+      "command": "env -u OPENROUTER_API_KEY PYTHONDONTWRITEBYTECODE=1 .venv/bin/mmaudit run --config mmaudit.example.toml --repo tests/fixtures/full_protocol_offline --output /private/tmp/mmaudit-eval-engine-maximum --profile maximum-assurance --require-maximum-assurance --allow-code-egress --no-color",
+      "result": "exit 2; run 20260727T114638Z-5641e2ed; maximum assurance INCONCLUSIVE; no scanner, formal, dynamic, or model execution"
+    },
+    {
+      "id": "CMD-BENCHMARK-EMPTY",
+      "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/private/tmp/mmaudit-eval-subagent.4jCjCg/src /Users/josevans/dev/Auditor/.venv/bin/python -m mmaudit benchmark --corpus benchmarks/corpus/manifest.json --reports /private/tmp/mmaudit-eval-empty-reports --ground-truth-root . --profile maximum-assurance --output-json /private/tmp/mmaudit-eval-benchmark-empty.json --no-color",
+      "result": "exit 6; status incomplete; 0 of 2 reports loaded; superiority not_evaluated; artifact SHA-256 49e295ebf1643df0be729704dc6a00bf1b952794dd860884293e9a7e9f7c8296"
+    }
+  ],
+  "artifact_index": {
+    "human_report": "docs/evaluation/fit_for_purpose_report.md",
+    "machine_report": "docs/evaluation/fit_for_purpose_report.json",
+    "requirements_traceability": "docs/evaluation/requirements_traceability.json",
+    "tool_execution_matrix": "docs/evaluation/tool_execution_matrix.json",
+    "model_execution_matrix": "docs/evaluation/model_execution_matrix.json",
+    "benchmark_results": "docs/evaluation/benchmark_results.json",
+    "isolation_results": "docs/evaluation/isolation_results.json"
+  }
+}

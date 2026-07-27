@@ -4,15 +4,126 @@ This file is the persistent handoff record. Update it after every meaningful
 implementation slice. Do not record secrets, source excerpts from external targets,
 credentials, RPC URLs, or operational attack instructions.
 
-AUTORUN_STATUS: FINISHED_BLOCKED_TECHNICAL
-CURRENT_TICKET: None
-LAST_COMPLETED_TICKET: BRAND-001
-NEXT_ACTION: No safe actionable ticket remains; await operator-provided pinned rootless containment, immutable non-placeholder model/provider configuration, and the other recorded local tool prerequisites before rerunning blocked real integrations.
-LAST_VALIDATION_COMMAND: .venv/bin/ruff format .; .venv/bin/ruff check .; .venv/bin/mypy; .venv/bin/pytest -q; make release-evidence PYTHON=.venv/bin/python
-LAST_VALIDATION_RESULT: PASS — Ruff left 208 files unchanged and reported no issues; strict mypy passed 101 source files; pytest passed 636 tests with 9 documented technical skips in 141.99s; all 18 schemas and persisted release evidence validated with release_status=blocked_technical; 27 PNG exports, the favicon ICO, all SVG/XML, HTML, and JSON brand assets validated.
+AUTORUN_STATUS: COMPLETE_WITH_BLOCKERS_RECORDED
+CURRENT_TICKET: NONE
+LAST_COMPLETED_TICKET: EVAL-001
+NEXT_ACTION: No implementation action is authorized by the completed evaluation; convert the separately recorded defects into bounded remediation tickets in a future implementation task, and resume blocked real integrations only when their prerequisites are supplied.
+LAST_VALIDATION_COMMAND: .venv/bin/python duplicate-key/semantic evaluation validator; frozen-source/archive/config/prompt/schema/source/binary/runtime hash validators; evaluation content scan; git diff --check
+LAST_VALIDATION_RESULT: PASS — exactly seven requested artifacts parsed without duplicate keys; 45 requirements, 65 implementation tickets, four meta dispositions, all 69 frozen headings, two hash-bound PROVEN_REAL rows, all verdict/model/benchmark/isolation/tool/link assertions, every recorded source and binary hash, both retained runtime-report hashes, whitespace, and secret-pattern checks passed.
 LAST_CHECKPOINT_COMMIT: 655567d16e3aba3bd139964c75cc8a4c7688a878 — `Add Corrovera brand system`.
 REMAINING_ACTIONABLE_TICKETS: 0
 BLOCKED_TICKETS: DYN-002 real Echidna and DYN-003 real Medusa binary integration subtasks are BLOCKED_TECHNICAL because no local binaries are installed; SYM-001 real Halmos target integration is BLOCKED_TECHNICAL because no hardened isolation backend is available; FORM-001 real configured Certora service integration is BLOCKED_TECHNICAL because certoraRun and configured CI credential/connectivity are unavailable; FORM-002 real Kontrol proof integration is BLOCKED_TECHNICAL because no local kontrol binary is installed; ISO-002, ISO-004, and E2E-002 real rootless containment integrations and other rootless/nested OS-isolation integration subtasks remain BLOCKED_TECHNICAL because no rootless runtime or pinned test image is configured; MODEL-002 real-provider execution is BLOCKED_TECHNICAL locally because no provider credential or committed operator model selection is available, while its conditional default-branch CI path and deterministic fake-provider coverage are complete; MAN-003 real isolated Foundry replay integration is BLOCKED_TECHNICAL in this sandbox because sandbox-exec cannot be nested and no other hardened backend is configured, while the conditional integration test is present; RELEASE-001 is BLOCKED_TECHNICAL because doctor, the real-provider model benchmark, the maximum-assurance run, and real isolated replay cannot pass without those prerequisites, while all eight safe local release gates are complete.
+
+## 2026-07-27 — EVAL-001
+
+- **Status:** `COMPLETE`
+- **Defensive objective:** Evaluate the frozen release candidate independently,
+  without production implementation changes, fixture recognition, weakened gates,
+  or fabricated execution evidence.
+- **Completed changes:**
+  - Confirmed the pre-evaluation tree was clean, archived commit
+    `e304807cf942542706b88544fa216516f8f95cad`, and evaluated separate frozen and
+    disposable trees without modifying production implementation.
+  - Recorded Git, 447-file source, config, prompt, schema, model-selection, corpus,
+    compiler, executable, runtime-artifact, and environment fingerprints.
+  - Created the seven requested artifacts under `docs/evaluation/`.
+  - Classified 45 requirements; mapped 65 implementation tickets and explicitly
+    dispositioned four meta tickets, accounting for all 69 frozen queue headings.
+  - Preserved only two `PROVEN_REAL` rows, each with the evaluated commit,
+    implementation, real test, exact command/result, and retained hash-verified
+    runtime artifact.
+  - Recorded `FIT_FOR_PURPOSE=FAIL`,
+    `MAXIMUM_ASSURANCE_IMPLEMENTATION=FAILED`, and
+    `SUPERIORITY_STATUS=NOT_EVALUATED`.
+- **Files changed:** `docs/evaluation/fit_for_purpose_report.md`,
+  `docs/evaluation/fit_for_purpose_report.json`,
+  `docs/evaluation/requirements_traceability.json`,
+  `docs/evaluation/tool_execution_matrix.json`,
+  `docs/evaluation/model_execution_matrix.json`,
+  `docs/evaluation/benchmark_results.json`,
+  `docs/evaluation/isolation_results.json`, `docs/codex_work_queue.md`, and
+  `docs/codex_worklog.md`. No production implementation, fixture, schema, prompt,
+  configuration, or test file changed.
+- **Commands and results:**
+  - `git status --short --branch`; `git diff`; `git archive
+    e304807cf942542706b88544fa216516f8f95cad`; SHA-256 manifest generation:
+    clean freeze; archive
+    `299b1b3ef5707d60be73bcfbd7af47bbf8b71a03a5a26c496758538ca7d13e3a`;
+    relative source-manifest
+    `be3e307f29780e15108e2cef06010f47cfb3130cbe11d9f206911c9a44ad5464`.
+  - Focused benchmark/model/reproduction/isolation pytest command recorded in
+    `fit_for_purpose_report.json#commands/CMD-FOCUSED`: `199 passed, 3 skipped in
+    5.06s`; all skips required an unconfigured real rootless image.
+  - Focused engine pytest command recorded as `CMD-ENGINE-TESTS` in the tool
+    matrix: `50 passed, 3 skipped in 7.41s`; real Echidna, Medusa, and Halmos
+    integrations did not execute.
+  - Real Foundry economic/full-protocol command recorded as `CMD-ECONOMIC`:
+    `2 passed in 27.12s`; 43 known-fixture harnesses executed, with 21 unsafe
+    controls replayed twice and 22 safe controls passing.
+  - `PYTHONDONTWRITEBYTECODE=1
+    PYTHONPATH=/private/tmp/mmaudit-fit-e304807.QF2xx6/run/src
+    /Users/josevans/dev/Auditor/.venv/bin/python -m pytest -q -p
+    no:cacheprovider`: `636 passed, 9 skipped in 134.66s`.
+  - Frozen-source `.venv/bin/ruff format --check .`, `.venv/bin/ruff check .`,
+    and `.venv/bin/mypy`: 208 files already formatted, lint passed, strict mypy
+    passed 101 source files.
+  - Credential-free `mmaudit doctor`: exit `2`; missing key, placeholder model
+    IDs, and unavailable isolation were rejected before provider access.
+  - Credential-free maximum-assurance run recorded as `CMD-MAXIMUM-RUN`: exit `2`,
+    run `20260727T114638Z-5641e2ed`, quality `failed`, maximum assurance
+    `INCONCLUSIVE`, zero model/scanner/formal executions.
+  - `mmaudit verify-run` on that run: exit `6`, `STALE`, four effective-config
+    mismatches caused by an unreproducible CLI profile override.
+  - Maximum-assurance benchmark against an empty immutable report directory:
+    exit `6`, `incomplete`, zero of two reports loaded, superiority
+    `not_evaluated`; zero-valued performance fields were rejected as measurements.
+  - Direct assurance assay, with exact inline source retained under
+    `CMD-ASSURANCE-ASSAY`, returned false `COMPLETE` for failed compilation,
+    failed reproduction, an unavailable formal record, absent default
+    fuzzers/engines, and a missing default benchmark certificate.
+- **Test results and evidence interpretation:** Real Foundry execution proves bounded
+  property/remediation regression only; it does not measure automated discovery.
+  Every model-provider path remains mock-only, and all product recall, precision,
+  location, mutation-kill, model-coverage, audit-runtime/cost, and superiority
+  metrics remain explicitly `NOT_EVALUATED` rather than inferred from fixtures or
+  absent reports.
+- **Final artifact hashes:**
+  - `fit_for_purpose_report.md`:
+    `fc09d9330ec2cfa8e56278a3692f494dac10b5b1f294c6d852cc6f0a1ddc5cde`.
+  - `fit_for_purpose_report.json`:
+    `bf67e8fc18e031bae04159bceca7fe00d985bcef632c4c69ec78ada76389dd0c`.
+  - `requirements_traceability.json`:
+    `6b71a2d8f39ac5e4e3529fb333a1856ee687353b734423f1e16d83b1d091040d`.
+  - `tool_execution_matrix.json`:
+    `e3f7f085b036cde19fd02956686b0173763cc309ffdc2340613e835be9038456`.
+  - `model_execution_matrix.json`:
+    `8bcd744893cef34f6e62d41b926d7e032de5695edf67a8c5834cedd87947b943`.
+  - `benchmark_results.json`:
+    `5507ac83940727faff54c5f8bb5e26104985f8512da98f911cd3e5ac0d0a2b00`.
+  - `isolation_results.json`:
+    `7064945c7fbc242cddcb032539c899a5aa53efcddef3a24ac5c78d7d4b43a696`.
+- **Final artifact validation:** Duplicate-key parsing; allowed-classification checks;
+  exact ticket-accounting checks; required `PROVEN_REAL` evidence checks; all
+  verdict, model, five-layer benchmark, metric, gate, isolation-threat, engine, and
+  Markdown-link assertions; source/archive/config/prompt/schema/binary/runtime hashes;
+  trailing-whitespace and secret-pattern scans; and `git diff --check` all passed.
+- **Recorded defects:** The assurance contract can falsely complete failed
+  compilation and reproduction; complementary engines and the benchmark certificate
+  are optional by default; scanner/model coverage can overcredit missing evidence;
+  profile-overridden runs cannot verify current; empty-report subgates pass
+  vacuously; release evidence is stale/declaration-driven; mutation coverage is
+  incomplete; deployed-bytecode equivalence and full rejected-finding report detail
+  are missing.
+- **Unresolved issues:** Real provider models, real Slither target execution,
+  Echidna, Medusa, Halmos, Kontrol, Certora, SMTChecker, Mythril, hardened/rootless
+  containment, isolated replay, the local snapshot importer, a public time-split
+  corpus, a private holdout, and an identical-scope expert comparison remain blocked,
+  unimplemented, or unexecuted as classified in the artifacts.
+- **Checkpoint commit:** Pending creation of the isolated docs-only evaluation
+  checkpoint; the hash will be recorded in a follow-up metadata commit.
+- **Exact next safe action:** Create the isolated docs-only checkpoint and push all
+  evaluation work through the configured SSH remote. Do not remediate production
+  implementation within this completed evaluation task.
 
 ## 2026-07-27 — BRAND-001
 

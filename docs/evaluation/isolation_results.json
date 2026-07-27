@@ -1,0 +1,264 @@
+{
+  "schema_version": "1.0",
+  "evaluation_type": "independent_fit_for_purpose_acceptance",
+  "source_commit": "e304807cf942542706b88544fa216516f8f95cad",
+  "overall_classification": "PARTIALLY_PROVEN",
+  "no_isolation_escape_gate": "NOT_EVALUABLE",
+  "backend": {
+    "configured_mode": "auto",
+    "resolved_backend": "NONE",
+    "rootless_test_image": null,
+    "rootless_image_pinned": false,
+    "available_relevant_binaries": {
+      "sandbox-exec": "/usr/bin/sandbox-exec",
+      "forge": "/Users/josevans/.foundry/bin/forge",
+      "solc": "/opt/homebrew/bin/solc",
+      "slither": "/Users/josevans/anaconda3/bin/slither",
+      "halmos": "/Users/josevans/anaconda3/bin/halmos",
+      "z3": "/opt/homebrew/bin/z3"
+    },
+    "unavailable_relevant_binaries": [
+      "docker",
+      "podman",
+      "bwrap"
+    ],
+    "reason": "No verified rootless runtime and no pinned MMAUDIT_TEST_ROOTLESS_IMAGE were available. sandbox-exec was discoverable but cannot be nested in this evaluation environment."
+  },
+  "adversarial_manifest": {
+    "path": "tests/fixtures/adversarial_repository/cases.json",
+    "schema_version": "1.0",
+    "case_count": 10,
+    "file_sha256": "3c66f3824b6db009b08f6b524d1c6c138a0a423848da136f6a06d64f6b3c3cbf",
+    "manifest_sha256": "b918fd902ef431577b1ffdab6fd343523078fc823e4b083487824021225aada6",
+    "fixture_tree_sha256": "780f9eee712db18e5e363039dcd1072dcb0cfbccdb3c87a733a4a54b8b1d8748",
+    "case_ids": [
+      "crafted_names",
+      "environment_read",
+      "fake_binaries",
+      "home_read",
+      "network_socket",
+      "output_abuse",
+      "path_traversal",
+      "process_resource_abuse",
+      "prompt_injection",
+      "symlink_escape"
+    ]
+  },
+  "threat_results": [
+    {
+      "threat": "malicious build configuration",
+      "classification": "PARTIALLY_PROVEN",
+      "result": "Repository JavaScript compilation fails closed and does not execute without an isolation backend.",
+      "evidence": [
+        "tests/integration/test_adversarial_acceptance_fail_closed.py",
+        "tests/integration/test_rootless_container.py::test_real_rootless_container_contains_synthetic_hardhat_configuration"
+      ],
+      "limitation": "The real rootless containment test skipped."
+    },
+    {
+      "threat": "package lifecycle scripts",
+      "classification": "PROVEN_REAL",
+      "result": "A synthetic postinstall package is rejected before repository JavaScript executes.",
+      "evidence": [
+        "tests/unit/test_dependencies.py::test_postinstall_is_rejected_without_executing_repository_javascript"
+      ],
+      "limitation": "This is deterministic pre-execution rejection, not runtime containment."
+    },
+    {
+      "threat": "fake local tool binaries",
+      "classification": "PROVEN_REAL",
+      "result": "Repository-local fake git and scanner binaries are rejected before execution.",
+      "evidence": [
+        "tests/unit/test_adversarial_repository.py::test_repository_local_fake_scanner_and_git_are_rejected_before_execution",
+        "tests/integration/test_adversarial_acceptance_fail_closed.py"
+      ],
+      "limitation": null
+    },
+    {
+      "threat": "path traversal",
+      "classification": "PROVEN_REAL",
+      "result": "Unsafe relative paths are rejected and traversal sources cannot be copied.",
+      "evidence": [
+        "tests/unit/test_adversarial_repository.py::test_links_traversal_and_control_names_are_omitted_or_rejected_before_copy",
+        "tests/integration/test_adversarial_acceptance_fail_closed.py"
+      ],
+      "limitation": "Runtime read-only-root containment was not executed."
+    },
+    {
+      "threat": "symlink escape",
+      "classification": "PROVEN_REAL",
+      "result": "Symlinked workspace content is omitted or rejected before copy.",
+      "evidence": [
+        "tests/unit/test_adversarial_repository.py::test_links_traversal_and_control_names_are_omitted_or_rejected_before_copy",
+        "tests/integration/test_adversarial_acceptance_fail_closed.py"
+      ],
+      "limitation": null
+    },
+    {
+      "threat": "host-home reads",
+      "classification": "IMPLEMENTED_NOT_EXECUTED",
+      "result": "Private HOME and absence of host-home paths are asserted in generated rootless commands.",
+      "evidence": [
+        "tests/unit/test_adversarial_repository.py::test_fixture_runtime_command_has_private_home_network_and_resource_boundaries",
+        "tests/integration/test_adversarial_repository_isolation.py::test_real_rootless_backend_contains_adversarial_runtime_probe"
+      ],
+      "limitation": "The real runtime probe skipped, so actual host-home containment was not observed."
+    },
+    {
+      "threat": "environment-secret reads",
+      "classification": "PARTIALLY_PROVEN",
+      "result": "Sanitized host environments omit a synthetic host canary; rootless commands specify a private environment.",
+      "evidence": [
+        "tests/unit/test_adversarial_repository.py::test_fixture_runtime_command_has_private_home_network_and_resource_boundaries",
+        "tests/integration/test_rootless_container.py::test_real_rootless_container_enforces_read_only_source_and_private_output"
+      ],
+      "limitation": "The real container assertion that provider secrets are absent skipped."
+    },
+    {
+      "threat": "SSH-agent access",
+      "classification": "UNIMPLEMENTED",
+      "result": "No explicit SSH-agent socket adversarial case or executed containment probe was found.",
+      "evidence": [],
+      "limitation": "Generic environment sanitization is not equivalent to an SSH-agent access test."
+    },
+    {
+      "threat": "cloud-credential access",
+      "classification": "UNIMPLEMENTED",
+      "result": "No explicit cloud-credential path or metadata-service adversarial case was found.",
+      "evidence": [],
+      "limitation": "Generic environment sanitization is not an executed cloud-credential containment test."
+    },
+    {
+      "threat": "container-socket access",
+      "classification": "IMPLEMENTED_NOT_EXECUTED",
+      "result": "The rootless integration test asserts that /var/run/docker.sock is absent.",
+      "evidence": [
+        "tests/integration/test_rootless_container.py::test_real_rootless_container_enforces_read_only_source_and_private_output"
+      ],
+      "limitation": "The test skipped because no pinned rootless image/backend was configured."
+    },
+    {
+      "threat": "network exfiltration",
+      "classification": "IMPLEMENTED_NOT_EXECUTED",
+      "result": "Container command construction uses network=none and the runtime probe attempts a bounded socket connection.",
+      "evidence": [
+        "tests/unit/test_adversarial_repository.py::test_fixture_runtime_command_has_private_home_network_and_resource_boundaries",
+        "tests/integration/test_adversarial_repository_isolation.py::test_real_rootless_backend_contains_adversarial_runtime_probe"
+      ],
+      "limitation": "The real socket probe skipped; command construction alone is not containment evidence."
+    },
+    {
+      "threat": "process exhaustion",
+      "classification": "PARTIALLY_PROVEN",
+      "result": "Trusted synthetic subprocesses are time-bounded and rootless commands include process limits.",
+      "evidence": [
+        "tests/unit/test_adversarial_repository.py::test_scanner_timeout_and_output_abuse_are_bounded_without_repository_execution",
+        "tests/unit/test_adversarial_repository.py::test_fixture_runtime_command_has_private_home_network_and_resource_boundaries"
+      ],
+      "limitation": "No real rootless fork-bomb or process-count exhaustion probe executed."
+    },
+    {
+      "threat": "memory exhaustion",
+      "classification": "IMPLEMENTED_NOT_EXECUTED",
+      "result": "Generated rootless commands include a 536870912-byte memory limit.",
+      "evidence": [
+        "tests/unit/test_adversarial_repository.py::test_fixture_runtime_command_has_private_home_network_and_resource_boundaries"
+      ],
+      "limitation": "No real memory-exhaustion workload executed under the limit."
+    },
+    {
+      "threat": "output flooding",
+      "classification": "PROVEN_REAL",
+      "result": "A real local trusted synthetic subprocess exceeding the configured output bound returns FAILED.",
+      "evidence": [
+        "tests/unit/test_adversarial_repository.py::test_scanner_timeout_and_output_abuse_are_bounded_without_repository_execution",
+        "tests/integration/test_adversarial_acceptance_fail_closed.py"
+      ],
+      "limitation": "This does not prove the unexecuted rootless runtime's output boundary."
+    },
+    {
+      "threat": "prompt injection in repository content",
+      "classification": "PARTIALLY_PROVEN",
+      "result": "Repository prompt text is hash-delimited and marked as untrusted evidence.",
+      "evidence": [
+        "tests/unit/test_adversarial_repository.py::test_repository_prompt_text_remains_hash_delimited_untrusted_evidence",
+        "tests/integration/test_adversarial_acceptance_fail_closed.py"
+      ],
+      "limitation": "No real model was called, so behavioral injection resistance is unproven."
+    },
+    {
+      "threat": "Unicode and case filename tricks",
+      "classification": "PARTIALLY_PROVEN",
+      "result": "Control characters, traversal, and a Unicode bidirectional override are rejected by path normalization.",
+      "evidence": [
+        "tests/unit/test_adversarial_repository.py::test_links_traversal_and_control_names_are_omitted_or_rejected_before_copy"
+      ],
+      "limitation": "No comprehensive case-folding, normalization-collision, or filesystem case-sensitivity matrix was executed."
+    },
+    {
+      "threat": "generated-file poisoning",
+      "classification": "UNIMPLEMENTED",
+      "result": "No explicit generated-file poisoning adversarial case or acceptance result was found.",
+      "evidence": [],
+      "limitation": "Source hashes and workspace validation are adjacent controls but do not substitute for this requested adversarial case."
+    }
+  ],
+  "static_and_fail_closed_acceptance": {
+    "classification": "PROVEN_REAL",
+    "status": "FAIL_CLOSED",
+    "manifest_cases": 10,
+    "safe_cases": 10,
+    "hostile_host_executions": 0,
+    "blocked_integrations": [
+      "real_rootless_containment"
+    ],
+    "interpretation": "All ten manifest cases either meet a deterministic rejection or structural boundary, or are explicitly blocked rather than treated as a real containment pass."
+  },
+  "real_rootless_acceptance": {
+    "classification": "BLOCKED",
+    "executed": false,
+    "passed": false,
+    "skip_reason": "MMAUDIT_TEST_ROOTLESS_IMAGE is not configured",
+    "tests": [
+      "tests/integration/test_adversarial_repository_isolation.py::test_real_rootless_backend_contains_adversarial_runtime_probe",
+      "tests/integration/test_rootless_container.py::test_real_rootless_container_enforces_read_only_source_and_private_output",
+      "tests/integration/test_rootless_container.py::test_real_rootless_container_contains_synthetic_hardhat_configuration"
+    ],
+    "unobserved_assertions": [
+      "private environment at runtime",
+      "private HOME at runtime",
+      "network denial at runtime",
+      "container-socket denial at runtime",
+      "read-only source at runtime",
+      "path traversal denial at runtime",
+      "bounded child-process behavior at runtime",
+      "source immutability after hostile configuration execution"
+    ]
+  },
+  "validation_evidence": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/private/tmp/mmaudit-eval-subagent.4jCjCg/src /Users/josevans/dev/Auditor/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/test_benchmark.py tests/unit/test_benchmark_claims.py tests/unit/test_mutations.py tests/integration/test_mutation_compilation.py tests/unit/test_model_benchmark.py tests/unit/test_model_registry.py tests/unit/test_model_coverage.py tests/unit/test_consensus.py tests/unit/test_cross_examination.py tests/unit/test_reproduction.py tests/unit/test_reproduction_integrity.py tests/integration/test_financial_settlement_foundry.py tests/unit/test_adversarial_repository.py tests/unit/test_adversarial_acceptance.py tests/integration/test_adversarial_acceptance_fail_closed.py tests/integration/test_adversarial_repository_isolation.py tests/integration/test_rootless_container.py tests/unit/test_scanners_reporting.py",
+      "result": "199 passed, 3 skipped in 5.06s",
+      "skips": [
+        {
+          "test": "tests/integration/test_adversarial_repository_isolation.py::test_real_rootless_backend_contains_adversarial_runtime_probe",
+          "reason": "MMAUDIT_TEST_ROOTLESS_IMAGE is not configured"
+        },
+        {
+          "test": "tests/integration/test_rootless_container.py::test_real_rootless_container_enforces_read_only_source_and_private_output",
+          "reason": "MMAUDIT_TEST_ROOTLESS_IMAGE is not configured"
+        },
+        {
+          "test": "tests/integration/test_rootless_container.py::test_real_rootless_container_contains_synthetic_hardhat_configuration",
+          "reason": "MMAUDIT_TEST_ROOTLESS_IMAGE is not configured"
+        }
+      ]
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/private/tmp/mmaudit-fit-e304807.QF2xx6/run/src /Users/josevans/dev/Auditor/.venv/bin/python -m pytest -q -p no:cacheprovider",
+      "result": "636 passed, 9 skipped in 134.66s",
+      "interpretation": "The full suite preserves unavailable real-engine and isolation paths as skips rather than passes."
+    }
+  ],
+  "conclusion": "The release candidate proves meaningful deterministic rejection, workspace hygiene, environment construction, bounded local subprocess behavior, and fail-closed handling. It does not prove real containment against an executing adversarial repository because every real rootless test skipped. Therefore the no-isolation-escape acceptance gate is NOT_EVALUABLE."
+}

@@ -730,9 +730,29 @@ and report serialization.
 - **Dependencies:** None.
 - **Status:** `COMPLETE`
 
+## Independent release evaluation
+
+### EVAL-001 — Fit-for-purpose acceptance evaluation
+
+- **Objective:** Independently determine whether the frozen release candidate
+  satisfies the operator's evidence-driven maximum-assurance product requirement,
+  without changing or repairing production implementation.
+- **Files/modules:** `docs/evaluation/`, queue and worklog only.
+- **Acceptance criteria:** Freeze a clean source snapshot; classify every material
+  requirement; distinguish real, mocked, partial, unexecuted, unavailable, and
+  absent evidence; exercise safe fail-closed and local real acceptance paths; report
+  required metrics and explicit fit-for-purpose, implementation, and superiority
+  verdicts in all seven requested artifacts.
+- **Tests:** Snapshot/hash verification, focused assurance/tool/benchmark/isolation
+  execution, artifact/schema consistency, JSON parsing, and evaluation-only diff
+  review.
+- **Dependencies:** `RELEASE-001`.
+- **Status:** `COMPLETE`
+
 ## Next action
 
-No safe actionable ticket remains. Resume `E2E-002` and the four blocked
-`RELEASE-001` gates only when an operator supplies a pinned rootless containment
-backend, immutable non-placeholder model selection and provider access, and the
-other explicitly recorded local tool prerequisites.
+No safe actionable queue ticket remains. `EVAL-001` is complete without production
+implementation changes. Its separately recorded defects require future authorized
+remediation tickets; `E2E-002` and the blocked `RELEASE-001` gates can resume only
+when an operator supplies the explicitly recorded real-model, engine, isolation,
+holdout, and comparison prerequisites.

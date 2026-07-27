@@ -1,0 +1,382 @@
+{
+  "schema_version": "1.0",
+  "evaluation_type": "independent_fit_for_purpose_acceptance",
+  "source_commit": "e304807cf942542706b88544fa216516f8f95cad",
+  "overall_status": "NOT_EVALUATED",
+  "interpretation_rule": "No product audit report was generated or loaded. Null product metrics below must not be replaced by the zero-valued arithmetic emitted by the deliberately empty-report fail-closed probe. The separate Foundry result is a bounded known-fixture property regression, not automated discovery performance.",
+  "corpus": {
+    "manifest_path": "benchmarks/corpus/manifest.json",
+    "name": "mmaudit synthetic Solidity benchmark",
+    "corpus_sha256": "186534e1d0d263920d42041e39b05fd6fb4acc57f5e7e4c9c1321a403756845b",
+    "repositories": 2,
+    "cases": 28,
+    "vulnerable_cases": 13,
+    "safe_cases": 15,
+    "vulnerable_by_severity": {
+      "critical": 4,
+      "high": 8,
+      "medium": 1
+    },
+    "safe_by_severity": {
+      "critical": 4,
+      "high": 10,
+      "medium": 1
+    },
+    "kind": "locally authored synthetic fixtures",
+    "public_real_world_time_split": false,
+    "private_holdout": false,
+    "identical_commit_human_comparison": false
+  },
+  "empty_report_probe": {
+    "purpose": "Verify fail-closed benchmark behavior without manufacturing audit output",
+    "command": "python -m mmaudit benchmark --corpus benchmarks/corpus/manifest.json --reports <empty-directory> --ground-truth-root . --profile maximum-assurance --output-json /private/tmp/mmaudit-eval-benchmark-empty.json --no-color",
+    "exit_code": 6,
+    "status": "incomplete",
+    "reports_expected": 2,
+    "reports_loaded": 0,
+    "raw_emitted_values": {
+      "critical_recall": 0.0,
+      "high_recall": 0.0,
+      "medium_recall": 0.0,
+      "precision": 0.0,
+      "safe_false_confirmation_rate": 0.0,
+      "location_accuracy": 0.0,
+      "reproduction_success_rate": 0.0
+    },
+    "is_product_performance_measurement": false,
+    "limitations": [
+      "missing report for repository economic_erc4626",
+      "missing report for repository maximum_assurance_protocol"
+    ],
+    "gate_results": [
+      {
+        "name": "known_critical_recall",
+        "raw_result": "FAIL",
+        "detail": "0/4 critical cases detected",
+        "valid_product_measurement": false
+      },
+      {
+        "name": "safe_control_false_confirmations",
+        "raw_result": "PASS",
+        "detail": "0 safe high/critical cases confirmed",
+        "valid_product_measurement": false,
+        "defect": "The gate passes vacuously when no report was loaded."
+      },
+      {
+        "name": "exact_ground_truth_locations",
+        "raw_result": "FAIL",
+        "detail": "0/13 vulnerable locations matched exactly",
+        "valid_product_measurement": false
+      },
+      {
+        "name": "repository_metrics_unmasked",
+        "raw_result": "FAIL",
+        "detail": "one or more repositories failed an unmasked quality metric",
+        "valid_product_measurement": true
+      },
+      {
+        "name": "evidence_caps",
+        "raw_result": "PASS",
+        "detail": "0 confirmed findings bypassed evidence caps",
+        "valid_product_measurement": false,
+        "defect": "No finding existed to exercise the evidence cap."
+      },
+      {
+        "name": "coverage_present",
+        "raw_result": "FAIL",
+        "detail": "0 loaded reports omitted Solidity coverage",
+        "valid_product_measurement": true
+      },
+      {
+        "name": "maximum_assurance_complete",
+        "raw_result": "FAIL",
+        "detail": "economic_erc4626 and maximum_assurance_protocol had no COMPLETE report",
+        "valid_product_measurement": true
+      },
+      {
+        "name": "maximum_assurance_repository_mutation_score",
+        "raw_result": "FAIL",
+        "detail": "one or more repositories lack a passing attributed mutation score",
+        "valid_product_measurement": true
+      },
+      {
+        "name": "maximum_assurance_semantic_coverage",
+        "raw_result": "PASS",
+        "detail": "required semantic coverage metrics are complete",
+        "valid_product_measurement": false,
+        "defect": "src/mmaudit/benchmark/engine.py::_maximum_assurance_coverage_gaps iterates only loaded reports, so zero loaded reports produce a vacuous pass."
+      },
+      {
+        "name": "maximum_assurance_property_mutation_score",
+        "raw_result": "FAIL",
+        "detail": "mutation scorecard unavailable",
+        "valid_product_measurement": true
+      }
+    ]
+  },
+  "bounded_known_fixture_control": {
+    "classification": "PROVEN_REAL",
+    "scope": "tests/fixtures/solidity/maximum_assurance_economic/manifest.json",
+    "manifest_sha256": "afd1b18d0e47daeb744b9512d605f25830c844b52312d57aa63c85f56121afde",
+    "economic_cases": 18,
+    "applicable_harnesses": 43,
+    "executed_harnesses": 43,
+    "unsafe_harnesses": 21,
+    "unsafe_counterexamples_first_run": 21,
+    "unsafe_counterexamples_second_run": 21,
+    "safe_harnesses": 22,
+    "safe_harnesses_passed": 22,
+    "unsafe_control_rate": 1.0,
+    "safe_control_rate": 1.0,
+    "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/private/tmp/mmaudit-eval-subagent.4jCjCg/src /Users/josevans/dev/Auditor/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_economic_acceptance_foundry.py tests/integration/test_full_protocol_offline_acceptance.py",
+    "result": "2 passed in 27.12s",
+    "engine": "real local offline Foundry and solc",
+    "limitation": "The test directly selects manifest-listed unsafe and safe harness contract names. It proves deterministic paired property behavior, compilation, execution, normalized evidence, and serialization; it does not prove mmaudit discovered any planted issue."
+  },
+  "benchmark_layers": {
+    "A_must_catch_security_regressions": {
+      "status": "NOT_EVALUATED",
+      "product_reports_loaded": 0,
+      "bounded_control": "21/21 unsafe harnesses produced counterexamples in each of two runs and 22/22 paired safe harnesses passed.",
+      "reason": "No blind mmaudit audit report was produced. The known-fixture Foundry property control is not a recall or precision measurement."
+    },
+    "B_security_mutation_testing": {
+      "status": "NOT_EVALUATED",
+      "implemented_source_mutations": [
+        "removed authorization guard",
+        "removed replay or nonce state update",
+        "weakened boundary comparator",
+        "replaced accounting operator",
+        "removed external-call return check"
+      ],
+      "proven_activity": "The five deterministic transforms apply, revert, and compile.",
+      "missing_activity": "No audit or security property was run to kill the mutants; the unit benchmark's killed outcomes are fabricated evaluator inputs.",
+      "requested_mutation_classes": [
+        {
+          "class": "removed authorization",
+          "classification": "IMPLEMENTED_NOT_EXECUTED"
+        },
+        {
+          "class": "removed nonce update",
+          "classification": "IMPLEMENTED_NOT_EXECUTED"
+        },
+        {
+          "class": "changed rounding direction",
+          "classification": "UNIMPLEMENTED",
+          "related_but_insufficient": "generic accounting operator replacement"
+        },
+        {
+          "class": "removed stale-price validation",
+          "classification": "UNIMPLEMENTED"
+        },
+        {
+          "class": "external call reordered before state update",
+          "classification": "UNIMPLEMENTED"
+        },
+        {
+          "class": "removed initializer protection",
+          "classification": "UNIMPLEMENTED"
+        },
+        {
+          "class": "weakened timelock",
+          "classification": "UNIMPLEMENTED"
+        },
+        {
+          "class": "changed storage slot",
+          "classification": "UNIMPLEMENTED"
+        },
+        {
+          "class": "removed pause enforcement",
+          "classification": "UNIMPLEMENTED"
+        },
+        {
+          "class": "unchecked return handling",
+          "classification": "IMPLEMENTED_NOT_EXECUTED"
+        },
+        {
+          "class": "incorrect decimal scale",
+          "classification": "UNIMPLEMENTED"
+        }
+      ]
+    },
+    "C_public_real_world_time_split_corpus": {
+      "status": "NOT_EVALUATED",
+      "cases": 0,
+      "reason": "No public pre-fix, publication-date-bound, post-cutoff corpus was supplied or run."
+    },
+    "D_private_or_blinded_holdout": {
+      "status": "NOT_EVALUATED",
+      "cases": 0,
+      "reason": "No operator-provided private or blinded holdout exists in the evaluation evidence."
+    },
+    "E_human_comparison": {
+      "status": "NOT_EVALUATED",
+      "comparisons": 0,
+      "reason": "No blind identical-commit and identical-scope expert comparison was independently adjudicated."
+    }
+  },
+  "required_quality_metrics": {
+    "critical_recall": {
+      "value": null,
+      "status": "NOT_EVALUATED"
+    },
+    "high_recall": {
+      "value": null,
+      "status": "NOT_EVALUATED"
+    },
+    "medium_recall": {
+      "value": null,
+      "status": "NOT_EVALUATED"
+    },
+    "confirmed_precision": {
+      "value": null,
+      "status": "NOT_EVALUATED",
+      "implementation_gap": "The current benchmark precision field counts matched active detections, not confirmed precision across all emitted findings."
+    },
+    "false_confirmed_critical_rate": {
+      "value": null,
+      "status": "NOT_EVALUATED"
+    },
+    "false_confirmed_high_rate": {
+      "value": null,
+      "status": "NOT_EVALUATED"
+    },
+    "safe_near_miss_rejection_rate": {
+      "value": null,
+      "status": "NOT_EVALUATED",
+      "bounded_known_fixture_control": "22/22 paired safe invariant harnesses passed; this is not finding rejection performance."
+    },
+    "exact_location_accuracy": {
+      "value": null,
+      "status": "NOT_EVALUATED"
+    },
+    "attack_path_reachability_accuracy": {
+      "value": null,
+      "status": "UNIMPLEMENTED"
+    },
+    "reproduction_success_rate": {
+      "value": null,
+      "status": "NOT_EVALUATED"
+    },
+    "symbolic_counterexample_success_rate": {
+      "value": null,
+      "status": "NOT_EVALUATED"
+    },
+    "formal_property_mutation_score": {
+      "value": null,
+      "status": "NOT_EVALUATED"
+    },
+    "invariant_mutation_score": {
+      "value": null,
+      "status": "NOT_EVALUATED"
+    },
+    "contract_coverage": {
+      "value": null,
+      "status": "NOT_EVALUATED"
+    },
+    "entry_point_coverage": {
+      "value": null,
+      "status": "NOT_EVALUATED"
+    },
+    "privileged_function_coverage": {
+      "value": null,
+      "status": "NOT_EVALUATED"
+    },
+    "asset_moving_function_coverage": {
+      "value": null,
+      "status": "NOT_EVALUATED"
+    },
+    "external_call_coverage": {
+      "value": null,
+      "status": "NOT_EVALUATED"
+    },
+    "model_review_coverage": {
+      "value": null,
+      "status": "NOT_EVALUATED"
+    },
+    "economic_template_applicability_execution_coverage": {
+      "value": null,
+      "status": "NOT_EVALUATED",
+      "bounded_known_fixture_control": {
+        "applicable_harnesses": 43,
+        "executed_harnesses": 43,
+        "ratio": 1.0
+      },
+      "limitation": "The bounded ratio is manifest-driven fixture execution, not automatic economic-template applicability or audit coverage."
+    },
+    "average_cost_usd": {
+      "value": null,
+      "status": "NOT_EVALUATED"
+    },
+    "worst_case_cost_usd": {
+      "value": null,
+      "status": "NOT_EVALUATED"
+    },
+    "audit_runtime_seconds": {
+      "value": null,
+      "status": "NOT_EVALUATED",
+      "bounded_test_runtime_seconds": 27.12
+    },
+    "confidence_intervals": {
+      "value": null,
+      "status": "NOT_EVALUATED",
+      "reason": "There are no blind product performance observations from which to calculate meaningful intervals."
+    }
+  },
+  "minimum_acceptance_gates": [
+    {
+      "gate": "100% recall on mandatory must-catch critical suite",
+      "status": "NOT_EVALUATED"
+    },
+    {
+      "gate": "zero false-confirmed critical findings on safe fixtures",
+      "status": "NOT_EVALUATED",
+      "reason": "The empty-report zero is vacuous."
+    },
+    {
+      "gate": "zero false-confirmed high findings on mandatory safe suite",
+      "status": "NOT_EVALUATED",
+      "reason": "The empty-report zero is vacuous."
+    },
+    {
+      "gate": "at least 95% mutation kill rate for mandatory critical property classes",
+      "status": "NOT_EVALUATED"
+    },
+    {
+      "gate": "100% final source-location validation",
+      "status": "NOT_EVALUATED"
+    },
+    {
+      "gate": "zero model-only confirmed findings",
+      "status": "NOT_EVALUATED",
+      "reason": "The deterministic cap is fake-provider tested, but no release audit findings exist."
+    },
+    {
+      "gate": "no hidden reduction of coverage denominators",
+      "status": "FAIL",
+      "reason": "With zero reports, semantic coverage and safe-control gates pass vacuously. This does not change the overall INCOMPLETE result, but the individual gates hide the absent denominator."
+    },
+    {
+      "gate": "no maximum-assurance COMPLETE result with a missing mandatory engine",
+      "status": "FAIL",
+      "reason": "The direct contract assay returned COMPLETE with no Echidna or Medusa and with an UNAVAILABLE formal record. Missing engines fail only when the operator separately lists them as required."
+    },
+    {
+      "gate": "no isolation escape in adversarial repository suite",
+      "status": "NOT_EVALUABLE",
+      "reason": "Real rootless containment tests skipped because no pinned rootless image/backend was configured."
+    }
+  ],
+  "superiority_status": "NOT_EVALUATED",
+  "superiority_reason": "No blind, identical-commit, identical-scope, independently adjudicated professional comparison exists. Internal fixtures, tool count, and mock model tests are insufficient.",
+  "validation_evidence": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/private/tmp/mmaudit-eval-subagent.4jCjCg/src /Users/josevans/dev/Auditor/.venv/bin/python -m pytest -q -p no:cacheprovider tests/unit/test_benchmark.py tests/unit/test_benchmark_claims.py tests/unit/test_mutations.py tests/integration/test_mutation_compilation.py tests/unit/test_model_benchmark.py tests/unit/test_model_registry.py tests/unit/test_model_coverage.py tests/unit/test_consensus.py tests/unit/test_cross_examination.py tests/unit/test_reproduction.py tests/unit/test_reproduction_integrity.py tests/integration/test_financial_settlement_foundry.py tests/unit/test_adversarial_repository.py tests/unit/test_adversarial_acceptance.py tests/integration/test_adversarial_acceptance_fail_closed.py tests/integration/test_adversarial_repository_isolation.py tests/integration/test_rootless_container.py tests/unit/test_scanners_reporting.py",
+      "result": "199 passed, 3 skipped in 5.06s"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/private/tmp/mmaudit-eval-subagent.4jCjCg/src /Users/josevans/dev/Auditor/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_economic_acceptance_foundry.py tests/integration/test_full_protocol_offline_acceptance.py",
+      "result": "2 passed in 27.12s"
+    }
+  ]
+}

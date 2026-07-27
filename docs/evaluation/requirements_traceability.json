@@ -1,0 +1,1401 @@
+{
+  "schema_version": "1.0",
+  "evaluation_type": "independent_fit_for_purpose_requirements_traceability",
+  "source_commit": "e304807cf942542706b88544fa216516f8f95cad",
+  "evaluated_tree_state": "clean_at_freeze",
+  "classification_vocabulary": [
+    "PROVEN_REAL",
+    "PROVEN_MOCK_ONLY",
+    "PARTIALLY_PROVEN",
+    "IMPLEMENTED_NOT_EXECUTED",
+    "UNIMPLEMENTED",
+    "BLOCKED",
+    "NOT_APPLICABLE_WITH_EVIDENCE"
+  ],
+  "evidence_policy": {
+    "documentation_is_not_implementation": true,
+    "mock_is_not_real_integration": true,
+    "generated_is_not_executed": true,
+    "availability_is_not_execution": true,
+    "proven_real_requires": [
+      "implementation path",
+      "real test",
+      "runtime artifact",
+      "exact command and result",
+      "evaluated source commit"
+    ],
+    "note": "Classifications describe the frozen release candidate, not the queue's self-reported completion labels."
+  },
+  "source_catalog": [
+    "AGENTS.md",
+    "README.md",
+    "docs/maximum_assurance_traceability.md",
+    "docs/codex_work_queue.md at the frozen commit",
+    "docs/release_gate_report.json",
+    "mmaudit.example.toml",
+    "src/mmaudit/templates/mmaudit.example.toml",
+    "src/mmaudit/config.py",
+    "src/mmaudit/models/schemas.py",
+    "src/mmaudit/orchestration/assurance.py",
+    "src/mmaudit/traceability.py",
+    "schemas/*.json",
+    "release acceptance criteria in RELEASE-001"
+  ],
+  "requirements": [
+    {
+      "requirement_id": "REQ-QUEUE-BOOTSTRAP",
+      "title": "The initial work-queue bootstrap is administrative provenance, not a release capability",
+      "sources": [
+        "docs/codex_work_queue.md#QUEUE-BOOTSTRAP-001"
+      ],
+      "queue_ticket_ids": [],
+      "meta_ticket_ids": [
+        "QUEUE-BOOTSTRAP-001"
+      ],
+      "classification": "NOT_APPLICABLE_WITH_EVIDENCE",
+      "implementation_paths": [],
+      "tests": [],
+      "runtime_artifacts": [
+        "docs/codex_work_queue.md at source commit e304807cf942542706b88544fa216516f8f95cad"
+      ],
+      "evidence": "QUEUE-BOOTSTRAP-001 records creation of the persistent operator queue and contains no product behavior or maximum-assurance runtime acceptance criterion.",
+      "gap": null
+    },
+    {
+      "requirement_id": "REQ-SAFE-LOCAL-EXECUTION",
+      "title": "Dynamic validation is bounded, isolated, local-only, and never silently falls back to host execution",
+      "sources": [
+        "AGENTS.md#Security & Configuration",
+        "AGENTS.md#Scope Boundaries",
+        "README.md#Auditor self-threat model",
+        "mmaudit.example.toml#[reproduction]"
+      ],
+      "queue_ticket_ids": [],
+      "classification": "PARTIALLY_PROVEN",
+      "implementation_paths": [
+        "src/mmaudit/isolation/container.py",
+        "src/mmaudit/repository/workspace.py",
+        "src/mmaudit/scanners/base.py",
+        "src/mmaudit/solidity/compile.py",
+        "src/mmaudit/solidity/reproduction.py"
+      ],
+      "tests": [
+        "tests/unit/test_isolation.py",
+        "tests/unit/test_adversarial_repository.py",
+        "tests/integration/test_adversarial_acceptance_fail_closed.py",
+        "tests/integration/test_rootless_container.py"
+      ],
+      "runtime_artifacts": [
+        "docs/evaluation/isolation_results.json",
+        "docs/evaluation/fit_for_purpose_report.json"
+      ],
+      "evidence": "Real local rejection, workspace hygiene, timeout, and output-bound paths executed. All real rootless containment tests skipped because no pinned image/backend was available.",
+      "gap": "No executing hostile repository was contained by a real hardened backend, so no-isolation-escape is not proven."
+    },
+    {
+      "requirement_id": "REQ-NO-LIVE-TARGET",
+      "title": "Live targets, public RPC, signing, broadcasting, wallets, and credentials are outside the authorized product evaluation",
+      "sources": [
+        "AGENTS.md#Scope Boundaries",
+        "README.md#Solidity smart-contract analysis"
+      ],
+      "queue_ticket_ids": [],
+      "classification": "NOT_APPLICABLE_WITH_EVIDENCE",
+      "implementation_paths": [
+        "src/mmaudit/snapshots/importer.py",
+        "src/mmaudit/solidity/reproduction.py"
+      ],
+      "tests": [
+        "tests/unit/test_snapshot_importer.py",
+        "tests/unit/test_reproduction.py"
+      ],
+      "runtime_artifacts": [
+        "docs/evaluation/fit_for_purpose_report.json"
+      ],
+      "evidence": "The evaluation used only the frozen local snapshot, local synthetic fixtures, and disposable workspaces; public network and provider calls are recorded as false/zero.",
+      "gap": null
+    },
+    {
+      "requirement_id": "REQ-TRACEABILITY-EVIDENCE",
+      "title": "Maximum-assurance traceability must be machine-validated against code, tests, and actual runtime artifacts",
+      "sources": [
+        "docs/maximum_assurance_traceability.md",
+        "schemas/maximum_assurance_traceability.schema.json",
+        "docs/codex_work_queue.md#TRACE-001"
+      ],
+      "queue_ticket_ids": [],
+      "meta_ticket_ids": [
+        "TRACE-001"
+      ],
+      "classification": "PARTIALLY_PROVEN",
+      "implementation_paths": [
+        "src/mmaudit/traceability.py",
+        "src/mmaudit/orchestration/pipeline.py",
+        "scripts/validate_release_evidence.py"
+      ],
+      "tests": [
+        "tests/unit/test_traceability.py",
+        "tests/integration/test_traceability_artifact.py"
+      ],
+      "runtime_artifacts": [
+        "maximum_assurance_traceability.json",
+        "docs/evaluation/fit_for_purpose_report.json"
+      ],
+      "evidence": "The frozen maximum-assurance attempt emitted a traceability artifact with SHA-256 2624976ffb20a0fcc9459941f178d152fba4ce1a919f3e92278a991fb68b9e09.",
+      "gap": "scripts/validate_release_evidence.py constructs the runtime-artifact set from declarations and hardcodes UNCOMMITTED-WORKTREE instead of proving emitted artifacts for the current commit."
+    },
+    {
+      "requirement_id": "REQ-ASSURANCE-CONTRACT",
+      "title": "Every missing mandatory prerequisite must yield FAILED or an explicitly pre-authorized DOWNGRADED result",
+      "sources": [
+        "AGENTS.md#Assurance Honesty",
+        "README.md#Reports and status semantics",
+        "docs/codex_work_queue.md#ASSURE-001",
+        "src/mmaudit/orchestration/assurance.py"
+      ],
+      "queue_ticket_ids": [],
+      "meta_ticket_ids": [
+        "ASSURE-001"
+      ],
+      "classification": "PARTIALLY_PROVEN",
+      "implementation_paths": [
+        "src/mmaudit/orchestration/assurance.py",
+        "src/mmaudit/orchestration/pipeline.py",
+        "src/mmaudit/models/schemas.py"
+      ],
+      "tests": [
+        "tests/unit/test_assurance.py",
+        "tests/integration/test_pipeline.py"
+      ],
+      "runtime_artifacts": [
+        "final-findings.json",
+        "docs/evaluation/fit_for_purpose_report.json"
+      ],
+      "evidence": "Missing isolation, missing model reviews, missing formal inventory, opted-in benchmark absence, incomplete scope, and explicitly required Echidna failed in the direct contract assay.",
+      "gap": "The same assay demonstrated false COMPLETE states for failed compilation, failed reproduction, unavailable formal engines, absent default fuzzers, and a missing default benchmark certificate."
+    },
+    {
+      "requirement_id": "REQ-ASSURANCE-COMPILE-SUCCESS",
+      "title": "A compilation failure must not satisfy maximum assurance",
+      "sources": [
+        "AGENTS.md#Assurance Honesty",
+        "README.md#Audit profiles",
+        "src/mmaudit/config.py#QualityGateConfig"
+      ],
+      "queue_ticket_ids": [],
+      "classification": "UNIMPLEMENTED",
+      "implementation_paths": [
+        "src/mmaudit/orchestration/assurance.py"
+      ],
+      "tests": [],
+      "runtime_artifacts": [
+        "docs/evaluation/fit_for_purpose_report.json"
+      ],
+      "evidence": "The direct assay supplied CompilationStatus.FAILED with retained evidence and received COMPLETE.",
+      "gap": "The compilation clause passes on compilation_attempted rather than compilation_succeeded."
+    },
+    {
+      "requirement_id": "REQ-ASSURANCE-REPRODUCTION-SUCCESS",
+      "title": "A failed high/critical reproduction must not satisfy maximum assurance",
+      "sources": [
+        "AGENTS.md#Assurance Honesty",
+        "README.md#Specialist ensemble",
+        "src/mmaudit/config.py#MaximumAssuranceConfig"
+      ],
+      "queue_ticket_ids": [],
+      "classification": "UNIMPLEMENTED",
+      "implementation_paths": [
+        "src/mmaudit/orchestration/assurance.py"
+      ],
+      "tests": [
+        "tests/unit/test_assurance.py::test_critical_reproduction_impossibility_requires_a_reason"
+      ],
+      "runtime_artifacts": [
+        "docs/evaluation/fit_for_purpose_report.json"
+      ],
+      "evidence": "The direct assay supplied NOT_REPRODUCED with attempts=1 and successful_attempts=0 and received COMPLETE.",
+      "gap": "The contract checks only that an attempt exists; require_reproduction_for_critical is not enforced as a success condition."
+    },
+    {
+      "requirement_id": "REQ-ASSURANCE-MANDATORY-ENGINE-SUCCESS",
+      "title": "Maximum assurance must require complementary dynamic, symbolic, and formal engine success",
+      "sources": [
+        "operator fit-for-purpose requirement",
+        "README.md#Invariants, formal engines, and economic templates",
+        "mmaudit.example.toml#[formal]",
+        "src/mmaudit/orchestration/assurance.py"
+      ],
+      "queue_ticket_ids": [],
+      "classification": "UNIMPLEMENTED",
+      "implementation_paths": [
+        "src/mmaudit/orchestration/assurance.py"
+      ],
+      "tests": [
+        "tests/unit/test_assurance.py"
+      ],
+      "runtime_artifacts": [
+        "docs/evaluation/fit_for_purpose_report.json"
+      ],
+      "evidence": "The direct assay returned COMPLETE with no Echidna/Medusa and with an UNAVAILABLE formal record.",
+      "gap": "formal_or_symbolic_engine is optional and individual tools are mandatory only when the operator separately lists them."
+    },
+    {
+      "requirement_id": "REQ-ECONOMIC-PORTFOLIO",
+      "title": "All declared economic templates have source-bound unsafe/safe harnesses that compile and execute deterministically",
+      "sources": [
+        "README.md#Invariants, formal engines, and economic templates",
+        "schemas/economic_acceptance_manifest.schema.json",
+        "schemas/economic_acceptance_report.schema.json",
+        "docs/codex_work_queue.md#ECO-001..ECO-018",
+        "docs/codex_work_queue.md#E2E-001"
+      ],
+      "queue_ticket_ids": [
+        "ECO-001",
+        "ECO-002",
+        "ECO-003",
+        "ECO-004",
+        "ECO-005",
+        "ECO-006",
+        "ECO-007",
+        "ECO-008",
+        "ECO-009",
+        "ECO-010",
+        "ECO-011",
+        "ECO-012",
+        "ECO-013",
+        "ECO-014",
+        "ECO-015",
+        "ECO-016",
+        "ECO-017",
+        "ECO-018",
+        "E2E-001"
+      ],
+      "classification": "PROVEN_REAL",
+      "source_commit": "e304807cf942542706b88544fa216516f8f95cad",
+      "implementation_paths": [
+        "src/mmaudit/economic_acceptance.py",
+        "src/mmaudit/solidity/invariant_execution.py",
+        "src/mmaudit/solidity/invariant_templates.py",
+        "tests/fixtures/solidity/maximum_assurance_economic/manifest.json"
+      ],
+      "real_tests": [
+        "tests/integration/test_economic_acceptance_foundry.py"
+      ],
+      "runtime_artifacts": [
+        {
+          "path": "/private/var/folders/js/hdsb507175d_gw8dp9x_1_s00000gn/T/pytest-of-josevans/pytest-513/test_real_foundry_economic_por0/economic-acceptance.json",
+          "file_sha256": "d23019721216acf45096bbd7838191584f65fff07cfd64f72b28a377c4f51ed0",
+          "internal_report_sha256": "c760364b540f9bbc00b8d354d211cd9c35905f0370516faa0013c2acb929f71b"
+        },
+        {
+          "path": "docs/evaluation/fit_for_purpose_report.json",
+          "pointer": "commands/CMD-ECONOMIC"
+        }
+      ],
+      "commands_and_results": [
+        {
+          "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/private/tmp/mmaudit-eval-subagent.4jCjCg/src /Users/josevans/dev/Auditor/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_economic_acceptance_foundry.py tests/integration/test_full_protocol_offline_acceptance.py",
+          "result": "2 passed in 27.12s; 43 real local Foundry harnesses executed"
+        }
+      ],
+      "evidence": "All 43 applicable harnesses executed; 21 unsafe controls reproduced twice and 22 safe near-miss controls passed.",
+      "gap": "Proof is limited to the committed synthetic portfolio and does not establish applicability or coverage on unseen protocols."
+    },
+    {
+      "requirement_id": "REQ-REPRODUCTION-REALISM",
+      "title": "Confirmed witnesses enforce declared capabilities, clean replay, source reachability, minimization, and financial settlement",
+      "sources": [
+        "README.md#Specialist ensemble",
+        "docs/codex_work_queue.md#REAL-001..REAL-004",
+        "src/mmaudit/models/schemas.py#ReproductionResult"
+      ],
+      "queue_ticket_ids": [
+        "REAL-001",
+        "REAL-002",
+        "REAL-003",
+        "REAL-004"
+      ],
+      "classification": "PARTIALLY_PROVEN",
+      "implementation_paths": [
+        "src/mmaudit/solidity/reproduction.py",
+        "src/mmaudit/solidity/reproduction_integrity.py"
+      ],
+      "tests": [
+        "tests/unit/test_reproduction.py",
+        "tests/unit/test_reproduction_integrity.py",
+        "tests/integration/test_financial_settlement_foundry.py"
+      ],
+      "runtime_artifacts": [
+        "reproduction-results.json",
+        "docs/evaluation/fit_for_purpose_report.json"
+      ],
+      "evidence": "Capability, prohibited-cheatcode, settlement, and deterministic integrity regressions passed in the focused 199-test evaluation.",
+      "gap": "General candidate reproduction remained unexecuted under hardened isolation, deployed-bytecode/source equivalence is incomplete, and failed attempts can satisfy the assurance clause."
+    },
+    {
+      "requirement_id": "REQ-TYPED-PROPERTY-CORPUS",
+      "title": "Dynamic engines share a typed, source-linked, bounded property corpus",
+      "sources": [
+        "docs/codex_work_queue.md#DYN-001",
+        "README.md#Invariants, formal engines, and economic templates"
+      ],
+      "queue_ticket_ids": [
+        "DYN-001"
+      ],
+      "classification": "PARTIALLY_PROVEN",
+      "implementation_paths": [
+        "src/mmaudit/solidity/properties.py",
+        "src/mmaudit/models/schemas.py"
+      ],
+      "tests": [
+        "tests/unit/test_properties.py",
+        "tests/integration/test_pipeline.py"
+      ],
+      "runtime_artifacts": [
+        "property-corpus.json"
+      ],
+      "evidence": "Deterministic construction, source binding, bounds, and serialization are tested.",
+      "gap": "No cross-engine real execution consumed the same corpus during this evaluation."
+    },
+    {
+      "requirement_id": "REQ-ECHIDNA-EXECUTION",
+      "title": "Echidna executes vulnerable and safe controls with trusted binary and isolated evidence",
+      "sources": [
+        "docs/codex_work_queue.md#DYN-002",
+        "README.md#Invariants, formal engines, and economic templates"
+      ],
+      "queue_ticket_ids": [
+        "DYN-002"
+      ],
+      "classification": "BLOCKED",
+      "implementation_paths": [
+        "src/mmaudit/solidity/engines/echidna.py",
+        "src/mmaudit/solidity/formal.py"
+      ],
+      "tests": [
+        "tests/unit/test_echidna.py",
+        "tests/integration/test_echidna_engine.py"
+      ],
+      "runtime_artifacts": [
+        "formal-results.json"
+      ],
+      "evidence": "Translation and pinned command behavior are mocked; the real integration skipped.",
+      "gap": "No Echidna binary or hardened isolation backend was available, and no vulnerable/safe control pair executed."
+    },
+    {
+      "requirement_id": "REQ-MEDUSA-EXECUTION",
+      "title": "Medusa independently executes the shared property corpus and preserves disagreement",
+      "sources": [
+        "docs/codex_work_queue.md#DYN-003",
+        "README.md#Invariants, formal engines, and economic templates"
+      ],
+      "queue_ticket_ids": [
+        "DYN-003"
+      ],
+      "classification": "BLOCKED",
+      "implementation_paths": [
+        "src/mmaudit/solidity/engines/medusa.py",
+        "src/mmaudit/solidity/formal.py"
+      ],
+      "tests": [
+        "tests/unit/test_medusa.py",
+        "tests/integration/test_medusa_engine.py"
+      ],
+      "runtime_artifacts": [
+        "formal-results.json"
+      ],
+      "evidence": "Parser, translation, comparison, and fixed-command behavior are mocked.",
+      "gap": "No Medusa binary or hardened isolation backend was available."
+    },
+    {
+      "requirement_id": "REQ-FOUNDRY-STATEFUL-CAMPAIGN",
+      "title": "Foundry fuzz/invariant campaigns retain seeds, corpora, coverage, minimization, and replay",
+      "sources": [
+        "docs/codex_work_queue.md#DYN-004",
+        "README.md#Invariants, formal engines, and economic templates"
+      ],
+      "queue_ticket_ids": [
+        "DYN-004"
+      ],
+      "classification": "PARTIALLY_PROVEN",
+      "implementation_paths": [
+        "src/mmaudit/solidity/invariant_execution.py",
+        "src/mmaudit/solidity/coverage.py"
+      ],
+      "tests": [
+        "tests/unit/test_invariant_execution.py",
+        "tests/integration/test_economic_state_ordering_fixture.py",
+        "tests/integration/test_pipeline.py"
+      ],
+      "runtime_artifacts": [
+        "invariant-execution-results.json",
+        "solidity-coverage.json"
+      ],
+      "evidence": "Real Foundry economic controls ran, and stateful campaign normalization passed the full suite.",
+      "gap": "The evaluation did not preserve a current candidate-specific campaign/replay artifact for an unseen audit target."
+    },
+    {
+      "requirement_id": "REQ-HALMOS-EXECUTION",
+      "title": "Halmos executes bounded symbolic properties with pinned solver provenance",
+      "sources": [
+        "docs/codex_work_queue.md#SYM-001",
+        "README.md#Invariants, formal engines, and economic templates"
+      ],
+      "queue_ticket_ids": [
+        "SYM-001"
+      ],
+      "classification": "BLOCKED",
+      "implementation_paths": [
+        "src/mmaudit/solidity/engines/halmos.py",
+        "src/mmaudit/solidity/formal.py"
+      ],
+      "tests": [
+        "tests/unit/test_halmos.py",
+        "tests/integration/test_halmos_engine.py"
+      ],
+      "runtime_artifacts": [
+        "formal-results.json"
+      ],
+      "evidence": "Translation, parser, pin checks, and normalized models are mocked or compile-only.",
+      "gap": "The real target integration did not execute because hardened isolation was unavailable."
+    },
+    {
+      "requirement_id": "REQ-CERTORA-EXECUTION",
+      "title": "Certora executes configured properties with assumptions and non-vacuity evidence",
+      "sources": [
+        "docs/codex_work_queue.md#FORM-001",
+        "mmaudit.example.toml#[formal.certora]"
+      ],
+      "queue_ticket_ids": [
+        "FORM-001"
+      ],
+      "classification": "BLOCKED",
+      "implementation_paths": [
+        "src/mmaudit/solidity/engines/certora.py",
+        "src/mmaudit/solidity/formal.py"
+      ],
+      "tests": [
+        "tests/unit/test_certora.py"
+      ],
+      "runtime_artifacts": [
+        "formal-results.json"
+      ],
+      "evidence": "Trust pins, redaction, vacuity normalization, and fixed commands are fake-binary tested.",
+      "gap": "certoraRun, configured service access, and a credential were unavailable; no real proof or counterexample exists."
+    },
+    {
+      "requirement_id": "REQ-KONTROL-EXECUTION",
+      "title": "Kontrol executes bounded proofs with trusted binary and normalized counterexamples",
+      "sources": [
+        "docs/codex_work_queue.md#FORM-002",
+        "mmaudit.example.toml#[formal]"
+      ],
+      "queue_ticket_ids": [
+        "FORM-002"
+      ],
+      "classification": "BLOCKED",
+      "implementation_paths": [
+        "src/mmaudit/solidity/engines/kontrol.py",
+        "src/mmaudit/solidity/formal.py"
+      ],
+      "tests": [
+        "tests/unit/test_kontrol.py"
+      ],
+      "runtime_artifacts": [
+        "formal-results.json"
+      ],
+      "evidence": "Translation compilation and fake-binary adapter tests exist.",
+      "gap": "No Kontrol binary was available; no real proof or counterexample executed."
+    },
+    {
+      "requirement_id": "REQ-OTHER-FORMAL-SCANNERS",
+      "title": "Slither, SMTChecker, Mythril, and configured complementary scanners execute positive and negative controls",
+      "sources": [
+        "README.md#Scanner installation",
+        "README.md#Invariants, formal engines, and economic templates",
+        "mmaudit.example.toml#[scanners]",
+        "mmaudit.example.toml#[formal]"
+      ],
+      "queue_ticket_ids": [],
+      "classification": "IMPLEMENTED_NOT_EXECUTED",
+      "implementation_paths": [
+        "src/mmaudit/scanners/slither.py",
+        "src/mmaudit/solidity/formal.py"
+      ],
+      "tests": [
+        "tests/unit/test_scanners_reporting.py",
+        "tests/unit/test_formal.py"
+      ],
+      "runtime_artifacts": [
+        "scanner-results.json",
+        "formal-results.json"
+      ],
+      "evidence": "Adapters and normalized parsers exist.",
+      "gap": "No real Slither, SMTChecker, or Mythril vulnerable/safe fixture execution was recorded."
+    },
+    {
+      "requirement_id": "REQ-SECURITY-MUTATION",
+      "title": "Mandatory security mutations compile, execute against properties, and meet the per-property kill-rate gate",
+      "sources": [
+        "docs/codex_work_queue.md#MUT-001",
+        "docs/codex_work_queue.md#MUT-002",
+        "README.md#Benchmarking"
+      ],
+      "queue_ticket_ids": [
+        "MUT-001",
+        "MUT-002"
+      ],
+      "classification": "PARTIALLY_PROVEN",
+      "implementation_paths": [
+        "src/mmaudit/benchmark/mutations.py",
+        "src/mmaudit/benchmark/engine.py"
+      ],
+      "tests": [
+        "tests/unit/test_mutations.py",
+        "tests/integration/test_mutation_compilation.py",
+        "tests/unit/test_benchmark.py"
+      ],
+      "runtime_artifacts": [
+        "benchmark-results.json",
+        "docs/evaluation/benchmark_results.json"
+      ],
+      "evidence": "Five source-local mutation kinds compiled in disposable workspaces; scorecard arithmetic and a 1.0 gate are tested.",
+      "gap": "Only 5 of the requested 11 mutation classes exist, and no real audit-report mutation scorecard or measured kill rate was produced."
+    },
+    {
+      "requirement_id": "REQ-MODEL-LINEAGE-QUALIFICATION",
+      "title": "Aliases and mirrors share immutable root lineage and every high-quality label is benchmark-backed",
+      "sources": [
+        "docs/codex_work_queue.md#MODEL-001",
+        "README.md#OpenRouter and model selection",
+        "src/mmaudit/config.py#ModelLineageConfig"
+      ],
+      "queue_ticket_ids": [
+        "MODEL-001"
+      ],
+      "classification": "PARTIALLY_PROVEN",
+      "implementation_paths": [
+        "src/mmaudit/config.py",
+        "src/mmaudit/models/registry.py"
+      ],
+      "tests": [
+        "tests/unit/test_model_registry.py",
+        "tests/unit/test_config.py"
+      ],
+      "runtime_artifacts": [
+        "model-validation.json",
+        "docs/evaluation/model_execution_matrix.json"
+      ],
+      "evidence": "Duplicate IDs, declared aliases, retention, approval, and tier thresholds are deterministic.",
+      "gap": "The frozen configuration has zero registry entries, provider mirrors are not independently fingerprinted, and quality_measurement hashes are not resolved against passed benchmark reports."
+    },
+    {
+      "requirement_id": "REQ-MODEL-BENCHMARK",
+      "title": "Configured model lineages pass a blinded quality benchmark",
+      "sources": [
+        "docs/codex_work_queue.md#MODEL-002",
+        "benchmarks/model_corpus/manifest.json"
+      ],
+      "queue_ticket_ids": [
+        "MODEL-002"
+      ],
+      "classification": "PROVEN_MOCK_ONLY",
+      "implementation_paths": [
+        "src/mmaudit/benchmark/models.py",
+        "src/mmaudit/cli.py"
+      ],
+      "tests": [
+        "tests/unit/test_model_benchmark.py"
+      ],
+      "runtime_artifacts": [
+        "model-benchmark-results.json",
+        "docs/evaluation/model_execution_matrix.json"
+      ],
+      "evidence": "Four synthetic cases are scored with fake-provider responses.",
+      "gap": "No real provider/model benchmark ran and no production model passed qualification."
+    },
+    {
+      "requirement_id": "REQ-MODEL-SPECIALIST-ENSEMBLE",
+      "title": "Every required specialist responsibility executes with bounded context and typed output",
+      "sources": [
+        "docs/codex_work_queue.md#MODEL-003",
+        "README.md#Specialist ensemble",
+        "mmaudit.example.toml#[models.specialists]"
+      ],
+      "queue_ticket_ids": [
+        "MODEL-003"
+      ],
+      "classification": "PROVEN_MOCK_ONLY",
+      "implementation_paths": [
+        "src/mmaudit/agents/specialists.py",
+        "src/mmaudit/orchestration/pipeline.py"
+      ],
+      "tests": [
+        "tests/integration/test_pipeline.py",
+        "tests/unit/test_assurance.py"
+      ],
+      "runtime_artifacts": [
+        "specialist-execution.json",
+        "docs/evaluation/model_execution_matrix.json"
+      ],
+      "evidence": "Scheduling, schema, budget, and execution-record behavior are covered with FakeOpenRouter.",
+      "gap": "No exact production model ID or specialist request executed."
+    },
+    {
+      "requirement_id": "REQ-MODEL-BLIND-DISCOVERY",
+      "title": "Primary investigators complete blind discovery before receiving peer findings",
+      "sources": [
+        "docs/codex_work_queue.md#MODEL-004",
+        "README.md#Specialist ensemble"
+      ],
+      "queue_ticket_ids": [
+        "MODEL-004"
+      ],
+      "classification": "PROVEN_MOCK_ONLY",
+      "implementation_paths": [
+        "src/mmaudit/orchestration/pipeline.py",
+        "src/mmaudit/orchestration/context.py"
+      ],
+      "tests": [
+        "tests/integration/test_pipeline.py::test_first_pass_contexts_exclude_peer_model_findings"
+      ],
+      "runtime_artifacts": [
+        "specialist-execution.json"
+      ],
+      "evidence": "A fake-provider canary verifies context ordering.",
+      "gap": "No real independent model ensemble executed the blind workflow."
+    },
+    {
+      "requirement_id": "REQ-MODEL-FALSIFICATION",
+      "title": "Two independent falsifier lineages review every high/critical candidate without creating findings",
+      "sources": [
+        "docs/codex_work_queue.md#MODEL-005",
+        "README.md#Specialist ensemble"
+      ],
+      "queue_ticket_ids": [
+        "MODEL-005"
+      ],
+      "classification": "PROVEN_MOCK_ONLY",
+      "implementation_paths": [
+        "src/mmaudit/agents/verifier.py",
+        "src/mmaudit/orchestration/pipeline.py"
+      ],
+      "tests": [
+        "tests/unit/test_cross_examination.py",
+        "tests/integration/test_pipeline.py"
+      ],
+      "runtime_artifacts": [
+        "cross-examination.json",
+        "final-findings.json"
+      ],
+      "evidence": "Opaque intake, two declared lineages, no-new-finding schemas, and dissent retention pass fake-provider tests.",
+      "gap": "No real falsifier response or provider lineage was observed."
+    },
+    {
+      "requirement_id": "REQ-MODEL-SURFACE-COVERAGE",
+      "title": "Every critical surface receives the configured minimum independent substantive model review",
+      "sources": [
+        "docs/codex_work_queue.md#MODEL-006",
+        "README.md#Solidity smart-contract analysis"
+      ],
+      "queue_ticket_ids": [
+        "MODEL-006"
+      ],
+      "classification": "PARTIALLY_PROVEN",
+      "implementation_paths": [
+        "src/mmaudit/orchestration/model_coverage.py",
+        "src/mmaudit/orchestration/assurance.py"
+      ],
+      "tests": [
+        "tests/unit/test_model_coverage.py",
+        "tests/unit/test_assurance.py"
+      ],
+      "runtime_artifacts": [
+        "model-review-coverage.json"
+      ],
+      "evidence": "Stable surface denominators and independent-lineage thresholds are implemented.",
+      "gap": "Coverage credits any successful request whose input context contained the surface; response content is not checked, so a generic summary counts as per-surface review."
+    },
+    {
+      "requirement_id": "REQ-REAL-MODEL-ENSEMBLE",
+      "title": "All independently qualified high-quality production models execute successfully with provider fingerprints",
+      "sources": [
+        "operator fit-for-purpose requirement",
+        "README.md#OpenRouter and model selection",
+        "mmaudit.example.toml#[models]"
+      ],
+      "queue_ticket_ids": [],
+      "classification": "BLOCKED",
+      "implementation_paths": [
+        "src/mmaudit/models/openrouter.py",
+        "src/mmaudit/models/registry.py",
+        "src/mmaudit/orchestration/pipeline.py"
+      ],
+      "tests": [
+        "tests/unit/test_openrouter.py",
+        "tests/integration/test_pipeline.py"
+      ],
+      "runtime_artifacts": [
+        "docs/evaluation/model_execution_matrix.json"
+      ],
+      "evidence": "The evaluation records zero configured exact production IDs, zero provider calls, zero successful responses, and zero provider fingerprints.",
+      "gap": "Only placeholder IDs are committed; no registry, credential, or real-provider artifact exists."
+    },
+    {
+      "requirement_id": "REQ-SEMANTIC-LOCATION-PROVENANCE",
+      "title": "Every transformed fact retains exact path, range, hash, and provenance",
+      "sources": [
+        "docs/codex_work_queue.md#SEM-001",
+        "README.md#Solidity smart-contract analysis"
+      ],
+      "queue_ticket_ids": [
+        "SEM-001"
+      ],
+      "classification": "PARTIALLY_PROVEN",
+      "implementation_paths": [
+        "src/mmaudit/solidity/index.py",
+        "src/mmaudit/solidity/graphs.py",
+        "src/mmaudit/repository/locations.py"
+      ],
+      "tests": [
+        "tests/unit/test_solidity.py",
+        "tests/integration/test_pipeline.py::test_invalid_file_location_is_rejected"
+      ],
+      "runtime_artifacts": [
+        "solidity-index.json",
+        "solidity-graphs.json",
+        "final-findings.json"
+      ],
+      "evidence": "Hash/range validation and invalid-location rejection passed the full suite.",
+      "gap": "No completed maximum-assurance audit demonstrated 100% final source-location validation across real findings."
+    },
+    {
+      "requirement_id": "REQ-SEMANTIC-GRAPH-COVERAGE",
+      "title": "Control, call, accounting, privilege, upgrade, cross-chain, and off-chain relationships are compiler-backed and complete",
+      "sources": [
+        "docs/codex_work_queue.md#SEM-002..SEM-006",
+        "README.md#Solidity smart-contract analysis",
+        "src/mmaudit/traceability.py#MA-SEMANTIC-GRAPHS"
+      ],
+      "queue_ticket_ids": [
+        "SEM-002",
+        "SEM-003",
+        "SEM-004",
+        "SEM-005",
+        "SEM-006"
+      ],
+      "classification": "PARTIALLY_PROVEN",
+      "implementation_paths": [
+        "src/mmaudit/solidity/index.py",
+        "src/mmaudit/solidity/graphs.py"
+      ],
+      "tests": [
+        "tests/unit/test_solidity.py",
+        "tests/integration/test_semantic_bridge_fixture.py",
+        "tests/integration/test_semantic_upgrade_layout_fixture.py"
+      ],
+      "runtime_artifacts": [
+        "solidity-graphs.json"
+      ],
+      "evidence": "Synthetic AST/fallback graph transformations and safe/unsafe relationships are tested.",
+      "gap": "The product's own traceability ledger states complete branch, cross-chain, off-chain dependency, and upgrade compatibility coverage is not proven."
+    },
+    {
+      "requirement_id": "REQ-COVERAGE-DENOMINATORS",
+      "title": "Coverage denominators and exclusions are explicit, independent, and cannot be silently reduced",
+      "sources": [
+        "docs/codex_work_queue.md#COV-001",
+        "README.md#Solidity smart-contract analysis"
+      ],
+      "queue_ticket_ids": [
+        "COV-001"
+      ],
+      "classification": "PARTIALLY_PROVEN",
+      "implementation_paths": [
+        "src/mmaudit/solidity/coverage.py",
+        "src/mmaudit/models/schemas.py"
+      ],
+      "tests": [
+        "tests/unit/test_solidity.py",
+        "tests/unit/test_model_coverage.py",
+        "tests/unit/test_scanners_reporting.py"
+      ],
+      "runtime_artifacts": [
+        "solidity-coverage.json"
+      ],
+      "evidence": "Typed metrics reconcile numerator, denominator, population, exclusions, provenance, and failures.",
+      "gap": "No completed product benchmark report existed to demonstrate all required coverage dimensions on the frozen release."
+    },
+    {
+      "requirement_id": "REQ-FULL-PROTOCOL-OFFLINE",
+      "title": "Full-protocol scope, offline deployment snapshot, and source/deployment consistency execute end to end",
+      "sources": [
+        "docs/codex_work_queue.md#SCOPE-001",
+        "docs/codex_work_queue.md#SNAP-001",
+        "docs/codex_work_queue.md#SNAP-002",
+        "docs/codex_work_queue.md#E2E-003",
+        "schemas/full_protocol_acceptance_report.schema.json"
+      ],
+      "queue_ticket_ids": [
+        "SCOPE-001",
+        "SNAP-001",
+        "SNAP-002",
+        "E2E-003"
+      ],
+      "classification": "PROVEN_REAL",
+      "source_commit": "e304807cf942542706b88544fa216516f8f95cad",
+      "implementation_paths": [
+        "src/mmaudit/orchestration/scope.py",
+        "src/mmaudit/snapshots/schema.py",
+        "src/mmaudit/snapshots/compare.py",
+        "src/mmaudit/full_protocol_acceptance.py"
+      ],
+      "real_tests": [
+        "tests/integration/test_full_protocol_offline_acceptance.py"
+      ],
+      "runtime_artifacts": [
+        {
+          "path": "/private/var/folders/js/hdsb507175d_gw8dp9x_1_s00000gn/T/pytest-of-josevans/pytest-513/test_full_protocol_offline_sna0/full-protocol-acceptance.json",
+          "file_sha256": "30712d150e7243dce1079d20d3006a2210b8edec0a6808985ef4dcd28eb71542",
+          "internal_report_sha256": "668c638eec147cc045d5736ca3f6ae3bb2f00907aa3056ca558310dbff1b6859"
+        },
+        {
+          "path": "docs/evaluation/fit_for_purpose_report.json",
+          "pointer": "commands/CMD-ECONOMIC"
+        }
+      ],
+      "commands_and_results": [
+        {
+          "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/private/tmp/mmaudit-eval-subagent.4jCjCg/src /Users/josevans/dev/Auditor/.venv/bin/python -m pytest -q -p no:cacheprovider tests/integration/test_economic_acceptance_foundry.py tests/integration/test_full_protocol_offline_acceptance.py",
+          "result": "2 passed in 27.12s; offline full-protocol acceptance passed"
+        }
+      ],
+      "evidence": "The bounded fixture validated source, compiler artifact, deployment snapshot, roles, timelock/oracle/configuration expectations, and scope accounting.",
+      "gap": "This is an offline synthetic snapshot, not a public or production deployment."
+    },
+    {
+      "requirement_id": "REQ-LOCAL-SNAPSHOT-IMPORT",
+      "title": "Snapshot import is explicit, read-only, allowlisted, loopback-only, and deterministic",
+      "sources": [
+        "docs/codex_work_queue.md#SNAP-003",
+        "schemas/deployment_snapshot.schema.json"
+      ],
+      "queue_ticket_ids": [
+        "SNAP-003"
+      ],
+      "classification": "BLOCKED",
+      "implementation_paths": [
+        "src/mmaudit/snapshots/importer.py",
+        "src/mmaudit/snapshots/schema.py"
+      ],
+      "tests": [
+        "tests/integration/test_snapshot_importer_local_chain.py:46"
+      ],
+      "runtime_artifacts": [
+        "docs/evaluation/fit_for_purpose_report.json#commands/CMD-FULL-SUITE"
+      ],
+      "evidence": "The full-suite run skipped tests/integration/test_snapshot_importer_local_chain.py:46 because loopback binding was unavailable; no snapshot-import runtime artifact was emitted.",
+      "gap": "The importer is implemented and unit-tested, but real disposable-local-chain execution was not completed in this evaluation environment."
+    },
+    {
+      "requirement_id": "REQ-BLIND-PRIOR-AUDIT",
+      "title": "Prior findings remain hidden until independent discovery and are compared afterward",
+      "sources": [
+        "docs/codex_work_queue.md#SCOPE-002",
+        "README.md#Configuration",
+        "schemas/prior_audit.schema.json"
+      ],
+      "queue_ticket_ids": [
+        "SCOPE-002"
+      ],
+      "classification": "PARTIALLY_PROVEN",
+      "implementation_paths": [
+        "src/mmaudit/orchestration/prior_audit.py",
+        "src/mmaudit/orchestration/pipeline.py"
+      ],
+      "tests": [
+        "tests/unit/test_prior_audit.py",
+        "tests/integration/test_pipeline.py::test_prior_audit_is_loaded_only_after_blind_model_discovery"
+      ],
+      "runtime_artifacts": [
+        "prior-audit-comparison.json"
+      ],
+      "evidence": "Ordering and source-hash comparison are deterministic.",
+      "gap": "The ordering integration uses FakeOpenRouter; no real blind model discovery was performed."
+    },
+    {
+      "requirement_id": "REQ-BENCHMARK-CERTIFICATE",
+      "title": "A current component-bound benchmark certificate is issued only from passing evidence and blocks stale runs",
+      "sources": [
+        "docs/codex_work_queue.md#BENCH-001",
+        "docs/codex_work_queue.md#BENCH-002",
+        "docs/codex_work_queue.md#BENCH-003",
+        "schemas/benchmark_certificate.schema.json"
+      ],
+      "queue_ticket_ids": [
+        "BENCH-001",
+        "BENCH-002",
+        "BENCH-003"
+      ],
+      "classification": "IMPLEMENTED_NOT_EXECUTED",
+      "implementation_paths": [
+        "src/mmaudit/benchmark/certificate.py",
+        "src/mmaudit/cli.py",
+        "src/mmaudit/orchestration/assurance.py"
+      ],
+      "tests": [
+        "tests/unit/test_benchmark_certificate.py",
+        "tests/unit/test_cli.py"
+      ],
+      "runtime_artifacts": [
+        "benchmark-certificate-verification.json"
+      ],
+      "evidence": "Certificate construction, tamper detection, and stale verification are unit-tested.",
+      "gap": "No current certificate bound to a completed frozen-build benchmark exists, and benchmark gating is disabled by default."
+    },
+    {
+      "requirement_id": "REQ-MULTILAYER-BENCHMARK",
+      "title": "Must-catch, safe, mutation, public time-split, and private/blinded benchmark layers produce required metrics",
+      "sources": [
+        "docs/codex_work_queue.md#BENCH-004",
+        "README.md#Benchmarking",
+        "schemas/benchmark_manifest.schema.json"
+      ],
+      "queue_ticket_ids": [
+        "BENCH-004"
+      ],
+      "classification": "IMPLEMENTED_NOT_EXECUTED",
+      "implementation_paths": [
+        "src/mmaudit/benchmark/engine.py",
+        "benchmarks/corpus/manifest.json"
+      ],
+      "tests": [
+        "tests/unit/test_benchmark.py"
+      ],
+      "runtime_artifacts": [
+        "docs/evaluation/benchmark_results.json",
+        "/private/tmp/mmaudit-eval-benchmark-empty.json"
+      ],
+      "evidence": "The empty-report probe exited 6 with status incomplete and loaded 0 of 2 reports.",
+      "gap": "The corpus has 28 locally authored synthetic cases only; no actual audit reports, public time-split corpus, private holdout, or product performance metrics exist."
+    },
+    {
+      "requirement_id": "REQ-SUPERIORITY-EVIDENCE",
+      "title": "Superiority requires blind identical-scope professional comparison with independent adjudication and statistical support",
+      "sources": [
+        "AGENTS.md#Assurance Honesty",
+        "docs/codex_work_queue.md#BENCH-005",
+        "schemas/human_comparison_evidence.schema.json"
+      ],
+      "queue_ticket_ids": [
+        "BENCH-005"
+      ],
+      "classification": "UNIMPLEMENTED",
+      "implementation_paths": [
+        "src/mmaudit/benchmark/claims.py"
+      ],
+      "tests": [
+        "tests/unit/test_benchmark_claims.py"
+      ],
+      "runtime_artifacts": [
+        "docs/evaluation/benchmark_results.json"
+      ],
+      "evidence": "The claim gate correctly defaults to NOT_EVALUATED.",
+      "gap": "No qualifying human comparison, private holdout, independent adjudication, or statistical comparison exists."
+    },
+    {
+      "requirement_id": "REQ-ROOTLESS-CONTAINMENT",
+      "title": "Digest-pinned rootless isolation provides read-only inputs, private output, no network/socket/credentials, bounded resources, and verified cleanup",
+      "sources": [
+        "docs/codex_work_queue.md#ISO-001",
+        "README.md#Docker",
+        "mmaudit.example.toml#[reproduction]"
+      ],
+      "queue_ticket_ids": [
+        "ISO-001"
+      ],
+      "classification": "BLOCKED",
+      "implementation_paths": [
+        "src/mmaudit/isolation/container.py",
+        "Dockerfile"
+      ],
+      "tests": [
+        "tests/unit/test_isolation.py",
+        "tests/integration/test_rootless_container.py"
+      ],
+      "runtime_artifacts": [
+        "docs/evaluation/isolation_results.json"
+      ],
+      "evidence": "Command construction is tested and mutable image references are rejected.",
+      "gap": "No pinned test image or verified rootless runtime was available; all real containment tests skipped."
+    },
+    {
+      "requirement_id": "REQ-HARDHAT-OFF-HOST",
+      "title": "Hardhat configuration and plugins never execute in the host audit process",
+      "sources": [
+        "docs/codex_work_queue.md#ISO-002",
+        "README.md#Solidity smart-contract analysis"
+      ],
+      "queue_ticket_ids": [
+        "ISO-002"
+      ],
+      "classification": "BLOCKED",
+      "implementation_paths": [
+        "src/mmaudit/isolation/repository_code.py",
+        "src/mmaudit/solidity/compile.py",
+        "src/mmaudit/scanners/slither.py"
+      ],
+      "tests": [
+        "tests/unit/test_isolation.py",
+        "tests/unit/test_scanners_reporting.py",
+        "tests/integration/test_rootless_container.py"
+      ],
+      "runtime_artifacts": [
+        "docs/evaluation/isolation_results.json"
+      ],
+      "evidence": "The no-backend path fails closed before repository JavaScript executes.",
+      "gap": "The positive off-host execution path skipped because rootless containment was unavailable."
+    },
+    {
+      "requirement_id": "REQ-OFFLINE-DEPENDENCY-PREPARATION",
+      "title": "Dependencies are copied only from checksum-bound offline snapshots without lifecycle execution",
+      "sources": [
+        "docs/codex_work_queue.md#ISO-003",
+        "README.md#Offline dependency preparation",
+        "schemas/dependency_snapshot.schema.json",
+        "schemas/dependency_sbom.schema.json"
+      ],
+      "queue_ticket_ids": [
+        "ISO-003"
+      ],
+      "classification": "PARTIALLY_PROVEN",
+      "implementation_paths": [
+        "src/mmaudit/isolation/dependencies.py",
+        "src/mmaudit/solidity/compile.py"
+      ],
+      "tests": [
+        "tests/unit/test_dependencies.py",
+        "tests/integration/test_pipeline.py"
+      ],
+      "runtime_artifacts": [
+        "dependency-preparation.json",
+        "dependency-sbom.json",
+        "docs/evaluation/isolation_results.json"
+      ],
+      "evidence": "A synthetic postinstall package is rejected before execution and snapshot/SBOM validation is deterministic.",
+      "gap": "No real isolated Hardhat build consumed a prepared snapshot in this evaluation."
+    },
+    {
+      "requirement_id": "REQ-ADVERSARIAL-REPOSITORY",
+      "title": "The hostile repository suite proves containment against all required adversarial behaviors",
+      "sources": [
+        "docs/codex_work_queue.md#ISO-004",
+        "docs/codex_work_queue.md#E2E-002",
+        "schemas/adversarial_acceptance_report.schema.json"
+      ],
+      "queue_ticket_ids": [
+        "ISO-004",
+        "E2E-002"
+      ],
+      "classification": "PARTIALLY_PROVEN",
+      "implementation_paths": [
+        "src/mmaudit/adversarial_acceptance.py",
+        "src/mmaudit/isolation/container.py",
+        "tests/fixtures/adversarial_repository/cases.json"
+      ],
+      "tests": [
+        "tests/integration/test_adversarial_acceptance_fail_closed.py",
+        "tests/integration/test_adversarial_repository_isolation.py"
+      ],
+      "runtime_artifacts": [
+        "docs/evaluation/isolation_results.json"
+      ],
+      "evidence": "Static/fail-closed acceptance is PROVEN_REAL for fake binaries, traversal, symlinks, lifecycle scripts, and bounded trusted subprocess output.",
+      "gap": "Real rootless containment is blocked, and explicit SSH-agent, cloud-credential, memory-exhaustion, generated-file-poisoning, and complete Unicode/case-trick cases are absent or unexecuted."
+    },
+    {
+      "requirement_id": "REQ-RUN-MANIFEST-VERIFICATION",
+      "title": "Every run is deterministically hash-bound and current-state verification detects source/config/tool drift",
+      "sources": [
+        "docs/codex_work_queue.md#MAN-001",
+        "docs/codex_work_queue.md#MAN-002",
+        "schemas/run_evidence_manifest.schema.json",
+        "schemas/run_verification.schema.json"
+      ],
+      "queue_ticket_ids": [
+        "MAN-001",
+        "MAN-002"
+      ],
+      "classification": "PARTIALLY_PROVEN",
+      "implementation_paths": [
+        "src/mmaudit/orchestration/manifest.py",
+        "src/mmaudit/orchestration/verification.py"
+      ],
+      "tests": [
+        "tests/unit/test_manifest.py",
+        "tests/integration/test_pipeline.py"
+      ],
+      "runtime_artifacts": [
+        "run-evidence-manifest.json",
+        "docs/evaluation/fit_for_purpose_report.json"
+      ],
+      "evidence": "The frozen maximum-assurance attempt emitted a manifest with SHA-256 f1fe03ce21394356d685a0403e5cafe16241cd60419bc52d21684a23e652dbc1.",
+      "gap": "verify-run reported STALE with four mismatches because the profile override could not be reproduced through verification input."
+    },
+    {
+      "requirement_id": "REQ-OFFLINE-REPLAY",
+      "title": "Sealed scanners, tests, and counterexamples replay without model-provider contact",
+      "sources": [
+        "docs/codex_work_queue.md#MAN-003",
+        "schemas/offline_replay.schema.json"
+      ],
+      "queue_ticket_ids": [
+        "MAN-003"
+      ],
+      "classification": "BLOCKED",
+      "implementation_paths": [
+        "src/mmaudit/orchestration/replay.py",
+        "src/mmaudit/orchestration/verification.py"
+      ],
+      "tests": [
+        "tests/unit/test_replay.py",
+        "tests/integration/test_offline_replay.py"
+      ],
+      "runtime_artifacts": [
+        "offline-replay.json",
+        "docs/evaluation/fit_for_purpose_report.json"
+      ],
+      "evidence": "Deterministic replay orchestration is mocked.",
+      "gap": "The real isolated Foundry replay integration skipped because no hardened backend was available."
+    },
+    {
+      "requirement_id": "REQ-RELEASE-GATE",
+      "title": "The complete release gate passes lint, type, tests, doctor, models, tools, benchmark, maximum run, artifacts, and replay",
+      "sources": [
+        "docs/codex_work_queue.md#RELEASE-001",
+        "schemas/release_gate_report.schema.json",
+        "docs/release_gate_report.json"
+      ],
+      "queue_ticket_ids": [
+        "RELEASE-001"
+      ],
+      "classification": "BLOCKED",
+      "implementation_paths": [
+        "src/mmaudit/release.py",
+        "scripts/validate_release_evidence.py",
+        ".github/workflows/mmaudit.yml"
+      ],
+      "tests": [
+        "tests/unit/test_release.py"
+      ],
+      "runtime_artifacts": [
+        "docs/release_gate_report.json",
+        "docs/evaluation/fit_for_purpose_report.json"
+      ],
+      "evidence": "The full frozen test suite passed 636 tests with 9 integration skips; the real maximum run exited 2 and reported INCONCLUSIVE.",
+      "gap": "The committed release report has only 8 of 12 gates passed, is stale/unbound to the evaluated commit, and doctor, real models, maximum run, and replay remain blocked."
+    },
+    {
+      "requirement_id": "REQ-REPORT-QUALITY",
+      "title": "Reports expose exact location/symbol, preconditions, reachability, severity, evidence, verifier/falsifier, reproduction/formal status, remediation, uncertainty, and dissent",
+      "sources": [
+        "README.md#Reports and status semantics",
+        "src/mmaudit/models/schemas.py#Finding",
+        "src/mmaudit/reporting/markdown.py"
+      ],
+      "queue_ticket_ids": [],
+      "classification": "PARTIALLY_PROVEN",
+      "implementation_paths": [
+        "src/mmaudit/models/schemas.py",
+        "src/mmaudit/reporting/markdown.py",
+        "src/mmaudit/reporting/json_report.py",
+        "src/mmaudit/reporting/sarif.py"
+      ],
+      "tests": [
+        "tests/unit/test_scanners_reporting.py",
+        "tests/integration/test_pipeline.py"
+      ],
+      "runtime_artifacts": [
+        "audit-report.md",
+        "final-findings.json",
+        "audit-results.sarif"
+      ],
+      "evidence": "Typed and rendered fields include most required evidence and preserve disagreement.",
+      "gap": "Model finding samples are fake-provider only, no real confirmed/strong/inconclusive/rejected sample was manually validated, and no dedicated per-finding formal-status field exists."
+    },
+    {
+      "requirement_id": "REQ-QUALITY-METRICS",
+      "title": "All required recall, precision, false-confirmation, location, reachability, reproduction, symbolic/formal, coverage, cost, runtime, and confidence metrics are emitted",
+      "sources": [
+        "README.md#Benchmarking",
+        "src/mmaudit/benchmark/engine.py#BenchmarkReport",
+        "src/mmaudit/solidity/coverage.py"
+      ],
+      "queue_ticket_ids": [],
+      "classification": "PARTIALLY_PROVEN",
+      "implementation_paths": [
+        "src/mmaudit/benchmark/engine.py",
+        "src/mmaudit/benchmark/mutations.py",
+        "src/mmaudit/solidity/coverage.py"
+      ],
+      "tests": [
+        "tests/unit/test_benchmark.py",
+        "tests/unit/test_solidity.py"
+      ],
+      "runtime_artifacts": [
+        "docs/evaluation/benchmark_results.json"
+      ],
+      "evidence": "Schemas support recall by severity, aggregate precision, safe false confirmations, exact location, reproduction, coverage, total cost, tokens, and runtime.",
+      "gap": "No valid product measurements exist; separate false-confirmed critical/high, attack-path accuracy, symbolic counterexample rate, distinct formal/invariant mutation scores, average/worst cost, and general confidence intervals are absent."
+    },
+    {
+      "requirement_id": "REQ-BRAND-IDENTITY",
+      "title": "Brand identity assets are outside maximum-assurance security capability acceptance",
+      "sources": [
+        "docs/codex_work_queue.md#BRAND-001"
+      ],
+      "queue_ticket_ids": [],
+      "meta_ticket_ids": [
+        "BRAND-001"
+      ],
+      "classification": "NOT_APPLICABLE_WITH_EVIDENCE",
+      "implementation_paths": [],
+      "tests": [],
+      "runtime_artifacts": [
+        "assets/brand/corrovera/"
+      ],
+      "evidence": "BRAND-001 governs Corrovera visual identity assets and explicitly does not establish model, engine, isolation, benchmark, or release-assurance behavior.",
+      "gap": null
+    }
+  ],
+  "queue_ticket_coverage": {
+    "frozen_queue_heading_count": 69,
+    "frozen_maximum_assurance_ticket_count": 65,
+    "mapped_implementation_ticket_count": 65,
+    "accounted_frozen_heading_count": 69,
+    "mapped_ticket_ids": [
+      "ECO-001",
+      "ECO-002",
+      "ECO-003",
+      "ECO-004",
+      "ECO-005",
+      "ECO-006",
+      "ECO-007",
+      "ECO-008",
+      "ECO-009",
+      "ECO-010",
+      "ECO-011",
+      "ECO-012",
+      "ECO-013",
+      "ECO-014",
+      "ECO-015",
+      "ECO-016",
+      "ECO-017",
+      "ECO-018",
+      "REAL-001",
+      "REAL-002",
+      "REAL-003",
+      "REAL-004",
+      "DYN-001",
+      "DYN-002",
+      "DYN-003",
+      "DYN-004",
+      "SYM-001",
+      "FORM-001",
+      "FORM-002",
+      "MUT-001",
+      "MUT-002",
+      "MODEL-001",
+      "MODEL-002",
+      "MODEL-003",
+      "MODEL-004",
+      "MODEL-005",
+      "MODEL-006",
+      "SEM-001",
+      "SEM-002",
+      "SEM-003",
+      "SEM-004",
+      "SEM-005",
+      "SEM-006",
+      "COV-001",
+      "SCOPE-001",
+      "SNAP-001",
+      "SNAP-002",
+      "SNAP-003",
+      "SCOPE-002",
+      "BENCH-001",
+      "BENCH-002",
+      "BENCH-003",
+      "BENCH-004",
+      "BENCH-005",
+      "ISO-001",
+      "ISO-002",
+      "ISO-003",
+      "ISO-004",
+      "MAN-001",
+      "MAN-002",
+      "MAN-003",
+      "E2E-001",
+      "E2E-002",
+      "E2E-003",
+      "RELEASE-001"
+    ],
+    "meta_ticket_dispositions": [
+      {
+        "ticket_id": "QUEUE-BOOTSTRAP-001",
+        "requirement_id": "REQ-QUEUE-BOOTSTRAP",
+        "classification": "NOT_APPLICABLE_WITH_EVIDENCE",
+        "basis": "Administrative queue creation, not runtime product capability."
+      },
+      {
+        "ticket_id": "TRACE-001",
+        "requirement_id": "REQ-TRACEABILITY-EVIDENCE",
+        "classification": "PARTIALLY_PROVEN",
+        "basis": "Meta-level traceability requirement evaluated by its referenced requirement row."
+      },
+      {
+        "ticket_id": "ASSURE-001",
+        "requirement_id": "REQ-ASSURANCE-CONTRACT",
+        "classification": "PARTIALLY_PROVEN",
+        "basis": "Meta-level assurance-contract requirement evaluated by its referenced requirement row."
+      },
+      {
+        "ticket_id": "BRAND-001",
+        "requirement_id": "REQ-BRAND-IDENTITY",
+        "classification": "NOT_APPLICABLE_WITH_EVIDENCE",
+        "basis": "Brand identity work has no bearing on maximum-assurance security capability."
+      }
+    ],
+    "mapping_rule": "Each of the 65 maximum-assurance implementation tickets appears exactly once in requirements[].queue_ticket_ids. Each of the four meta tickets appears exactly once in requirements[].meta_ticket_ids and has an explicit disposition. Their union accounts for all 69 frozen queue headings."
+  },
+  "unsupported_or_stale_claims": [
+    {
+      "claim": "All queue tickets marked COMPLETE imply release readiness.",
+      "finding": "False. Multiple COMPLETE tickets explicitly retain blocked real engine integrations, while RELEASE-001 is blocked."
+    },
+    {
+      "claim": "The committed release report represents the current release candidate.",
+      "finding": "False. It records an uncommitted pre-initial-commit state, lacks an exact commit field, and predates the frozen build."
+    },
+    {
+      "claim": "Implemented traceability rows prove runtime execution.",
+      "finding": "Not generally. The release-evidence validator can satisfy artifact checks with a declaration-derived filename set."
+    },
+    {
+      "claim": "Model-review coverage proves substantive per-surface review.",
+      "finding": "False. It proves only successful requests whose input contexts contained surface tokens."
+    },
+    {
+      "claim": "Maximum assurance requires a successful complementary formal portfolio by default.",
+      "finding": "False. Engine success is optional unless each tool is separately listed."
+    },
+    {
+      "claim": "The benchmark corpus is blind real-world performance evidence.",
+      "finding": "False. It is a committed, known, locally authored synthetic corpus with no frozen audit reports."
+    }
+  ],
+  "overall_conclusion": {
+    "requirements_status": "FAILED",
+    "reason": "The frozen release candidate proves valuable bounded Foundry economic regressions and offline full-protocol plumbing, but it does not execute a real model ensemble or complementary scanner/formal portfolio, lacks real hardened containment and replay, has no measured product benchmark, and contains fail-closed defects that admit false COMPLETE states."
+  }
+}

@@ -1,0 +1,1148 @@
+{
+  "schema_version": "1.0",
+  "artifact_kind": "fit_for_purpose_tool_execution_matrix",
+  "evaluated_build": {
+    "git_commit": "e304807cf942542706b88544fa216516f8f95cad",
+    "tree_state_at_freeze": "clean",
+    "evaluation_anchor_time": "2026-07-27T11:46:38.138007+00:00",
+    "evaluation_scope": "Local, credential-free, network-disabled engine and assurance evaluation",
+    "later_evaluation_edits_excluded_from_build": true
+  },
+  "status_legend": {
+    "PROVEN_REAL": "The named external binary executed against a synthetic local target during this evaluation.",
+    "PROVEN_MOCK_ONLY": "The adapter or orchestration path passed tests using a fake executable, fake model, synthetic runner, or passthrough isolation backend.",
+    "UNEXECUTED_AVAILABLE": "A host binary was found, but it did not analyze a target.",
+    "UNAVAILABLE": "No acceptable off-repository binary was found.",
+    "SKIPPED": "The engine was disabled or no applicable executable property was available.",
+    "INCONCLUSIVE": "Execution prerequisites were absent or the resulting evidence could not establish a proof or counterexample.",
+    "MIXED": "Real execution exists for a bounded subpath, but the production maximum-assurance integration remains unproven."
+  },
+  "environment": {
+    "operating_system": "macOS 26.5.2 build 25F84",
+    "kernel": "Darwin 25.5.0 arm64",
+    "python": "3.13.4",
+    "mmaudit": "0.1.0",
+    "network_used": false,
+    "credentials_used": false,
+    "live_chain_used": false,
+    "public_rpc_used": false,
+    "container_runtime": null,
+    "container_image": null,
+    "container_image_digest": null,
+    "selected_isolation_backend": null,
+    "isolation_observation": "sandbox-exec was present, but the auto usability probe returned no hardened backend in the managed evaluation environment. Docker, Podman, and bubblewrap were absent.",
+    "production_containment_proven": false
+  },
+  "toolchain": [
+    {
+      "tool": "python",
+      "available": true,
+      "path": ".venv/bin/python",
+      "version": "3.13.4",
+      "sha256": "cd226e7546887d11c50f86ff8862269e928e0be4d3ec1fb6cf2b2bada0b324e6"
+    },
+    {
+      "tool": "ruff",
+      "available": true,
+      "path": ".venv/bin/ruff",
+      "version": "0.16.0",
+      "sha256": "1ac190f23d9a690d75b3e74eb88a07e02f6414227a41ba1920609af989ecec52"
+    },
+    {
+      "tool": "mypy",
+      "available": true,
+      "path": ".venv/bin/mypy",
+      "version": "1.20.2 compiled",
+      "sha256": "e443b2c28c88c534136020dd9f27037726bfbb3f12d4b7680193173aae728a89"
+    },
+    {
+      "tool": "pytest",
+      "available": true,
+      "path": ".venv/bin/pytest",
+      "version": "8.4.2",
+      "sha256": "7f15b1cef38cf5ce7ed2c0916052c152b6f350516c372898bd93868bea379c4a"
+    },
+    {
+      "tool": "mmaudit",
+      "available": true,
+      "path": ".venv/bin/mmaudit",
+      "version": "0.1.0",
+      "sha256": "8a5a01aae370d0363e51cfa7a15e07b50cd282cb5394d5e3191714c2bc886ef1"
+    },
+    {
+      "tool": "forge",
+      "available": true,
+      "path": "/Users/josevans/.foundry/bin/forge",
+      "version": "1.3.2-stable",
+      "build_commit": "b0381e15d1465396aabcb398b60d2c10cc0112f2",
+      "build_timestamp": "2025-08-29T06:56:57.874013000Z",
+      "sha256": "c0ed9870bf0637ce351ef70e347bcf8ab5e23c4cc12d32ef6fdf4eb1d97116ee"
+    },
+    {
+      "tool": "anvil",
+      "available": true,
+      "path": "/Users/josevans/.foundry/bin/anvil",
+      "version": "1.3.2-stable",
+      "build_commit": "b0381e15d1465396aabcb398b60d2c10cc0112f2",
+      "sha256": "80ff77a2dfe71fac6bd9810d942c4f1b0447e42f4c086956417d9e63f5f7f0d3"
+    },
+    {
+      "tool": "cast",
+      "available": true,
+      "path": "/Users/josevans/.foundry/bin/cast",
+      "version": "1.3.2-stable",
+      "build_commit": "b0381e15d1465396aabcb398b60d2c10cc0112f2",
+      "sha256": "2907fba7c298c3f22c9061d45bf28994563c48dd9a05a21811f3b5a9f51da8b1"
+    },
+    {
+      "tool": "solc-selector",
+      "available": true,
+      "path": "/opt/homebrew/bin/solc",
+      "version": null,
+      "version_command_result": "failed: No solc version set",
+      "sha256": "e79832255397e4bf1cc33feb56700f930feb702d045148c094c1f4f1969504b9"
+    },
+    {
+      "tool": "solc-0.8.20",
+      "available": true,
+      "path": "/Users/josevans/Library/Application Support/svm/0.8.20/solc-0.8.20",
+      "version": "0.8.20+commit.a1b79de6.Darwin.appleclang",
+      "sha256": "5d98c9ed892b74ecadc4ab7f93de6211fdde0351ef66f2cb90eb11630e30e2ab"
+    },
+    {
+      "tool": "solc-0.8.22",
+      "available": true,
+      "path": "/Users/josevans/Library/Application Support/svm/0.8.22/solc-0.8.22",
+      "version": "0.8.22+commit.4fc1097e.Darwin.appleclang",
+      "sha256": "2a190970f93f3f8f3631df6eabd245994ffc5558e8efbd94d597a6f447f59b33"
+    },
+    {
+      "tool": "solc-0.8.24",
+      "available": true,
+      "path": "/Users/josevans/Library/Application Support/svm/0.8.24/solc-0.8.24",
+      "version": "0.8.24+commit.e11b9ed9.Darwin.appleclang",
+      "sha256": "1cb1bfc4cdf6873ebf36dc65317a8a0614096b9c2bcca5bb1f70d57d319c50a6"
+    },
+    {
+      "tool": "solc-0.8.30",
+      "available": true,
+      "path": "/Users/josevans/Library/Application Support/svm/0.8.30/solc-0.8.30",
+      "version": "0.8.30+commit.73712a01.Darwin.appleclang",
+      "sha256": "738dcdc6afddeb505ee4e4ef24f1c1fdba2b8c924e614cbbf5801a5b062dd683"
+    },
+    {
+      "tool": "slither",
+      "available": true,
+      "path": "/Users/josevans/anaconda3/bin/slither",
+      "version": "0.11.5",
+      "sha256": "1a95e1d6b88b600e219d40643ddb7353e0822d19b930d315828ea1f98bcd9aaf"
+    },
+    {
+      "tool": "halmos",
+      "available": true,
+      "path": "/Users/josevans/anaconda3/bin/halmos",
+      "version": "0.3.3",
+      "sha256": "99ef8b6844cfe6e5288fa2f3b57587a3356c9b563a31f52dfb335d9e87623065"
+    },
+    {
+      "tool": "z3",
+      "available": true,
+      "path": "/opt/homebrew/bin/z3",
+      "version": "4.15.0 - 64 bit",
+      "sha256": "5d83379fd1979ed2d308658ffb4564f2af46edc4b3e3556f098b9ea89c3d3878"
+    },
+    {
+      "tool": "node",
+      "available": true,
+      "path": "/opt/homebrew/bin/node",
+      "version": "24.2.0",
+      "sha256": "29ccb9b9ab496483f795e595419c61cef3fe1f8d1e2ee68beaed9f9133d8e1e7"
+    },
+    {
+      "tool": "sandbox-exec",
+      "available": true,
+      "usable_as_mmaudit_hardened_backend": false,
+      "path": "/usr/bin/sandbox-exec",
+      "version": null,
+      "sha256": "8290e4be7387a0df83cd1559e86afd880464f269450573d012795761fe298f16"
+    },
+    {
+      "tool": "jq",
+      "available": true,
+      "path": "/usr/bin/jq",
+      "version": "jq-1.7.1-apple",
+      "sha256": null
+    }
+  ],
+  "unavailable_binaries": [
+    "echidna",
+    "medusa",
+    "kontrol",
+    "certoraRun",
+    "myth",
+    "semgrep",
+    "gitleaks",
+    "trivy",
+    "osv-scanner",
+    "codeql",
+    "docker",
+    "podman",
+    "bwrap"
+  ],
+  "retained_runtime_evidence": {
+    "run_id": "20260727T114638Z-5641e2ed",
+    "run_directory": "/private/tmp/mmaudit-eval-engine-maximum/runs/20260727T114638Z-5641e2ed",
+    "target": "tests/fixtures/full_protocol_offline",
+    "quality_status": "failed",
+    "maximum_assurance_status": "INCONCLUSIVE",
+    "completed": false,
+    "duration_seconds": 0.054448916926048696,
+    "engine_execution_summary": {
+      "scanner_runs": 0,
+      "formal_runs": 0,
+      "invariant_runs": 0,
+      "reproduction_runs": 0,
+      "compilation_status": "skipped"
+    },
+    "artifacts": [
+      {
+        "path": "audit-report.md",
+        "sha256": "d3f209760b6ba477bf950d5e9265d68c83c39f024146830b49377b5278e9fe62"
+      },
+      {
+        "path": "run-evidence-manifest.json",
+        "sha256": "f1fe03ce21394356d685a0403e5cafe16241cd60419bc52d21684a23e652dbc1"
+      },
+      {
+        "path": "scanner-results.json",
+        "sha256": "a1d3503f2e3b6eb7c9551e129291f4f39710c0e225f284e753d0e95e784b09cd",
+        "content_summary": "empty runs array"
+      },
+      {
+        "path": "formal-results.json",
+        "sha256": "9f5920b7c8486fe868630ba555c15b22b8864c12e11e90cbeac32f96c06a3cbe",
+        "content_summary": "empty runs and dynamic-engine-comparison arrays"
+      },
+      {
+        "path": "invariant-execution-results.json",
+        "sha256": "840d91a9ee920bd3e2d5fef25d65118237b563ea3f367412f1038993ad215009",
+        "content_summary": "empty harnesses and results arrays"
+      },
+      {
+        "path": "reproduction-results.json",
+        "sha256": "5758383811806359be72f8a822102e0535283117d79cd1db2d65654c246805aa",
+        "content_summary": "empty results, test specifications, and falsification decisions"
+      },
+      {
+        "path": "solidity-compilation.json",
+        "sha256": "a28f9f6c0cb50bcdc695a813fd3245060b87bf35d1d6a520306d97cfd658255e",
+        "content_summary": "Foundry build command recorded but status skipped, executable hash absent, duration zero"
+      }
+    ]
+  },
+  "engine_matrix": [
+    {
+      "engine": "Foundry unit/fuzz/invariant",
+      "configured": true,
+      "default_maximum_assurance_required": {
+        "invariant_execution": true,
+        "formal_adapter_name_required": false,
+        "forge_binary_pin_required_by_runtime_schema": false
+      },
+      "evidence_class": "MIXED",
+      "real_or_mock": "real execution on bounded synthetic controls; production isolation and executable provenance unproven",
+      "binary": {
+        "path": "/Users/josevans/.foundry/bin/forge",
+        "version": "1.3.2-stable",
+        "sha256": "c0ed9870bf0637ce351ef70e347bcf8ab5e23c4cc12d32ef6fdf4eb1d97116ee"
+      },
+      "isolation": {
+        "real_economic_portfolio": "direct subprocess in disposable pytest workspaces with a sanitized environment",
+        "generated_pipeline_tests": "test-only passthrough backend named synthetic-local-only-isolation",
+        "production_hardened_backend": null,
+        "production_containment_proven": false
+      },
+      "targets": [
+        "tests/fixtures/solidity/maximum_assurance_economic/manifest.json and its synthetic fixture projects",
+        "a generated local financial-settlement fixture",
+        "generated ERC-4626 and state-ordering pipeline harnesses"
+      ],
+      "elapsed_time_seconds": {
+        "economic_and_financial_suite": 29.39,
+        "generated_erc4626_pipeline_test": 6.82,
+        "state_ordering_pipeline_test": 8.02
+      },
+      "coverage": {
+        "applicable_harnesses": 43,
+        "executed_harnesses": 43,
+        "unsafe_controls": 21,
+        "unsafe_counterexamples_reproduced_first_run": 21,
+        "unsafe_counterexamples_reproduced_second_run": 21,
+        "safe_controls": 22,
+        "safe_controls_passed": 22,
+        "line_or_branch_coverage": null,
+        "blind_discovery_coverage": null
+      },
+      "counterexamples": {
+        "observed": true,
+        "counted_unsafe_controls": 21,
+        "persisted_after_pytest": true
+      },
+      "proofs": [],
+      "artifacts": {
+        "runtime_artifacts_retained": true,
+        "normalized_report_and_schema_validated": true,
+        "economic_acceptance_report": {
+          "path": "/private/var/folders/js/hdsb507175d_gw8dp9x_1_s00000gn/T/pytest-of-josevans/pytest-513/test_real_foundry_economic_por0/economic-acceptance.json",
+          "file_sha256": "d23019721216acf45096bbd7838191584f65fff07cfd64f72b28a377c4f51ed0",
+          "internal_report_sha256": "c760364b540f9bbc00b8d354d211cd9c35905f0370516faa0013c2acb929f71b"
+        }
+      },
+      "unsafe_control": "present and executed",
+      "safe_control": "present and executed",
+      "failures": [
+        "The maximum-assurance CLI run stopped before compilation or Foundry execution because hardened isolation was unavailable.",
+        "The production invariant and reproduction result schemas do not bind the actual Forge path, version, and checksum."
+      ],
+      "unsupported_or_unproven": [
+        "Hardened production containment",
+        "Real local-fork replay in this environment",
+        "Blind vulnerability discovery by the economic fixture portfolio",
+        "Persistent per-harness stdout, stderr, and individual counterexample hashes from this evaluation"
+      ],
+      "command_ids": [
+        "CMD-FOUNDRY-PORTFOLIO",
+        "CMD-FOUNDRY-ERC4626",
+        "CMD-FOUNDRY-ORDERING",
+        "CMD-REPLAY"
+      ]
+    },
+    {
+      "engine": "Foundry formal adapter (foundry-invariant)",
+      "configured": true,
+      "evidence_class": "MIXED",
+      "real_or_mock": "the general Foundry harness runner executed real controls; the FormalRunner adapter was skipped in the observed inventory",
+      "binary": {
+        "path": "/Users/josevans/.foundry/bin/forge",
+        "version": "1.3.2-stable",
+        "sha256": "c0ed9870bf0637ce351ef70e347bcf8ab5e23c4cc12d32ef6fdf4eb1d97116ee"
+      },
+      "isolation": {
+        "formal_inventory_backend": null,
+        "production_containment_proven": false
+      },
+      "target": "tests/fixtures/full_protocol_offline using frozen property and invariant artifacts",
+      "elapsed_time_seconds": 0.0001776249846443534,
+      "coverage": null,
+      "artifacts": [],
+      "counterexamples": [],
+      "proofs": [],
+      "observed_status": "skipped",
+      "failure": "no executable property harness was discovered",
+      "unsafe_control": "covered only by separate Foundry integration paths",
+      "safe_control": "covered only by separate Foundry integration paths",
+      "unsupported_or_unproven": [
+        "FormalRunner execution of a reviewed harness in hardened isolation",
+        "FormalRunner-specific counterexample or proof artifacts"
+      ],
+      "command_ids": [
+        "CMD-FORMAL-INVENTORY"
+      ]
+    },
+    {
+      "engine": "Slither",
+      "configured": true,
+      "maximum_profile_required": true,
+      "evidence_class": "UNEXECUTED_AVAILABLE",
+      "real_or_mock": "binary discovery was real; adapter parsing and successful execution paths were mock-tested; no target was analyzed",
+      "binary": {
+        "path": "/Users/josevans/anaconda3/bin/slither",
+        "version": "0.11.5",
+        "sha256": "1a95e1d6b88b600e219d40643ddb7353e0822d19b930d315828ea1f98bcd9aaf"
+      },
+      "isolation": {
+        "backend": null,
+        "status": "hardened scanner isolation unavailable",
+        "isolated": false
+      },
+      "target": "tests/fixtures/full_protocol_offline was supplied to ScannerRunner but Slither was not launched",
+      "elapsed_time_seconds": null,
+      "coverage": null,
+      "artifacts": [],
+      "counterexamples": [],
+      "proofs": [],
+      "observed_status": "unavailable",
+      "failure": "hardened scanner isolation is unavailable; scanner was not executed",
+      "unsafe_control": "no real execution",
+      "safe_control": "no real execution",
+      "unsupported_or_unproven": [
+        "Real target analysis",
+        "Vulnerable/safe negative-control discrimination",
+        "Result artifact provenance"
+      ],
+      "command_ids": [
+        "CMD-SCANNER-INVENTORY",
+        "CMD-ENGINE-TESTS"
+      ]
+    },
+    {
+      "engine": "Echidna",
+      "configured": true,
+      "default_required_tools_entry": false,
+      "evidence_class": "UNAVAILABLE",
+      "real_or_mock": "translation and adapter behavior were unit-tested; conditional real integration skipped",
+      "binary": null,
+      "isolation": {
+        "backend": null,
+        "isolated": false
+      },
+      "target": "conditional test target tests/fixtures/solidity/echidna_property was not executed",
+      "elapsed_time_seconds": 0.00004091602750122547,
+      "coverage": null,
+      "artifacts": [],
+      "counterexamples": [],
+      "proofs": [],
+      "observed_status": "unavailable",
+      "failure": "echidna is unavailable outside the target repository",
+      "unsafe_control": "defined by conditional real integration but not executed",
+      "safe_control": "absent from the real integration test",
+      "unsupported_or_unproven": [
+        "Real execution",
+        "Configured version and checksum trust pins",
+        "Safe negative control",
+        "Hardened isolation"
+      ],
+      "command_ids": [
+        "CMD-ENGINE-TESTS",
+        "CMD-FORMAL-INVENTORY",
+        "CMD-ASSURANCE-ASSAY"
+      ]
+    },
+    {
+      "engine": "Medusa",
+      "configured": true,
+      "default_required_tools_entry": false,
+      "evidence_class": "UNAVAILABLE",
+      "real_or_mock": "translation and adapter behavior were unit-tested; conditional real integration skipped",
+      "binary": null,
+      "isolation": {
+        "backend": null,
+        "isolated": false
+      },
+      "target": "conditional translated Echidna-property fixture was not executed",
+      "elapsed_time_seconds": 0.00003724999260157347,
+      "coverage": null,
+      "artifacts": [],
+      "counterexamples": [],
+      "proofs": [],
+      "observed_status": "unavailable",
+      "failure": "medusa is unavailable outside the target repository",
+      "unsafe_control": "defined by conditional real integration but not executed",
+      "safe_control": "absent from the real integration test",
+      "unsupported_or_unproven": [
+        "Real execution",
+        "Configured version and checksum trust pins",
+        "Safe negative control",
+        "Hardened isolation"
+      ],
+      "command_ids": [
+        "CMD-ENGINE-TESTS",
+        "CMD-FORMAL-INVENTORY",
+        "CMD-ASSURANCE-ASSAY"
+      ]
+    },
+    {
+      "engine": "Halmos",
+      "configured": true,
+      "default_required_tools_entry": false,
+      "evidence_class": "UNEXECUTED_AVAILABLE",
+      "real_or_mock": "Halmos and Z3 binaries were inventoried; parser/adapter tests were mock-backed; conditional real integration skipped",
+      "binary": {
+        "path": "/Users/josevans/anaconda3/bin/halmos",
+        "version": "0.3.3",
+        "sha256": "99ef8b6844cfe6e5288fa2f3b57587a3356c9b563a31f52dfb335d9e87623065"
+      },
+      "dependencies": [
+        {
+          "tool": "z3",
+          "path": "/opt/homebrew/bin/z3",
+          "version": "4.15.0 - 64 bit",
+          "sha256": "5d83379fd1979ed2d308658ffb4564f2af46edc4b3e3556f098b9ea89c3d3878"
+        }
+      ],
+      "isolation": {
+        "backend": null,
+        "isolated": false
+      },
+      "target": "frozen full_protocol_offline property corpus contained no executable property harness; conditional counterexample fixture was not executed",
+      "elapsed_time_seconds": 0.00018550001550465822,
+      "coverage": null,
+      "artifacts": [],
+      "counterexamples": [],
+      "proofs": [],
+      "observed_status": "skipped",
+      "failure": "no executable property harness was discovered; independently, no hardened isolation backend was available",
+      "unsafe_control": "defined by conditional real integration but not executed",
+      "safe_control": "absent from the real integration test",
+      "unsupported_or_unproven": [
+        "Real symbolic execution",
+        "Configured Halmos and Z3 trust pins in the example configuration",
+        "Safe negative control",
+        "Hardened isolation"
+      ],
+      "command_ids": [
+        "CMD-ENGINE-TESTS",
+        "CMD-FORMAL-INVENTORY"
+      ]
+    },
+    {
+      "engine": "Kontrol",
+      "configured": true,
+      "default_required_tools_entry": false,
+      "evidence_class": "UNAVAILABLE",
+      "real_or_mock": "translation and parser behavior were unit-tested; no real integration exists",
+      "binary": null,
+      "isolation": {
+        "backend": null,
+        "isolated": false
+      },
+      "target": null,
+      "elapsed_time_seconds": 0.000042625004425644875,
+      "coverage": null,
+      "artifacts": [],
+      "counterexamples": [],
+      "proofs": [],
+      "observed_status": "unavailable",
+      "failure": "kontrol is unavailable outside the target repository",
+      "unsafe_control": "no real execution",
+      "safe_control": "no real execution",
+      "unsupported_or_unproven": [
+        "Real execution",
+        "Vulnerable and safe controls",
+        "Proof or counterexample artifacts",
+        "Hardened isolation"
+      ],
+      "command_ids": [
+        "CMD-ENGINE-TESTS",
+        "CMD-FORMAL-INVENTORY"
+      ]
+    },
+    {
+      "engine": "Certora",
+      "configured": true,
+      "enabled_in_evaluated_example_config": false,
+      "default_required_tools_entry": false,
+      "evidence_class": "PROVEN_MOCK_ONLY",
+      "real_or_mock": "workspace preparation and result parsing were unit-tested with mocks; no remote verification call occurred",
+      "binary": null,
+      "isolation": {
+        "backend": null,
+        "isolated": false,
+        "network_path_observation": "FormalRunner uses the normal network-denying backend wrapper. No real remote-service path was proven."
+      },
+      "target": null,
+      "elapsed_time_seconds": null,
+      "coverage": null,
+      "artifacts": [],
+      "counterexamples": [],
+      "proofs": [],
+      "observed_status": "not emitted because Certora was disabled",
+      "failure": "certoraRun was not installed; operator configuration and API key were not supplied or accessed",
+      "unsafe_control": "no real execution",
+      "safe_control": "no real execution",
+      "unsupported_or_unproven": [
+        "Real Certora service integration",
+        "Network-enabled isolated execution",
+        "Vacuity artifact from a real run",
+        "Vulnerable and safe controls"
+      ],
+      "command_ids": [
+        "CMD-ENGINE-TESTS",
+        "CMD-FORMAL-INVENTORY"
+      ]
+    },
+    {
+      "engine": "solc-SMTChecker",
+      "configured": true,
+      "default_required_tools_entry": false,
+      "evidence_class": "UNEXECUTED_AVAILABLE",
+      "real_or_mock": "the adapter saw the solc selector, but did not execute it against the target",
+      "binary": {
+        "path": "/opt/homebrew/bin/solc",
+        "version": null,
+        "sha256": "e79832255397e4bf1cc33feb56700f930feb702d045148c094c1f4f1969504b9",
+        "version_failure": "No solc version set"
+      },
+      "isolation": {
+        "backend": null,
+        "isolated": false
+      },
+      "target": "tests/fixtures/full_protocol_offline was considered applicable but not analyzed",
+      "elapsed_time_seconds": 0.0003194590099155903,
+      "coverage": null,
+      "artifacts": [],
+      "counterexamples": [],
+      "proofs": [],
+      "observed_status": "inconclusive",
+      "failure": "hardened isolation backend unavailable; tool was not executed",
+      "unsafe_control": "no real execution",
+      "safe_control": "no real execution",
+      "unsupported_or_unproven": [
+        "SMT proof generation",
+        "Counterexample generation",
+        "Compiler-version binding through the selector",
+        "Vulnerable and safe controls"
+      ],
+      "command_ids": [
+        "CMD-FORMAL-INVENTORY"
+      ]
+    },
+    {
+      "engine": "Mythril",
+      "configured": true,
+      "default_required_tools_entry": false,
+      "evidence_class": "UNAVAILABLE",
+      "real_or_mock": "adapter and parser behavior only",
+      "binary": null,
+      "isolation": {
+        "backend": null,
+        "isolated": false
+      },
+      "target": null,
+      "elapsed_time_seconds": 0.00008291599806398153,
+      "coverage": null,
+      "artifacts": [],
+      "counterexamples": [],
+      "proofs": [],
+      "observed_status": "unavailable",
+      "failure": "myth is unavailable outside the target repository",
+      "unsafe_control": "no real execution",
+      "safe_control": "no real execution",
+      "unsupported_or_unproven": [
+        "Real analysis",
+        "Vulnerable and safe controls",
+        "Normalized runtime evidence"
+      ],
+      "command_ids": [
+        "CMD-FORMAL-INVENTORY",
+        "CMD-ENGINE-TESTS"
+      ]
+    },
+    {
+      "engine": "Semgrep scanner",
+      "configured": true,
+      "enabled": true,
+      "required": false,
+      "evidence_class": "UNAVAILABLE",
+      "real_or_mock": "binary unavailable; adapter did not analyze the target",
+      "binary": null,
+      "observed_status": "unavailable",
+      "failure": "semgrep is not installed",
+      "isolated": false,
+      "target_analyzed": false,
+      "elapsed_time_seconds": null,
+      "coverage": null,
+      "artifacts": [],
+      "counterexamples": [],
+      "proofs": [],
+      "unsafe_control": "not executed",
+      "safe_control": "not executed",
+      "unsupported_or_unproven": [
+        "Real target analysis",
+        "Vulnerable and safe controls",
+        "Normalized runtime artifacts"
+      ],
+      "command_ids": [
+        "CMD-SCANNER-INVENTORY"
+      ]
+    },
+    {
+      "engine": "Gitleaks scanner",
+      "configured": true,
+      "enabled": true,
+      "required": false,
+      "evidence_class": "UNAVAILABLE",
+      "real_or_mock": "binary unavailable; adapter did not analyze the target",
+      "binary": null,
+      "observed_status": "unavailable",
+      "failure": "gitleaks is not installed",
+      "isolated": false,
+      "target_analyzed": false,
+      "elapsed_time_seconds": null,
+      "coverage": null,
+      "artifacts": [],
+      "counterexamples": [],
+      "proofs": [],
+      "unsafe_control": "not executed",
+      "safe_control": "not executed",
+      "unsupported_or_unproven": [
+        "Real target analysis",
+        "Vulnerable and safe controls",
+        "Normalized runtime artifacts"
+      ],
+      "command_ids": [
+        "CMD-SCANNER-INVENTORY"
+      ]
+    },
+    {
+      "engine": "Trivy scanner",
+      "configured": true,
+      "enabled": true,
+      "required": false,
+      "evidence_class": "UNAVAILABLE",
+      "real_or_mock": "binary unavailable; adapter did not analyze the target",
+      "binary": null,
+      "observed_status": "unavailable",
+      "failure": "trivy is not installed",
+      "isolated": false,
+      "target_analyzed": false,
+      "elapsed_time_seconds": null,
+      "coverage": null,
+      "artifacts": [],
+      "counterexamples": [],
+      "proofs": [],
+      "unsafe_control": "not executed",
+      "safe_control": "not executed",
+      "unsupported_or_unproven": [
+        "Real target analysis",
+        "Vulnerable and safe controls",
+        "Normalized runtime artifacts"
+      ],
+      "command_ids": [
+        "CMD-SCANNER-INVENTORY"
+      ]
+    },
+    {
+      "engine": "OSV scanner",
+      "configured": true,
+      "enabled": true,
+      "required": false,
+      "evidence_class": "UNAVAILABLE",
+      "real_or_mock": "binary unavailable; adapter did not analyze the target",
+      "binary": null,
+      "observed_status": "unavailable",
+      "failure": "osv-scanner is not installed",
+      "isolated": false,
+      "target_analyzed": false,
+      "elapsed_time_seconds": null,
+      "coverage": null,
+      "artifacts": [],
+      "counterexamples": [],
+      "proofs": [],
+      "unsafe_control": "not executed",
+      "safe_control": "not executed",
+      "unsupported_or_unproven": [
+        "Real target analysis",
+        "Vulnerable and safe controls",
+        "Normalized runtime artifacts"
+      ],
+      "command_ids": [
+        "CMD-SCANNER-INVENTORY"
+      ]
+    },
+    {
+      "engine": "CodeQL scanner",
+      "configured": true,
+      "enabled": false,
+      "required": false,
+      "evidence_class": "SKIPPED",
+      "real_or_mock": "disabled and unexecuted",
+      "binary": null,
+      "observed_status": "skipped",
+      "failure": "disabled by configuration or command line",
+      "isolated": false,
+      "target_analyzed": false,
+      "elapsed_time_seconds": 0.0,
+      "coverage": null,
+      "artifacts": [],
+      "counterexamples": [],
+      "proofs": [],
+      "unsafe_control": "not executed",
+      "safe_control": "not executed",
+      "unsupported_or_unproven": [
+        "Real target analysis",
+        "Vulnerable and safe controls",
+        "Normalized runtime artifacts"
+      ],
+      "command_ids": [
+        "CMD-SCANNER-INVENTORY"
+      ]
+    },
+    {
+      "engine": "Foundry fork scanner",
+      "configured": true,
+      "enabled": false,
+      "required": false,
+      "evidence_class": "SKIPPED",
+      "real_or_mock": "real Forge binary exists, but this scanner path was disabled and unexecuted",
+      "binary": {
+        "path": "/Users/josevans/.foundry/bin/forge",
+        "version": "1.3.2-stable",
+        "sha256": "c0ed9870bf0637ce351ef70e347bcf8ab5e23c4cc12d32ef6fdf4eb1d97116ee"
+      },
+      "observed_status": "skipped",
+      "failure": "disabled by configuration or command line",
+      "isolated": false,
+      "target_analyzed": false,
+      "elapsed_time_seconds": 0.0,
+      "coverage": null,
+      "artifacts": [],
+      "counterexamples": [],
+      "proofs": [],
+      "unsafe_control": "not executed through this scanner",
+      "safe_control": "not executed through this scanner",
+      "unsupported_or_unproven": [
+        "Real local-fork baseline in the production scanner path",
+        "Hardened isolation"
+      ],
+      "command_ids": [
+        "CMD-SCANNER-INVENTORY"
+      ]
+    }
+  ],
+  "assurance_contract_assay": {
+    "command_id": "CMD-ASSURANCE-ASSAY",
+    "method": "Pure deterministic mutation assay over the real MaximumAssuranceContract using the synthetic complete runtime helper. No target or external binary was executed.",
+    "results": [
+      {
+        "case": "baseline_no_echidna_medusa",
+        "status": "COMPLETE",
+        "failed_required_clauses": []
+      },
+      {
+        "case": "compilation_failed",
+        "status": "COMPLETE",
+        "failed_required_clauses": []
+      },
+      {
+        "case": "formal_only_unavailable_record",
+        "status": "COMPLETE",
+        "failed_required_clauses": []
+      },
+      {
+        "case": "formal_inventory_missing",
+        "status": "FAILED",
+        "failed_required_clauses": [
+          "formal_adapter_inventory"
+        ]
+      },
+      {
+        "case": "failed_reproduction_attempt",
+        "status": "COMPLETE",
+        "failed_required_clauses": []
+      },
+      {
+        "case": "missing_isolation",
+        "status": "FAILED",
+        "failed_required_clauses": [
+          "hardened_dynamic_isolation"
+        ]
+      },
+      {
+        "case": "missing_model_reviews",
+        "status": "FAILED",
+        "failed_required_clauses": [
+          "multi_agent_review",
+          "critical_model_surface_review"
+        ]
+      },
+      {
+        "case": "missing_benchmark_default",
+        "status": "COMPLETE",
+        "failed_required_clauses": []
+      },
+      {
+        "case": "missing_benchmark_when_opted_in",
+        "status": "FAILED",
+        "failed_required_clauses": [
+          "benchmark_regression_gate"
+        ]
+      },
+      {
+        "case": "required_echidna_missing",
+        "status": "COMPLETE",
+        "failed_required_clauses": []
+      },
+      {
+        "case": "required_echidna_explicit",
+        "status": "FAILED",
+        "failed_required_clauses": [
+          "required_formal_tool:echidna"
+        ]
+      }
+    ],
+    "defects_and_gaps": [
+      {
+        "id": "ASSURANCE-COMPILATION-ATTEMPT",
+        "severity": "high",
+        "source": "src/mmaudit/orchestration/assurance.py:303-307,426-449",
+        "observation": "The compilation requirement passes when compilation was attempted, even when every compilation result is FAILED.",
+        "mitigation_elsewhere": "Pipeline quality gates separately require CompilationStatus.SUCCESS.",
+        "maximum_assurance_status_defect": true
+      },
+      {
+        "id": "ASSURANCE-FORMAL-INVENTORY",
+        "severity": "high",
+        "source": "src/mmaudit/orchestration/assurance.py:686-718",
+        "observation": "Any non-empty formal run inventory satisfies the required inventory clause. Successful formal or symbolic execution is optional unless the operator explicitly populates formal.required_tools.",
+        "maximum_assurance_status_defect": true
+      },
+      {
+        "id": "ASSURANCE-REPRODUCTION-ATTEMPT",
+        "severity": "high",
+        "source": "src/mmaudit/orchestration/assurance.py:596-605",
+        "observation": "A high/critical candidate with attempts greater than zero satisfies the reproduction clause even when state is NOT_REPRODUCED and successful_attempts is zero.",
+        "mitigation_elsewhere": "Pipeline quality gates separately require verified reproduction integrity for eligible candidates.",
+        "maximum_assurance_status_defect": true
+      },
+      {
+        "id": "ASSURANCE-BENCHMARK-OPT-IN",
+        "severity": "medium",
+        "source": "src/mmaudit/orchestration/assurance.py:720-752 and mmaudit.example.toml:139",
+        "observation": "A current benchmark certificate is not required by the default maximum-assurance configuration. It fails closed only when benchmark_gate or CI mode is explicitly enabled.",
+        "maximum_assurance_status_defect": true
+      },
+      {
+        "id": "ASSURANCE-ENGINE-OPTIONALITY",
+        "severity": "high",
+        "source": "src/mmaudit/orchestration/assurance.py:754-780 and mmaudit.example.toml:158",
+        "observation": "Echidna, Medusa, Halmos, Kontrol, Certora, Mythril, solc-SMTChecker, and foundry-invariant are not individually mandatory because required_tools is empty. The assay reached COMPLETE with only a synthetic solc-SMTChecker success record.",
+        "maximum_assurance_status_defect": true
+      },
+      {
+        "id": "FORMAL-BACKEND-CONFIG-DISCONNECT",
+        "severity": "high",
+        "source": "src/mmaudit/orchestration/pipeline.py:236-248",
+        "observation": "Reproduction and scanner runners share the configured isolation backend, while FormalRunner independently auto-selects a backend and does not receive the configured rootless image.",
+        "effect": "An operator-supplied pinned rootless image does not establish formal execution through the default pipeline construction."
+      },
+      {
+        "id": "CERTORA-REAL-PATH-UNPROVEN",
+        "severity": "high",
+        "source": "src/mmaudit/solidity/formal.py",
+        "observation": "Certora requires a remote service, but the evaluated FormalRunner path uses the normal network-denying isolation wrapper. No real network-enabled isolated Certora execution was demonstrated.",
+        "inference": true
+      },
+      {
+        "id": "FOUNDRY-PROVENANCE-GAP",
+        "severity": "medium",
+        "source": "src/mmaudit/models/schemas.py and src/mmaudit/orchestration/manifest.py",
+        "observation": "Invariant and reproduction artifacts do not record and manifest-bind the actual Forge executable path, version, and checksum."
+      },
+      {
+        "id": "PROFILE-OVERRIDE-VERIFY-RUN",
+        "severity": "high",
+        "source": "public CLI maximum-assurance run followed immediately by verify-run",
+        "observation": "verify-run returned STALE with compiler, full configuration, model configuration, and scanner configuration mismatches because the run used a CLI profile override that verify-run cannot accept.",
+        "verification_status": "stale"
+      }
+    ],
+    "fail_closed_controls_that_worked": [
+      "Missing hardened isolation produced FAILED.",
+      "Missing model review coverage produced FAILED.",
+      "Missing formal inventory produced FAILED.",
+      "A missing benchmark certificate produced FAILED when benchmark_gate was explicitly enabled.",
+      "A missing Echidna run produced FAILED when Echidna was explicitly listed in formal.required_tools.",
+      "ScannerRunner marked required Slither unavailable and reported it in required_failures."
+    ]
+  },
+  "evidence_source_hashes": [
+    {
+      "path": "src/mmaudit/orchestration/assurance.py",
+      "sha256": "89cd4a41cd00dabee3cea0b2b736d17a63a2ee534038d7fa2cc5f81e2b991185"
+    },
+    {
+      "path": "src/mmaudit/orchestration/pipeline.py",
+      "sha256": "0d254656d52dcb5140232e5b1a68ee1e6be129d747e61b4256028e20bbb97409"
+    },
+    {
+      "path": "src/mmaudit/solidity/formal.py",
+      "sha256": "898a4127e62c3d4e8f63e1601273c57a993caf16f94b5a4ce859540954a3b860"
+    },
+    {
+      "path": "src/mmaudit/solidity/invariant_execution.py",
+      "sha256": "dc7b2ce078ac9569c7c21c8ded51e2ea5d9d94306ddb3b359a893df0e27f2ea6"
+    },
+    {
+      "path": "src/mmaudit/solidity/reproduction.py",
+      "sha256": "9003074b315eb7fcf32a235fa430229a8f024c0f9ab6419eabf97a46031db244"
+    },
+    {
+      "path": "src/mmaudit/scanners/runner.py",
+      "sha256": "ecbf119988434160c43d4b4b44ae8ef3cb08dc589475434fbfaeece15a8a6a86"
+    },
+    {
+      "path": "src/mmaudit/isolation/container.py",
+      "sha256": "1b02eed7962795032b11eb774512b979883af90895ef0ad3410721390b29503c"
+    },
+    {
+      "path": "src/mmaudit/orchestration/manifest.py",
+      "sha256": "29b0721ce167fdd8712e2196f91acfaa29a9bfb6ab66ed7667a30a6faf1da485"
+    },
+    {
+      "path": "mmaudit.example.toml",
+      "sha256": "9772a68e007fc11c60c146273378549106c0e19d996e6d5bfc04dde50eef8304"
+    },
+    {
+      "path": "tests/unit/test_assurance.py",
+      "sha256": "a1f000a3f9df7d6d9b533dfcb1e450e30baa7c70446ddc70376f0a1f89a88560"
+    },
+    {
+      "path": "tests/unit/test_formal.py",
+      "sha256": "9451f02b016b2d68d532d7c871d3da53b6d7be72410e0e7141d60fccec30d675"
+    },
+    {
+      "path": "tests/integration/test_economic_acceptance_foundry.py",
+      "sha256": "66b2c24d770a806ef0dc7e3c9339cc811f0fa1ceb92a537698b33868d371378d"
+    },
+    {
+      "path": "tests/integration/test_financial_settlement_foundry.py",
+      "sha256": "9fdc038513415c7076f0426b8bbe3cbbf73a2f2adce97ba086a5c0476cd36024"
+    },
+    {
+      "path": "tests/integration/test_echidna_engine.py",
+      "sha256": "79416199d19d6f9c0d0637337ad73f64453ded4ac59dacef8a35c017a196f63f"
+    },
+    {
+      "path": "tests/integration/test_medusa_engine.py",
+      "sha256": "f53b0f93646621c8e85df02f9bf34d01e5d33e1ce1e4f58fbb34737060c0275f"
+    },
+    {
+      "path": "tests/integration/test_halmos_engine.py",
+      "sha256": "286a9b54d3558647f657e03cf7279f59e6e20456f14022054388f3f184cf30c9"
+    }
+  ],
+  "commands": [
+    {
+      "id": "CMD-ENGINE-TESTS",
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/pytest -q -p no:cacheprovider tests/unit/test_assurance.py tests/unit/test_formal.py tests/unit/test_echidna.py tests/unit/test_medusa.py tests/unit/test_halmos.py tests/unit/test_kontrol.py tests/unit/test_certora.py tests/unit/test_release.py tests/integration/test_echidna_engine.py tests/integration/test_medusa_engine.py tests/integration/test_halmos_engine.py",
+      "exit_code": 0,
+      "result": "50 passed, 3 skipped in 7.41s",
+      "qualifier": "The three real integration tests skipped: Echidna missing, Medusa missing, and Halmos hardened isolation unavailable."
+    },
+    {
+      "id": "CMD-FOUNDRY-PORTFOLIO",
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/pytest -q -p no:cacheprovider tests/integration/test_economic_acceptance_foundry.py tests/integration/test_financial_settlement_foundry.py",
+      "exit_code": 0,
+      "result": "2 passed in 29.39s"
+    },
+    {
+      "id": "CMD-FOUNDRY-ERC4626",
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/pytest -q -p no:cacheprovider tests/integration/test_pipeline.py::test_erc4626_generated_harness_executes_locally_and_is_counted_separately",
+      "exit_code": 0,
+      "result": "1 passed in 6.82s",
+      "qualifier": "Real Forge with synthetic compiler and test-only passthrough isolation."
+    },
+    {
+      "id": "CMD-FOUNDRY-ORDERING",
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/pytest -q -p no:cacheprovider tests/integration/test_pipeline.py::test_state_ordering_harness_persists_seed_sequence_and_removal_trials",
+      "exit_code": 0,
+      "result": "1 passed in 8.02s",
+      "qualifier": "Real Forge with synthetic compiler and test-only passthrough isolation."
+    },
+    {
+      "id": "CMD-REPLAY",
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/pytest -q -p no:cacheprovider tests/unit/test_replay.py tests/integration/test_offline_replay.py",
+      "exit_code": 0,
+      "result": "4 passed, 1 skipped in 0.38s",
+      "qualifier": "The real Foundry replay test skipped because no hardened backend was available; the passing cases were mock or deterministic orchestration tests."
+    },
+    {
+      "id": "CMD-MAXIMUM-E2E-MOCK",
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/pytest -q -p no:cacheprovider tests/integration/test_pipeline.py::test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete",
+      "exit_code": 0,
+      "result": "1 passed in 2.13s",
+      "qualifier": "Uses fake models and synthetic compiler, scanner, formal, invariant, and reproduction runners; PROVEN_MOCK_ONLY."
+    },
+    {
+      "id": "CMD-ASSURANCE-ASSAY",
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -",
+      "stdin_description": "Inline deterministic script imported tests/conftest.py and tests/unit/test_assurance.py with runpy, mutated the complete synthetic AssuranceRuntime, evaluated MaximumAssuranceContract for the eleven cases recorded in assurance_contract_assay, and printed each status and failed required clauses.",
+      "exit_code": 0,
+      "result": [
+        "baseline_no_echidna_medusa COMPLETE failed= none",
+        "compilation_failed COMPLETE failed= none",
+        "formal_only_unavailable_record COMPLETE failed= none",
+        "formal_inventory_missing FAILED failed= formal_adapter_inventory",
+        "failed_reproduction_attempt COMPLETE failed= none",
+        "missing_isolation FAILED failed= hardened_dynamic_isolation",
+        "missing_model_reviews FAILED failed= multi_agent_review,critical_model_surface_review",
+        "missing_benchmark_default COMPLETE failed= none",
+        "missing_benchmark_when_opted_in FAILED failed= benchmark_regression_gate",
+        "required_echidna_missing COMPLETE failed= none",
+        "required_echidna_explicit FAILED failed= required_formal_tool:echidna"
+      ]
+    },
+    {
+      "id": "CMD-SCANNER-INVENTORY",
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -",
+      "stdin_description": "Inline script loaded mmaudit.example.toml, applied the maximum-assurance profile, constructed ScannerRunner, and called run_all against tests/fixtures/full_protocol_offline with allow_fork_probing=False.",
+      "exit_code": 0,
+      "result": [
+        "codeql skipped None None None disabled by configuration or command line",
+        "foundry_fork skipped None None None disabled by configuration or command line",
+        "gitleaks unavailable None None None gitleaks is not installed",
+        "osv unavailable None None None osv-scanner is not installed",
+        "semgrep unavailable None None None semgrep is not installed",
+        "slither unavailable None None None hardened scanner isolation is unavailable; scanner was not executed",
+        "trivy unavailable None None None trivy is not installed",
+        "required_failures ['slither: unavailable']"
+      ]
+    },
+    {
+      "id": "CMD-FORMAL-INVENTORY",
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -",
+      "stdin_description": "Inline script loaded the frozen maximum-run project, index, invariant, and property-corpus artifacts and called FormalRunner under the effective maximum-assurance configuration.",
+      "exit_code": 0,
+      "result": [
+        "solc-smtchecker inconclusive; hardened isolation backend unavailable; tool was not executed",
+        "mythril unavailable; myth is unavailable outside the target repository",
+        "echidna unavailable; echidna is unavailable outside the target repository",
+        "medusa unavailable; medusa is unavailable outside the target repository",
+        "foundry-invariant skipped; no executable property harness was discovered",
+        "halmos skipped; no executable property harness was discovered",
+        "kontrol unavailable; kontrol is unavailable outside the target repository"
+      ],
+      "qualifier": "Certora was not emitted because it was disabled."
+    },
+    {
+      "id": "CMD-MAXIMUM-RUN",
+      "command": "env -u OPENROUTER_API_KEY PYTHONDONTWRITEBYTECODE=1 .venv/bin/mmaudit run --config mmaudit.example.toml --repo tests/fixtures/full_protocol_offline --output /private/tmp/mmaudit-eval-engine-maximum --profile maximum-assurance --require-maximum-assurance --allow-code-egress --no-color",
+      "exit_code": 2,
+      "result": "quality status failed; maximum-assurance INCONCLUSIVE; stopped before model, scanner, invariant, reproduction, or formal execution"
+    },
+    {
+      "id": "CMD-VERIFY-RUN",
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/mmaudit verify-run --manifest /private/tmp/mmaudit-eval-engine-maximum/runs/20260727T114638Z-5641e2ed/run-evidence-manifest.json --run-dir /private/tmp/mmaudit-eval-engine-maximum/runs/20260727T114638Z-5641e2ed --repo tests/fixtures/full_protocol_offline --config mmaudit.example.toml --output /private/tmp/mmaudit-eval-engine-maximum-verification.json --no-color",
+      "exit_code": 6,
+      "result": "STALE: four mismatches for configured/solidity, config/full, config/models, and configured/scanners",
+      "verification_sha256": "70de4a371a2e0063a76795c7c522ccb037e983fbc53ea58692114cf036d5ae60",
+      "output_file_sha256": "30aa961e0ffafe087fa5ea8d294a302be01b0ee25da13b723f194cb9a6d623db"
+    },
+    {
+      "id": "CMD-DOCTOR",
+      "command": "env -u OPENROUTER_API_KEY PYTHONDONTWRITEBYTECODE=1 .venv/bin/mmaudit doctor --config mmaudit.example.toml --repo . --output /private/tmp/mmaudit-eval-engine-doctor --allow-code-egress --no-color",
+      "exit_code": 2,
+      "result": "Failed for missing model key, unavailable hardened/local-fork isolation, and placeholder model IDs; Foundry and Slither were discoverable."
+    },
+    {
+      "id": "CMD-TOOLCHAIN-INVENTORY",
+      "command": "command -v and version queries followed by shasum -a 256 for .venv/bin/python, .venv/bin/mmaudit, solc selector and direct compilers, sandbox-exec, Forge tools, Slither, Halmos, and Z3",
+      "exit_code": 0,
+      "result": "Paths, versions, and checksums are recorded in toolchain."
+    }
+  ],
+  "overall_conclusion": {
+    "real_engine_execution": "Foundry executed real bounded synthetic unsafe and safe controls. No other configured scanner, fuzzer, symbolic engine, or formal engine analyzed a target in this environment.",
+    "mock_only_integrations": [
+      "maximum-assurance end-to-end orchestration",
+      "Certora",
+      "Kontrol",
+      "successful Slither adapter path",
+      "formal adapter success paths not covered by the real Foundry portfolio"
+    ],
+    "maximum_assurance_engine_reality": "INCONCLUSIVE",
+    "fit_for_purpose_implication": "The evaluated build does not prove a real complementary multi-engine maximum-assurance audit stack. Configuration and unit coverage exceed demonstrated runtime integration.",
+    "superiority_evidence_from_tools": "none"
+  }
+}
