@@ -34,7 +34,7 @@ def _write_config(path: Path, budget: float = 20.0) -> None:
         "minimum_distinct_families = 3",
     ]
     for role, model in data["models"].items():
-        if not isinstance(model, dict):
+        if not isinstance(model, dict) or "primary" not in model:
             continue
         lines.extend(
             [
@@ -52,10 +52,12 @@ def test_load_configuration_and_defaults(tmp_path: Path) -> None:
     config = load_config(path, environ={})
     assert config.version == 1
     assert config.execution.budget_usd == 20
+    assert config.execution.cost_ledger_path is None
     assert config.repository.max_file_bytes == 250_000
     assert config.repository.max_walk_entries == 50_000
     assert config.execution.max_request_bytes == 4_000_000
     assert config.reporting.json_report is True
+    assert config.models.provider_policy.allow_fallbacks is False
 
 
 def test_environment_overrides_are_typed(tmp_path: Path) -> None:
@@ -65,6 +67,7 @@ def test_environment_overrides_are_typed(tmp_path: Path) -> None:
         path,
         environ={
             "MMAUDIT_BUDGET_USD": "7.5",
+            "MMAUDIT_COST_LEDGER_PATH": "/operator/control/mmaudit-cost-ledger.json",
             "MMAUDIT_CONCURRENCY": "2",
             "MMAUDIT_MAX_WALK_ENTRIES": "1234",
             "MMAUDIT_MAX_REQUEST_BYTES": "9000",
@@ -77,6 +80,7 @@ def test_environment_overrides_are_typed(tmp_path: Path) -> None:
         },
     )
     assert config.execution.budget_usd == 7.5
+    assert config.execution.cost_ledger_path == "/operator/control/mmaudit-cost-ledger.json"
     assert config.execution.concurrency == 2
     assert config.repository.max_walk_entries == 1234
     assert config.execution.max_request_bytes == 9000
@@ -218,6 +222,8 @@ def test_reproduction_capability_names_are_safe_and_unique(
 def test_maximum_assurance_profile_forces_exact_engine_portfolio(config_factory) -> None:
     config = config_factory(
         profile=AuditProfile.MAXIMUM_ASSURANCE,
+        privacy={"require_zdr": False},
+        execution={"max_json_repair_attempts": 1},
         smart_contracts={"compile": False},
         reproduction={"repetitions": 1, "required_for_solidity": False},
         quality_gates={"require_candidate_reproduction": False},
@@ -237,8 +243,49 @@ def test_maximum_assurance_profile_forces_exact_engine_portfolio(config_factory)
     assert config.scanners.foundry_fork.enabled is True
     assert config.scanners.foundry_fork.required is True
     assert config.maximum_assurance.benchmark_gate is True
+    assert config.privacy.require_zdr is True
+    assert config.execution.max_json_repair_attempts == 0
+    assert config.models.provider_policy.allow_fallbacks is False
     assert {"echidna", "medusa", "halmos"} <= set(config.formal.required_tools)
     assert "foundry-invariant" not in config.formal.required_tools
+
+
+def test_openrouter_provider_policy_is_exact_and_unambiguous(config_factory) -> None:
+    config = config_factory(
+        models={
+            "provider_policy": {
+                "only": ["anthropic", "google-vertex/us-east5"],
+                "allow_fallbacks": False,
+            }
+        }
+    )
+    assert config.models.provider_policy.only == (
+        "anthropic",
+        "google-vertex/us-east5",
+    )
+    with pytest.raises(ValueError, match="only or order"):
+        config_factory(
+            models={
+                "provider_policy": {
+                    "only": ["anthropic"],
+                    "order": ["openai"],
+                }
+            }
+        )
+
+
+def test_model_budget_cannot_exceed_operator_cap(config_factory) -> None:
+    with pytest.raises(ValueError, match="less than or equal to 250"):
+        config_factory(execution={"budget_usd": 250.01})
+
+
+def test_provider_cost_ledger_configuration_requires_an_absolute_path(config_factory) -> None:
+    config = config_factory(
+        execution={"cost_ledger_path": "/operator/control/mmaudit-cost-ledger.json"}
+    )
+    assert config.execution.cost_ledger_path == ("/operator/control/mmaudit-cost-ledger.json")
+    with pytest.raises(ValueError, match="absolute file path"):
+        config_factory(execution={"cost_ledger_path": "relative-cost-ledger.json"})
 
 
 def test_scanner_trust_pins_must_be_paired(config_factory) -> None:
@@ -257,7 +304,11 @@ def test_smart_contract_path_and_env_validation(config_factory) -> None:
 
 @pytest.mark.parametrize(
     "reserved_name",
-    ["OPENROUTER_API_KEY", "MMAUDIT_SECRETS_ENV_FILE"],
+    [
+        "OPENROUTER_API_KEY",
+        "MMAUDIT_SECRETS_ENV_FILE",
+        "MMAUDIT_COST_LEDGER_PATH",
+    ],
 )
 def test_control_plane_names_cannot_be_forwarded_to_engines(
     config_factory,

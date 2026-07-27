@@ -170,6 +170,18 @@ class ExecutionEvidenceKind(StrEnum):
     UNVERIFIED = "unverified"
 
 
+class ModelRequestValidationStatus(StrEnum):
+    """Fail-closed terminal validation state for one provider request."""
+
+    NOT_VALIDATED = "not_validated"
+    VALID = "valid"
+    INVALID_RESPONSE = "invalid_response"
+    TRUNCATED = "truncated"
+    MODEL_MISMATCH = "model_mismatch"
+    PROVIDER_MISMATCH = "provider_mismatch"
+    PROVIDER_ERROR = "provider_error"
+
+
 class SolidityProjectType(StrEnum):
     FOUNDRY = "foundry"
     HARDHAT = "hardhat"
@@ -3992,8 +4004,54 @@ class UsageRecord(StrictModel):
     routing: dict[str, Any] = Field(default_factory=dict)
     prompt_sha256: str
     response_sha256: str | None = None
+    request_body_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    schema_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    openrouter_generation_id: str | None = Field(default=None, max_length=500)
+    configured_provider_endpoints: list[str] = Field(default_factory=list, max_length=100)
+    actual_provider_endpoint: str | None = Field(default=None, max_length=500)
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    latency_ms: int | None = Field(default=None, ge=0)
+    finish_reason: str | None = Field(default=None, max_length=100)
+    reasoning_tokens: int = Field(default=0, ge=0)
+    cached_tokens: int = Field(default=0, ge=0)
+    retry_count: int | None = Field(default=None, ge=0)
+    provider_error_classification: str | None = Field(default=None, max_length=100)
+    validation_status: ModelRequestValidationStatus = ModelRequestValidationStatus.NOT_VALIDATED
+    fallback_used: bool = False
+    substitution_detected: bool = False
     status: str
     attempts: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def request_evidence_is_consistent(self) -> UsageRecord:
+        if (
+            self.ended_at is not None
+            and self.started_at is not None
+            and self.ended_at < self.started_at
+        ):
+            raise ValueError("provider request end time precedes its start time")
+        if self.retry_count is not None and self.retry_count != self.attempts - 1:
+            raise ValueError("provider retry count must equal attempts minus one")
+        if len(self.configured_provider_endpoints) != len(set(self.configured_provider_endpoints)):
+            raise ValueError("configured provider endpoints must be unique")
+        if self.validation_status is ModelRequestValidationStatus.VALID:
+            required = (
+                self.response_sha256,
+                self.request_body_sha256,
+                self.schema_sha256,
+                self.openrouter_generation_id,
+                self.started_at,
+                self.ended_at,
+                self.latency_ms,
+                self.finish_reason,
+                self.retry_count,
+            )
+            if any(value is None for value in required):
+                raise ValueError("validated provider request evidence is incomplete")
+            if self.status != "success":
+                raise ValueError("validated provider request must have success status")
+        return self
 
 
 class RepositoryFile(StrictModel):

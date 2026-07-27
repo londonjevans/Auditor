@@ -1,0 +1,699 @@
+"""Fail-closed validation of OpenRouter endpoint metadata snapshots.
+
+The validator accepts already-fetched provider metadata and emits only a bounded,
+allowlisted projection. Unknown provider-controlled fields are neither retained nor
+hashed. This keeps the evidence suitable for public manifests while preserving the
+exact endpoint pricing and capability data needed to prove a request cost ceiling.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from collections.abc import Mapping, Sequence
+from decimal import Decimal, InvalidOperation
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+_MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+_ENDPOINT_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+_PROVIDER_NAME_MAX_LENGTH = 128
+_PRICING_FIELD_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
+_DECIMAL_PRICE_PATTERN = re.compile(r"(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,36})?\Z")
+_STRUCTURED_OUTPUT_PARAMETERS = frozenset(
+    {
+        "json_schema",
+        "response_format",
+        "structured_outputs",
+    }
+)
+_BASE_REQUEST_PARAMETERS = frozenset(
+    {
+        "max_tokens",
+        "response_format",
+        "temperature",
+    }
+)
+_OPERATIONAL_TEXT_STATUSES = frozenset(
+    {
+        "active",
+        "available",
+        "healthy",
+        "online",
+        "operational",
+    }
+)
+_MAX_ENDPOINTS = 2_048
+_MAX_PARAMETERS = 256
+_MAX_PRICING_FIELDS = 64
+_SNAPSHOT_SCHEMA_VERSION = "1.0"
+
+
+class EndpointSnapshotValidationError(ValueError):
+    """Raised when endpoint metadata cannot prove the configured routing policy."""
+
+
+class OpenRouterEndpointEvidence(BaseModel):
+    """Canonical evidence for one exact configured model endpoint."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    exact_model_id: str = Field(pattern=_MODEL_ID_PATTERN)
+    provider_endpoint: str = Field(pattern=_ENDPOINT_ID_PATTERN)
+    endpoint_tag: str | None = Field(default=None, pattern=_ENDPOINT_ID_PATTERN)
+    endpoint_slug: str | None = Field(default=None, pattern=_ENDPOINT_ID_PATTERN)
+    provider_name: str = Field(min_length=1, max_length=_PROVIDER_NAME_MAX_LENGTH)
+    operational: bool
+    operational_status: str = Field(min_length=1, max_length=32)
+    zdr_eligible: bool | None
+    supported_parameters: tuple[str, ...] = Field(max_length=_MAX_PARAMETERS)
+    required_request_parameters: tuple[str, ...] = Field(min_length=3, max_length=4)
+    structured_output_parameters: tuple[str, ...] = Field(min_length=1, max_length=3)
+    context_length: int = Field(gt=0)
+    max_prompt_tokens: int = Field(gt=0)
+    max_completion_tokens: int = Field(gt=0)
+    pricing: dict[str, str] = Field(min_length=2, max_length=_MAX_PRICING_FIELDS)
+    pricing_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    endpoint_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    zdr_endpoint_snapshot_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def evidence_is_canonical_and_self_bound(self) -> OpenRouterEndpointEvidence:
+        if self.endpoint_tag is None and self.endpoint_slug is None:
+            raise ValueError("endpoint evidence requires a tag or slug")
+        if self.provider_endpoint not in {self.endpoint_tag, self.endpoint_slug}:
+            raise ValueError("configured endpoint does not match its exact tag or slug")
+        if _provider_display_name(self.provider_name) != self.provider_name:
+            raise ValueError("provider display name is not canonical")
+        if self.operational is not True:
+            raise ValueError("endpoint evidence cannot credit a non-operational endpoint")
+        if self.supported_parameters != tuple(sorted(set(self.supported_parameters))):
+            raise ValueError("supported endpoint parameters must be sorted and unique")
+        if self.required_request_parameters != tuple(sorted(set(self.required_request_parameters))):
+            raise ValueError("required request parameters must be sorted and unique")
+        if not _BASE_REQUEST_PARAMETERS.issubset(self.required_request_parameters):
+            raise ValueError("required request parameters omit the base request shape")
+        if not set(self.required_request_parameters).issubset(self.supported_parameters):
+            raise ValueError("endpoint does not support every emitted request parameter")
+        expected_structured = tuple(
+            sorted(_STRUCTURED_OUTPUT_PARAMETERS.intersection(self.supported_parameters))
+        )
+        if self.structured_output_parameters != expected_structured:
+            raise ValueError("structured-output parameter evidence is inconsistent")
+        if self.max_prompt_tokens > self.context_length:
+            raise ValueError("endpoint prompt limit exceeds its context length")
+        if self.max_completion_tokens > self.context_length:
+            raise ValueError("endpoint completion limit exceeds its context length")
+        if tuple(self.pricing) != tuple(sorted(self.pricing)):
+            raise ValueError("endpoint pricing fields must be sorted")
+        if not {"prompt", "completion"}.issubset(self.pricing):
+            raise ValueError("endpoint pricing omits prompt or completion")
+        for field, value in self.pricing.items():
+            if not _PRICING_FIELD_PATTERN.fullmatch(field):
+                raise ValueError("endpoint pricing contains an invalid field")
+            if _canonical_price(value) != value:
+                raise ValueError("endpoint pricing is not canonically encoded")
+        if self.pricing_sha256 != _canonical_sha256(self.pricing):
+            raise ValueError("endpoint pricing hash is inconsistent")
+        expected = _canonical_sha256(
+            self.model_dump(
+                mode="json",
+                exclude={"endpoint_snapshot_sha256"},
+            )
+        )
+        if self.endpoint_snapshot_sha256 != expected:
+            raise ValueError("endpoint evidence hash is inconsistent")
+        return self
+
+
+class OpenRouterEndpointSnapshotEvidence(BaseModel):
+    """Canonical, self-hashed evidence for an exact endpoint routing policy."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"]
+    exact_model_id: str = Field(pattern=_MODEL_ID_PATTERN)
+    provider_policy_mode: Literal["only", "order"]
+    configured_provider_endpoints: tuple[str, ...] = Field(min_length=1, max_length=100)
+    require_zdr: bool
+    endpoints: tuple[OpenRouterEndpointEvidence, ...] = Field(min_length=1, max_length=100)
+    endpoint_metadata_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    zdr_metadata_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def snapshot_is_complete_and_self_bound(self) -> OpenRouterEndpointSnapshotEvidence:
+        if len(self.configured_provider_endpoints) != len(set(self.configured_provider_endpoints)):
+            raise ValueError("configured provider endpoints must be unique")
+        observed = tuple(item.provider_endpoint for item in self.endpoints)
+        if observed != self.configured_provider_endpoints:
+            raise ValueError("endpoint evidence does not exactly cover the configured policy")
+        if any(item.exact_model_id != self.exact_model_id for item in self.endpoints):
+            raise ValueError("endpoint evidence is not bound to the exact model")
+        if self.require_zdr:
+            if self.zdr_metadata_sha256 is None:
+                raise ValueError("ZDR-required endpoint evidence omits its ZDR snapshot")
+            if any(item.zdr_eligible is not True for item in self.endpoints):
+                raise ValueError("ZDR-required endpoint evidence contains an ineligible endpoint")
+        expected = _canonical_sha256(
+            self.model_dump(
+                mode="json",
+                exclude={"snapshot_sha256"},
+            )
+        )
+        if self.snapshot_sha256 != expected:
+            raise ValueError("endpoint policy snapshot hash is inconsistent")
+        return self
+
+    def endpoint(self, provider_endpoint: str) -> OpenRouterEndpointEvidence:
+        """Return one exact configured endpoint, rejecting an unknown identifier."""
+
+        for endpoint in self.endpoints:
+            if endpoint.provider_endpoint == provider_endpoint:
+                return endpoint
+        raise KeyError(provider_endpoint)
+
+
+def validate_openrouter_endpoint_snapshot(
+    *,
+    exact_model_id: str,
+    configured_provider_endpoints: Sequence[str],
+    provider_policy_mode: Literal["only", "order"],
+    endpoint_payload: Any,
+    require_zdr: bool,
+    zdr_payload: Any | None = None,
+    reasoning_requested: bool = False,
+) -> OpenRouterEndpointSnapshotEvidence:
+    """Validate provider snapshots and return canonical non-secret evidence.
+
+    ``endpoint_payload`` is the response body from the exact per-model endpoint
+    metadata route. ``zdr_payload``, when present, is the response body from the
+    global ZDR endpoint route. Every configured provider identifier must match an
+    exact endpoint ``tag`` or ``slug``; display names are deliberately ignored.
+    """
+
+    _validate_exact_model_id(exact_model_id)
+    configured = _validate_configured_endpoints(configured_provider_endpoints)
+    if provider_policy_mode not in {"only", "order"}:
+        raise EndpointSnapshotValidationError("provider policy mode must be only or order")
+    data = _required_mapping(endpoint_payload, "endpoint metadata")
+    data = _required_mapping(data.get("data"), "endpoint metadata data")
+    if data.get("id") != exact_model_id:
+        raise EndpointSnapshotValidationError(
+            "endpoint metadata is not bound to the exact requested model"
+        )
+    raw_endpoints = _required_endpoint_list(data.get("endpoints"), "endpoint metadata")
+    matched = _match_configured_endpoints(configured, raw_endpoints)
+    required_request_parameters = tuple(
+        sorted(
+            {
+                *_BASE_REQUEST_PARAMETERS,
+                *(("reasoning",) if reasoning_requested else ()),
+            }
+        )
+    )
+    identity_inventory = sorted(
+        (_endpoint_identity_projection(endpoint) for endpoint in raw_endpoints),
+        key=lambda item: json.dumps(
+            item,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ),
+    )
+    provider_name_counts: dict[str, int] = {}
+    for identity in identity_inventory:
+        provider_name = identity["provider_name"]
+        assert isinstance(provider_name, str)
+        normalized_name = provider_name.casefold()
+        provider_name_counts[normalized_name] = provider_name_counts.get(normalized_name, 0) + 1
+    for raw_endpoint in matched:
+        provider_name = _provider_display_name(raw_endpoint.get("provider_name"))
+        if provider_name_counts[provider_name.casefold()] != 1:
+            raise EndpointSnapshotValidationError(
+                "configured endpoint provider display name is ambiguous in exact-model metadata"
+            )
+
+    zdr_matches: dict[str, Mapping[str, Any] | None]
+    zdr_projection: dict[str, Any] | None
+    if zdr_payload is None:
+        if require_zdr:
+            raise EndpointSnapshotValidationError(
+                "ZDR-required policy needs a current endpoint eligibility snapshot"
+            )
+        zdr_matches = {endpoint_id: None for endpoint_id in configured}
+        zdr_projection = None
+    else:
+        zdr_matches, zdr_projection = _match_zdr_endpoints(
+            exact_model_id=exact_model_id,
+            configured=configured,
+            payload=zdr_payload,
+            required_request_parameters=required_request_parameters,
+        )
+
+    endpoint_evidence: list[OpenRouterEndpointEvidence] = []
+    endpoint_projection: list[dict[str, Any]] = []
+    for endpoint_id, raw_endpoint in zip(configured, matched, strict=True):
+        normalized = _normalize_endpoint(
+            exact_model_id=exact_model_id,
+            configured_endpoint=endpoint_id,
+            raw_endpoint=raw_endpoint,
+            required_request_parameters=required_request_parameters,
+        )
+        zdr_raw = zdr_matches[endpoint_id]
+        zdr_hash: str | None = None
+        zdr_eligible: bool | None = None if zdr_payload is None else False
+        if zdr_raw is not None:
+            normalized_zdr = _normalize_endpoint(
+                exact_model_id=exact_model_id,
+                configured_endpoint=endpoint_id,
+                raw_endpoint=zdr_raw,
+                require_item_model_binding=True,
+                required_request_parameters=required_request_parameters,
+            )
+            _validate_zdr_counterpart(normalized, normalized_zdr)
+            zdr_eligible = True
+            zdr_hash = _canonical_sha256(normalized_zdr)
+        if require_zdr and zdr_eligible is not True:
+            raise EndpointSnapshotValidationError(
+                f"configured endpoint is not present in the exact-model ZDR snapshot: {endpoint_id}"
+            )
+        endpoint_projection.append(normalized)
+        endpoint_evidence.append(
+            _seal_endpoint_evidence(
+                normalized,
+                zdr_eligible=zdr_eligible,
+                zdr_endpoint_snapshot_sha256=zdr_hash,
+            )
+        )
+
+    endpoint_metadata_projection = {
+        "model_id": exact_model_id,
+        "endpoint_identities": identity_inventory,
+        "configured_endpoints": endpoint_projection,
+    }
+    serialized: dict[str, Any] = {
+        "schema_version": _SNAPSHOT_SCHEMA_VERSION,
+        "exact_model_id": exact_model_id,
+        "provider_policy_mode": provider_policy_mode,
+        "configured_provider_endpoints": configured,
+        "require_zdr": require_zdr,
+        "endpoints": [item.model_dump(mode="json") for item in endpoint_evidence],
+        "endpoint_metadata_sha256": _canonical_sha256(endpoint_metadata_projection),
+        "zdr_metadata_sha256": (
+            _canonical_sha256(zdr_projection) if zdr_projection is not None else None
+        ),
+    }
+    return OpenRouterEndpointSnapshotEvidence.model_validate(
+        {
+            **serialized,
+            "snapshot_sha256": _canonical_sha256(serialized),
+        }
+    )
+
+
+def _validate_exact_model_id(model_id: str) -> None:
+    if not isinstance(model_id, str) or re.fullmatch(_MODEL_ID_PATTERN, model_id) is None:
+        raise EndpointSnapshotValidationError(
+            "endpoint snapshot requires an exact author/model identifier"
+        )
+    lowered = model_id.casefold()
+    if lowered in {"openrouter/auto", "openrouter/random"} or lowered.endswith(":latest"):
+        raise EndpointSnapshotValidationError("endpoint snapshot rejects router or latest aliases")
+
+
+def _validate_configured_endpoints(values: Sequence[str]) -> tuple[str, ...]:
+    if isinstance(values, (str, bytes)) or not 1 <= len(values) <= 100:
+        raise EndpointSnapshotValidationError(
+            "endpoint snapshot requires a bounded provider endpoint policy"
+        )
+    configured = tuple(values)
+    if len(configured) != len(set(configured)):
+        raise EndpointSnapshotValidationError("configured provider endpoints must be unique")
+    if any(
+        not isinstance(value, str) or re.fullmatch(_ENDPOINT_ID_PATTERN, value) is None
+        for value in configured
+    ):
+        raise EndpointSnapshotValidationError(
+            "configured provider policy contains an invalid endpoint identifier"
+        )
+    return configured
+
+
+def _required_mapping(value: Any, label: str) -> Mapping[str, Any]:
+    if not isinstance(value, dict):
+        raise EndpointSnapshotValidationError(f"{label} must be an object")
+    return value
+
+
+def _required_endpoint_list(value: Any, label: str) -> list[Mapping[str, Any]]:
+    if (
+        not isinstance(value, list)
+        or not value
+        or len(value) > _MAX_ENDPOINTS
+        or any(not isinstance(item, dict) for item in value)
+    ):
+        raise EndpointSnapshotValidationError(f"{label} contains an invalid endpoint list")
+    return value
+
+
+def _match_configured_endpoints(
+    configured: tuple[str, ...],
+    endpoints: list[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    identities = [_endpoint_identities(endpoint) for endpoint in endpoints]
+    matched: list[Mapping[str, Any]] = []
+    matched_indexes: set[int] = set()
+    for configured_endpoint in configured:
+        indexes = [
+            index
+            for index, endpoint_identities in enumerate(identities)
+            if configured_endpoint in endpoint_identities
+        ]
+        if not indexes:
+            raise EndpointSnapshotValidationError(
+                f"configured endpoint tag or slug is unavailable: {configured_endpoint}"
+            )
+        if len(indexes) != 1 or indexes[0] in matched_indexes:
+            raise EndpointSnapshotValidationError(
+                f"configured endpoint tag or slug is ambiguous: {configured_endpoint}"
+            )
+        matched_indexes.add(indexes[0])
+        matched.append(endpoints[indexes[0]])
+    return matched
+
+
+def _match_zdr_endpoints(
+    *,
+    exact_model_id: str,
+    configured: tuple[str, ...],
+    payload: Any,
+    required_request_parameters: tuple[str, ...],
+) -> tuple[dict[str, Mapping[str, Any] | None], dict[str, Any]]:
+    envelope = _required_mapping(payload, "ZDR endpoint metadata")
+    raw_items = _required_endpoint_list(envelope.get("data"), "ZDR endpoint metadata")
+    exact_model_items: list[Mapping[str, Any]] = []
+    for item in raw_items:
+        item_model = item.get("model_id")
+        if not isinstance(item_model, str):
+            raise EndpointSnapshotValidationError("ZDR endpoint omits its exact model binding")
+        if item_model == exact_model_id:
+            exact_model_items.append(item)
+    identities = [_endpoint_identities(item) for item in exact_model_items]
+    matches: dict[str, Mapping[str, Any] | None] = {}
+    projection: list[dict[str, Any]] = []
+    for configured_endpoint in configured:
+        indexes = [
+            index
+            for index, endpoint_identities in enumerate(identities)
+            if configured_endpoint in endpoint_identities
+        ]
+        if len(indexes) > 1:
+            raise EndpointSnapshotValidationError(
+                f"ZDR endpoint tag or slug is ambiguous: {configured_endpoint}"
+            )
+        match = exact_model_items[indexes[0]] if indexes else None
+        matches[configured_endpoint] = match
+        projection.append(
+            {
+                "provider_endpoint": configured_endpoint,
+                "eligible": match is not None,
+                "endpoint": (
+                    _normalize_endpoint(
+                        exact_model_id=exact_model_id,
+                        configured_endpoint=configured_endpoint,
+                        raw_endpoint=match,
+                        require_item_model_binding=True,
+                        required_request_parameters=required_request_parameters,
+                    )
+                    if match is not None
+                    else None
+                ),
+            }
+        )
+    return matches, {"model_id": exact_model_id, "endpoints": projection}
+
+
+def _endpoint_identities(endpoint: Mapping[str, Any]) -> frozenset[str]:
+    tag = _optional_endpoint_id(endpoint.get("tag"), "endpoint tag")
+    slug_values = [
+        _optional_endpoint_id(endpoint.get(key), f"endpoint {key}")
+        for key in ("slug", "provider_slug")
+        if endpoint.get(key) is not None
+    ]
+    if len(set(slug_values)) > 1:
+        raise EndpointSnapshotValidationError("endpoint has conflicting slug identities")
+    slug = slug_values[0] if slug_values else None
+    identities = frozenset(value for value in (tag, slug) if value is not None)
+    if not identities:
+        raise EndpointSnapshotValidationError("endpoint metadata omits its exact tag or slug")
+    return identities
+
+
+def _endpoint_identity_projection(endpoint: Mapping[str, Any]) -> dict[str, str | None]:
+    identities = _endpoint_identities(endpoint)
+    tag = _optional_endpoint_id(endpoint.get("tag"), "endpoint tag")
+    slug_values = [
+        _optional_endpoint_id(endpoint.get(key), f"endpoint {key}")
+        for key in ("slug", "provider_slug")
+        if endpoint.get(key) is not None
+    ]
+    slug = slug_values[0] if slug_values else None
+    if not identities:
+        raise EndpointSnapshotValidationError("endpoint identity inventory is empty")
+    return {
+        "tag": tag,
+        "slug": slug,
+        "provider_name": _provider_display_name(endpoint.get("provider_name")),
+    }
+
+
+def _optional_endpoint_id(value: Any, label: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or re.fullmatch(_ENDPOINT_ID_PATTERN, value) is None:
+        raise EndpointSnapshotValidationError(f"{label} is invalid")
+    return value
+
+
+def _provider_display_name(value: Any) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or len(value) > _PROVIDER_NAME_MAX_LENGTH
+        or any(not character.isprintable() for character in value)
+    ):
+        raise EndpointSnapshotValidationError("endpoint provider display name is invalid")
+    return value
+
+
+def _normalize_endpoint(
+    *,
+    exact_model_id: str,
+    configured_endpoint: str,
+    raw_endpoint: Mapping[str, Any],
+    require_item_model_binding: bool = False,
+    required_request_parameters: tuple[str, ...],
+) -> dict[str, Any]:
+    item_model_id = raw_endpoint.get("model_id")
+    if (
+        require_item_model_binding or item_model_id is not None
+    ) and item_model_id != exact_model_id:
+        raise EndpointSnapshotValidationError(
+            "endpoint record is not bound to the exact requested model"
+        )
+    identities = _endpoint_identities(raw_endpoint)
+    if configured_endpoint not in identities:
+        raise EndpointSnapshotValidationError(
+            "endpoint record does not match the configured tag or slug"
+        )
+    tag = _optional_endpoint_id(raw_endpoint.get("tag"), "endpoint tag")
+    slug_values = [
+        _optional_endpoint_id(raw_endpoint.get(key), f"endpoint {key}")
+        for key in ("slug", "provider_slug")
+        if raw_endpoint.get(key) is not None
+    ]
+    slug = slug_values[0] if slug_values else None
+    provider_name = _provider_display_name(raw_endpoint.get("provider_name"))
+    status = _operational_status(raw_endpoint.get("status"))
+    supported = _supported_parameters(raw_endpoint.get("supported_parameters"))
+    structured = tuple(sorted(_STRUCTURED_OUTPUT_PARAMETERS.intersection(supported)))
+    if not structured:
+        raise EndpointSnapshotValidationError(
+            f"configured endpoint lacks structured-output parameter support: {configured_endpoint}"
+        )
+    if not set(required_request_parameters).issubset(supported):
+        missing = sorted(set(required_request_parameters) - set(supported))
+        raise EndpointSnapshotValidationError(
+            "configured endpoint lacks emitted request parameter support: " + ", ".join(missing)
+        )
+    pricing = _canonical_pricing(raw_endpoint.get("pricing"))
+    context_length = _positive_integer(
+        raw_endpoint.get("context_length"),
+        "endpoint context length",
+    )
+    max_prompt_tokens = _positive_integer(
+        raw_endpoint.get("max_prompt_tokens"),
+        "endpoint prompt limit",
+    )
+    max_completion_tokens = _positive_integer(
+        raw_endpoint.get("max_completion_tokens"),
+        "endpoint completion limit",
+    )
+    if max_prompt_tokens > context_length:
+        raise EndpointSnapshotValidationError("endpoint prompt limit exceeds its context length")
+    if max_completion_tokens > context_length:
+        raise EndpointSnapshotValidationError(
+            "endpoint completion limit exceeds its context length"
+        )
+    return {
+        "exact_model_id": exact_model_id,
+        "provider_endpoint": configured_endpoint,
+        "endpoint_tag": tag,
+        "endpoint_slug": slug,
+        "provider_name": provider_name,
+        "operational": True,
+        "operational_status": status,
+        "supported_parameters": supported,
+        "required_request_parameters": required_request_parameters,
+        "structured_output_parameters": structured,
+        "context_length": context_length,
+        "max_prompt_tokens": max_prompt_tokens,
+        "max_completion_tokens": max_completion_tokens,
+        "pricing": pricing,
+        "pricing_sha256": _canonical_sha256(pricing),
+    }
+
+
+def _operational_status(value: Any) -> str:
+    if isinstance(value, bool):
+        raise EndpointSnapshotValidationError("endpoint operational status is invalid")
+    if isinstance(value, int):
+        if value == 0:
+            return "0"
+        raise EndpointSnapshotValidationError("configured endpoint is not operational")
+    if isinstance(value, str):
+        normalized = value.casefold()
+        if normalized in _OPERATIONAL_TEXT_STATUSES:
+            return normalized
+        raise EndpointSnapshotValidationError("configured endpoint is not operational")
+    raise EndpointSnapshotValidationError("endpoint operational status is missing")
+
+
+def _supported_parameters(value: Any) -> tuple[str, ...]:
+    if (
+        not isinstance(value, list)
+        or len(value) > _MAX_PARAMETERS
+        or any(
+            not isinstance(item, str) or not item or len(item) > 100 or item != item.casefold()
+            for item in value
+        )
+    ):
+        raise EndpointSnapshotValidationError("endpoint supported parameters are invalid")
+    if len(value) != len(set(value)):
+        raise EndpointSnapshotValidationError("endpoint supported parameters are duplicated")
+    return tuple(sorted(value))
+
+
+def _positive_integer(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 < value <= 2**31 - 1:
+        raise EndpointSnapshotValidationError(f"{label} is invalid")
+    return int(value)
+
+
+def _canonical_pricing(value: Any) -> dict[str, str]:
+    if (
+        not isinstance(value, dict)
+        or not 1 <= len(value) <= _MAX_PRICING_FIELDS
+        or any(not isinstance(field, str) for field in value)
+    ):
+        raise EndpointSnapshotValidationError("endpoint pricing must be a bounded object")
+    if not {"prompt", "completion"}.issubset(value):
+        raise EndpointSnapshotValidationError("endpoint pricing omits prompt or completion")
+    if len({field.casefold() for field in value}) != len(value):
+        raise EndpointSnapshotValidationError("endpoint pricing fields are ambiguous")
+    normalized: dict[str, str] = {}
+    for field in sorted(value):
+        if not _PRICING_FIELD_PATTERN.fullmatch(field):
+            raise EndpointSnapshotValidationError("endpoint pricing field is invalid")
+        raw_price = value[field]
+        if not isinstance(raw_price, str):
+            raise EndpointSnapshotValidationError("endpoint prices must be exact decimal strings")
+        normalized[field] = _canonical_price(raw_price)
+    return normalized
+
+
+def _canonical_price(value: str) -> str:
+    if not isinstance(value, str) or _DECIMAL_PRICE_PATTERN.fullmatch(value) is None:
+        raise EndpointSnapshotValidationError("endpoint price is not a bounded decimal string")
+    try:
+        parsed = Decimal(value)
+    except InvalidOperation as error:
+        raise EndpointSnapshotValidationError("endpoint price is invalid") from error
+    if not parsed.is_finite() or parsed < 0:
+        raise EndpointSnapshotValidationError("endpoint price must be finite and nonnegative")
+    if parsed == 0:
+        return "0"
+    return format(parsed.normalize(), "f")
+
+
+def _validate_zdr_counterpart(
+    endpoint: Mapping[str, Any],
+    zdr_endpoint: Mapping[str, Any],
+) -> None:
+    compared_fields = (
+        "exact_model_id",
+        "provider_endpoint",
+        "endpoint_tag",
+        "endpoint_slug",
+        "provider_name",
+        "operational",
+        "operational_status",
+        "supported_parameters",
+        "structured_output_parameters",
+        "context_length",
+        "max_prompt_tokens",
+        "max_completion_tokens",
+        "pricing",
+        "pricing_sha256",
+    )
+    if any(endpoint[field] != zdr_endpoint[field] for field in compared_fields):
+        raise EndpointSnapshotValidationError(
+            "per-model and ZDR endpoint metadata snapshots are inconsistent"
+        )
+
+
+def _seal_endpoint_evidence(
+    normalized: Mapping[str, Any],
+    *,
+    zdr_eligible: bool | None,
+    zdr_endpoint_snapshot_sha256: str | None,
+) -> OpenRouterEndpointEvidence:
+    serialized = {
+        **normalized,
+        "zdr_eligible": zdr_eligible,
+        "zdr_endpoint_snapshot_sha256": zdr_endpoint_snapshot_sha256,
+    }
+    return OpenRouterEndpointEvidence.model_validate(
+        {
+            **serialized,
+            "endpoint_snapshot_sha256": _canonical_sha256(serialized),
+        }
+    )
+
+
+def _canonical_sha256(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()

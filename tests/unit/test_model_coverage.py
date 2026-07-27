@@ -6,11 +6,13 @@ from datetime import UTC, datetime
 from mmaudit.config import AuditConfig
 from mmaudit.models.schemas import (
     ContextPackage,
+    ExecutionEvidenceKind,
     InvariantCategory,
     InvariantSpec,
     InvariantSuite,
     InvariantTemplate,
     Location,
+    ModelRequestValidationStatus,
     ModelReviewCoverage,
     ModelReviewSurfaceKind,
     RepositoryMap,
@@ -224,15 +226,53 @@ def _context(
 
 
 def _usage(role: str, model_id: str, request_id: str) -> UsageRecord:
+    started_at = datetime.now(UTC)
+    generation_id = f"generation-{request_id}"
+    schema_sha256 = "e" * 64
     return UsageRecord(
         request_id=request_id,
         role=role,
+        execution_evidence=ExecutionEvidenceKind.REAL,
         requested_model=model_id,
         returned_model=model_id,
+        provider="approved-provider",
         model_family=model_id.split("/", 1)[0],
-        timestamp=datetime.now(UTC),
+        timestamp=started_at,
+        prompt_tokens=100,
+        completion_tokens=20,
+        total_tokens=120,
+        reported_cost_usd=0.01,
+        accounted_cost_usd=0.01,
+        routing={
+            "generation_id": generation_id,
+            "selected_provider_endpoint": "approved-provider",
+            "router_strategy": "direct",
+            "finish_reason": "stop",
+            "schema_sha256": schema_sha256,
+            "router_metadata_sha256": "f" * 64,
+            "provider_policy_sha256": "0" * 64,
+            "validation_status": "valid",
+            "zdr_requested": True,
+            "data_collection": "deny",
+            "repair_used": False,
+            "repair_request": False,
+            "request_started_at": started_at.isoformat(),
+            "request_ended_at": started_at.isoformat(),
+            "latency_ms": 0,
+        },
         prompt_sha256="c" * 64,
         response_sha256="d" * 64,
+        request_body_sha256="a" * 64,
+        schema_sha256=schema_sha256,
+        openrouter_generation_id=generation_id,
+        configured_provider_endpoints=["approved-provider"],
+        actual_provider_endpoint="approved-provider",
+        started_at=started_at,
+        ended_at=started_at,
+        latency_ms=0,
+        finish_reason="stop",
+        retry_count=0,
+        validation_status=ModelRequestValidationStatus.VALID,
         status="success",
         attempts=1,
     )
@@ -286,6 +326,48 @@ def test_model_review_coverage_emits_every_surface_kind_and_lineage(
         for surface in coverage.surfaces
     )
     assert ModelReviewCoverage.model_validate_json(coverage.model_dump_json()) == coverage
+
+
+def test_mock_reviews_cannot_be_credited_by_an_unrelated_real_request(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = config_factory()
+    index, graphs, invariants = _inventory()
+    usage_records = [
+        _usage(
+            "source_audit",
+            config.models.source_audit.primary,
+            "mock-source",
+        ).model_copy(update={"execution_evidence": ExecutionEvidenceKind.MOCK}),
+        _usage(
+            "business_logic",
+            config.models.business_logic.primary,
+            "mock-business",
+        ).model_copy(update={"execution_evidence": ExecutionEvidenceKind.MOCK}),
+        _usage(
+            "configuration",
+            config.models.configuration.primary,
+            "real-unrelated",
+        ),
+    ]
+
+    coverage = build_model_review_coverage(
+        config,
+        usage_records=usage_records,
+        contexts=[
+            _context("source_audit", index, graphs, invariants),
+            _context("business_logic", index, graphs, invariants),
+        ],
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+    )
+
+    assert coverage.overall.denominator > 0
+    assert coverage.overall.numerator == 0
+    assert not coverage.critical_gate_passed
+    assert any("mock model usage was excluded" in item for item in coverage.limitations)
 
 
 def test_critical_surface_gate_cannot_be_masked_by_complete_aggregate_coverage(

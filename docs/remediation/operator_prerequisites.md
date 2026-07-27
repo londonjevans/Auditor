@@ -11,6 +11,14 @@ the operator-controlled environment.
 - The allowlisted `OPENROUTER_API_KEY` entry.
 - Explicit invocation with `--secrets-env-file <operator-secret-file>` or
   `MMAUDIT_SECRETS_ENV_FILE=<operator-secret-file>`.
+- An absolute path in an operator-owned mode-`0700` directory for the cumulative
+  paid-provider ledger. Initialize it exactly once with
+  `mmaudit models init-cost-ledger --cost-ledger <absolute-path>`, then select that
+  same existing file with `mmaudit run --cost-ledger <absolute-path>`,
+  `execution.cost_ledger_path`, or `MMAUDIT_COST_LEDGER_PATH`.
+- The configured `execution.budget_usd` must remain equal to the ledger's immutable
+  campaign cap. A missing, deleted, moved, malformed, active-reservation, or
+  cap-mismatched ledger fails before secret loading and provider access.
 - Real tests additionally require `MMAUDIT_RUN_REAL_PROVIDER_TESTS=1`, an exact
   model allowlist, and a numeric cost cap. The normal suite never spends money.
 

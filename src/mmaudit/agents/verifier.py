@@ -18,6 +18,7 @@ from mmaudit.models.schemas import (
     VerificationTest,
     VerificationVerdict,
 )
+from mmaudit.models.usage import is_creditable_usage_record
 from mmaudit.orchestration.context import render_context
 
 
@@ -184,7 +185,7 @@ class CandidateCrossExaminerAgent:
             (
                 record
                 for record in reversed(self.client.usage.records)
-                if record.role == request_role and record.status == "success"
+                if record.role == request_role and is_creditable_usage_record(record)
             ),
             None,
         )

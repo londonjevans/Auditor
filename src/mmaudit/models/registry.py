@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import stat
+import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from mmaudit.config import AuditConfig, ModelQualityTier, model_lineage_index
-from mmaudit.constants import ALL_MODEL_ROLES
+from mmaudit.constants import ALL_MODEL_ROLES, OPENROUTER_DEFAULT_BASE_URL
 
 _QUALITY_TIER_RANK: dict[str, int] = {
     "standard": 0,
@@ -20,6 +24,8 @@ _RETENTION_RANK: dict[str, int] = {
     "temporary": 1,
     "persistent": 2,
 }
+_CACHE_SCHEMA_VERSION = "1.0"
+_MAX_CACHE_BYTES = 20_000_000
 
 
 class ModelRegistryError(RuntimeError):
@@ -35,43 +41,93 @@ class ModelRegistry:
         if self._has_symlink_component():
             return None
         try:
-            raw = json.loads(self.cache_path.read_text(encoding="utf-8"))
+            metadata = self.cache_path.stat()
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_nlink != 1
+                or metadata.st_size > _MAX_CACHE_BYTES
+            ):
+                return None
+            raw = json.loads(
+                self.cache_path.read_text(encoding="utf-8"),
+                object_pairs_hook=_unique_json_object,
+            )
+            if not isinstance(raw, dict) or set(raw) != {
+                "schema_version",
+                "source_base_url",
+                "cached_at",
+                "models_sha256",
+                "models",
+            }:
+                return None
+            if (
+                raw["schema_version"] != _CACHE_SCHEMA_VERSION
+                or raw["source_base_url"] != OPENROUTER_DEFAULT_BASE_URL
+            ):
+                return None
             cached_at = datetime.fromisoformat(str(raw["cached_at"]))
-            if datetime.now(UTC) - cached_at > self.ttl:
+            now = datetime.now(UTC)
+            if (
+                cached_at.tzinfo is None
+                or cached_at > now + timedelta(minutes=5)
+                or now - cached_at > self.ttl
+            ):
                 return None
             models = raw["models"]
-            if not isinstance(models, list):
+            if (
+                not isinstance(models, list)
+                or not models
+                or any(not isinstance(item, dict) for item in models)
+                or raw["models_sha256"] != _canonical_sha256(models)
+            ):
                 return None
-            return [item for item in models if isinstance(item, dict)]
+            return list(models)
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
             return None
 
     def save_cache(self, models: list[dict[str, Any]]) -> None:
         if self._has_symlink_component():
             raise ModelRegistryError("refusing symlinked model metadata cache")
+        if not models or any(not isinstance(item, dict) for item in models):
+            raise ModelRegistryError("refusing invalid model metadata cache")
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
+            "schema_version": _CACHE_SCHEMA_VERSION,
+            "source_base_url": OPENROUTER_DEFAULT_BASE_URL,
             "cached_at": datetime.now(UTC).isoformat(),
+            "models_sha256": _canonical_sha256(models),
             "models": models,
         }
         if self.cache_path.exists():
-            if not self.cache_path.is_file():
+            metadata = self.cache_path.stat()
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
                 raise ModelRegistryError("refusing non-file model metadata cache")
-            self.cache_path.unlink()
-        self.cache_path.write_text(
-            json.dumps(payload, sort_keys=True, separators=(",", ":")),
-            encoding="utf-8",
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        if len(encoded) > _MAX_CACHE_BYTES:
+            raise ModelRegistryError("refusing oversized model metadata cache")
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=self.cache_path.parent,
+            prefix=f".{self.cache_path.name}.",
         )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb", closefd=True) as stream:
+                os.fchmod(stream.fileno(), stat.S_IRUSR | stat.S_IWUSR)
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            temporary.replace(self.cache_path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def _has_symlink_component(self) -> bool:
-        return any(
-            path.is_symlink() or path.is_junction()
-            for path in (
-                self.cache_path,
-                self.cache_path.parent,
-                self.cache_path.parent.parent,
-            )
-        )
+        cursor = self.cache_path.absolute()
+        while True:
+            if cursor.is_symlink() or cursor.is_junction():
+                return True
+            if cursor == cursor.parent:
+                return False
+            cursor = cursor.parent
 
     @staticmethod
     def validate(
@@ -196,3 +252,23 @@ def _configured_model_requirements(
             for index, model_id in enumerate(role_config.fallbacks)
         )
     return requirements
+
+
+def _canonical_sha256(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result

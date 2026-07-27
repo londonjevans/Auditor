@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import shutil
+from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
@@ -36,8 +38,10 @@ from mmaudit.benchmark.mutations import (
     score_mutation_outcomes,
 )
 from mmaudit.cli import app
+from mmaudit.config import ConfigError, configured_model_ids
 from mmaudit.constants import ExitCode
 from mmaudit.models.schemas import AuditProfile
+from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 
 ROOT = Path(__file__).parents[2]
 runner = CliRunner()
@@ -68,6 +72,7 @@ def test_run_help_lists_fork_aliases() -> None:
     assert result.exit_code == 0
     assert "--allow-fork" in result.stdout
     assert "--scope" in result.stdout
+    assert "--cost-ledger" in result.stdout
 
 
 def test_models_benchmark_help_lists_blinded_corpus_and_egress_controls() -> None:
@@ -76,6 +81,7 @@ def test_models_benchmark_help_lists_blinded_corpus_and_egress_controls() -> Non
     assert "--corpus" in result.stdout
     assert "--model" in result.stdout
     assert "--allow-code-egress" in result.stdout
+    assert "--cost-ledger" in result.stdout
 
 
 @pytest.mark.parametrize(
@@ -125,8 +131,376 @@ def test_models_benchmark_requires_explicit_egress_before_provider_access(
     assert "explicit synthetic-source egress" in without_approval.stdout
     assert "approval" in without_approval.stdout
     assert with_approval.exit_code == ExitCode.CONFIGURATION
-    assert "operator secret file is not selected" in with_approval.stdout
+    assert "--cost-ledger" in with_approval.stdout
     assert not (tmp_path / "model-benchmark.json").exists()
+
+
+def test_models_cost_ledger_initialization_is_explicit_and_one_time(
+    tmp_path: Path,
+    monkeypatch,
+    config_factory,
+) -> None:
+    tmp_path.chmod(0o700)
+    config = config_factory(execution={"budget_usd": 250.0})
+    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+    ledger = tmp_path / "provider-cost-ledger.json"
+    arguments = [
+        "models",
+        "init-cost-ledger",
+        "--config",
+        str(tmp_path / "synthetic.toml"),
+        "--cost-ledger",
+        str(ledger),
+        "--no-color",
+    ]
+
+    first = runner.invoke(app, arguments)
+    second = runner.invoke(app, arguments)
+
+    assert first.exit_code == 0, first.stdout
+    assert ledger.is_file()
+    assert second.exit_code == ExitCode.CONFIGURATION
+    assert "one-time" in second.stdout
+
+
+def test_provider_run_missing_ledger_fails_before_secret_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    config = config_factory()
+    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("operator secrets must not be accessed")
+
+    monkeypatch.setattr("mmaudit.cli.load_operator_secrets", forbidden_secret_access)
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--repo",
+            str(tmp_path),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "requires an existing --cost-ledger" in result.stdout
+    assert not secret_accessed
+
+
+def test_provider_run_deleted_ledger_fails_without_recreating_budget_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    tmp_path.chmod(0o700)
+    config = config_factory()
+    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("operator secrets must not be accessed")
+
+    monkeypatch.setattr("mmaudit.cli.load_operator_secrets", forbidden_secret_access)
+    ledger_path = tmp_path / "deleted-campaign-ledger.json"
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--repo",
+            str(tmp_path),
+            "--cost-ledger",
+            str(ledger_path),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "existing cost ledger lock" in result.stdout
+    assert not secret_accessed
+    assert not ledger_path.exists()
+    assert not ledger_path.with_name(f".{ledger_path.name}.lock").exists()
+
+
+def test_provider_run_cap_mismatch_fails_before_secret_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    tmp_path.chmod(0o700)
+    config = config_factory(execution={"budget_usd": 20.0})
+    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+    ledger_path = tmp_path / "different-cap-ledger.json"
+    AtomicCostLedger.initialize(ledger_path, cap_usd=Decimal("19.0"))
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("operator secrets must not be accessed")
+
+    monkeypatch.setattr("mmaudit.cli.load_operator_secrets", forbidden_secret_access)
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--repo",
+            str(tmp_path),
+            "--cost-ledger",
+            str(ledger_path),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "cost cap does not match" in result.stdout
+    assert not secret_accessed
+
+
+def test_provider_run_uses_existing_configured_campaign_ledger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    tmp_path.chmod(0o700)
+    ledger_path = tmp_path / "campaign-cost-ledger.json"
+    config = config_factory(
+        execution={"cost_ledger_path": str(ledger_path)},
+    )
+    AtomicCostLedger.initialize(
+        ledger_path,
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    secret_file = tmp_path / "operator-secrets.env"
+    secret_file.write_text("OPENROUTER_API_KEY=synthetic-provider-canary\n", encoding="utf-8")
+    secret_file.chmod(0o600)
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    (repository / "app.py").write_text("value = 1\n", encoding="utf-8")
+    observed_ledgers: list[AtomicCostLedger] = []
+
+    class SyntheticPipelineResult:
+        run_dir = tmp_path / "synthetic-run"
+
+        def exit_for_findings(self, _fail_on: object) -> ExitCode:
+            return ExitCode.SUCCESS
+
+    class SyntheticPipeline:
+        def __init__(self, _config: object, **kwargs: object) -> None:
+            ledger = kwargs["cost_ledger"]
+            assert isinstance(ledger, AtomicCostLedger)
+            self.ledger = ledger
+            observed_ledgers.append(ledger)
+
+        async def run(self, **_kwargs: object) -> SyntheticPipelineResult:
+            index = len(observed_ledgers)
+            reservation = self.ledger.reserve(
+                f"synthetic-provider-run-{index}",
+                Decimal("1.0"),
+            )
+            self.ledger.reconcile(reservation, Decimal("0.25"))
+            return SyntheticPipelineResult()
+
+        def clear_credentials(self) -> None:
+            return None
+
+    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+    monkeypatch.setattr("mmaudit.cli.AuditPipeline", SyntheticPipeline)
+    for index in range(2):
+        output = tmp_path / f"output-{index}"
+        result = runner.invoke(
+            app,
+            [
+                "run",
+                "--config",
+                str(tmp_path / "synthetic.toml"),
+                "--secrets-env-file",
+                str(secret_file),
+                "--repo",
+                str(repository),
+                "--output",
+                str(output),
+                "--no-color",
+            ],
+        )
+        assert result.exit_code == ExitCode.SUCCESS, result.stdout
+        assert not list(output.rglob("model-cost-ledger.json"))
+
+    assert [ledger.path for ledger in observed_ledgers] == [ledger_path, ledger_path]
+    snapshot = observed_ledgers[-1].snapshot()
+    assert snapshot.spent_usd == Decimal("0.5")
+    assert len(snapshot.entries) == 2
+
+
+def test_models_benchmark_missing_ledger_fails_before_secret_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    tmp_path.chmod(0o700)
+    config = config_factory()
+    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("operator secrets must not be accessed")
+
+    monkeypatch.setattr("mmaudit.cli.load_operator_secrets", forbidden_secret_access)
+    output = tmp_path / "benchmark.json"
+    result = runner.invoke(
+        app,
+        [
+            "models",
+            "benchmark",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--corpus",
+            str(ROOT / "benchmarks" / "model_corpus" / "manifest.json"),
+            "--model",
+            config.models.threat_model.primary,
+            "--output",
+            str(output),
+            "--cost-ledger",
+            str(tmp_path / "missing-cost-ledger.json"),
+            "--allow-code-egress",
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "existing cost ledger lock" in result.stdout
+    assert not secret_accessed
+    assert not output.exists()
+    assert not (tmp_path / "missing-cost-ledger.json").exists()
+    assert not (tmp_path / ".missing-cost-ledger.json.lock").exists()
+
+
+def test_models_benchmark_output_path_does_not_select_or_create_budget_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    tmp_path.chmod(0o700)
+    config = config_factory()
+    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+    ledger_path = tmp_path / "campaign-cost-ledger.json"
+    AtomicCostLedger.initialize(
+        ledger_path,
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    secret_calls = 0
+
+    def stop_at_secret_boundary(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_calls
+        secret_calls += 1
+        raise ConfigError("synthetic secret boundary reached")
+
+    monkeypatch.setattr("mmaudit.cli.load_operator_secrets", stop_at_secret_boundary)
+    outputs = (tmp_path / "first-report.json", tmp_path / "second-report.json")
+    for output in outputs:
+        result = runner.invoke(
+            app,
+            [
+                "models",
+                "benchmark",
+                "--config",
+                str(tmp_path / "synthetic.toml"),
+                "--corpus",
+                str(ROOT / "benchmarks" / "model_corpus" / "manifest.json"),
+                "--model",
+                config.models.threat_model.primary,
+                "--output",
+                str(output),
+                "--cost-ledger",
+                str(ledger_path),
+                "--allow-code-egress",
+                "--no-color",
+            ],
+        )
+        assert result.exit_code == ExitCode.CONFIGURATION
+        assert "synthetic secret boundary reached" in result.stdout
+        assert not output.exists()
+
+    assert secret_calls == 2
+    snapshot = AtomicCostLedger.open_existing(
+        ledger_path,
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    ).snapshot()
+    assert snapshot.entries == ()
+    for output in outputs:
+        derived = output.with_name(f"{output.stem}-cost-ledger.json")
+        assert not derived.exists()
+        assert not derived.with_name(f".{derived.name}.lock").exists()
+
+
+@pytest.mark.parametrize("protected_name", ["ledger", "lock"])
+def test_models_benchmark_rejects_output_that_aliases_cost_state_before_secret_access(
+    protected_name: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    tmp_path.chmod(0o700)
+    config = config_factory()
+    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+    ledger_path = tmp_path / "campaign-cost-ledger.json"
+    ledger = AtomicCostLedger.initialize(
+        ledger_path,
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("operator secrets must not be accessed")
+
+    monkeypatch.setattr("mmaudit.cli.load_operator_secrets", forbidden_secret_access)
+    output = ledger.path if protected_name == "ledger" else ledger.lock_path
+    result = runner.invoke(
+        app,
+        [
+            "models",
+            "benchmark",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--corpus",
+            str(ROOT / "benchmarks" / "model_corpus" / "manifest.json"),
+            "--model",
+            config.models.threat_model.primary,
+            "--output",
+            str(output),
+            "--cost-ledger",
+            str(ledger_path),
+            "--allow-code-egress",
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "distinct from cost-ledger" in result.stdout
+    assert "state" in result.stdout
+    assert (
+        AtomicCostLedger.open_existing(
+            ledger_path,
+            cap_usd=Decimal(str(config.execution.budget_usd)),
+        )
+        .snapshot()
+        .entries
+        == ()
+    )
 
 
 def test_benchmark_without_reports_is_explicitly_incomplete(tmp_path: Path) -> None:
@@ -1172,3 +1546,137 @@ def test_models_check_requires_operator_secret_file(tmp_path: Path, monkeypatch)
     result = runner.invoke(app, ["models", "check", "--config", str(config)])
     assert result.exit_code == ExitCode.CONFIGURATION
     assert "operator secret file is not selected" in result.stdout
+
+
+def test_models_check_rejects_empty_provider_endpoint_policy_before_network(
+    tmp_path: Path,
+    monkeypatch,
+    config_factory,
+) -> None:
+    secret_file = tmp_path / "operator.env"
+    secret_file.write_text("OPENROUTER_API_KEY=synthetic-check-key\n", encoding="utf-8")
+    secret_file.chmod(0o600)
+    config = config_factory(
+        models={
+            "provider_policy": {
+                "only": [],
+                "order": [],
+                "allow_fallbacks": False,
+            }
+        }
+    )
+    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+
+    class UnexpectedClient:
+        def __init__(self, **_kwargs: object) -> None:
+            raise AssertionError("models check reached the network client")
+
+    monkeypatch.setattr("mmaudit.cli.OpenRouterClient", UnexpectedClient)
+    result = runner.invoke(
+        app,
+        [
+            "models",
+            "check",
+            "--config",
+            str(tmp_path / "mmaudit.toml"),
+            "--secrets-env-file",
+            str(secret_file),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "explicit provider endpoint" in result.stdout
+    assert "allowlist" in result.stdout
+
+
+def test_models_check_rejects_unavailable_exact_provider_endpoint(
+    tmp_path: Path,
+    monkeypatch,
+    config_factory,
+) -> None:
+    canary = "sk-or-v1-synthetic-model-check-canary"
+    secret_file = tmp_path / "operator.env"
+    secret_file.write_text(f"OPENROUTER_API_KEY={canary}\n", encoding="utf-8")
+    secret_file.chmod(0o600)
+    config = config_factory()
+    model_ids = tuple(sorted(set(configured_model_ids(config, include_fallbacks=True))))
+    observed_models: list[str] = []
+    observed_keys: list[str] = []
+    closed = False
+
+    def endpoint_record(model_id: str, endpoint: str) -> dict[str, object]:
+        return {
+            "model_id": model_id,
+            "tag": endpoint,
+            "provider_name": "Synthetic Provider",
+            "status": 0,
+            "context_length": 200_000,
+            "max_prompt_tokens": 180_000,
+            "max_completion_tokens": 20_000,
+            "supported_parameters": ["max_tokens", "response_format", "temperature"],
+            "pricing": {
+                "prompt": "0.000001",
+                "completion": "0.00001",
+                "request": "0",
+            },
+        }
+
+    class EndpointMismatchClient:
+        def __init__(self, *, api_key: str, **_kwargs: object) -> None:
+            observed_keys.append(api_key)
+
+        async def list_models(self) -> list[dict[str, object]]:
+            return [
+                {
+                    "id": model_id,
+                    "supported_parameters": ["response_format"],
+                }
+                for model_id in model_ids
+            ]
+
+        async def list_zdr_endpoints(self) -> dict[str, object]:
+            return {
+                "data": [endpoint_record(model_id, "synthetic-provider") for model_id in model_ids]
+            }
+
+        async def get_model_endpoint_metadata(self, model_id: str) -> dict[str, object]:
+            observed_models.append(model_id)
+            return {
+                "data": {
+                    "id": model_id,
+                    "endpoints": [endpoint_record(model_id, "unapproved-provider")],
+                }
+            }
+
+        async def close(self) -> None:
+            nonlocal closed
+            closed = True
+
+    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+    monkeypatch.setattr("mmaudit.cli.OpenRouterClient", EndpointMismatchClient)
+
+    result = runner.invoke(
+        app,
+        [
+            "models",
+            "check",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--secrets-env-file",
+            str(secret_file),
+            "--refresh",
+            "--no-color",
+        ],
+        env={"COLUMNS": "500"},
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert observed_keys == [canary]
+    assert observed_models == list(model_ids)
+    assert closed is True
+    assert "exact provider endpoint validation failed" in result.stdout
+    assert "configured endpoint tag or slug is unavailable: synthetic-provider" in result.stdout
+    assert "Validated" not in result.stdout
+    assert canary not in result.stdout
+    assert str(secret_file) not in result.stdout

@@ -83,7 +83,7 @@ def base_config_data() -> dict[str, Any]:
             "request_timeout_seconds": 1,
             "scanner_timeout_seconds": 2,
             "max_model_retries": 0,
-            "max_json_repair_attempts": 1,
+            "max_json_repair_attempts": 0,
             "budget_usd": 20,
             "max_output_tokens_per_request": 2_048,
             "max_requests_per_agent": 2,
@@ -92,6 +92,10 @@ def base_config_data() -> dict[str, Any]:
         "models": {
             "minimum_distinct_families": 3,
             "allow_non_independent_models": False,
+            "provider_policy": {
+                "only": ["synthetic-provider"],
+                "allow_fallbacks": False,
+            },
             "registry": registry,
             **{
                 role: {"primary": model_id, "fallbacks": []} for role, model_id in MODEL_IDS.items()

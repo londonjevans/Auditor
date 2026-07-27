@@ -14,7 +14,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Literal
 
 from mmaudit.agents.business_logic import BusinessLogicAgent
 from mmaudit.agents.configuration import ConfigurationAgent
@@ -40,7 +40,7 @@ from mmaudit.benchmark.certificate import (
     CertificateVerificationOrigin,
     CertificateVerificationStatus,
 )
-from mmaudit.config import AuditConfig, validate_model_independence
+from mmaudit.config import AuditConfig, configured_model_ids, validate_model_independence
 from mmaudit.constants import (
     REPORT_SCHEMA_VERSION,
     SEVERITY_ORDER,
@@ -53,12 +53,20 @@ from mmaudit.isolation.dependencies import (
     prepare_dependencies,
 )
 from mmaudit.logging import JsonLineHandler, RedactingFilter
+from mmaudit.models.endpoint_snapshots import (
+    EndpointSnapshotValidationError,
+    validate_openrouter_endpoint_snapshot,
+)
 from mmaudit.models.openrouter import (
     OpenRouterAuthenticationError,
     OpenRouterClient,
     OpenRouterError,
 )
 from mmaudit.models.registry import ModelRegistry, extract_zdr_model_ids
+from mmaudit.models.runtime import (
+    build_openrouter_runtime_controls,
+    maximum_assurance_model_certification_required,
+)
 from mmaudit.models.schemas import (
     AnalysisState,
     AuditProfile,
@@ -74,6 +82,7 @@ from mmaudit.models.schemas import (
     EconomicSimulationKind,
     EconomicSimulationPlan,
     Evidence,
+    ExecutionEvidenceKind,
     FalsificationBatch,
     FalsificationVerdict,
     Finding,
@@ -118,7 +127,7 @@ from mmaudit.models.schemas import (
     VerificationTest,
     VerificationVerdict,
 )
-from mmaudit.models.usage import UsageLedger
+from mmaudit.models.usage import UsageLedger, is_creditable_usage_record
 from mmaudit.orchestration.assurance import AssuranceRuntime, MaximumAssuranceContract
 from mmaudit.orchestration.budgets import BudgetExhaustedError, BudgetManager
 from mmaudit.orchestration.consensus import (
@@ -133,6 +142,7 @@ from mmaudit.orchestration.context import (
     ContextBuilder,
     context_hash_index,
 )
+from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.manifest import (
     build_run_evidence_manifest,
     validate_manifest_artifacts,
@@ -224,6 +234,7 @@ class AuditPipeline:
         output: Path,
         scanner_runner: ScannerRunner | None = None,
         client: OpenRouterClient | None = None,
+        cost_ledger: AtomicCostLedger | None = None,
         api_key: str | None = None,
         logger: logging.Logger | None = None,
         reproduction_runner: ForkReproductionRunner | None = None,
@@ -234,6 +245,7 @@ class AuditPipeline:
         self.repo_input = safe_repository_root(repo)
         self.output = resolve_safe_output_root(output)
         self.client = client
+        self.cost_ledger = cost_ledger
         self.api_key = api_key or ""
         self.logger = logger or logging.getLogger("mmaudit.pipeline")
         self.reproduction_runner = reproduction_runner or ForkReproductionRunner(
@@ -327,6 +339,45 @@ class AuditPipeline:
         benchmark_verification: BenchmarkCertificateVerification | None = None,
         benchmark_repository_git_commit: str | None = None,
     ) -> PipelineResult:
+        if not scanner_only and self.client is None and self.cost_ledger is None:
+            raise ValueError("provider audits require an explicit existing cumulative cost ledger")
+        if (
+            not scanner_only
+            and self.client is not None
+            and self.client.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
+        ):
+            raise ValueError("provider audits reject unverified injected clients")
+        if (
+            not scanner_only
+            and self.client is not None
+            and self.client.execution_evidence is ExecutionEvidenceKind.REAL
+        ):
+            client_ledger = self.client.budget.atomic_ledger
+            if self.cost_ledger is None or client_ledger is None:
+                raise ValueError(
+                    "real injected provider clients require the selected cumulative cost ledger"
+                )
+            if client_ledger.path.resolve(strict=True) != self.cost_ledger.path.resolve(
+                strict=True
+            ):
+                raise ValueError(
+                    "real injected provider client does not use the selected cumulative cost ledger"
+                )
+            certification_required = maximum_assurance_model_certification_required(self.config)
+            expected_controls = build_openrouter_runtime_controls(
+                self.config,
+                certification=certification_required,
+                require_single_model_per_role=certification_required,
+            )
+            if (
+                self.client.execution != self.config.execution
+                or self.client.privacy != self.config.privacy
+                or self.client.provider_policy != expected_controls.provider_policy
+                or self.client.reasoning != expected_controls.reasoning
+            ):
+                raise ValueError(
+                    "real injected provider client does not match effective audit controls"
+                )
         benchmark_required = (
             self.config.maximum_assurance.benchmark_gate or self.config.maximum_assurance.ci_mode
         )
@@ -858,6 +909,7 @@ class AuditPipeline:
                     >= SEVERITY_ORDER[severity_threshold.value]
                 ):
                     final_findings.append(finding)
+        model_certification_required = maximum_assurance_model_certification_required(self.config)
         usage = self.client.usage if self.client is not None else UsageLedger()
         budget = (
             self.client.budget
@@ -869,12 +921,19 @@ class AuditPipeline:
                     self.config.execution.conservative_usd_per_million_tokens
                 ),
                 max_requests_per_agent=self.config.execution.max_requests_per_agent,
+                atomic_ledger=None if scanner_only else self.cost_ledger,
+                require_endpoint_cost_bound=not scanner_only,
             )
         )
 
         context_builder: ContextBuilder | None = None
         if not scanner_only and terminal_code is ExitCode.SUCCESS:
             if self.client is None:
+                controls = build_openrouter_runtime_controls(
+                    self.config,
+                    certification=model_certification_required,
+                    require_single_model_per_role=model_certification_required,
+                )
                 self.client = OpenRouterClient(
                     api_key=self.api_key or "",
                     execution=self.config.execution,
@@ -883,6 +942,8 @@ class AuditPipeline:
                     usage=usage,
                     run_dir=run_dir / "private",
                     logger=self.logger,
+                    provider_policy=controls.provider_policy,
+                    reasoning=controls.reasoning,
                 )
                 self._owns_client = True
                 self.api_key = ""
@@ -1603,7 +1664,9 @@ class AuditPipeline:
             invariant_executions=invariant_executions,
             eligible_candidates=eligible_for_reproduction,
             reproductions=reproductions,
-            usage_roles={record.role for record in usage.records if record.status == "success"},
+            usage_roles={
+                record.role for record in usage.records if is_creditable_usage_record(record)
+            },
             scanner_only=scanner_only,
         )
         if (
@@ -1668,7 +1731,7 @@ class AuditPipeline:
             },
         )
         successful_usage_roles = {
-            record.role for record in usage.records if record.status == "success"
+            record.role for record in usage.records if is_creditable_usage_record(record)
         }
         successful_specialist_roles = {
             specialist_role
@@ -2075,11 +2138,17 @@ class AuditPipeline:
         assert self.client is not None
         cache_dir = _safe_output_directory(self.output, "cache")
         registry = ModelRegistry(cache_dir / "openrouter-models.json")
-        models = None if refresh else registry.load_cache()
+        provider_policy = self.client.provider_policy
+        if source_egress_requested and not self.config.privacy.require_zdr:
+            raise OpenRouterError("source egress requires zero-data-retention provider routing")
+        if source_egress_requested and not provider_policy.configured_endpoints:
+            raise OpenRouterError("source egress requires an explicit provider endpoint allowlist")
+        models = None if refresh or provider_policy.certification else registry.load_cache()
         if models is None:
             models = await self.client.list_models()
             registry.save_cache(models)
         zdr_ids: set[str] | None = None
+        zdr_payload: dict[str, Any] | None = None
         if self.config.privacy.require_zdr:
             zdr_payload = await self.client.list_zdr_endpoints()
             zdr_ids = extract_zdr_model_ids(zdr_payload)
@@ -2095,6 +2164,27 @@ class AuditPipeline:
         )
         if errors:
             raise OpenRouterError("; ".join(errors))
+        endpoint_snapshots = []
+        if provider_policy.configured_endpoints:
+            policy_mode: Literal["only", "order"] = "only" if provider_policy.only else "order"
+            for model_id in sorted(set(configured_model_ids(self.config, include_fallbacks=True))):
+                endpoint_payload = await self.client.get_model_endpoint_metadata(model_id)
+                try:
+                    snapshot = validate_openrouter_endpoint_snapshot(
+                        exact_model_id=model_id,
+                        configured_provider_endpoints=(provider_policy.configured_endpoints),
+                        provider_policy_mode=policy_mode,
+                        endpoint_payload=endpoint_payload,
+                        require_zdr=self.config.privacy.require_zdr,
+                        zdr_payload=zdr_payload,
+                        reasoning_requested=self.client.reasoning is not None,
+                    )
+                except EndpointSnapshotValidationError as exc:
+                    raise OpenRouterError(
+                        f"exact provider endpoint validation failed for {model_id}: {exc}"
+                    ) from None
+                endpoint_snapshots.append(snapshot)
+                self.client.register_endpoint_snapshot(evidence=snapshot)
         write_json(
             run_dir / "model-validation.json",
             {
@@ -2104,6 +2194,9 @@ class AuditPipeline:
                     lineage.model_dump(mode="json") for lineage in self.config.models.registry
                 ],
                 "zdr_required": self.config.privacy.require_zdr,
+                "endpoint_snapshots": [
+                    snapshot.model_dump(mode="json") for snapshot in endpoint_snapshots
+                ],
                 "source_egress_policy": {
                     "requested": source_egress_requested,
                     "maximum_retention": self.config.privacy.maximum_model_retention,
@@ -2862,7 +2955,7 @@ def _attach_verifier_votes(
         (
             record
             for record in reversed(client.usage.records)
-            if record.role == "verifier" and record.status == "success"
+            if record.role == "verifier" and is_creditable_usage_record(record)
         ),
         None,
     )
@@ -2990,7 +3083,7 @@ def _judge_vote(
         (
             record
             for record in reversed(client.usage.records)
-            if record.role == "judge" and record.status == "success"
+            if record.role == "judge" and is_creditable_usage_record(record)
         ),
         None,
     )

@@ -46,8 +46,12 @@ concurrency = 3
 request_timeout_seconds = 180
 scanner_timeout_seconds = 900
 max_model_retries = 2
-max_json_repair_attempts = 1
+max_json_repair_attempts = 0
 budget_usd = 20.0
+# Paid provider runs fail closed unless this existing cumulative ledger is selected
+# here, with MMAUDIT_COST_LEDGER_PATH, or with `mmaudit run --cost-ledger`.
+# Initialize it once with `mmaudit models init-cost-ledger`.
+# cost_ledger_path = "/absolute/operator/control/mmaudit-cost-ledger.json"
 max_request_bytes = 4000000
 max_output_tokens_per_request = 4096
 max_requests_per_agent = 2
@@ -235,6 +239,19 @@ allow_non_independent_models = false
 # measured_quality_tier = "highest"
 # quality_measurement = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 # retention_policy = "zero" # zero, temporary, or persistent
+
+[models.provider_policy]
+# Qualification and certification require an exact, operator-approved endpoint
+# allowlist. Use either `only` or `order`, never both. Empty lists are not
+# sufficient for certification.
+only = []
+order = []
+allow_fallbacks = false
+
+[models.reasoning]
+effort = "high"
+# max_tokens = 4096
+exclude = false
 
 [models.threat_model]
 primary = "PROVIDER_A/MODEL_ID_A"

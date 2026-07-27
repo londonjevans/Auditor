@@ -4,16 +4,16 @@ The seven files under `docs/evaluation/` are immutable baseline evidence from
 commit `e304807cf942542706b88544fa216516f8f95cad`.
 
 AUTORUN_STATUS: IN_PROGRESS
-CURRENT_TICKET: REM-OPENROUTER-001
-LAST_COMPLETED_TICKET: EVAL-DEFECT-004
-NEXT_ACTION: Checkpoint the exact-Slither gate ledger, then audit the current OpenRouter request, routing, response-validation, and atomic-cost implementation against REM-OPENROUTER-001.
-LAST_COMMAND: .venv/bin/pytest -q 'tests/unit/test_assurance.py::test_exact_maximum_assurance_portfolio_fails_closed[required_slither_missing]' tests/unit/test_scanners_reporting.py -k 'slither or required_slither_missing'
-LAST_RESULT: PASS — 9 tests passed and 56 were deselected in 0.90s; other scanner evidence cannot satisfy the exact Slither clause.
+CURRENT_TICKET: REM-MODELS-001
+LAST_COMPLETED_TICKET: REM-OPENROUTER-001
+NEXT_ACTION: Checkpoint and push the completed exact OpenRouter client and cost-ledger controls, then freeze the production model registry and qualification artifact contract before any paid model call.
+LAST_COMMAND: .venv/bin/pytest -q
+LAST_RESULT: PASS — post-review full suite passed with 1060 tests and 10 explicit real-integration skips in 156.13s; full Ruff formatting/check and strict mypy also passed.
 REMAINING_CODE_DEFECTS: 9
 REMAINING_REAL_INTEGRATIONS: OpenRouter exact-model smoke/qualification/specialist review; certified-isolation Foundry and Slither; Echidna; Medusa; Halmos; formal proof engine; rootless isolation; isolated replay; product benchmark reports
 BLOCKED_EXTERNAL_PREREQUISITES: Echidna, Medusa, Kontrol, Certora, rootless runtime/image, private holdout, and independently adjudicated expert comparison are not yet evidenced as available
 OPENROUTER_COST_USED_USD: 0.00
-LAST_CHECKPOINT_COMMIT: f9dc2e3c96e0eb64a9e13a3f22b9d18192bddfd1
+LAST_CHECKPOINT_COMMIT: ac71dc0400556f3a8b0b32ed33a1524f448718c7
 
 ## Immutable baseline
 
@@ -321,3 +321,60 @@ LAST_CHECKPOINT_COMMIT: f9dc2e3c96e0eb64a9e13a3f22b9d18192bddfd1
 - **Implementation commit:** `f9dc2e3c96e0eb64a9e13a3f22b9d18192bddfd1`.
 - **Exact next safe action:** Record this ledger checkpoint and continue
   `REM-OPENROUTER-001`.
+
+## 2026-07-27 — REM-OPENROUTER-001
+
+- **Status:** `COMPLETE` for the safe implementation and deterministic local
+  protocol validation; the paid exact-model integration remains unexecuted and is
+  tracked by `REM-MODELS-001`.
+- **Defensive objective:** Require exact OpenRouter model and endpoint identities,
+  certification-grade privacy and fallback policy, complete response validation,
+  conservative typed failures, and a hard atomic campaign cost ledger.
+- **Completed changes:** Added canonical OpenRouter metadata, endpoint, key, and
+  completion handling; exact endpoint snapshots; exact requested-versus-returned
+  identity checks; emitted-parameter capability validation; strict structured
+  responses; timeout/retry/error classification; immutable transport provenance;
+  redacted diagnostics; cumulative atomic reservation/reconciliation; and
+  certification-grade model-usage evidence. Default reasoning is omitted unless
+  configured, ambiguous provider display identities fail closed, and unsupported
+  variable pricing dimensions are rejected because they cannot be provider-capped.
+- **Cost integrity:** Every paid-control request reserves its maximum exact
+  `Decimal` cost before transport. Successful usage reconciles against the exact
+  provider amount; malformed/error responses retain the full reservation.
+  Concurrent reservations share a locked persistent ledger. Injected or replaced
+  transports cannot mint `REAL` execution evidence, and an injected real client
+  cannot bypass the pipeline's effective controls or selected campaign ledger.
+- **Focused commands and results:**
+  - `.venv/bin/ruff check <OpenRouter affected files>` — PASS.
+  - `.venv/bin/mypy src/mmaudit/models/openrouter.py
+    src/mmaudit/models/endpoint_snapshots.py src/mmaudit/models/runtime.py
+    src/mmaudit/orchestration/budgets.py
+    src/mmaudit/orchestration/pipeline.py` — PASS, five source files.
+  - `.venv/bin/pytest -q tests/unit/test_openrouter.py
+    tests/unit/test_endpoint_snapshots.py tests/unit/test_model_runtime.py
+    tests/unit/test_budgets.py tests/unit/test_cli.py
+    tests/integration/test_pipeline.py
+    tests/integration/test_real_openrouter_provider.py` — PASS,
+    `212 passed, 1 skipped in 50.78s`. The sole skip requires explicit
+    `MMAUDIT_RUN_REAL_PROVIDER_TESTS=1`.
+- **Full validation:**
+  - `.venv/bin/ruff format .` — PASS, 230 files unchanged.
+  - `.venv/bin/ruff check .` — PASS.
+  - `.venv/bin/mypy` — PASS, 107 source files.
+  - `.venv/bin/pytest -q` — PASS,
+    `1060 passed, 10 skipped in 156.13s`. Every skip names an unavailable
+    real-provider, real-engine, rootless-isolation, replay, or sandbox
+    prerequisite and receives no maximum-assurance credit.
+- **Runtime artifact:**
+  `docs/remediation/runtime/rem_openrouter_001.json`.
+- **Provider boundary:** No paid completion call was made, no provider completion
+  was credited, and the cumulative OpenRouter campaign spend remains `0.00 USD`.
+  The earlier credential validation remains separate zero-cost authentication
+  evidence. Exact model qualification and specialist requests require the
+  explicit real-provider controls under `REM-MODELS-001`.
+- **Result:** The OpenRouter control path is locally validated and fail-closed.
+  It is not real-provider execution evidence and cannot satisfy the
+  maximum-assurance model-review clause by itself.
+- **Exact next safe action:** Checkpoint and push this ticket, then freeze the
+  exact production candidate registry and qualification artifact contract under
+  `REM-MODELS-001` before authorizing any paid call.

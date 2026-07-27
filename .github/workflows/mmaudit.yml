@@ -122,45 +122,40 @@ jobs:
       - name: Install mmaudit
         if: env.HAS_OPENROUTER_KEY == 'true'
         run: python -m pip install .
-      - name: Validate committed configuration
+      - name: Prepare explicit operator secret file
         if: env.HAS_OPENROUTER_KEY == 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
+          umask 077
+          secret_file="$RUNNER_TEMP/mmaudit-operator-secrets.env"
+          printf 'OPENROUTER_API_KEY=%s\n' "$OPENROUTER_API_KEY" > "$secret_file"
+          chmod 600 "$secret_file"
+          printf 'MMAUDIT_SECRETS_ENV_FILE=%s\n' "$secret_file" >> "$GITHUB_ENV"
+      - name: Validate committed configuration
+        if: env.HAS_OPENROUTER_KEY == 'true'
+        run: |
           test -f mmaudit.toml
           mmaudit doctor --config mmaudit.toml --repo . --output .mmaudit --allow-code-egress --no-color
           mmaudit models check --config mmaudit.toml
-      - name: Run bounded audit
+      - name: Explain deferred paid provider audit
         if: env.HAS_OPENROUTER_KEY == 'true'
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          AUDIT_BUDGET: ${{ inputs.budget_usd || '20' }}
-          FAIL_LEVEL: ${{ inputs.fail_on || 'high' }}
         run: >-
-          mmaudit run
-          --config mmaudit.toml
-          --repo .
-          --output .mmaudit
-          --allow-code-egress
-          --require-zdr
-          --budget-usd "$AUDIT_BUDGET"
-          --fail-on "$FAIL_LEVEL"
-          --no-color
-      - name: Run configured real-provider model benchmark
+          echo "Paid provider audits are disabled on ephemeral CI because
+          mmaudit run requires an existing operator-owned cumulative cost ledger."
+      - name: Explain deferred real-provider model qualification
         if: >-
           env.HAS_OPENROUTER_KEY == 'true' &&
           env.HAS_MODEL_BENCHMARK == 'true'
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          MODEL_BENCHMARK_ID: ${{ vars.MMAUDIT_MODEL_BENCHMARK_MODEL_ID }}
         run: >-
-          mmaudit models benchmark
-          --config mmaudit.toml
-          --corpus benchmarks/model_corpus/manifest.json
-          --model "$MODEL_BENCHMARK_ID"
-          --allow-code-egress
-          --output .mmaudit/model-benchmark-results.json
-          --no-color
+          echo "Model qualification is disabled on ephemeral CI because the
+          cumulative paid-provider ledger must persist atomically across runs."
+      - name: Remove operator secret file
+        if: env.HAS_OPENROUTER_KEY == 'true' && always()
+        run: |
+          if test -n "${MMAUDIT_SECRETS_ENV_FILE:-}" && test -f "$MMAUDIT_SECRETS_ENV_FILE"; then
+            rm -f -- "$MMAUDIT_SECRETS_ENV_FILE"
+          fi
       - name: Upload model reports
         if: env.HAS_OPENROUTER_KEY == 'true' && always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -1,0 +1,95 @@
+{
+  "schema_version": "1.0",
+  "ticket_id": "REM-OPENROUTER-001",
+  "baseline_commit": "e304807cf942542706b88544fa216516f8f95cad",
+  "implementation_commit": null,
+  "executed_at": "2026-07-27T19:26:46Z",
+  "implementation": [
+    {
+      "path": "src/mmaudit/models/openrouter.py",
+      "sha256": "978555e1131f95a20ee39a0497efce40a301f12675710d9f9e27f2e9fa74cb22"
+    },
+    {
+      "path": "src/mmaudit/models/endpoint_snapshots.py",
+      "sha256": "39344fd4d198e9a7c39812a0daa351fe1fb4a2a24395ec11dcf6220c735be884"
+    },
+    {
+      "path": "src/mmaudit/models/runtime.py",
+      "sha256": "b62e5144e970eb48b7b0f445fdd021dc6aac669847b5c056409ee7e6b6c68be3"
+    },
+    {
+      "path": "src/mmaudit/orchestration/cost_ledger.py",
+      "sha256": "cae2d898c90f55296f612acd09bf16ddf0b75244fed4a529a622830aaf0d6416"
+    },
+    {
+      "path": "src/mmaudit/orchestration/budgets.py",
+      "sha256": "9e773001ff518efa7851428368f410ca0b91d27df516388449793c1df128965a"
+    },
+    {
+      "path": "src/mmaudit/orchestration/pipeline.py",
+      "sha256": "61162182e99047eb775bf6de4883a1fb2b8d3ed12e8418ef39e7da14db4c6642"
+    },
+    {
+      "path": "src/mmaudit/models/usage.py",
+      "sha256": "020e79552f02b74623134de684175bfd1c048992029b772180364711300dbe59"
+    }
+  ],
+  "validated_controls": {
+    "canonical_base_url": "https://openrouter.ai/api/v1",
+    "exact_model_required": true,
+    "exact_provider_policy_required": true,
+    "certification_fallbacks_disabled": true,
+    "privacy_data_collection": "deny",
+    "privacy_zdr_required": true,
+    "provider_parameter_support_validated": true,
+    "endpoint_identity_ambiguity_rejected": true,
+    "model_and_provider_substitution_rejected": true,
+    "structured_response_required": true,
+    "truncation_rejected": true,
+    "typed_provider_errors": true,
+    "authorization_redacted": true,
+    "transport_provenance_fail_closed": true,
+    "atomic_campaign_ledger": true,
+    "budget_cap_usd": "250.00",
+    "exact_decimal_reconciliation": true,
+    "concurrent_reservation_bound": true,
+    "uncappable_variable_pricing_rejected": true,
+    "malformed_or_error_response_charged_conservatively": true,
+    "partial_output_never_credited": true
+  },
+  "focused_validation": {
+    "command": ".venv/bin/pytest -q tests/unit/test_openrouter.py tests/unit/test_endpoint_snapshots.py tests/unit/test_model_runtime.py tests/unit/test_budgets.py tests/unit/test_cli.py tests/integration/test_pipeline.py tests/integration/test_real_openrouter_provider.py",
+    "result": "PASS",
+    "tests_passed": 212,
+    "tests_skipped": 1,
+    "duration_seconds": 50.78,
+    "skip_reason": "Paid provider tests require explicit MMAUDIT_RUN_REAL_PROVIDER_TESTS=1."
+  },
+  "full_validation": {
+    "format_command": ".venv/bin/ruff format .",
+    "format_result": "PASS; 230 files left unchanged",
+    "lint_command": ".venv/bin/ruff check .",
+    "lint_result": "PASS",
+    "type_command": ".venv/bin/mypy",
+    "type_result": "PASS; 107 source files",
+    "test_command": ".venv/bin/pytest -q",
+    "test_result": "PASS",
+    "tests_passed": 1060,
+    "tests_skipped": 10,
+    "duration_seconds": 156.13
+  },
+  "provider_execution": {
+    "real_completion_calls": 0,
+    "invalid_completion_calls": 0,
+    "cost_used_usd": "0.00",
+    "mocked_protocol_tests_are_real_execution": false,
+    "status": "BLOCKED_TECHNICAL",
+    "reason": "The exact-model paid-provider smoke and qualification run is intentionally deferred to REM-MODELS-001, where explicit opt-in, a validated secrets file, exact allowlists, provider metadata, and the persistent campaign ledger are all required."
+  },
+  "result": {
+    "code_status": "COMPLETE",
+    "real_provider_status": "NOT_EXECUTED",
+    "maximum_assurance_credit": false,
+    "next_ticket": "REM-MODELS-001"
+  }
+}

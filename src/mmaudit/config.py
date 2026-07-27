@@ -28,7 +28,10 @@ from mmaudit.models.schemas import (
     OracleInfluenceCapability,
     TransactionOrderingCapability,
 )
-from mmaudit.operator_secrets import RESERVED_OPERATOR_CONTROL_PLANE_NAMES
+from mmaudit.operator_secrets import (
+    COST_LEDGER_PATH_VARIABLE,
+    RESERVED_OPERATOR_CONTROL_PLANE_NAMES,
+)
 
 
 class ConfigError(ValueError):
@@ -120,12 +123,29 @@ class ExecutionConfig(ConfigModel):
     request_timeout_seconds: float = Field(default=180, gt=0, le=900)
     scanner_timeout_seconds: float = Field(default=900, gt=0, le=3_600)
     max_model_retries: int = Field(default=2, ge=0, le=5)
-    max_json_repair_attempts: int = Field(default=1, ge=0, le=1)
-    budget_usd: float = Field(default=20.0, gt=0)
+    max_json_repair_attempts: int = Field(default=0, ge=0, le=1)
+    budget_usd: float = Field(default=20.0, gt=0, le=250.0)
+    cost_ledger_path: str | None = None
     max_request_bytes: int = Field(default=4_000_000, ge=1_024)
     max_output_tokens_per_request: int = Field(default=4_096, ge=256, le=65_536)
     max_requests_per_agent: int = Field(default=2, ge=1, le=10)
     conservative_usd_per_million_tokens: float = Field(default=60.0, gt=0)
+
+    @field_validator("cost_ledger_path")
+    @classmethod
+    def cost_ledger_is_an_explicit_absolute_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        path = Path(value)
+        if (
+            not value
+            or "\x00" in value
+            or len(value) > 4_096
+            or not path.is_absolute()
+            or path.name in {"", ".", ".."}
+        ):
+            raise ValueError("execution cost ledger path must be an absolute file path")
+        return value
 
 
 class DependencyPreparationConfig(ConfigModel):
@@ -591,6 +611,7 @@ _MODEL_QUALITY_MINIMUM_SCORE: dict[str, float] = {
 }
 _MODEL_IDENTIFIER = re.compile(r"[^\s/]+/[^\s/]+")
 _SHA256_IDENTIFIER = re.compile(r"sha256:[0-9a-f]{64}")
+_PROVIDER_ENDPOINT_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}")
 
 
 class ModelLineageConfig(ConfigModel):
@@ -680,10 +701,47 @@ class ModelRoleConfig(ConfigModel):
         return values
 
 
+class ModelProviderPolicyConfig(ConfigModel):
+    """Explicit OpenRouter endpoint routing policy with no implicit fallback."""
+
+    only: tuple[str, ...] = ()
+    order: tuple[str, ...] = ()
+    allow_fallbacks: bool = False
+
+    @field_validator("only", "order")
+    @classmethod
+    def provider_endpoints_are_exact_and_unique(
+        cls,
+        values: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        cleaned = tuple(value.strip() for value in values)
+        if any(not _PROVIDER_ENDPOINT_IDENTIFIER.fullmatch(value) for value in cleaned) or len(
+            cleaned
+        ) != len(set(cleaned)):
+            raise ValueError("provider endpoint slugs must be exact, safe, and unique")
+        return cleaned
+
+    @model_validator(mode="after")
+    def routing_modes_are_unambiguous(self) -> ModelProviderPolicyConfig:
+        if self.only and self.order:
+            raise ValueError("provider routing may configure only or order, not both")
+        return self
+
+
+class ModelReasoningConfig(ConfigModel):
+    """Bounded provider reasoning controls applied only when configured."""
+
+    effort: Literal["minimal", "low", "medium", "high", "xhigh"] | None = None
+    max_tokens: int | None = Field(default=None, ge=1, le=65_536)
+    exclude: bool = False
+
+
 class ModelsConfig(ConfigModel):
     minimum_distinct_families: int = Field(default=3, ge=3)
     minimum_high_quality_slots: int = Field(default=0, ge=0, le=64)
     allow_non_independent_models: bool = False
+    provider_policy: ModelProviderPolicyConfig = Field(default_factory=ModelProviderPolicyConfig)
+    reasoning: ModelReasoningConfig = Field(default_factory=ModelReasoningConfig)
     registry: tuple[ModelLineageConfig, ...] = ()
     threat_model: ModelRoleConfig
     source_audit: ModelRoleConfig
@@ -794,6 +852,8 @@ class AuditConfig(ConfigModel):
 
         if self.profile is not AuditProfile.MAXIMUM_ASSURANCE:
             return self
+        privacy = self.privacy.model_copy(update={"require_zdr": True})
+        execution = self.execution.model_copy(update={"max_json_repair_attempts": 0})
         smart_contracts = self.smart_contracts.model_copy(
             update={
                 "enabled": True,
@@ -901,6 +961,9 @@ class AuditConfig(ConfigModel):
                     if maximum_assurance.allow_downgrade
                     else max(8, self.models.minimum_high_quality_slots)
                 ),
+                "provider_policy": self.models.provider_policy.model_copy(
+                    update={"allow_fallbacks": False}
+                ),
             }
         )
         scanners = self.scanners.model_copy(
@@ -924,6 +987,8 @@ class AuditConfig(ConfigModel):
         return self.model_copy(
             update={
                 "scope": scope,
+                "privacy": privacy,
+                "execution": execution,
                 "smart_contracts": smart_contracts,
                 "reproduction": reproduction,
                 "quality_gates": quality_gates,
@@ -1120,6 +1185,7 @@ def _set_nested(data: dict[str, Any], path: tuple[str, ...], value: Any) -> None
 def _environment_overrides(data: dict[str, Any], environ: Mapping[str, str]) -> None:
     mappings: dict[str, tuple[tuple[str, ...], type[Any]]] = {
         "MMAUDIT_BUDGET_USD": (("execution", "budget_usd"), float),
+        COST_LEDGER_PATH_VARIABLE: (("execution", "cost_ledger_path"), str),
         "MMAUDIT_CONCURRENCY": (("execution", "concurrency"), int),
         "MMAUDIT_MAX_REQUEST_BYTES": (("execution", "max_request_bytes"), int),
         "MMAUDIT_MAX_FILES": (("repository", "max_files"), int),

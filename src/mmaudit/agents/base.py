@@ -14,6 +14,7 @@ from mmaudit.models.schemas import (
     ModelVote,
     ThreatModel,
 )
+from mmaudit.models.usage import is_creditable_usage_record
 from mmaudit.orchestration.context import render_context
 
 
@@ -74,7 +75,7 @@ class FindingAgent(AgentBase):
             (
                 record
                 for record in reversed(self.client.usage.records)
-                if record.role == self.role and record.status == "success"
+                if record.role == self.role and is_creditable_usage_record(record)
             ),
             None,
         )

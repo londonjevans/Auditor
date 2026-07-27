@@ -17,7 +17,7 @@ from mmaudit.benchmark.certificate import (
     CertificateVerificationOrigin,
     CertificateVerificationStatus,
 )
-from mmaudit.config import AuditConfig, model_family
+from mmaudit.config import AuditConfig, model_family, model_lineage_index
 from mmaudit.constants import ALL_SPECIALIST_ROLES, SPECIALIST_INVESTIGATOR_ROLES
 from mmaudit.models.schemas import (
     AnalysisState,
@@ -53,6 +53,7 @@ from mmaudit.models.schemas import (
     SoliditySymbolIndex,
     UsageRecord,
 )
+from mmaudit.models.usage import is_creditable_usage_record
 from mmaudit.orchestration.replay import (
     OfflineReplay,
     OfflineReplayStatus,
@@ -615,6 +616,32 @@ class MaximumAssuranceContract:
             record for record in runtime.model_usage if _is_real_model_usage(record, self.config)
         ]
         real_model_roles = {record.role for record in real_model_records}
+        model_coverage_backed_by_real_usage = _model_coverage_is_backed_by_real_usage(
+            runtime.model_review_coverage,
+            real_model_records,
+            self.config,
+        )
+        if runtime.model_review_coverage is None:
+            model_coverage_detail = "per-surface model review coverage was not produced"
+        elif not model_coverage_backed_by_real_usage:
+            model_coverage_detail = (
+                "model surface credits are not backed by matching "
+                "certification-grade real-provider usage"
+            )
+        else:
+            model_coverage_detail = (
+                f"{runtime.model_review_coverage.critical.numerator}/"
+                f"{runtime.model_review_coverage.critical.denominator} critical "
+                "surface(s) received independent certification-grade "
+                "registered-lineage review"
+            )
+        real_falsifier_lineages = _real_model_usage_lineages(
+            [record for record in real_model_records if _is_falsifier_usage_role(record.role)],
+            self.config,
+        )
+        qualified_falsifier_lineages = (
+            runtime.candidate_falsifier_lineages & real_falsifier_lineages
+        )
         real_specialist_roles = {
             role
             for request_role in real_model_roles
@@ -805,19 +832,15 @@ class MaximumAssuranceContract:
                 bool(real_model_records)
                 and runtime.model_review_coverage is not None
                 and runtime.model_review_coverage.applicable
-                and runtime.model_review_coverage.critical_gate_passed,
-                (
-                    f"{runtime.model_review_coverage.critical.numerator}/"
-                    f"{runtime.model_review_coverage.critical.denominator} critical "
-                    "surface(s) received independent registered-lineage review"
-                    if runtime.model_review_coverage is not None
-                    else "per-surface model review coverage was not produced"
-                ),
+                and runtime.model_review_coverage.critical_gate_passed
+                and model_coverage_backed_by_real_usage,
+                model_coverage_detail,
                 state=(
                     AnalysisState.MODEL_ONLY
                     if real_model_records
                     and runtime.model_review_coverage is not None
                     and runtime.model_review_coverage.applicable
+                    and model_coverage_backed_by_real_usage
                     else AnalysisState.NOT_ANALYZED
                 ),
                 artifacts=_present(runtime.artifacts, "model-review-coverage.json"),
@@ -974,31 +997,18 @@ class MaximumAssuranceContract:
             ),
             _requirement(
                 "independent_falsifier",
-                (
-                    runtime.falsifier_completed
-                    and len(runtime.candidate_falsifier_lineages) >= 2
-                    and any(
-                        role == "falsifier" or role.startswith("candidate_falsifier:")
-                        for role in real_model_roles
-                    )
-                )
+                (runtime.falsifier_completed and len(qualified_falsifier_lineages) >= 2)
                 or not runtime.eligible_high_critical_ids,
                 (
                     "two independent candidate-falsifier lineages completed"
-                    if (
-                        runtime.falsifier_completed
-                        and len(runtime.candidate_falsifier_lineages) >= 2
-                        and any(
-                            role == "falsifier" or role.startswith("candidate_falsifier:")
-                            for role in real_model_roles
-                        )
-                    )
+                    if (runtime.falsifier_completed and len(qualified_falsifier_lineages) >= 2)
                     else (
                         "no eligible high/critical candidate required falsification"
                         if not runtime.eligible_high_critical_ids
                         else (
-                            f"{len(runtime.candidate_falsifier_lineages)} independent "
-                            "candidate-falsifier lineage(s) completed; 2 required"
+                            f"{len(qualified_falsifier_lineages)} independent "
+                            "candidate-falsifier lineage(s) are backed by "
+                            "certification-grade real-provider usage; 2 required"
                         )
                     )
                 ),
@@ -1749,29 +1759,74 @@ def _expected_replay_components(
 
 
 def _is_real_model_usage(record: UsageRecord, config: AuditConfig) -> bool:
-    generation_id = record.routing.get("generation_id")
-    role = canonical_specialist_role(record.role) or record.role
+    role = canonical_specialist_role(record.role) or (
+        "falsifier" if record.role.startswith("candidate_falsifier:") else record.role
+    )
     try:
         configured_role = config.models.role(role)
     except (KeyError, TypeError):
         return False
     configured_models = {configured_role.primary, *configured_role.fallbacks}
+    if record.role.startswith("specialist:falsifier:cross_exam_"):
+        for supporting_role in ("verifier", "judge"):
+            role_config = config.models.role(supporting_role)
+            configured_models.update({role_config.primary, *role_config.fallbacks})
     return (
-        record.execution_evidence is ExecutionEvidenceKind.REAL
-        and record.status == "success"
-        and record.returned_model == record.requested_model
+        is_creditable_usage_record(
+            record,
+            require_real=True,
+            require_certification=True,
+        )
         and record.requested_model in configured_models
-        and bool(record.provider)
-        and isinstance(generation_id, str)
-        and bool(generation_id)
-        and record.routing.get("zdr_requested") is True
-        and record.routing.get("data_collection") == "deny"
-        and _is_sha256(record.prompt_sha256)
-        and _is_sha256(record.response_sha256)
-        and record.prompt_tokens > 0
-        and record.completion_tokens > 0
-        and record.total_tokens >= record.prompt_tokens + record.completion_tokens
     )
+
+
+def _is_falsifier_usage_role(role: str) -> bool:
+    return (
+        role == "falsifier"
+        or role.startswith("candidate_falsifier:")
+        or role == "specialist:falsifier"
+        or role.startswith("specialist:falsifier:")
+    )
+
+
+def _real_model_usage_lineages(
+    records: Iterable[UsageRecord],
+    config: AuditConfig,
+) -> set[str]:
+    lineage_by_model = model_lineage_index(config)
+    return {
+        lineage.root_lineage
+        for record in records
+        if (lineage := lineage_by_model.get(record.requested_model.lower())) is not None
+    }
+
+
+def _model_coverage_is_backed_by_real_usage(
+    coverage: ModelReviewCoverage | None,
+    records: list[UsageRecord],
+    config: AuditConfig,
+) -> bool:
+    if coverage is None:
+        return False
+    lineage_by_model = model_lineage_index(config)
+    lineages_by_role: dict[str, set[str]] = {}
+    for record in records:
+        lineage = lineage_by_model.get(record.requested_model.lower())
+        if lineage is None:
+            continue
+        lineages_by_role.setdefault(record.role, set()).add(lineage.root_lineage)
+    for surface in coverage.surfaces:
+        if not surface.reviewed:
+            continue
+        if any(role not in lineages_by_role for role in surface.reviewer_roles):
+            return False
+        available_lineages = {
+            lineage for role in surface.reviewer_roles for lineage in lineages_by_role[role]
+        }
+        if not set(surface.root_lineages) <= available_lineages:
+            return False
+    return True
 
 
 def _compilation_failure_detail(

@@ -73,7 +73,9 @@ cp mmaudit.example.toml mmaudit.toml
 
 mmaudit doctor
 mmaudit scan --repo ../..
-mmaudit run --repo ../.. --allow-code-egress --budget-usd 20
+mmaudit models init-cost-ledger --cost-ledger /absolute/operator/control/mmaudit-cost-ledger.json
+mmaudit run --repo ../.. --allow-code-egress --budget-usd 20 \
+  --cost-ledger /absolute/operator/control/mmaudit-cost-ledger.json
 ```
 
 This repository is the auditor itself, so local commands normally use `--repo .`.
@@ -200,7 +202,9 @@ mmaudit init
 # Edit exact model IDs and consciously review [privacy].
 mmaudit doctor
 mmaudit scan --repo .
-mmaudit run --repo . --allow-code-egress --budget-usd 20 --fail-on high
+mmaudit models init-cost-ledger --cost-ledger /absolute/operator/control/mmaudit-cost-ledger.json
+mmaudit run --repo . --allow-code-egress --budget-usd 20 --fail-on high \
+  --cost-ledger /absolute/operator/control/mmaudit-cost-ledger.json
 ```
 
 For the stricter Solidity path, configure `[reproduction].targets`, pin the fork block/chain, point
@@ -212,7 +216,8 @@ mmaudit run --repo . \
   --require-maximum-assurance \
   --compile --run-slither \
   --allow-code-egress --allow-fork \
-  --budget-usd 20
+  --budget-usd 20 \
+  --cost-ledger /absolute/operator/control/mmaudit-cost-ledger.json
 ```
 
 `--changed-since origin/main` restricts prioritization to changed files while retaining surrounding
@@ -245,7 +250,8 @@ compilation only for a repository you intend to analyze:
 
 ```bash
 mmaudit scan --repo . --compile --run-slither
-mmaudit run --repo . --compile --run-slither --allow-code-egress --budget-usd 20
+mmaudit run --repo . --compile --run-slither --allow-code-egress --budget-usd 20 \
+  --cost-ledger /absolute/operator/control/mmaudit-cost-ledger.json
 ```
 
 Useful controls:

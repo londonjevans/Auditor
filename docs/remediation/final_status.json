@@ -15,6 +15,12 @@
     "cost_used_usd": 0.0,
     "real_calls": 0,
     "invalid_calls": 0,
+    "client_control_path": {
+      "status": "COMPLETE_LOCAL_PROTOCOL_VALIDATION",
+      "runtime_artifact": "docs/remediation/runtime/rem_openrouter_001.json",
+      "real_completion_executed": false,
+      "maximum_assurance_credit": false
+    },
     "credential_validation": {
       "status": "PASSED_REAL",
       "endpoint": "https://openrouter.ai/api/v1/key",

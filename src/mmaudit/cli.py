@@ -6,6 +6,7 @@ import asyncio
 import os
 import sys
 import tempfile
+from decimal import Decimal
 from importlib.resources import files
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -50,8 +51,13 @@ from mmaudit.config import (
 )
 from mmaudit.constants import DEFAULT_CONFIG_NAME, VERSION, ExitCode
 from mmaudit.logging import configure_logging
+from mmaudit.models.endpoint_snapshots import (
+    EndpointSnapshotValidationError,
+    validate_openrouter_endpoint_snapshot,
+)
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterError
 from mmaudit.models.registry import ModelRegistry, extract_zdr_model_ids
+from mmaudit.models.runtime import build_openrouter_runtime_controls
 from mmaudit.models.schemas import (
     AuditProfile,
     AuditReport,
@@ -71,6 +77,7 @@ from mmaudit.orchestration.certification import (
     certify_maximum_assurance_run,
     write_maximum_assurance_certification,
 )
+from mmaudit.orchestration.cost_ledger import AtomicCostLedger, CostLedgerError
 from mmaudit.orchestration.pipeline import AuditPipeline, resolve_safe_output_root
 from mmaudit.orchestration.replay import (
     OfflineReplayOrchestrator,
@@ -83,6 +90,7 @@ from mmaudit.orchestration.verification import (
     write_run_verification,
 )
 from mmaudit.repository.discovery import RepositorySafetyError, safe_repository_root
+from mmaudit.repository.secrets import is_sensitive_workspace_name
 from mmaudit.scanners.runner import ScannerRunner
 from mmaudit.snapshots.importer import (
     ReadOnlySnapshotImporter,
@@ -531,7 +539,7 @@ def models_check(
     refresh: Annotated[bool, typer.Option("--refresh", help="Ignore cached metadata.")] = False,
     no_color: Annotated[bool, typer.Option("--no-color")] = False,
 ) -> None:
-    """Verify existence, structured JSON, ZDR, duplicates, and independence."""
+    """Verify exact models, endpoint capabilities, ZDR, duplicates, and independence."""
 
     async def execute() -> None:
         config = load_config(config_path)
@@ -540,12 +548,20 @@ def models_check(
             if not operator_secrets.openrouter_api_key_present:
                 raise ConfigError("OPENROUTER_API_KEY is missing from the operator secret file")
             budget, usage = _budget_and_usage(config)
+            controls = build_openrouter_runtime_controls(
+                config,
+                certification=False,
+            )
+            if not controls.provider_policy.configured_endpoints:
+                raise ConfigError("models check requires an explicit provider endpoint allowlist")
             client = OpenRouterClient(
                 api_key=operator_secrets.openrouter_api_key,
                 execution=config.execution,
                 privacy=config.privacy,
                 budget=budget,
                 usage=usage,
+                provider_policy=controls.provider_policy,
+                reasoning=controls.reasoning,
             )
             try:
                 registry = ModelRegistry(_cache_path(config_path))
@@ -553,11 +569,10 @@ def models_check(
                 if metadata is None:
                     metadata = await client.list_models()
                     registry.save_cache(metadata)
-                zdr_ids = None
-                if config.privacy.require_zdr:
-                    zdr_ids = extract_zdr_model_ids(await client.list_zdr_endpoints())
-                    if not zdr_ids:
-                        errors.append("ZDR endpoint eligibility could not be verified")
+                zdr_payload = await client.list_zdr_endpoints()
+                zdr_ids = extract_zdr_model_ids(zdr_payload)
+                if not zdr_ids:
+                    errors.append("ZDR endpoint eligibility could not be verified")
                 errors.extend(
                     registry.validate(
                         config,
@@ -566,13 +581,42 @@ def models_check(
                         source_egress_requested=True,
                     )
                 )
+                provider_policy = controls.provider_policy
+                endpoint_snapshots = []
+                if provider_policy.configured_endpoints:
+                    policy_mode: Literal["only", "order"] = (
+                        "only" if provider_policy.only else "order"
+                    )
+                    for model_id in sorted(
+                        set(configured_model_ids(config, include_fallbacks=True))
+                    ):
+                        endpoint_payload = await client.get_model_endpoint_metadata(model_id)
+                        try:
+                            endpoint_snapshots.append(
+                                validate_openrouter_endpoint_snapshot(
+                                    exact_model_id=model_id,
+                                    configured_provider_endpoints=(
+                                        provider_policy.configured_endpoints
+                                    ),
+                                    provider_policy_mode=policy_mode,
+                                    endpoint_payload=endpoint_payload,
+                                    require_zdr=True,
+                                    zdr_payload=zdr_payload,
+                                    reasoning_requested=controls.reasoning is not None,
+                                )
+                            )
+                        except EndpointSnapshotValidationError as exc:
+                            errors.append(
+                                f"exact provider endpoint validation failed for {model_id}: {exc}"
+                            )
             finally:
                 await client.close()
         if errors:
             raise ConfigError("; ".join(errors))
         Console(no_color=no_color).print(
             f"[green]Validated {len(configured_model_ids(config, include_fallbacks=True))} "
-            "configured model IDs.[/green]"
+            f"configured model IDs and {len(endpoint_snapshots)} exact endpoint "
+            "snapshots.[/green]"
         )
 
     _run_async_cli(execute)
@@ -597,6 +641,13 @@ def models_benchmark(
         Path,
         typer.Option("--output", help="Destination for the model benchmark report."),
     ] = Path("model-benchmark-results.json"),
+    cost_ledger: Annotated[
+        Path | None,
+        typer.Option(
+            "--cost-ledger",
+            help="Existing operator-controlled cumulative paid-provider ledger.",
+        ),
+    ] = None,
     allow_code_egress: Annotated[
         bool,
         typer.Option(
@@ -617,18 +668,56 @@ def models_benchmark(
             targets,
             explicitly_allowed=allow_code_egress,
         )
+        ledger_path = _selected_cost_ledger_path(config, cost_ledger)
+        if ledger_path is None:
+            raise ConfigError(
+                "models benchmark requires an existing --cost-ledger initialized "
+                "with models init-cost-ledger or execution.cost_ledger_path"
+            )
+        budget, usage = _budget_and_usage(
+            config,
+            ledger_path=ledger_path,
+            require_endpoint_cost_bound=True,
+        )
+        assert budget.atomic_ledger is not None
+        _preflight_model_benchmark_output(output, budget.atomic_ledger)
+        controls = build_openrouter_runtime_controls(
+            config,
+            certification=True,
+        )
         with load_operator_secrets(secrets_env_file, required=True) as operator_secrets:
             if not operator_secrets.openrouter_api_key_present:
                 raise ConfigError("OPENROUTER_API_KEY is missing from the operator secret file")
-            budget, usage = _budget_and_usage(config)
             client = OpenRouterClient(
                 api_key=operator_secrets.openrouter_api_key,
                 execution=config.execution,
                 privacy=config.privacy,
                 budget=budget,
                 usage=usage,
+                provider_policy=controls.provider_policy,
+                reasoning=controls.reasoning,
             )
             try:
+                zdr_payload = await client.list_zdr_endpoints()
+                policy_mode: Literal["only", "order"] = (
+                    "only" if controls.provider_policy.only else "order"
+                )
+                for target in targets:
+                    endpoint_payload = await client.get_model_endpoint_metadata(target.model_id)
+                    endpoint_snapshot = validate_openrouter_endpoint_snapshot(
+                        exact_model_id=target.model_id,
+                        configured_provider_endpoints=(
+                            controls.provider_policy.configured_endpoints
+                        ),
+                        provider_policy_mode=policy_mode,
+                        endpoint_payload=endpoint_payload,
+                        require_zdr=True,
+                        zdr_payload=zdr_payload,
+                        reasoning_requested=controls.reasoning is not None,
+                    )
+                    client.register_certification_endpoint_snapshot(
+                        evidence=endpoint_snapshot,
+                    )
                 report = await run_model_benchmark(
                     corpus=benchmark_corpus,
                     targets=targets,
@@ -646,6 +735,34 @@ def models_benchmark(
         local_console.print(f"Result: {output.resolve()}")
 
     _run_async_cli(execute)
+
+
+@models_app.command("init-cost-ledger")
+def models_init_cost_ledger(
+    cost_ledger: Annotated[
+        Path,
+        typer.Option(
+            "--cost-ledger",
+            help="New absolute path for the cumulative paid-provider cost ledger.",
+        ),
+    ],
+    config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Initialize one cumulative paid-provider ledger exactly once."""
+
+    try:
+        config = load_config(config_path)
+        AtomicCostLedger.initialize(
+            cost_ledger,
+            cap_usd=Decimal(str(config.execution.budget_usd)),
+        )
+    except (ConfigError, CostLedgerError, OSError, ValueError) as exc:
+        Console(no_color=no_color).print(f"[red]mmaudit failed safely:[/red] {exc}")
+        raise typer.Exit(ExitCode.CONFIGURATION) from exc
+    Console(no_color=no_color).print(
+        "[green]Initialized cumulative paid-provider cost ledger.[/green]"
+    )
 
 
 @app.command("scan")
@@ -777,6 +894,7 @@ def scan_command(
         repo=repo,
         output=output,
         budget_usd=None,
+        cost_ledger=None,
         max_files=None,
         max_file_bytes=None,
         max_context_bytes=None,
@@ -823,6 +941,13 @@ def run_command(
     repo: Annotated[Path | None, typer.Option("--repo")] = None,
     output: Annotated[Path | None, typer.Option("--output")] = None,
     budget_usd: Annotated[float | None, typer.Option("--budget-usd", min=0.01)] = None,
+    cost_ledger: Annotated[
+        Path | None,
+        typer.Option(
+            "--cost-ledger",
+            help="Existing operator-controlled cumulative paid-provider ledger.",
+        ),
+    ] = None,
     max_files: Annotated[int | None, typer.Option("--max-files", min=1)] = None,
     max_file_bytes: Annotated[int | None, typer.Option("--max-file-bytes", min=1)] = None,
     max_context_bytes: Annotated[int | None, typer.Option("--max-context-bytes", min=1)] = None,
@@ -956,6 +1081,7 @@ def run_command(
         repo=repo,
         output=output,
         budget_usd=budget_usd,
+        cost_ledger=cost_ledger,
         max_files=max_files,
         max_file_bytes=max_file_bytes,
         max_context_bytes=max_context_bytes,
@@ -1438,6 +1564,7 @@ def _execute_audit(
     repo: Path | None,
     output: Path | None,
     budget_usd: float | None,
+    cost_ledger: Path | None,
     max_files: int | None,
     max_file_bytes: int | None,
     max_context_bytes: int | None,
@@ -1476,8 +1603,6 @@ def _execute_audit(
     operator_secrets = OperatorSecrets()
     pipeline: AuditPipeline | None = None
     try:
-        if not scanner_only:
-            operator_secrets = load_operator_secrets(secrets_env_file, required=True)
         config = load_config(config_path)
         config = _apply_overrides(
             config,
@@ -1507,6 +1632,19 @@ def _execute_audit(
             project_root=project_root,
             fork_rpc_url_env=fork_rpc_url_env,
         )
+        campaign_ledger: AtomicCostLedger | None = None
+        if not scanner_only:
+            ledger_path = _selected_cost_ledger_path(config, cost_ledger)
+            if ledger_path is None:
+                raise ConfigError(
+                    "provider audit requires an existing --cost-ledger initialized "
+                    "with models init-cost-ledger"
+                )
+            campaign_ledger = AtomicCostLedger.open_existing(
+                ledger_path,
+                cap_usd=Decimal(str(config.execution.budget_usd)),
+            )
+            operator_secrets = load_operator_secrets(secrets_env_file, required=True)
         benchmark_required = (
             config.maximum_assurance.benchmark_gate or config.maximum_assurance.ci_mode
         )
@@ -1560,6 +1698,7 @@ def _execute_audit(
             config,
             repo=repo_path,
             output=output_path,
+            cost_ledger=campaign_ledger,
             api_key=operator_secrets.openrouter_api_key,
             logger=logger,
         )
@@ -1592,7 +1731,14 @@ def _execute_audit(
         operator_secrets.clear()
 
 
-SecretlessErrors = (ConfigError, RepositorySafetyError, OpenRouterError, OSError, ValueError)
+SecretlessErrors = (
+    ConfigError,
+    CostLedgerError,
+    RepositorySafetyError,
+    OpenRouterError,
+    OSError,
+    ValueError,
+)
 
 
 def _apply_overrides(
@@ -1737,7 +1883,12 @@ def platform_python() -> str:
     return f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
 
 
-def _budget_and_usage(config: AuditConfig) -> tuple[BudgetManager, UsageLedger]:
+def _budget_and_usage(
+    config: AuditConfig,
+    *,
+    ledger_path: Path | None = None,
+    require_endpoint_cost_bound: bool = False,
+) -> tuple[BudgetManager, UsageLedger]:
     return (
         BudgetManager(
             total_usd=config.execution.budget_usd,
@@ -1746,9 +1897,64 @@ def _budget_and_usage(config: AuditConfig) -> tuple[BudgetManager, UsageLedger]:
                 config.execution.conservative_usd_per_million_tokens
             ),
             max_requests_per_agent=config.execution.max_requests_per_agent,
+            atomic_ledger=(
+                AtomicCostLedger.open_existing(
+                    ledger_path,
+                    cap_usd=Decimal(str(config.execution.budget_usd)),
+                )
+                if ledger_path is not None
+                else None
+            ),
+            require_endpoint_cost_bound=require_endpoint_cost_bound,
         ),
         UsageLedger(),
     )
+
+
+def _selected_cost_ledger_path(
+    config: AuditConfig,
+    override: Path | None,
+) -> Path | None:
+    if override is not None:
+        return override
+    configured = config.execution.cost_ledger_path
+    return Path(configured) if configured is not None else None
+
+
+def _preflight_model_benchmark_output(
+    output: Path,
+    ledger: AtomicCostLedger,
+) -> None:
+    """Prove a paid benchmark can persist its report without touching budget state."""
+
+    output_parent = output.absolute().parent
+    output_parent.mkdir(parents=True, exist_ok=True)
+    if is_sensitive_workspace_name(output.name):
+        raise ConfigError("refusing a sensitive model benchmark output filename")
+    candidate = output.absolute().resolve(strict=False)
+    protected = {
+        ledger.path.resolve(strict=True),
+        ledger.lock_path.resolve(strict=True),
+    }
+    if candidate in protected:
+        raise ConfigError("model benchmark output must be distinct from cost-ledger state")
+    if output.exists():
+        if output.is_symlink() or output.is_junction():
+            raise ConfigError("model benchmark output may not be a link")
+        metadata = output.stat()
+        if not output.is_file() or metadata.st_nlink != 1:
+            raise ConfigError("model benchmark output must be an unshared regular file")
+        if any(output.samefile(path) for path in protected):
+            raise ConfigError("model benchmark output must be distinct from cost-ledger state")
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=output_parent,
+            prefix=".mmaudit-model-benchmark-preflight-",
+            delete=True,
+        ):
+            pass
+    except OSError as exc:
+        raise ConfigError("model benchmark output directory is not writable") from exc
 
 
 def _cache_path(config_path: Path) -> Path:
@@ -1769,12 +1975,18 @@ async def _model_metadata(
     if cached is not None:
         return cached
     budget, usage = _budget_and_usage(config)
+    controls = build_openrouter_runtime_controls(
+        config,
+        certification=False,
+    )
     client = OpenRouterClient(
         api_key=api_key,
         execution=config.execution,
         privacy=config.privacy,
         budget=budget,
         usage=usage,
+        provider_policy=controls.provider_policy,
+        reasoning=controls.reasoning,
     )
     try:
         metadata = await client.list_models()
@@ -1787,12 +1999,18 @@ async def _model_metadata(
 def _openrouter_authentication_valid(config: AuditConfig, api_key: str) -> bool:
     async def validate() -> bool:
         budget, usage = _budget_and_usage(config)
+        controls = build_openrouter_runtime_controls(
+            config,
+            certification=False,
+        )
         client = OpenRouterClient(
             api_key=api_key,
             execution=config.execution,
             privacy=config.privacy,
             budget=budget,
             usage=usage,
+            provider_policy=controls.provider_policy,
+            reasoning=controls.reasoning,
         )
         try:
             await client.validate_authentication()
@@ -1811,7 +2029,7 @@ def _openrouter_authentication_valid(config: AuditConfig, api_key: str) -> bool:
 def _run_async_cli(function: Any) -> None:
     try:
         asyncio.run(function())
-    except (ConfigError, OpenRouterError, OSError, ValueError) as exc:
+    except (ConfigError, CostLedgerError, OpenRouterError, OSError, ValueError) as exc:
         console.print(f"[red]mmaudit failed safely:[/red] {exc}")
         raise typer.Exit(ExitCode.CONFIGURATION) from exc
 

@@ -321,7 +321,6 @@ class FakeOpenRouter:
     requests: list[dict[str, Any]] = field(default_factory=list)
     extra_model_ids: list[str] = field(default_factory=list)
     chat_calls: int = 0
-    repaired_roles: list[str] = field(default_factory=list)
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/models"):
@@ -339,12 +338,23 @@ class FakeOpenRouter:
                     ]
                 },
             )
+        if "/models/" in request.url.path and request.url.path.endswith("/endpoints"):
+            model = request.url.path.split("/models/", 1)[1].removesuffix("/endpoints")
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "id": model,
+                        "endpoints": [self._endpoint_record(model)],
+                    }
+                },
+            )
         if request.url.path.endswith("/endpoints/zdr"):
             data = (
                 []
                 if self.mode == "zdr_failure"
                 else [
-                    {"model_id": model, "provider": "synthetic"}
+                    self._endpoint_record(model)
                     for model in [*MODEL_IDS.values(), *self.extra_model_ids]
                 ]
             )
@@ -357,16 +367,13 @@ class FakeOpenRouter:
         self.requests.append(body)
         schema_name = body["response_format"]["json_schema"]["name"]
         role = schema_name.removeprefix("mmaudit_").removesuffix("_findings")
-        is_repair = "JSON repair function" in body["messages"][0]["content"]
 
         if self.mode == "authentication_failure":
             return httpx.Response(401, json={"error": {"message": "synthetic auth failure"}})
-        if self.mode == "timeout" and role == self.role and not is_repair:
+        if self.mode == "timeout" and role == self.role:
             raise httpx.ReadTimeout("synthetic timeout", request=request)
-        if self.mode == "invalid_json" and role == self.role and not is_repair:
+        if self.mode == "invalid_json" and role == self.role:
             return self._completion(body, "not valid json")
-        if is_repair:
-            self.repaired_roles.append(role)
 
         if schema_name == "mmaudit_threat_model":
             content: Any = _threat_model()
@@ -645,19 +652,71 @@ class FakeOpenRouter:
         return self._completion(body, json.dumps(content, sort_keys=True))
 
     @staticmethod
+    def _endpoint_record(model: str) -> dict[str, Any]:
+        return {
+            "model_id": model,
+            "tag": "synthetic-provider",
+            "provider_name": "Synthetic Provider",
+            "status": 0,
+            "context_length": 200_000,
+            "max_prompt_tokens": 180_000,
+            "max_completion_tokens": 20_000,
+            "supported_parameters": ["max_tokens", "response_format", "temperature"],
+            "pricing": {
+                "prompt": "0.0000001",
+                "completion": "0.000001",
+                "request": "0",
+            },
+        }
+
+    @staticmethod
     def _completion(body: dict[str, Any], content: str) -> httpx.Response:
         return httpx.Response(
             200,
+            headers={"X-Generation-Id": "synthetic-generation"},
             json={
                 "id": "synthetic-generation",
                 "model": body["model"],
-                "provider": "synthetic-provider",
-                "choices": [{"message": {"content": content}}],
+                "provider": "Synthetic Provider",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "native_finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": content,
+                        },
+                    }
+                ],
                 "usage": {
                     "prompt_tokens": 100,
                     "completion_tokens": 50,
                     "total_tokens": 150,
                     "cost": 0.001,
+                },
+                "openrouter_metadata": {
+                    "requested": body["model"],
+                    "strategy": "direct",
+                    "attempt": 1,
+                    "endpoints": {
+                        "total": 1,
+                        "available": [
+                            {
+                                "provider": "Synthetic Provider",
+                                "model": body["model"],
+                                "selected": True,
+                            }
+                        ],
+                    },
+                    "attempts": [
+                        {
+                            "provider": "Synthetic Provider",
+                            "model": body["model"],
+                            "status": 200,
+                        }
+                    ],
+                    "pipeline": [],
                 },
             },
         )

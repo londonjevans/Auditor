@@ -27,6 +27,7 @@ from mmaudit.models.schemas import (
     SoliditySymbolIndex,
     UsageRecord,
 )
+from mmaudit.models.usage import is_creditable_usage_record
 
 _CALL_GRAPHS = frozenset(
     {
@@ -214,7 +215,13 @@ def _successful_review_contexts(
 ) -> list[_ReviewContext]:
     lineage_by_model = model_lineage_index(config)
     results: list[_ReviewContext] = []
-    successful = [record for record in usage_records if record.status == "success"]
+    successful = [
+        record for record in usage_records if is_creditable_usage_record(record, require_real=True)
+    ]
+    if any(
+        is_creditable_usage_record(record) and record not in successful for record in usage_records
+    ):
+        limitations.add("mock model usage was excluded from substantive model-review coverage")
     for package in contexts:
         tokens = _context_tokens(package)
         for record in successful:

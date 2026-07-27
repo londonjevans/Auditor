@@ -14,7 +14,7 @@ from mmaudit.benchmark.certificate import (
     CertificateVerificationStatus,
     FileBackedBenchmarkVerificationEvidence,
 )
-from mmaudit.config import validate_model_independence
+from mmaudit.config import model_lineage_index, validate_model_independence
 from mmaudit.constants import ALL_SPECIALIST_ROLES, SPECIALIST_INVESTIGATOR_ROLES
 from mmaudit.models.schemas import (
     AnalysisState,
@@ -49,6 +49,7 @@ from mmaudit.models.schemas import (
     InvariantTemplate,
     Location,
     MaximumAssuranceStatus,
+    ModelRequestValidationStatus,
     ModelReviewCoverage,
     ModelReviewSurface,
     ModelReviewSurfaceKind,
@@ -187,7 +188,12 @@ def _complete_model_coverage() -> ModelReviewCoverage:
             )
         ],
         reviewer_roles=["business_logic", "source_audit"],
-        root_lineages=["sha256:" + ("a" * 64), "sha256:" + ("b" * 64)],
+        root_lineages=sorted(
+            {
+                "sha256:" + hashlib.sha256(b"lineage:bravo/borealis-secure").hexdigest(),
+                "sha256:" + hashlib.sha256(b"lineage:charlie/cirrus-secure").hexdigest(),
+            }
+        ),
         reviewed=True,
     )
     return ModelReviewCoverage(
@@ -365,13 +371,45 @@ def _real_model_usage(now: datetime) -> list[UsageRecord]:
             prompt_tokens=100,
             completion_tokens=100,
             total_tokens=200,
+            reported_cost_usd=0.01,
+            accounted_cost_usd=0.01,
             routing={
                 "generation_id": f"generation-{index:02d}",
+                "selected_provider_endpoint": "approved-provider",
+                "router_strategy": "direct",
+                "router_attempt": 1,
+                "router_attempt_count": 1,
+                "router_pipeline": [],
+                "finish_reason": "stop",
+                "schema_sha256": "d" * 64,
+                "router_metadata_sha256": "e" * 64,
+                "provider_policy_sha256": "f" * 64,
+                "provider_fallbacks_allowed": False,
+                "certification_request": True,
+                "endpoint_snapshot_sha256": "1" * 64,
+                "endpoint_pricing_sha256": "2" * 64,
+                "validation_status": "valid",
                 "zdr_requested": True,
                 "data_collection": "deny",
+                "repair_used": False,
+                "repair_request": False,
+                "request_started_at": now.isoformat(),
+                "request_ended_at": now.isoformat(),
+                "latency_ms": 0,
             },
             prompt_sha256=hashlib.sha256(f"{role}:prompt".encode()).hexdigest(),
             response_sha256=hashlib.sha256(f"{role}:response".encode()).hexdigest(),
+            request_body_sha256=hashlib.sha256(f"{role}:request".encode()).hexdigest(),
+            schema_sha256="d" * 64,
+            openrouter_generation_id=f"generation-{index:02d}",
+            configured_provider_endpoints=["approved-provider"],
+            actual_provider_endpoint="approved-provider",
+            started_at=now,
+            ended_at=now,
+            latency_ms=0,
+            finish_reason="stop",
+            retry_count=0,
+            validation_status=ModelRequestValidationStatus.VALID,
             status="success",
             attempts=1,
         )
@@ -835,6 +873,34 @@ def test_maximum_assurance_complete_requires_all_runtime_clauses(config_factory)
     )
 
 
+def test_unrelated_real_requests_cannot_back_mock_model_surface_coverage(
+    config_factory,
+) -> None:
+    runtime = _complete_runtime()
+    runtime = replace(
+        runtime,
+        model_usage=[
+            (
+                record.model_copy(update={"execution_evidence": ExecutionEvidenceKind.MOCK})
+                if record.role in {"business_logic", "source_audit"}
+                else record
+            )
+            for record in runtime.model_usage
+        ],
+    )
+
+    assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(runtime)
+    gate = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "critical_model_surface_review"
+    )
+
+    assert not gate.passed
+    assert "not backed by matching certification-grade" in gate.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
 def test_foundry_negative_regression_is_conclusive_engine_execution(config_factory) -> None:
     runtime = _complete_runtime()
     foundry = next(run for run in runtime.scanners if run.scanner == "foundry_fork")
@@ -1120,6 +1186,11 @@ def test_invariant_observation_binds_assurance_consumed_identity_and_economic_fi
             "mock_model_usage",
             "real_model_execution",
             id="mock_models_are_not_real_reviews",
+        ),
+        pytest.param(
+            "non_certification_model_usage",
+            "real_model_execution",
+            id="ordinary_real_calls_are_not_certification_evidence",
         ),
         pytest.param(
             "unconfigured_model_usage",
@@ -1556,6 +1627,21 @@ def test_exact_maximum_assurance_portfolio_fails_closed(
             runtime,
             model_usage=[
                 record.model_copy(update={"execution_evidence": ExecutionEvidenceKind.MOCK})
+                for record in runtime.model_usage
+            ],
+        )
+    elif case == "non_certification_model_usage":
+        runtime = replace(
+            runtime,
+            model_usage=[
+                record.model_copy(
+                    update={
+                        "routing": {
+                            **record.routing,
+                            "certification_request": False,
+                        }
+                    }
+                )
                 for record in runtime.model_usage
             ],
         )
@@ -2323,12 +2409,41 @@ def test_duplicate_candidate_resolutions_fail_closed(config_factory) -> None:
 def test_high_critical_cross_examination_requires_two_lineages(config_factory) -> None:
     config = _maximum_config(config_factory)
     contract = MaximumAssuranceContract(config)
+    lineage_by_model = model_lineage_index(config)
+    template = _complete_runtime().model_usage[0]
+    falsifier_models = [
+        config.models.verifier.primary,
+        config.models.judge.primary,
+    ]
+    falsifier_usage: list[UsageRecord] = []
+    for index, model_id in enumerate(falsifier_models):
+        generation_id = f"generation-cross-exam-{index}"
+        falsifier_usage.append(
+            template.model_copy(
+                update={
+                    "request_id": f"request-cross-exam-{index}",
+                    "role": f"specialist:falsifier:cross_exam_{index}",
+                    "requested_model": model_id,
+                    "returned_model": model_id,
+                    "model_family": model_id,
+                    "openrouter_generation_id": generation_id,
+                    "routing": {
+                        **template.routing,
+                        "generation_id": generation_id,
+                    },
+                }
+            )
+        )
+    falsifier_lineages = [
+        lineage_by_model[model_id.lower()].root_lineage for model_id in falsifier_models
+    ]
     one_lineage = contract.evaluate(
         replace(
             _complete_runtime(),
             eligible_high_critical_ids={"critical-1"},
             falsifier_completed=True,
-            candidate_falsifier_lineages={"sha256:" + ("a" * 64)},
+            candidate_falsifier_lineages={falsifier_lineages[0]},
+            model_usage=[*_complete_runtime().model_usage, falsifier_usage[0]],
         )
     )
     one_lineage_gate = next(
@@ -2343,10 +2458,8 @@ def test_high_critical_cross_examination_requires_two_lineages(config_factory) -
             _complete_runtime(),
             eligible_high_critical_ids={"critical-1"},
             falsifier_completed=True,
-            candidate_falsifier_lineages={
-                "sha256:" + ("a" * 64),
-                "sha256:" + ("b" * 64),
-            },
+            candidate_falsifier_lineages=set(falsifier_lineages),
+            model_usage=[*_complete_runtime().model_usage, *falsifier_usage],
         )
     )
     two_lineage_gate = next(

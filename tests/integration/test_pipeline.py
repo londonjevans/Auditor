@@ -4,6 +4,7 @@ import hashlib
 import json
 import shutil
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from mmaudit.benchmark.certificate import (
 from mmaudit.constants import ALL_SPECIALIST_ROLES, ExitCode
 from mmaudit.isolation.dependencies import dependency_tree_sha256
 from mmaudit.models.openrouter import OpenRouterClient
+from mmaudit.models.runtime import build_openrouter_runtime_controls
 from mmaudit.models.schemas import (
     AuditProfile,
     AuditReport,
@@ -60,6 +62,7 @@ from mmaudit.models.schemas import (
 from mmaudit.models.usage import UsageLedger
 from mmaudit.operator_secrets import load_operator_secrets
 from mmaudit.orchestration.budgets import BudgetManager
+from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.manifest import (
     RunEvidenceManifest,
     canonical_sha256,
@@ -151,6 +154,116 @@ class StaticScannerRunner:
         return []
 
 
+@pytest.mark.asyncio
+async def test_provider_pipeline_requires_existing_cumulative_ledger_before_output(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "provider-output"
+    pipeline = AuditPipeline(
+        config_factory(),
+        repo=vulnerable_repo,
+        output=output,
+        api_key="synthetic-provider-canary",
+        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(ValueError, match="existing cumulative cost ledger"):
+        await pipeline.run(allow_code_egress=True)
+
+    assert not (output / "runs").exists()
+
+
+@pytest.mark.asyncio
+async def test_real_injected_client_cannot_supply_unselected_budget_state(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = config_factory()
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "client-only-ledger.json",
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    client = OpenRouterClient(
+        api_key="synthetic-provider-canary",
+        execution=config.execution,
+        privacy=config.privacy,
+        budget=BudgetManager(
+            total_usd=config.execution.budget_usd,
+            max_output_tokens=config.execution.max_output_tokens_per_request,
+            conservative_usd_per_million_tokens=(
+                config.execution.conservative_usd_per_million_tokens
+            ),
+            max_requests_per_agent=config.execution.max_requests_per_agent,
+            atomic_ledger=ledger,
+            require_endpoint_cost_bound=True,
+        ),
+        usage=UsageLedger(),
+    )
+    output = tmp_path / "provider-output"
+    pipeline = AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=output,
+        client=client,
+        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+    )
+    try:
+        with pytest.raises(ValueError, match="selected cumulative cost ledger"):
+            await pipeline.run(allow_code_egress=True)
+    finally:
+        await client.close()
+
+    assert not (output / "runs").exists()
+
+
+@pytest.mark.asyncio
+async def test_real_injected_client_must_match_effective_provider_controls(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = config_factory()
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "campaign-ledger.json",
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    client = OpenRouterClient(
+        api_key="synthetic-provider-canary",
+        execution=config.execution,
+        privacy=config.privacy,
+        budget=BudgetManager(
+            total_usd=config.execution.budget_usd,
+            max_output_tokens=config.execution.max_output_tokens_per_request,
+            conservative_usd_per_million_tokens=(
+                config.execution.conservative_usd_per_million_tokens
+            ),
+            max_requests_per_agent=config.execution.max_requests_per_agent,
+            atomic_ledger=ledger,
+            require_endpoint_cost_bound=True,
+        ),
+        usage=UsageLedger(),
+    )
+    output = tmp_path / "provider-output"
+    pipeline = AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=output,
+        client=client,
+        cost_ledger=ledger,
+        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+    )
+    try:
+        with pytest.raises(ValueError, match="effective audit controls"):
+            await pipeline.run(allow_code_egress=True)
+    finally:
+        await client.close()
+
+    assert not (output / "runs").exists()
+
+
 def _current_benchmark_verification() -> BenchmarkCertificateVerification:
     payload = {
         "schema_version": "1.0",
@@ -194,6 +307,7 @@ def _provider(
         conservative_usd_per_million_tokens=(config.execution.conservative_usd_per_million_tokens),
         max_requests_per_agent=config.execution.max_requests_per_agent,
     )
+    controls = build_openrouter_runtime_controls(config, certification=False)
     return (
         OpenRouterClient(
             api_key=api_key,
@@ -202,6 +316,8 @@ def _provider(
             budget=budget,
             usage=usage,
             http_client=http_client,
+            provider_policy=controls.provider_policy,
+            reasoning=controls.reasoning,
         ),
         http_client,
     )
@@ -976,7 +1092,11 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
     model_coverage = ModelReviewCoverage.model_validate(model_coverage_payload["coverage"])
     assert result.report.model_review_coverage == model_coverage
     assert {surface.kind for surface in model_coverage.surfaces} == set(ModelReviewSurfaceKind)
-    assert 0 < model_coverage.overall.numerator < model_coverage.overall.denominator
+    assert model_coverage.overall.numerator == 0
+    assert model_coverage.overall.denominator > 0
+    assert "mock model usage was excluded from substantive model-review coverage" in (
+        model_coverage.limitations
+    )
     assert not model_coverage.critical_gate_passed
     assert all(
         surface.reviewed == bool(surface.reviewer_roles and surface.root_lineages)
@@ -2340,15 +2460,19 @@ async def test_one_model_timeout_preserves_partial_report(
 
 
 @pytest.mark.asyncio
-async def test_invalid_model_json_gets_one_repair(
+async def test_invalid_model_json_fails_without_repair_or_credit(
     config_factory, vulnerable_repo: Path, tmp_path: Path
 ) -> None:
     config = config_factory(privacy={"fail_on_detected_secret": False})
     fake = FakeOpenRouter(mode="invalid_json", role="source_audit")
     result = await _run(config, vulnerable_repo, tmp_path, fake)
-    assert result.exit_code is ExitCode.SUCCESS
-    assert fake.repaired_roles == ["source_audit"]
-    assert any(record.role == "source_audit:json_repair" for record in result.report.usage)
+    assert result.exit_code is ExitCode.MODEL_FAILURE
+    assert not result.report.completed
+    assert not any(record.role == "source_audit:json_repair" for record in result.report.usage)
+    assert not any(
+        record.role == "source_audit" and record.status == "success"
+        for record in result.report.usage
+    )
 
 
 @pytest.mark.asyncio

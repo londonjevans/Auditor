@@ -83,7 +83,13 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   cannot exceed `250.00 USD`; malformed, truncated, mismatched, timed-out,
   rate-limited, and unavailable responses never count as reviews.
 - **Dependencies:** `EVAL-DEFECT-004`.
-- **Status:** `IN_PROGRESS`
+- **Status:** `COMPLETE`
+- **Runtime artifact:** `docs/remediation/runtime/rem_openrouter_001.json`.
+- **Real integration boundary:** Protocol, routing, validation, cost-ledger, and
+  fail-closed behavior are covered by deterministic local tests. No paid
+  completion was executed or credited; exact-model provider execution remains
+  tracked by `REM-MODELS-001`.
+- **Next action:** None; continue with `REM-MODELS-001`.
 
 ## REM-MODELS-001 — Production model registry and qualification
 
@@ -98,7 +104,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   lineage mapping is mandatory; production selection is `all_eligible_tier_a`;
   minimum certified ensemble counts are enforced from completed real requests.
 - **Dependencies:** `REM-OPENROUTER-001`.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
+- **Next action:** Freeze the exact candidate-registry and qualification schemas,
+  then implement non-empty, artifact-bound discovery, benchmark, qualification,
+  and verification commands before any paid model call.
 
 ## EVAL-DEFECT-005 — Context delivery is credited as model review
 

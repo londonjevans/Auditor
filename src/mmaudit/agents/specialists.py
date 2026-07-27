@@ -28,6 +28,7 @@ from mmaudit.models.schemas import (
     SpecialistExecutionStatus,
     UsageRecord,
 )
+from mmaudit.models.usage import is_creditable_usage_record
 from mmaudit.orchestration.context import render_context
 
 
@@ -467,7 +468,7 @@ def build_specialist_execution_records(
             (package for package in contexts if package.role == request_prefix),
             None,
         )
-        successful_requests = sum(record.status == "success" for record in role_usage)
+        successful_requests = sum(is_creditable_usage_record(record) for record in role_usage)
         failed_requests = len(role_usage) - successful_requests
         configured = role in configured_roles
         if not configured:
@@ -539,7 +540,7 @@ class SpecialistFindingAgent:
             (
                 record
                 for record in reversed(self.client.usage.records)
-                if record.role == request_role and record.status == "success"
+                if record.role == request_role and is_creditable_usage_record(record)
             ),
             None,
         )

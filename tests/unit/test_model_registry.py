@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -141,3 +144,53 @@ def test_measured_quality_tier_rejects_unqualified_score() -> None:
 
     with pytest.raises(ValidationError, match=r"requires score >= 0\.75"):
         AuditConfig.model_validate(data)
+
+
+def test_model_metadata_cache_is_source_and_hash_bound(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "openrouter-models.json"
+    registry = ModelRegistry(path)
+    models = _metadata(config_factory())
+
+    registry.save_cache(models)
+
+    assert registry.load_cache() == models
+    assert path.stat().st_mode & 0o077 == 0
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["source_base_url"] == "https://openrouter.ai/api/v1"
+    assert len(payload["models_sha256"]) == 64
+
+
+@pytest.mark.parametrize("mutation", ["future", "hash", "source", "extra"])
+def test_model_metadata_cache_rejects_untrusted_envelopes(
+    config_factory,
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    path = tmp_path / "openrouter-models.json"
+    registry = ModelRegistry(path)
+    registry.save_cache(_metadata(config_factory()))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if mutation == "future":
+        payload["cached_at"] = (datetime.now(UTC) + timedelta(days=1)).isoformat()
+    elif mutation == "hash":
+        payload["models_sha256"] = "0" * 64
+    elif mutation == "source":
+        payload["source_base_url"] = "https://untrusted.invalid/api/v1"
+    else:
+        payload["untrusted"] = True
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert registry.load_cache() is None
+
+
+def test_model_metadata_cache_rejects_duplicate_json_keys(tmp_path: Path) -> None:
+    path = tmp_path / "openrouter-models.json"
+    path.write_text(
+        '{"schema_version":"1.0","schema_version":"1.0"}',
+        encoding="utf-8",
+    )
+
+    assert ModelRegistry(path).load_cache() is None
