@@ -2,7 +2,7 @@
   "schema_version": "1.0",
   "ticket_id": "REM-OPENROUTER-001",
   "baseline_commit": "e304807cf942542706b88544fa216516f8f95cad",
-  "implementation_commit": null,
+  "implementation_commit": "40cb4e7cdf155401618553304cc69623d69fe69f4",
   "executed_at": "2026-07-27T19:26:46Z",
   "implementation": [
     {

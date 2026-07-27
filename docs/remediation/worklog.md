@@ -13,7 +13,7 @@ REMAINING_CODE_DEFECTS: 9
 REMAINING_REAL_INTEGRATIONS: OpenRouter exact-model smoke/qualification/specialist review; certified-isolation Foundry and Slither; Echidna; Medusa; Halmos; formal proof engine; rootless isolation; isolated replay; product benchmark reports
 BLOCKED_EXTERNAL_PREREQUISITES: Echidna, Medusa, Kontrol, Certora, rootless runtime/image, private holdout, and independently adjudicated expert comparison are not yet evidenced as available
 OPENROUTER_COST_USED_USD: 0.00
-LAST_CHECKPOINT_COMMIT: ac71dc0400556f3a8b0b32ed33a1524f448718c7
+LAST_CHECKPOINT_COMMIT: 40cb4e7cdf155401618553304cc69623d69fe69f4
 
 ## Immutable baseline
 
@@ -375,6 +375,7 @@ LAST_CHECKPOINT_COMMIT: ac71dc0400556f3a8b0b32ed33a1524f448718c7
 - **Result:** The OpenRouter control path is locally validated and fail-closed.
   It is not real-provider execution evidence and cannot satisfy the
   maximum-assurance model-review clause by itself.
-- **Exact next safe action:** Checkpoint and push this ticket, then freeze the
-  exact production candidate registry and qualification artifact contract under
+- **Implementation commit:** `40cb4e7cdf155401618553304cc69623d69fe69f4`.
+- **Exact next safe action:** Push the bound checkpoint, then freeze the exact
+  production candidate registry and qualification artifact contract under
   `REM-MODELS-001` before authorizing any paid call.

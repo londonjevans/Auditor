@@ -18,6 +18,7 @@
     "client_control_path": {
       "status": "COMPLETE_LOCAL_PROTOCOL_VALIDATION",
       "runtime_artifact": "docs/remediation/runtime/rem_openrouter_001.json",
+      "checkpoint_commit": "40cb4e7cdf155401618553304cc69623d69fe69f4",
       "real_completion_executed": false,
       "maximum_assurance_credit": false
     },
