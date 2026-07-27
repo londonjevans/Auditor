@@ -313,6 +313,41 @@ def _extract_json(content: str, tag: str) -> Any:
     return json.loads(content.split(start, 1)[1].split(end, 1)[0])
 
 
+def _surface_reviews(
+    user_prompt: str,
+    *,
+    role: str,
+    status: str = "REVIEWED_NO_ISSUE",
+) -> list[dict[str, Any]]:
+    requests = _extract_json(user_prompt, "TRUSTED_MODEL_SURFACE_REQUESTS_JSON")
+    reviews: list[dict[str, Any]] = []
+    for request in requests:
+        allowed_locations = request["allowed_locations"]
+        allowed_symbols = request["allowed_symbols"]
+        symbol = allowed_symbols[0] if allowed_symbols else None
+        location = (
+            None if symbol is not None else (allowed_locations[0] if allowed_locations else None)
+        )
+        reviews.append(
+            {
+                "surface_id": request["surface_id"],
+                "contract": request["contract"],
+                "function_or_state_surface": request["function_or_state_surface"],
+                "review_role": role,
+                "status": status,
+                "rationale": "The synthetic reviewer explicitly considered this supplied surface.",
+                "citation": {
+                    "location": location,
+                    "symbol": symbol,
+                },
+                "invariant_considered": request["invariant_considered"],
+                "assumptions": [],
+                "confidence": 0.9,
+            }
+        )
+    return reviews
+
+
 @dataclass
 class FakeOpenRouter:
     mode: str = "success"
@@ -392,8 +427,12 @@ class FakeOpenRouter:
                     }
                 ]
         elif schema_name == "mmaudit_source_audit_findings":
+            user = body["messages"][1]["content"]
             if self.mode == "maximum_assurance":
-                content = {"findings": []}
+                content = {
+                    "findings": [],
+                    "surface_reviews": _surface_reviews(user, role="source_audit"),
+                }
                 return self._completion(body, json.dumps(content, sort_keys=True))
             path = (
                 "src/Vault.sol"
@@ -409,13 +448,18 @@ class FakeOpenRouter:
                         role="source_audit",
                         path=path,
                     )
-                ]
+                ],
+                "surface_reviews": _surface_reviews(user, role="source_audit"),
             }
             if self.first_pass_canary is not None:
                 content["findings"][0]["summary"] += f" {self.first_pass_canary}"
         elif schema_name == "mmaudit_business_logic_findings":
+            user = body["messages"][1]["content"]
             if self.mode == "maximum_assurance":
-                content = {"findings": []}
+                content = {
+                    "findings": [],
+                    "surface_reviews": _surface_reviews(user, role="business_logic"),
+                }
                 return self._completion(body, json.dumps(content, sort_keys=True))
             content = {
                 "findings": [
@@ -426,11 +470,16 @@ class FakeOpenRouter:
                         role="business_logic",
                         title="User search permits SQL query manipulation",
                     )
-                ]
+                ],
+                "surface_reviews": _surface_reviews(user, role="business_logic"),
             }
         elif schema_name == "mmaudit_configuration_findings":
+            user = body["messages"][1]["content"]
             content = (
-                {"findings": []}
+                {
+                    "findings": [],
+                    "surface_reviews": _surface_reviews(user, role="configuration"),
+                }
                 if self.mode in {"solidity_reproduction", "maximum_assurance"}
                 else {
                     "findings": [
@@ -443,7 +492,8 @@ class FakeOpenRouter:
                             end_line=3,
                             cwe="CWE-489",
                         )
-                    ]
+                    ],
+                    "surface_reviews": _surface_reviews(user, role="configuration"),
                 }
             )
         elif schema_name == "mmaudit_verification":
@@ -577,6 +627,7 @@ class FakeOpenRouter:
             content = _invariant_review(body["messages"][1]["content"])
         elif schema_name.startswith("mmaudit_specialist_"):
             specialist = schema_name.removeprefix("mmaudit_specialist_")
+            user = body["messages"][1]["content"]
             candidate_by_role = {
                 "access_control": _candidate(
                     candidate_id="specialist-access",
@@ -636,7 +687,11 @@ class FakeOpenRouter:
                     [candidate_by_role[specialist]]
                     if self.mode == "maximum_assurance" and specialist in candidate_by_role
                     else []
-                )
+                ),
+                "surface_reviews": _surface_reviews(
+                    user,
+                    role=f"specialist:{specialist}",
+                ),
             }
         elif schema_name == "mmaudit_report_quality_review":
             content = {

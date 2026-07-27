@@ -38,6 +38,8 @@ from mmaudit.models.schemas import (
     MaximumAssuranceRequirement,
     MaximumAssuranceStatus,
     ModelReviewCoverage,
+    ModelSurfaceReviewArtifact,
+    ModelSurfaceReviewStatus,
     ReproductionIntegrityStatus,
     ReproductionResolutionKind,
     ReproductionResult,
@@ -130,6 +132,7 @@ class AssuranceRuntime:
     judge_completed: bool = False
     coverage: SolidityCoverage | None = None
     model_review_coverage: ModelReviewCoverage | None = None
+    model_surface_review_artifacts: list[ModelSurfaceReviewArtifact] = field(default_factory=list)
     model_usage: list[UsageRecord] = field(default_factory=list)
     scope_assessment: AuditScopeAssessment | None = None
     benchmark_verification: BenchmarkCertificateVerification | None = None
@@ -618,7 +621,8 @@ class MaximumAssuranceContract:
         real_model_roles = {record.role for record in real_model_records}
         model_coverage_backed_by_real_usage = _model_coverage_is_backed_by_real_usage(
             runtime.model_review_coverage,
-            real_model_records,
+            runtime.model_usage,
+            runtime.model_surface_review_artifacts,
             self.config,
         )
         if runtime.model_review_coverage is None:
@@ -1805,28 +1809,97 @@ def _real_model_usage_lineages(
 def _model_coverage_is_backed_by_real_usage(
     coverage: ModelReviewCoverage | None,
     records: list[UsageRecord],
+    artifacts: list[ModelSurfaceReviewArtifact],
     config: AuditConfig,
 ) -> bool:
     if coverage is None:
         return False
-    lineage_by_model = model_lineage_index(config)
-    lineages_by_role: dict[str, set[str]] = {}
+
+    usage_by_request: dict[str, list[UsageRecord]] = {}
     for record in records:
-        lineage = lineage_by_model.get(record.requested_model.lower())
-        if lineage is None:
-            continue
-        lineages_by_role.setdefault(record.role, set()).add(lineage.root_lineage)
+        usage_by_request.setdefault(record.request_id, []).append(record)
+    artifacts_by_request: dict[str, list[ModelSurfaceReviewArtifact]] = {}
+    for artifact in artifacts:
+        artifacts_by_request.setdefault(artifact.request_id, []).append(artifact)
+
+    lineage_by_model = model_lineage_index(config)
+    credited_reference_count = 0
     for surface in coverage.surfaces:
-        if not surface.reviewed:
-            continue
-        if any(role not in lineages_by_role for role in surface.reviewer_roles):
+        credited_references = [
+            reference for reference in surface.evidence_references if reference.credited
+        ]
+        if (
+            surface.reviewed != bool(credited_references)
+            or surface.reviewer_roles
+            != sorted({reference.review_role for reference in credited_references})
+            or surface.root_lineages
+            != sorted(
+                {
+                    reference.root_lineage
+                    for reference in credited_references
+                    if reference.root_lineage is not None
+                }
+            )
+        ):
             return False
-        available_lineages = {
-            lineage for role in surface.reviewer_roles for lineage in lineages_by_role[role]
-        }
-        if not set(surface.root_lineages) <= available_lineages:
-            return False
-    return True
+        credited_reference_count += len(credited_references)
+        for reference in credited_references:
+            matching_usage = usage_by_request.get(reference.request_id, [])
+            if len(matching_usage) != 1:
+                return False
+            usage = matching_usage[0]
+            if not _is_real_model_usage(usage, config):
+                return False
+
+            matching_artifacts = artifacts_by_request.get(reference.request_id, [])
+            if len(matching_artifacts) != 1:
+                return False
+            artifact = matching_artifacts[0]
+            if artifact.artifact_sha256 != reference.artifact_sha256:
+                return False
+            try:
+                sealed_artifact = ModelSurfaceReviewArtifact.model_validate(
+                    artifact.model_dump(mode="json")
+                )
+            except ValueError:
+                return False
+
+            matching_records = [
+                record
+                for record in sealed_artifact.records
+                if record.surface_id == reference.surface_id
+            ]
+            if len(matching_records) != 1:
+                return False
+            review_record = matching_records[0]
+            lineage = lineage_by_model.get(usage.requested_model.lower())
+            if lineage is None:
+                return False
+            if lineage.root_lineage not in config.privacy.approved_model_lineages:
+                return False
+            if (
+                reference.surface_id != surface.surface_id
+                or reference.status
+                not in {
+                    ModelSurfaceReviewStatus.CANDIDATE,
+                    ModelSurfaceReviewStatus.REVIEWED_NO_ISSUE,
+                }
+                or reference.status is not review_record.status
+                or reference.review_role != usage.role
+                or reference.review_role != sealed_artifact.review_role
+                or reference.review_role != review_record.review_role
+                or reference.requested_model != usage.requested_model
+                or reference.model != usage.actual_model
+                or reference.root_lineage != lineage.root_lineage
+                or sealed_artifact.request_id != usage.request_id
+                or reference.surface_id not in sealed_artifact.requested_surface_ids
+                or sealed_artifact.prompt_sha256 != usage.prompt_sha256
+                or sealed_artifact.response_sha256 != usage.response_sha256
+                or sealed_artifact.validated_response_sha256 != usage.validated_response_sha256
+                or sealed_artifact.response_schema_sha256 != usage.schema_sha256
+            ):
+                return False
+    return credited_reference_count > 0
 
 
 def _compilation_failure_detail(

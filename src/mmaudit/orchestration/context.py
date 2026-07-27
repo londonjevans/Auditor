@@ -15,6 +15,7 @@ from mmaudit.models.schemas import (
     FormalToolRun,
     InvariantExecutionResult,
     InvariantSuite,
+    ModelSurfaceReviewRequest,
     RepositoryMap,
     ScannerFinding,
     SolidityCompilationResult,
@@ -24,6 +25,7 @@ from mmaudit.models.schemas import (
     SoliditySymbolIndex,
     ThreatModel,
 )
+from mmaudit.orchestration.model_coverage import build_model_surface_requests
 from mmaudit.repository.chunking import chunk_text
 from mmaudit.repository.discovery import DiscoveredFile, DiscoveryResult
 from mmaudit.repository.redaction import SecretSafetyError, detect_secrets, redact_text
@@ -425,9 +427,13 @@ class ContextBuilder:
         threat_model: ThreatModel | None = None,
         requested_budget: int | None = None,
         preferred_paths: set[str] | None = None,
+        requested_model_surfaces: list[ModelSurfaceReviewRequest] | None = None,
+        request_model_surface_reviews: bool = False,
     ) -> ContextPackage:
         """Allocate a package; allocations across a run cannot exceed the total."""
 
+        if request_model_surface_reviews and requested_model_surfaces is not None:
+            raise ContextBudgetError("model surface requests cannot be both derived and supplied")
         default_share = max(
             1, self.repository_config.max_total_context_bytes // self.planned_packages
         )
@@ -440,9 +446,22 @@ class ContextBuilder:
         entity_limit = 500
         graph_edge_limit = 700
         included_threat_model = threat_model
+        selected_model_surfaces = list(requested_model_surfaces or [])
         deterministic_preferred_paths = set(preferred_paths or set())
+        deterministic_preferred_paths.update(
+            location.path
+            for request in selected_model_surfaces
+            for location in request.allowed_locations
+        )
         source_reserve = min(64_000, max(8_192, budget // 4))
         metadata_ceiling = max(1, budget - source_reserve)
+        review_request_mode = bool(selected_model_surfaces) or request_model_surface_reviews
+        if review_request_mode:
+            omissions.append(
+                "bulk deterministic analysis omitted because exact surface requests "
+                "carry the bounded review contract"
+            )
+        minimum_compact_limit = 8 if review_request_mode else 32
         while True:
             compact_map = _compact_map(self.repository_map, role, max_files=file_limit)
             selected_scanners = self.scanner_findings[:scanner_limit]
@@ -458,10 +477,20 @@ class ContextBuilder:
                 max_edges=graph_edge_limit,
                 preferred_paths=deterministic_preferred_paths,
             )
+            if request_model_surface_reviews:
+                selected_model_surfaces = build_model_surface_requests(
+                    index=compact_index,
+                    graphs=compact_graphs,
+                    invariants=self.solidity_invariants,
+                    economic_simulations=self.economic_simulations,
+                )
             base_payload = {
                 "repository_map": compact_map.model_dump(mode="json"),
                 "scanner_findings": [
                     finding.model_dump(mode="json") for finding in selected_scanners
+                ],
+                "requested_model_surfaces": [
+                    request.model_dump(mode="json") for request in selected_model_surfaces
                 ],
                 "threat_model": (
                     included_threat_model.model_dump(mode="json") if included_threat_model else None
@@ -480,30 +509,38 @@ class ContextBuilder:
                 ),
                 "solidity_invariants": (
                     self.solidity_invariants.model_dump(mode="json")
-                    if self.solidity_invariants is not None
+                    if self.solidity_invariants is not None and not review_request_mode
                     else None
                 ),
                 "invariant_executions": [
                     result.model_dump(mode="json") for result in self.invariant_executions
-                ],
+                ]
+                if not review_request_mode
+                else [],
                 "economic_simulations": [
                     plan.model_dump(mode="json") for plan in self.economic_simulations
-                ],
-                "formal_runs": [run.model_dump(mode="json") for run in self.formal_runs],
+                ]
+                if not review_request_mode
+                else [],
+                "formal_runs": (
+                    [run.model_dump(mode="json") for run in self.formal_runs]
+                    if not review_request_mode
+                    else []
+                ),
                 "solidity_coverage": (
                     self.solidity_coverage.model_dump(mode="json")
-                    if self.solidity_coverage is not None
+                    if self.solidity_coverage is not None and not review_request_mode
                     else None
                 ),
             }
             base_bytes = len(json.dumps(base_payload, sort_keys=True).encode()) + 512
             if base_bytes <= metadata_ceiling:
                 break
-            if graph_edge_limit > 32:
-                graph_edge_limit = max(32, graph_edge_limit // 2)
+            if graph_edge_limit > minimum_compact_limit:
+                graph_edge_limit = max(minimum_compact_limit, graph_edge_limit // 2)
                 omissions.append("semantic graph evidence reduced to reserve source-excerpt budget")
-            elif entity_limit > 32:
-                entity_limit = max(32, entity_limit // 2)
+            elif entity_limit > minimum_compact_limit:
+                entity_limit = max(minimum_compact_limit, entity_limit // 2)
                 omissions.append("Solidity symbol index reduced to reserve source-excerpt budget")
             elif scanner_limit:
                 scanner_limit //= 2
@@ -565,6 +602,7 @@ class ContextBuilder:
             repository_map=compact_map,
             scanner_findings=selected_scanners,
             excerpts=excerpts,
+            requested_model_surfaces=selected_model_surfaces,
             threat_model=included_threat_model,
             solidity_projects=self.solidity_projects,
             solidity_compilations=self.solidity_compilations,
@@ -580,11 +618,11 @@ class ContextBuilder:
                 max_edges=graph_edge_limit,
                 preferred_paths=deterministic_preferred_paths,
             ),
-            solidity_invariants=self.solidity_invariants,
-            invariant_executions=self.invariant_executions,
-            economic_simulations=self.economic_simulations,
-            formal_runs=self.formal_runs,
-            solidity_coverage=self.solidity_coverage,
+            solidity_invariants=(None if review_request_mode else self.solidity_invariants),
+            invariant_executions=([] if review_request_mode else self.invariant_executions),
+            economic_simulations=([] if review_request_mode else self.economic_simulations),
+            formal_runs=[] if review_request_mode else self.formal_runs,
+            solidity_coverage=None if review_request_mode else self.solidity_coverage,
             omissions=sorted(set(omissions)),
         )
         actual_bytes = len(render_context(package).encode())
@@ -632,6 +670,12 @@ def render_context(package: ContextPackage) -> str:
             sort_keys=True,
         ),
         "</NORMALIZED_SCANNER_EVIDENCE_JSON>",
+        "<TRUSTED_MODEL_SURFACE_REQUESTS_JSON>",
+        json.dumps(
+            [request.model_dump(mode="json") for request in package.requested_model_surfaces],
+            sort_keys=True,
+        ),
+        "</TRUSTED_MODEL_SURFACE_REQUESTS_JSON>",
     ]
     if package.threat_model is not None:
         parts.extend(

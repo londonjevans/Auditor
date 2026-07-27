@@ -43,6 +43,7 @@ from mmaudit.models.schemas import (
     Location,
     ModelReviewCoverage,
     ModelReviewSurfaceKind,
+    ModelSurfaceReviewArtifact,
     PriorAuditComparison,
     PriorAuditDiscoveryStatus,
     PriorAuditRemediationStatus,
@@ -1102,6 +1103,33 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
         surface.reviewed == bool(surface.reviewer_roles and surface.root_lineages)
         for surface in model_coverage.surfaces
     )
+    private_review_payload = json.loads(
+        (result.run_dir / "private/model-review-artifacts.json").read_text(encoding="utf-8")
+    )
+    review_artifacts = [
+        ModelSurfaceReviewArtifact.model_validate(item)
+        for item in private_review_payload["artifacts"]
+    ]
+    assert review_artifacts
+    sealed_hashes = {artifact.artifact_sha256 for artifact in review_artifacts}
+    assert {
+        reference.artifact_sha256
+        for surface in model_coverage.surfaces
+        for reference in surface.evidence_references
+    } <= sealed_hashes
+    manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    sealed_file = next(
+        artifact
+        for artifact in manifest.artifacts
+        if artifact.path == "private/model-review-artifacts.json"
+    )
+    assert (
+        sealed_file.sha256
+        == hashlib.sha256((result.run_dir / sealed_file.path).read_bytes()).hexdigest()
+    )
+    assert not (result.run_dir.parent.parent / "latest/private").exists()
     critical_gate = next(
         gate for gate in result.report.quality_gates if gate.gate == "critical_model_surface_review"
     )

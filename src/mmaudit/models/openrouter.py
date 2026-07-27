@@ -207,6 +207,14 @@ class CompletionEnvelope:
     pipeline: tuple[dict[str, str], ...]
 
 
+@dataclass(frozen=True, slots=True)
+class StructuredCompletion[ValueT: BaseModel]:
+    """Validated structured response paired with its exact provider evidence."""
+
+    value: ValueT
+    usage_record: UsageRecord
+
+
 @dataclass(frozen=True)
 class _RegisteredEndpointPricing:
     provider_endpoint: str
@@ -1117,6 +1125,28 @@ class OpenRouterClient:
         response_model: type[ResponseT],
         schema_name: str,
     ) -> ResponseT:
+        """Compatibility wrapper returning only the validated structured value."""
+
+        completion = await self.complete_with_evidence(
+            role=role,
+            models=models,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=response_model,
+            schema_name=schema_name,
+        )
+        return completion.value
+
+    async def complete_with_evidence(
+        self,
+        *,
+        role: str,
+        models: list[str],
+        system_prompt: str,
+        user_prompt: str,
+        response_model: type[ResponseT],
+        schema_name: str,
+    ) -> StructuredCompletion[ResponseT]:
         """Call only the explicitly supplied models, in order."""
 
         if not models:
@@ -1188,7 +1218,7 @@ class OpenRouterClient:
         response_model: type[ResponseT],
         schema_name: str,
         fallback_used: bool,
-    ) -> ResponseT:
+    ) -> StructuredCompletion[ResponseT]:
         request_id = str(uuid.uuid4())
         prompt_hash = _canonical_sha256(
             [
@@ -1397,47 +1427,46 @@ class OpenRouterClient:
                 validation_status="valid",
                 repair_used=False,
             )
-            self.usage.add(
-                UsageRecord(
-                    request_id=request_id,
-                    role=role,
-                    execution_evidence=self.execution_evidence,
-                    requested_model=model,
-                    returned_model=envelope.returned_model,
-                    actual_model=envelope.selected_model,
-                    provider=envelope.provider,
-                    model_family=model_family(model),
-                    timestamp=started_at,
-                    prompt_tokens=_nonnegative_int(initial_usage.get("prompt_tokens")),
-                    completion_tokens=_nonnegative_int(initial_usage.get("completion_tokens")),
-                    total_tokens=_nonnegative_int(initial_usage.get("total_tokens")),
-                    reported_cost_usd=float(initial_cost),
-                    accounted_cost_usd=accounted_cost_usd,
-                    routing=routing,
-                    prompt_sha256=prompt_hash,
-                    response_sha256=response_hash,
-                    validated_response_sha256=validated_response_hash,
-                    request_body_sha256=request_body_hash,
-                    schema_sha256=schema_hash,
-                    openrouter_generation_id=envelope.generation_id,
-                    configured_provider_endpoints=list(self.provider_policy.configured_endpoints),
-                    actual_provider_endpoint=envelope.selected_provider,
-                    started_at=started_at,
-                    ended_at=ended_at,
-                    latency_ms=latency_ms,
-                    finish_reason=envelope.finish_reason,
-                    reasoning_tokens=_reasoning_tokens(initial_usage),
-                    cached_tokens=_cached_tokens(initial_usage),
-                    retry_count=attempts - 1,
-                    validation_status=ModelRequestValidationStatus.VALID,
-                    fallback_used=fallback_used
-                    or envelope.router_attempt > 1
-                    or envelope.router_attempt_count > 1,
-                    substitution_detected=False,
-                    status="success",
-                    attempts=attempts,
-                )
+            usage_record = UsageRecord(
+                request_id=request_id,
+                role=role,
+                execution_evidence=self.execution_evidence,
+                requested_model=model,
+                returned_model=envelope.returned_model,
+                actual_model=envelope.selected_model,
+                provider=envelope.provider,
+                model_family=model_family(model),
+                timestamp=started_at,
+                prompt_tokens=_nonnegative_int(initial_usage.get("prompt_tokens")),
+                completion_tokens=_nonnegative_int(initial_usage.get("completion_tokens")),
+                total_tokens=_nonnegative_int(initial_usage.get("total_tokens")),
+                reported_cost_usd=float(initial_cost),
+                accounted_cost_usd=accounted_cost_usd,
+                routing=routing,
+                prompt_sha256=prompt_hash,
+                response_sha256=response_hash,
+                validated_response_sha256=validated_response_hash,
+                request_body_sha256=request_body_hash,
+                schema_sha256=schema_hash,
+                openrouter_generation_id=envelope.generation_id,
+                configured_provider_endpoints=list(self.provider_policy.configured_endpoints),
+                actual_provider_endpoint=envelope.selected_provider,
+                started_at=started_at,
+                ended_at=ended_at,
+                latency_ms=latency_ms,
+                finish_reason=envelope.finish_reason,
+                reasoning_tokens=_reasoning_tokens(initial_usage),
+                cached_tokens=_cached_tokens(initial_usage),
+                retry_count=attempts - 1,
+                validation_status=ModelRequestValidationStatus.VALID,
+                fallback_used=fallback_used
+                or envelope.router_attempt > 1
+                or envelope.router_attempt_count > 1,
+                substitution_detected=False,
+                status="success",
+                attempts=attempts,
             )
+            self.usage.add(usage_record)
             usage_recorded = True
             self.logger.info(
                 "Structured model request completed",
@@ -1447,7 +1476,7 @@ class OpenRouterClient:
                     "status": "success",
                 },
             )
-            return parsed
+            return StructuredCompletion(value=parsed, usage_record=usage_record)
         except Exception as exc:
             terminal_error = exc
             if active_reservation is not None:

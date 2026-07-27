@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Sequence
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
@@ -238,6 +239,7 @@ class CoverageProvenance(StrEnum):
     SEMANTIC_GRAPH = "semantic_graph"
     STATIC_TOOL = "static_tool"
     MODEL_CONTEXT = "model_context"
+    MODEL_REVIEW = "model_review"
     INVARIANT_EXECUTION = "invariant_execution"
     FORMAL_ENGINE = "formal_engine"
     RUNTIME = "runtime"
@@ -1746,6 +1748,86 @@ class CandidateBatch(StrictModel):
     findings: list[CandidateFinding]
 
 
+class ModelSurfaceReviewRequest(StrictModel):
+    """One deterministic surface that a model is explicitly asked to review."""
+
+    surface_id: str = Field(pattern=r"^model-surface:[0-9a-f]{64}$")
+    kind: ModelReviewSurfaceKind
+    subject_id: str = Field(min_length=1, max_length=500)
+    contract: str = Field(min_length=1, max_length=500)
+    function_or_state_surface: str = Field(min_length=1, max_length=500)
+    critical: bool
+    allowed_locations: tuple[Location, ...] = Field(default_factory=tuple, max_length=100)
+    allowed_symbols: tuple[str, ...] = Field(default_factory=tuple, max_length=100)
+    invariant_considered: str = Field(min_length=1, max_length=1_000)
+
+    @staticmethod
+    def calculate_surface_id(kind: ModelReviewSurfaceKind, subject_id: str) -> str:
+        """Return the stable ID shared with the deterministic surface inventory."""
+
+        digest = hashlib.sha256(f"{kind.value}\0{subject_id}".encode()).hexdigest()
+        return f"model-surface:{digest}"
+
+    @field_validator(
+        "subject_id",
+        "contract",
+        "function_or_state_surface",
+        "invariant_considered",
+    )
+    @classmethod
+    def descriptor_text_is_bounded_plain_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or any(
+            ord(character) < 32 or ord(character) == 127 for character in normalized
+        ):
+            raise ValueError("model surface review request text must be bounded plain text")
+        return normalized
+
+    @field_validator("allowed_locations")
+    @classmethod
+    def allowed_locations_are_canonical(
+        cls,
+        value: tuple[Location, ...],
+    ) -> tuple[Location, ...]:
+        keys = [
+            (
+                location.path,
+                location.start_line,
+                location.end_line,
+                location.symbol or "",
+                location.content_hash or "",
+            )
+            for location in value
+        ]
+        if keys != sorted(set(keys)):
+            raise ValueError("model surface review allowed locations must be unique and sorted")
+        return value
+
+    @field_validator("allowed_symbols")
+    @classmethod
+    def allowed_symbols_are_canonical(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(symbol.strip() for symbol in value)
+        if any(
+            not symbol
+            or len(symbol) > 500
+            or any(ord(character) < 32 or ord(character) == 127 for character in symbol)
+            for symbol in normalized
+        ) or normalized != tuple(sorted(set(normalized))):
+            raise ValueError(
+                "model surface review allowed symbols must be bounded, unique, and sorted"
+            )
+        return normalized
+
+    @model_validator(mode="after")
+    def identity_and_evidence_are_explicit(self) -> ModelSurfaceReviewRequest:
+        expected_surface_id = self.calculate_surface_id(self.kind, self.subject_id)
+        if self.surface_id != expected_surface_id:
+            raise ValueError("model surface review request has an inconsistent stable ID")
+        if not self.allowed_locations and not self.allowed_symbols:
+            raise ValueError("model surface review request requires an allowed location or symbol")
+        return self
+
+
 class ModelSurfaceReviewStatus(StrEnum):
     """Explicit outcome for one requested deterministic review surface."""
 
@@ -1832,6 +1914,43 @@ class ModelSurfaceReviewRecord(StrictModel):
         return normalized
 
 
+class CandidateReviewBatch(StrictModel):
+    """Provider response with candidates and an explicit record for each supplied surface."""
+
+    findings: list[CandidateFinding]
+    surface_reviews: tuple[ModelSurfaceReviewRecord, ...] = Field(max_length=10_000)
+
+    @field_validator("surface_reviews")
+    @classmethod
+    def surface_reviews_are_unique_and_sorted(
+        cls,
+        value: tuple[ModelSurfaceReviewRecord, ...],
+    ) -> tuple[ModelSurfaceReviewRecord, ...]:
+        surface_ids = tuple(record.surface_id for record in value)
+        if surface_ids != tuple(sorted(set(surface_ids))):
+            raise ValueError("candidate surface reviews must be unique and sorted by surface ID")
+        return value
+
+    def require_exact_surface_set(
+        self,
+        requested_surface_ids: Sequence[str],
+    ) -> CandidateReviewBatch:
+        """Reject a response that omitted or invented any requested surface record."""
+
+        expected = tuple(requested_surface_ids)
+        if expected != tuple(sorted(set(expected))) or any(
+            re.fullmatch(r"model-surface:[0-9a-f]{64}", surface_id) is None
+            for surface_id in expected
+        ):
+            raise ValueError("requested surface IDs must be valid, unique, and sorted")
+        actual = tuple(record.surface_id for record in self.surface_reviews)
+        if actual != expected:
+            raise ValueError(
+                "candidate surface reviews must exactly cover the requested surface set"
+            )
+        return self
+
+
 class ModelSurfaceReviewArtifact(StrictModel):
     """Hash-linked normalized response for one exact requested surface set."""
 
@@ -1840,6 +1959,7 @@ class ModelSurfaceReviewArtifact(StrictModel):
     review_role: str = Field(pattern=r"^[a-z][a-z0-9_:.-]{0,127}$")
     requested_surface_ids: tuple[str, ...] = Field(min_length=1, max_length=10_000)
     requested_surface_ids_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    requested_surface_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     prompt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     validated_response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -1858,6 +1978,23 @@ class ModelSurfaceReviewArtifact(StrictModel):
         return hashlib.sha256(
             json.dumps(
                 canonical,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+
+    @staticmethod
+    def calculate_requested_surface_manifest_sha256(
+        requests: Sequence[ModelSurfaceReviewRequest],
+    ) -> str:
+        """Hash the exact ordered deterministic request descriptors."""
+
+        payload = [request.model_dump(mode="json") for request in requests]
+        return hashlib.sha256(
+            json.dumps(
+                payload,
                 sort_keys=True,
                 separators=(",", ":"),
                 ensure_ascii=False,
@@ -1912,6 +2049,24 @@ class ModelSurfaceReviewArtifact(StrictModel):
         expected_artifact_hash = self.calculate_artifact_sha256(self.model_dump(mode="json"))
         if self.artifact_sha256 != expected_artifact_hash:
             raise ValueError("model surface review artifact hash is inconsistent")
+        return self
+
+    def require_exact_requested_surface_manifest(
+        self,
+        requests: Sequence[ModelSurfaceReviewRequest],
+    ) -> ModelSurfaceReviewArtifact:
+        """Verify that this artifact is bound to the supplied ordered descriptors."""
+
+        requested_surface_ids = tuple(request.surface_id for request in requests)
+        if requested_surface_ids != self.requested_surface_ids:
+            raise ValueError(
+                "model surface review artifact does not match the requested surface IDs"
+            )
+        expected_manifest_hash = self.calculate_requested_surface_manifest_sha256(requests)
+        if self.requested_surface_manifest_sha256 != expected_manifest_hash:
+            raise ValueError(
+                "model surface review artifact does not match the requested surface manifest"
+            )
         return self
 
 
@@ -3895,8 +4050,38 @@ class CoverageMetric(StrictModel):
         return self
 
 
+class ModelReviewEvidenceReference(StrictModel):
+    """One normalized decision about whether a response record earns surface credit."""
+
+    surface_id: str = Field(pattern=r"^model-surface:[0-9a-f]{64}$")
+    request_id: str = Field(min_length=1, max_length=500)
+    artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    requested_model: str | None = Field(default=None, pattern=r"^[^\s/]+/[^\s/]+$")
+    model: str | None = Field(default=None, pattern=r"^[^\s/]+/[^\s/]+$")
+    review_role: str = Field(pattern=r"^[a-z][a-z0-9_:.-]{0,127}$")
+    status: ModelSurfaceReviewStatus
+    root_lineage: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+    credited: bool
+    reason: str = Field(min_length=1, max_length=1_000)
+
+    @model_validator(mode="after")
+    def credited_reference_is_substantive_and_registered(
+        self,
+    ) -> ModelReviewEvidenceReference:
+        if self.credited and self.status not in {
+            ModelSurfaceReviewStatus.CANDIDATE,
+            ModelSurfaceReviewStatus.REVIEWED_NO_ISSUE,
+        }:
+            raise ValueError("only candidate or reviewed-no-issue records may earn review credit")
+        if self.credited and (
+            self.requested_model is None or self.model is None or self.root_lineage is None
+        ):
+            raise ValueError("credited model-review evidence requires exact model and lineage")
+        return self
+
+
 class ModelReviewSurface(StrictModel):
-    """One deterministic surface and the successful model requests that received it."""
+    """One deterministic surface and its explicit model-authored review evidence."""
 
     surface_id: str = Field(pattern=r"^model-surface:[0-9a-f]{64}$")
     kind: ModelReviewSurfaceKind
@@ -3906,7 +4091,40 @@ class ModelReviewSurface(StrictModel):
     locations: list[Location] = Field(default_factory=list, max_length=100)
     reviewer_roles: list[str] = Field(default_factory=list, max_length=100)
     root_lineages: list[str] = Field(default_factory=list, max_length=100)
-    reviewed: bool
+    reviewed: bool = False
+    evidence_references: list[ModelReviewEvidenceReference] = Field(
+        default_factory=list,
+        max_length=10_000,
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def derive_review_summary_from_credited_references(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        references = [
+            ModelReviewEvidenceReference.model_validate(item)
+            for item in value.get("evidence_references", [])
+        ]
+        credited = [reference for reference in references if reference.credited]
+        derived_roles = sorted({reference.review_role for reference in credited})
+        derived_lineages = sorted(
+            {reference.root_lineage for reference in credited if reference.root_lineage is not None}
+        )
+        derived_reviewed = bool(credited)
+        for field, derived in (
+            ("reviewer_roles", derived_roles),
+            ("root_lineages", derived_lineages),
+            ("reviewed", derived_reviewed),
+        ):
+            if field in value and value[field] != derived:
+                raise ValueError(f"{field} must be derived from credited evidence references")
+        return {
+            **value,
+            "reviewer_roles": derived_roles,
+            "root_lineages": derived_lineages,
+            "reviewed": derived_reviewed,
+        }
 
     @model_validator(mode="after")
     def review_evidence_is_normalized(self) -> ModelReviewSurface:
@@ -3927,17 +4145,31 @@ class ModelReviewSurface(StrictModel):
             ),
         ):
             raise ValueError("model-review locations must be sorted")
+        evidence_keys = [
+            (
+                item.request_id,
+                item.artifact_sha256,
+                item.surface_id,
+                item.review_role,
+                item.status.value,
+            )
+            for item in self.evidence_references
+        ]
+        if evidence_keys != sorted(set(evidence_keys)):
+            raise ValueError("model-review evidence references must be unique and sorted")
+        if any(item.surface_id != self.surface_id for item in self.evidence_references):
+            raise ValueError("model-review evidence references must identify their surface")
         if self.reviewed != bool(self.reviewer_roles and self.root_lineages):
             raise ValueError("reviewed must require both a successful role and registered lineage")
         return self
 
 
 class ModelReviewCoverage(StrictModel):
-    """Per-surface model-context coverage with an independent critical-surface gate."""
+    """Per-surface response evidence with an independent critical-surface gate."""
 
     schema_version: Literal["1.0"] = "1.0"
     applicable: bool
-    minimum_critical_root_lineages: int = Field(default=2, ge=2, le=16)
+    minimum_critical_root_lineages: int = Field(default=3, ge=2, le=16)
     surfaces: list[ModelReviewSurface] = Field(default_factory=list)
     overall: CoverageMetric
     by_kind: dict[ModelReviewSurfaceKind, CoverageMetric]
@@ -4277,6 +4509,7 @@ class ContextPackage(StrictModel):
     repository_map: RepositoryMap
     scanner_findings: list[ScannerFinding]
     excerpts: list[ContextExcerpt]
+    requested_model_surfaces: list[ModelSurfaceReviewRequest] = Field(default_factory=list)
     threat_model: ThreatModel | None = None
     solidity_projects: list[SolidityProjectMetadata] = Field(default_factory=list)
     solidity_compilations: list[SolidityCompilationResult] = Field(default_factory=list)
@@ -4288,6 +4521,17 @@ class ContextPackage(StrictModel):
     formal_runs: list[FormalToolRun] = Field(default_factory=list)
     solidity_coverage: SolidityCoverage | None = None
     omissions: list[str] = Field(default_factory=list)
+
+    @field_validator("requested_model_surfaces")
+    @classmethod
+    def requested_model_surfaces_are_canonical(
+        cls,
+        value: list[ModelSurfaceReviewRequest],
+    ) -> list[ModelSurfaceReviewRequest]:
+        surface_ids = [request.surface_id for request in value]
+        if surface_ids != sorted(set(surface_ids)):
+            raise ValueError("requested model surfaces must be unique and sorted by surface ID")
+        return value
 
 
 class AuditReport(StrictModel):

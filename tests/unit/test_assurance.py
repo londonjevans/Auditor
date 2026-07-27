@@ -51,8 +51,14 @@ from mmaudit.models.schemas import (
     MaximumAssuranceStatus,
     ModelRequestValidationStatus,
     ModelReviewCoverage,
+    ModelReviewEvidenceReference,
     ModelReviewSurface,
     ModelReviewSurfaceKind,
+    ModelSurfaceReviewArtifact,
+    ModelSurfaceReviewCitation,
+    ModelSurfaceReviewRecord,
+    ModelSurfaceReviewRequest,
+    ModelSurfaceReviewStatus,
     RepositoryMap,
     ReproductionIntegrityAssessment,
     ReproductionIntegrityCheck,
@@ -165,39 +171,110 @@ def _model_metric(numerator: int, denominator: int, detail: str) -> CoverageMetr
         exclusions=[],
         not_applicable_evidence=([] if denominator else ["no synthetic surfaces of this category"]),
         confidence=1,
-        provenance=[CoverageProvenance.MODEL_CONTEXT],
+        provenance=[CoverageProvenance.MODEL_REVIEW],
         failures=[],
         state=AnalysisState.MODEL_ONLY,
         detail=detail,
     )
 
 
-def _complete_model_coverage() -> ModelReviewCoverage:
+def _complete_model_coverage(
+    usage_records: list[UsageRecord],
+) -> tuple[ModelReviewCoverage, list[ModelSurfaceReviewArtifact]]:
+    location = Location(
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=5,
+        content_hash="a" * 64,
+    )
+    request = ModelSurfaceReviewRequest(
+        surface_id=ModelSurfaceReviewRequest.calculate_surface_id(
+            ModelReviewSurfaceKind.CONTRACT,
+            "contract:Vault",
+        ),
+        kind=ModelReviewSurfaceKind.CONTRACT,
+        subject_id="contract:Vault",
+        contract="Vault",
+        function_or_state_surface="Vault",
+        critical=True,
+        allowed_locations=(location,),
+        allowed_symbols=("Vault",),
+        invariant_considered="Assess declared security invariants across contract Vault.",
+    )
+    references: list[ModelReviewEvidenceReference] = []
+    artifacts: list[ModelSurfaceReviewArtifact] = []
+    for role in ("business_logic", "configuration", "source_audit"):
+        usage = next(record for record in usage_records if record.role == role)
+        record = ModelSurfaceReviewRecord(
+            surface_id=request.surface_id,
+            contract=request.contract,
+            function_or_state_surface=request.function_or_state_surface,
+            review_role=role,
+            status=ModelSurfaceReviewStatus.REVIEWED_NO_ISSUE,
+            rationale="Synthetic substantive review found no invariant violation.",
+            citation=ModelSurfaceReviewCitation(location=location, symbol="Vault"),
+            invariant_considered=request.invariant_considered,
+            assumptions=(),
+            confidence=1,
+        )
+        artifact_payload = {
+            "schema_version": "1.0",
+            "request_id": usage.request_id,
+            "review_role": role,
+            "requested_surface_ids": [request.surface_id],
+            "requested_surface_ids_sha256": canonical_sha256([request.surface_id]),
+            "requested_surface_manifest_sha256": (
+                ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256([request])
+            ),
+            "prompt_sha256": usage.prompt_sha256,
+            "response_sha256": usage.response_sha256,
+            "validated_response_sha256": usage.validated_response_sha256,
+            "response_schema_sha256": usage.schema_sha256,
+            "records": [record.model_dump(mode="json")],
+        }
+        artifact_payload["artifact_sha256"] = ModelSurfaceReviewArtifact.calculate_artifact_sha256(
+            artifact_payload
+        )
+        artifact = ModelSurfaceReviewArtifact.model_validate(artifact_payload)
+        artifacts.append(artifact)
+        references.append(
+            ModelReviewEvidenceReference(
+                surface_id=request.surface_id,
+                request_id=usage.request_id,
+                artifact_sha256=artifact.artifact_sha256,
+                requested_model=usage.requested_model,
+                model=usage.actual_model,
+                review_role=role,
+                status=record.status,
+                root_lineage=(
+                    "sha256:"
+                    + hashlib.sha256(f"lineage:{usage.requested_model}".encode()).hexdigest()
+                ),
+                credited=True,
+                reason="credited: synthetic response evidence passed validation",
+            )
+        )
+    references.sort(
+        key=lambda item: (
+            item.request_id,
+            item.artifact_sha256,
+            item.surface_id,
+            item.review_role,
+            item.status.value,
+        )
+    )
     surface = ModelReviewSurface(
-        surface_id="model-surface:" + ("a" * 64),
+        surface_id=request.surface_id,
         kind=ModelReviewSurfaceKind.CONTRACT,
         subject_id="contract:Vault",
         label="Vault",
         critical=True,
-        locations=[
-            Location(
-                path="src/Vault.sol",
-                start_line=1,
-                end_line=5,
-                content_hash="a" * 64,
-            )
-        ],
-        reviewer_roles=["business_logic", "source_audit"],
-        root_lineages=sorted(
-            {
-                "sha256:" + hashlib.sha256(b"lineage:bravo/borealis-secure").hexdigest(),
-                "sha256:" + hashlib.sha256(b"lineage:charlie/cirrus-secure").hexdigest(),
-            }
-        ),
-        reviewed=True,
+        locations=[location],
+        evidence_references=references,
     )
-    return ModelReviewCoverage(
+    coverage = ModelReviewCoverage(
         applicable=True,
+        minimum_critical_root_lineages=3,
         surfaces=[surface],
         overall=_model_metric(1, 1, "synthetic complete overall model coverage"),
         by_kind={
@@ -211,6 +288,7 @@ def _complete_model_coverage() -> ModelReviewCoverage:
         critical=_model_metric(1, 1, "synthetic complete critical model coverage"),
         critical_gate_passed=True,
     )
+    return coverage, artifacts
 
 
 def _complete_scope_assessment() -> AuditScopeAssessment:
@@ -557,6 +635,8 @@ def _real_slither_scanner(now: datetime) -> ScannerRun:
 
 def _complete_runtime() -> AssuranceRuntime:
     now = datetime.now(UTC)
+    model_usage = _real_model_usage(now)
+    model_review_coverage, model_surface_review_artifacts = _complete_model_coverage(model_usage)
     project = SolidityProjectMetadata(
         project_type=SolidityProjectType.FOUNDRY,
         project_root=".",
@@ -721,8 +801,9 @@ def _complete_runtime() -> AssuranceRuntime:
         falsifier_completed=True,
         judge_completed=True,
         coverage=SolidityCoverage(projects_discovered=1),
-        model_review_coverage=_complete_model_coverage(),
-        model_usage=_real_model_usage(now),
+        model_review_coverage=model_review_coverage,
+        model_surface_review_artifacts=model_surface_review_artifacts,
+        model_usage=model_usage,
         offline_replay=_real_offline_replay(),
         replay_run_id="synthetic-assurance-run",
         replay_manifest_sha256="1" * 64,
@@ -914,6 +995,113 @@ def test_unrelated_real_requests_cannot_back_mock_model_surface_coverage(
     assert not gate.passed
     assert "not backed by matching certification-grade" in gate.detail
     assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_context_and_aggregate_fields_alone_cannot_back_model_surface_coverage(
+    config_factory,
+) -> None:
+    runtime = _complete_runtime()
+    coverage = runtime.model_review_coverage
+    assert coverage is not None
+    asserted_surface = coverage.surfaces[0].model_copy(update={"evidence_references": []})
+    asserted_coverage = coverage.model_copy(update={"surfaces": [asserted_surface]})
+    assert asserted_coverage.critical_gate_passed
+    assert asserted_surface.reviewed
+
+    assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(
+        replace(
+            runtime,
+            model_review_coverage=asserted_coverage,
+            model_surface_review_artifacts=[],
+        )
+    )
+    gate = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "critical_model_surface_review"
+    )
+
+    assert not gate.passed
+    assert "not backed by matching certification-grade" in gate.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_model_surface_coverage_rejects_sealed_artifact_usage_hash_mismatch(
+    config_factory,
+) -> None:
+    runtime = _complete_runtime()
+    coverage = runtime.model_review_coverage
+    assert coverage is not None
+    original = runtime.model_surface_review_artifacts[0]
+    payload = original.model_dump(mode="json")
+    payload["prompt_sha256"] = "f" * 64
+    payload["artifact_sha256"] = ModelSurfaceReviewArtifact.calculate_artifact_sha256(payload)
+    mismatched = ModelSurfaceReviewArtifact.model_validate(payload)
+    updated_references = [
+        (
+            reference.model_copy(update={"artifact_sha256": mismatched.artifact_sha256})
+            if reference.request_id == original.request_id
+            else reference
+        )
+        for reference in coverage.surfaces[0].evidence_references
+    ]
+    updated_surface = coverage.surfaces[0].model_copy(
+        update={"evidence_references": updated_references}
+    )
+    updated_coverage = coverage.model_copy(update={"surfaces": [updated_surface]})
+    updated_artifacts = [
+        mismatched if artifact.request_id == original.request_id else artifact
+        for artifact in runtime.model_surface_review_artifacts
+    ]
+
+    assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(
+        replace(
+            runtime,
+            model_review_coverage=updated_coverage,
+            model_surface_review_artifacts=updated_artifacts,
+        )
+    )
+    gate = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "critical_model_surface_review"
+    )
+
+    assert not gate.passed
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_model_surface_coverage_requires_exactly_one_usage_and_artifact(
+    config_factory,
+) -> None:
+    runtime = _complete_runtime()
+    referenced_request = runtime.model_surface_review_artifacts[0].request_id
+    usage = next(
+        record for record in runtime.model_usage if record.request_id == referenced_request
+    )
+    duplicate_usage_runtime = replace(
+        runtime,
+        model_usage=[*runtime.model_usage, usage],
+    )
+    duplicate_artifact_runtime = replace(
+        runtime,
+        model_surface_review_artifacts=[
+            *runtime.model_surface_review_artifacts,
+            runtime.model_surface_review_artifacts[0],
+        ],
+    )
+
+    for ambiguous_runtime in (duplicate_usage_runtime, duplicate_artifact_runtime):
+        assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(
+            ambiguous_runtime
+        )
+        gate = next(
+            requirement
+            for requirement in assessment.requirements
+            if requirement.engine == "critical_model_surface_review"
+        )
+        assert not gate.passed
+        assert assessment.status is not MaximumAssuranceStatus.COMPLETE
 
 
 def test_foundry_negative_regression_is_conclusive_engine_execution(config_factory) -> None:

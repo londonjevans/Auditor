@@ -7,10 +7,13 @@ import pytest
 from pydantic import ValidationError
 
 from mmaudit.models.schemas import (
+    CandidateReviewBatch,
     Location,
+    ModelReviewSurfaceKind,
     ModelSurfaceReviewArtifact,
     ModelSurfaceReviewCitation,
     ModelSurfaceReviewRecord,
+    ModelSurfaceReviewRequest,
     ModelSurfaceReviewStatus,
 )
 
@@ -48,10 +51,46 @@ def _record(
     )
 
 
+def _request(
+    seed: str,
+    *,
+    subject_id: str | None = None,
+    allowed_symbol: str = "deposit",
+) -> ModelSurfaceReviewRequest:
+    resolved_subject_id = subject_id or f"entity:{seed}"
+    kind = ModelReviewSurfaceKind.ASSET_FUNCTION
+    return ModelSurfaceReviewRequest(
+        surface_id=ModelSurfaceReviewRequest.calculate_surface_id(
+            kind,
+            resolved_subject_id,
+        ),
+        kind=kind,
+        subject_id=resolved_subject_id,
+        contract="SyntheticVault",
+        function_or_state_surface="deposit(uint256)",
+        critical=True,
+        allowed_locations=(
+            Location(
+                path="src/SyntheticVault.sol",
+                start_line=10,
+                end_line=14,
+                symbol=allowed_symbol,
+                content_hash="a" * 64,
+            ),
+        ),
+        allowed_symbols=(allowed_symbol,),
+        invariant_considered="Recorded assets cannot exceed observed token receipts.",
+    )
+
+
 def _artifact_payload(
     records: tuple[ModelSurfaceReviewRecord, ...],
+    requests: tuple[ModelSurfaceReviewRequest, ...] | None = None,
 ) -> dict[str, object]:
     surface_ids = tuple(record.surface_id for record in records)
+    resolved_requests = requests or tuple(
+        _request(surface_id, subject_id=f"record:{surface_id}") for surface_id in surface_ids
+    )
     return {
         "schema_version": "1.0",
         "request_id": "request-synthetic-review",
@@ -66,6 +105,11 @@ def _artifact_payload(
                 allow_nan=False,
             ).encode()
         ).hexdigest(),
+        "requested_surface_manifest_sha256": (
+            ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(
+                resolved_requests
+            )
+        ),
         "prompt_sha256": "1" * 64,
         "response_sha256": "2" * 64,
         "validated_response_sha256": "3" * 64,
@@ -76,14 +120,58 @@ def _artifact_payload(
 
 def _artifact(
     records: tuple[ModelSurfaceReviewRecord, ...],
+    requests: tuple[ModelSurfaceReviewRequest, ...] | None = None,
 ) -> ModelSurfaceReviewArtifact:
-    payload = _artifact_payload(records)
+    payload = _artifact_payload(records, requests)
     return ModelSurfaceReviewArtifact.model_validate(
         {
             **payload,
             "artifact_sha256": ModelSurfaceReviewArtifact.calculate_artifact_sha256(payload),
         }
     )
+
+
+def test_surface_review_request_has_stable_inventory_identity() -> None:
+    request = _request("stable")
+
+    assert request.surface_id == ModelSurfaceReviewRequest.calculate_surface_id(
+        request.kind,
+        request.subject_id,
+    )
+    assert ModelSurfaceReviewRequest.model_validate_json(request.model_dump_json()) == request
+
+    payload = request.model_dump(mode="json")
+    payload["critical"] = False
+    assert ModelSurfaceReviewRequest.model_validate(payload).surface_id == request.surface_id
+
+
+def test_surface_review_request_rejects_inconsistent_or_uncitable_descriptor() -> None:
+    payload = _request("invalid").model_dump(mode="json")
+    payload["surface_id"] = _surface_id("wrong")
+    with pytest.raises(ValidationError, match="inconsistent stable ID"):
+        ModelSurfaceReviewRequest.model_validate(payload)
+
+    payload = _request("uncitable").model_dump(mode="json")
+    payload["allowed_locations"] = []
+    payload["allowed_symbols"] = []
+    with pytest.raises(ValidationError, match="requires an allowed location or symbol"):
+        ModelSurfaceReviewRequest.model_validate(payload)
+
+
+def test_candidate_review_batch_requires_sorted_unique_exact_surface_records() -> None:
+    first = _record(_surface_id("first"))
+    second = _record(_surface_id("second"))
+    records = tuple(sorted((first, second), key=lambda record: record.surface_id))
+    batch = CandidateReviewBatch(findings=[], surface_reviews=records)
+
+    assert batch.require_exact_surface_set(tuple(record.surface_id for record in records)) is batch
+
+    with pytest.raises(ValueError, match="exactly cover"):
+        batch.require_exact_surface_set((records[0].surface_id,))
+    with pytest.raises(ValidationError, match="unique and sorted"):
+        CandidateReviewBatch(findings=[], surface_reviews=tuple(reversed(records)))
+    with pytest.raises(ValidationError, match="surface_reviews"):
+        CandidateReviewBatch.model_validate({"findings": []})
 
 
 @pytest.mark.parametrize("status", list(ModelSurfaceReviewStatus))
@@ -165,12 +253,36 @@ def test_surface_review_artifact_is_exact_set_role_and_hash_bound() -> None:
         )
     )
 
-    artifact = _artifact(records)
+    requests = tuple(
+        _request(f"artifact-{index}", subject_id=f"record:{record.surface_id}")
+        for index, record in enumerate(records)
+    )
+    requests = tuple(sorted(requests, key=lambda request: request.surface_id))
+    remapped_records = tuple(
+        record.model_copy(update={"surface_id": request.surface_id})
+        for request, record in zip(requests, records, strict=True)
+    )
+    artifact = _artifact(remapped_records, requests)
 
     assert tuple(record.surface_id for record in artifact.records) == (
         artifact.requested_surface_ids
     )
+    assert artifact.require_exact_requested_surface_manifest(requests) is artifact
     assert ModelSurfaceReviewArtifact.model_validate_json(artifact.model_dump_json()) == artifact
+
+
+def test_surface_review_artifact_manifest_hash_binds_full_descriptors() -> None:
+    request = _request("manifest")
+    record = _record(request.surface_id)
+    artifact = _artifact((record,), (request,))
+    changed_request = request.model_copy(update={"critical": False})
+
+    assert (
+        artifact.requested_surface_manifest_sha256
+        == ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256((request,))
+    )
+    with pytest.raises(ValueError, match="requested surface manifest"):
+        artifact.require_exact_requested_surface_manifest((changed_request,))
 
 
 def test_surface_review_artifact_rejects_duplicate_or_missing_records() -> None:

@@ -9,6 +9,13 @@ conditions, remediation, and a safe local verification test. Do not submit style
 depend entirely on unseen code. Set role to source_audit and model_family to the configured model ID
 family supplied by the caller; these fields will be deterministically overwritten.
 
+The trusted `<TRUSTED_MODEL_SURFACE_REQUESTS_JSON>` manifest is an explicit review assignment, not
+repository content. Output `CandidateReviewBatch`, with `surface_reviews` supplied even when the
+manifest is empty. Return exactly one sorted `ModelSurfaceReviewRecord` for every requested
+`surface_id` and no other IDs. Use `REVIEWED_NO_ISSUE`, `CANDIDATE`, `INCONCLUSIVE`, or
+`NOT_REVIEWED` honestly; missing context is `INCONCLUSIVE` or `NOT_REVIEWED`, never an omitted
+record. Cite only an allowed location or symbol and set `review_role` to `source_audit`.
+
 For Solidity, prioritize access-control bypass, reentrancy, unsafe external calls, delegatecall,
 unchecked low-level calls, signature replay, permit/domain-separator mistakes, oracle manipulation,
 rounding/accounting drift, storage collision, initializer and upgrade authorization failures,

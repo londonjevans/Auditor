@@ -5,7 +5,6 @@ from __future__ import annotations
 from mmaudit.models.schemas import (
     AnalysisState,
     CompilationStatus,
-    ContextPackage,
     CoverageExclusion,
     CoverageMetric,
     CoverageProvenance,
@@ -18,6 +17,7 @@ from mmaudit.models.schemas import (
     InvariantExecutionStatus,
     InvariantReviewResult,
     InvariantSuite,
+    ModelReviewCoverage,
     ScannerRun,
     ScannerStatus,
     SolidityCompilationResult,
@@ -255,7 +255,7 @@ def build_solidity_coverage(
         compiled_names=compiled_contract_names,
         indexed_names=indexed_contract_names,
     )
-    model_review_pending = "model review coverage has not been applied"
+    model_review_pending = "explicit substantive model review coverage has not been applied"
     compilation_successes = len(project_roots & successfully_compiled_project_roots)
     compilation_failures = [
         f"{result.project_root}: compilation status {result.status.value}"
@@ -342,7 +342,7 @@ def build_solidity_coverage(
             0,
             len(entry_points),
             AnalysisState.NOT_ANALYZED,
-            "Public/external entry points included in successful model contexts",
+            "Public/external entry points with validated substantive model reviews",
             population=len(entry_points),
             exclusions=[],
             not_applicable_evidence=(
@@ -353,7 +353,7 @@ def build_solidity_coverage(
             confidence=min((entity.confidence for entity in entry_points), default=1),
             provenance=[
                 CoverageProvenance.SYMBOL_INDEX,
-                CoverageProvenance.MODEL_CONTEXT,
+                CoverageProvenance.MODEL_REVIEW,
             ],
             failures=(
                 [model_review_pending]
@@ -365,7 +365,7 @@ def build_solidity_coverage(
             0,
             len(privilege_sources),
             AnalysisState.NOT_ANALYZED,
-            "Privilege-graph source functions included in successful model contexts",
+            "Privilege-graph source functions with validated substantive model reviews",
             population=len(privilege_sources),
             exclusions=[],
             not_applicable_evidence=(
@@ -376,7 +376,7 @@ def build_solidity_coverage(
             confidence=_graph_source_confidence(graphs, privilege_sources),
             provenance=[
                 CoverageProvenance.SEMANTIC_GRAPH,
-                CoverageProvenance.MODEL_CONTEXT,
+                CoverageProvenance.MODEL_REVIEW,
             ],
             failures=(
                 [model_review_pending]
@@ -388,7 +388,7 @@ def build_solidity_coverage(
             0,
             len(state_write_sources),
             AnalysisState.NOT_ANALYZED,
-            "State-write graph source functions included in successful model contexts",
+            "State-write graph source functions with validated substantive model reviews",
             population=len(state_write_sources),
             exclusions=[],
             not_applicable_evidence=(
@@ -399,7 +399,7 @@ def build_solidity_coverage(
             confidence=_graph_source_confidence(graphs, state_write_sources),
             provenance=[
                 CoverageProvenance.SEMANTIC_GRAPH,
-                CoverageProvenance.MODEL_CONTEXT,
+                CoverageProvenance.MODEL_REVIEW,
             ],
             failures=(
                 [model_review_pending]
@@ -411,7 +411,7 @@ def build_solidity_coverage(
             0,
             len(sensitive_sources),
             AnalysisState.NOT_ANALYZED,
-            "Sensitive-reachability source functions included in successful model contexts",
+            "Sensitive-reachability source functions with validated substantive model reviews",
             population=len(sensitive_sources),
             exclusions=[],
             not_applicable_evidence=(
@@ -422,7 +422,7 @@ def build_solidity_coverage(
             confidence=_graph_source_confidence(graphs, sensitive_sources),
             provenance=[
                 CoverageProvenance.SEMANTIC_GRAPH,
-                CoverageProvenance.MODEL_CONTEXT,
+                CoverageProvenance.MODEL_REVIEW,
             ],
             failures=(
                 [model_review_pending]
@@ -950,26 +950,23 @@ def _economic_template_quality_metrics(
 def with_model_review_coverage(
     coverage: SolidityCoverage,
     index: SoliditySymbolIndex | None,
-    packages: list[ContextPackage],
+    review_coverage: ModelReviewCoverage,
     graphs: SolidityGraphSet | None = None,
 ) -> SolidityCoverage:
+    """Project validated substantive review evidence onto Solidity function metrics."""
+
     if index is None:
         return coverage
-    reviewed_ranges = {
-        (excerpt.path, excerpt.start_line, excerpt.end_line)
-        for package in packages
-        if package.role in {"source_audit", "business_logic", "configuration", "verifier", "judge"}
-        for excerpt in package.excerpts
+    function_ids = {
+        entity.id
+        for entity in index.entities
+        if entity.kind in {SolidityEntityKind.FUNCTION, SolidityEntityKind.CONSTRUCTOR}
     }
-    reviewed_ids: set[str] = set()
-    for entity in index.entities:
-        if entity.kind not in {SolidityEntityKind.FUNCTION, SolidityEntityKind.CONSTRUCTOR}:
-            continue
-        if any(
-            entity.path == path and entity.start_line <= end and entity.end_line >= start
-            for path, start, end in reviewed_ranges
-        ):
-            reviewed_ids.add(entity.id)
+    reviewed_ids = {
+        surface.subject_id
+        for surface in review_coverage.surfaces
+        if surface.reviewed and surface.subject_id in function_ids
+    }
     metrics = dict(coverage.quality_metrics)
     for metric_name, source_ids in (
         (
@@ -999,7 +996,11 @@ def with_model_review_coverage(
         metrics[metric_name] = _metric(
             reviewed_count,
             len(source_ids),
-            AnalysisState.MODEL_ONLY,
+            (
+                AnalysisState.MODEL_ONLY
+                if review_coverage.applicable
+                else AnalysisState.NOT_ANALYZED
+            ),
             existing.detail,
             population=existing.population,
             exclusions=existing.exclusions,
@@ -1010,7 +1011,7 @@ def with_model_review_coverage(
                 _coverage_gap(
                     reviewed_count,
                     len(source_ids),
-                    "eligible function(s) were absent from successful model contexts",
+                    "eligible function(s) lack validated substantive model reviews",
                 )
                 if source_ids
                 else existing.failures

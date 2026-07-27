@@ -45,6 +45,7 @@ from mmaudit.models.openrouter import (
     OpenRouterSchemaError,
     OpenRouterTransientError,
     OpenRouterTruncatedResponseError,
+    StructuredCompletion,
     is_retryable_status,
     safe_headers,
     strict_json_schema,
@@ -1505,6 +1506,65 @@ async def test_concurrent_usage_records_account_only_their_own_request_cost(
 
 
 @pytest.mark.asyncio
+async def test_complete_with_evidence_binds_exact_concurrent_same_role_record(
+    config_factory,
+) -> None:
+    both_arrived = asyncio.Event()
+    arrived = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal arrived
+        body = json.loads(request.content)
+        user_prompt = body["messages"][1]["content"]
+        arrived += 1
+        if arrived == 2:
+            both_arrived.set()
+        await both_arrived.wait()
+        generation_id = f"generation-{user_prompt}"
+        payload = _completion(
+            json.dumps({"answer": user_prompt}),
+            cost=0.01,
+        )
+        payload["id"] = generation_id
+        return httpx.Response(
+            200,
+            headers={"X-Generation-Id": generation_id},
+            json=payload,
+        )
+
+    client, http_client, usage = _client(config_factory(), handler)
+    try:
+        first, second = await asyncio.gather(
+            client.complete_with_evidence(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="first",
+                response_model=Answer,
+                schema_name="answer",
+            ),
+            client.complete_with_evidence(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="second",
+                response_model=Answer,
+                schema_name="answer",
+            ),
+        )
+    finally:
+        await http_client.aclose()
+
+    records_by_generation = {record.openrouter_generation_id: record for record in usage.records}
+    assert isinstance(first, StructuredCompletion)
+    assert first.value.answer == "first"
+    assert first.usage_record is records_by_generation["generation-first"]
+    assert second.value.answer == "second"
+    assert second.usage_record is records_by_generation["generation-second"]
+    assert first.usage_record.request_id != second.usage_record.request_id
+
+
+@pytest.mark.asyncio
 async def test_authentication_failure_is_not_retried(config_factory) -> None:
     calls = 0
 
@@ -2020,6 +2080,95 @@ async def test_only_explicit_fallback_is_used(config_factory) -> None:
         await http_client.aclose()
     assert result.answer == "fallback"
     assert requested == ["alpha/atlas-secure", "bravo/borealis-secure"]
+
+
+@pytest.mark.asyncio
+async def test_complete_with_evidence_returns_successful_explicit_fallback_record(
+    config_factory,
+) -> None:
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        model = body["model"]
+        requested.append(model)
+        if model == "alpha/atlas-secure":
+            return httpx.Response(404)
+        return _completion_response('{"answer":"fallback"}', model=model)
+
+    client, http_client, usage = _client(config_factory(), handler)
+    try:
+        result = await client.complete_with_evidence(
+            role="source_audit",
+            models=["alpha/atlas-secure", "bravo/borealis-secure"],
+            system_prompt="system",
+            user_prompt="user",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert result.value.answer == "fallback"
+    assert requested == ["alpha/atlas-secure", "bravo/borealis-secure"]
+    assert [record.status for record in usage.records] == [
+        "failed:OpenRouterModelError",
+        "success",
+    ]
+    assert result.usage_record is usage.records[1]
+    assert result.usage_record.fallback_used is True
+
+
+@pytest.mark.asyncio
+async def test_complete_with_evidence_preserves_non_fallback_exception_behavior(
+    config_factory,
+) -> None:
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(json.loads(request.content)["model"])
+        return httpx.Response(401, json={"error": {"message": "synthetic rejection"}})
+
+    client, http_client, usage = _client(config_factory(), handler)
+    try:
+        with pytest.raises(OpenRouterAuthenticationError):
+            await client.complete_with_evidence(
+                role="source_audit",
+                models=["alpha/atlas-secure", "bravo/borealis-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert requested == ["alpha/atlas-secure"]
+    assert len(usage.records) == 1
+    assert usage.records[0].status == "failed:OpenRouterAuthenticationError"
+
+
+@pytest.mark.asyncio
+async def test_complete_remains_value_only_compatibility_wrapper(config_factory) -> None:
+    client, http_client, usage = _client(
+        config_factory(),
+        lambda _request: _completion_response('{"answer":"compatible"}'),
+    )
+    try:
+        result = await client.complete(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="user",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert type(result) is Answer
+    assert result.answer == "compatible"
+    assert len(usage.records) == 1
 
 
 @pytest.mark.parametrize(

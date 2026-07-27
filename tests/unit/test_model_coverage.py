@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 
 from mmaudit.config import AuditConfig
 from mmaudit.models.schemas import (
-    ContextPackage,
     ExecutionEvidenceKind,
     InvariantCategory,
     InvariantSpec,
@@ -15,7 +16,11 @@ from mmaudit.models.schemas import (
     ModelRequestValidationStatus,
     ModelReviewCoverage,
     ModelReviewSurfaceKind,
-    RepositoryMap,
+    ModelSurfaceReviewArtifact,
+    ModelSurfaceReviewCitation,
+    ModelSurfaceReviewRecord,
+    ModelSurfaceReviewRequest,
+    ModelSurfaceReviewStatus,
     SolidityEntity,
     SolidityEntityKind,
     SolidityGraphEdge,
@@ -29,7 +34,9 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.orchestration.model_coverage import (
     build_model_review_coverage,
+    build_model_surface_requests,
     model_review_critical_surface_gate,
+    plan_model_surface_review_assignments,
 )
 
 
@@ -85,13 +92,14 @@ def _edge(
 
 
 def _inventory() -> tuple[SoliditySymbolIndex, SolidityGraphSet, InvariantSuite]:
-    project = SolidityProjectMetadata(
-        project_type=SolidityProjectType.FOUNDRY,
-        project_root=".",
-        source_directories=["src"],
-    )
     index = SoliditySymbolIndex(
-        projects=[project],
+        projects=[
+            SolidityProjectMetadata(
+                project_type=SolidityProjectType.FOUNDRY,
+                project_root=".",
+                source_directories=["src"],
+            )
+        ],
         entities=[
             _entity(
                 "contract:Vault",
@@ -187,52 +195,20 @@ def _inventory() -> tuple[SoliditySymbolIndex, SolidityGraphSet, InvariantSuite]
     return index, graphs, invariants
 
 
-def _repository_map() -> RepositoryMap:
-    return RepositoryMap(
-        root_name="synthetic",
-        languages={"Solidity": 1},
-        frameworks=["Foundry"],
-        manifests=["foundry.toml"],
-        entry_points=[],
-        api_surfaces=[],
-        auth_components=[],
-        data_layers=[],
-        network_clients=[],
-        file_handlers=[],
-        configuration_files=[],
-        sensitive_processing=[],
-        security_tests=[],
-        files=[],
-    )
-
-
-def _context(
+def _usage(
     role: str,
-    index: SoliditySymbolIndex,
-    graphs: SolidityGraphSet,
-    invariants: InvariantSuite,
-) -> ContextPackage:
-    return ContextPackage(
-        role=role,
-        byte_budget=100_000,
-        bytes_used=10_000,
-        repository_map=_repository_map(),
-        scanner_findings=[],
-        excerpts=[],
-        solidity_index=index,
-        solidity_graphs=graphs,
-        solidity_invariants=invariants,
-    )
-
-
-def _usage(role: str, model_id: str, request_id: str) -> UsageRecord:
+    model_id: str,
+    request_id: str,
+    *,
+    execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.REAL,
+) -> UsageRecord:
     started_at = datetime.now(UTC)
     generation_id = f"generation-{request_id}"
     schema_sha256 = "e" * 64
     return UsageRecord(
         request_id=request_id,
         role=role,
-        execution_evidence=ExecutionEvidenceKind.REAL,
+        execution_evidence=execution_evidence,
         requested_model=model_id,
         returned_model=model_id,
         actual_model=model_id,
@@ -281,120 +257,266 @@ def _usage(role: str, model_id: str, request_id: str) -> UsageRecord:
     )
 
 
-def test_model_review_coverage_emits_every_surface_kind_and_lineage(
+def _record(
+    request: ModelSurfaceReviewRequest,
+    role: str,
+    *,
+    status: ModelSurfaceReviewStatus = ModelSurfaceReviewStatus.REVIEWED_NO_ISSUE,
+) -> ModelSurfaceReviewRecord:
+    if request.allowed_locations:
+        location = request.allowed_locations[0]
+        citation = ModelSurfaceReviewCitation(
+            location=location,
+            symbol=location.symbol,
+        )
+    else:
+        citation = ModelSurfaceReviewCitation(symbol=request.allowed_symbols[0])
+    return ModelSurfaceReviewRecord(
+        surface_id=request.surface_id,
+        contract=request.contract,
+        function_or_state_surface=request.function_or_state_surface,
+        review_role=role,
+        status=status,
+        rationale="The named invariant and reachable state transition were reviewed.",
+        citation=citation,
+        invariant_considered=request.invariant_considered,
+        assumptions=(),
+        confidence=0.9,
+    )
+
+
+def _artifact(
+    requests: list[ModelSurfaceReviewRequest],
+    usage: UsageRecord,
+    *,
+    status: ModelSurfaceReviewStatus = ModelSurfaceReviewStatus.REVIEWED_NO_ISSUE,
+    manifest_sha256: str | None = None,
+) -> ModelSurfaceReviewArtifact:
+    records = tuple(_record(request, usage.role, status=status) for request in requests)
+    ids = tuple(request.surface_id for request in requests)
+    payload = {
+        "schema_version": "1.0",
+        "request_id": usage.request_id,
+        "review_role": usage.role,
+        "requested_surface_ids": list(ids),
+        "requested_surface_ids_sha256": hashlib.sha256(
+            json.dumps(
+                list(ids),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest(),
+        "requested_surface_manifest_sha256": manifest_sha256
+        or ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256(requests),
+        "prompt_sha256": usage.prompt_sha256,
+        "response_sha256": usage.response_sha256,
+        "validated_response_sha256": usage.validated_response_sha256,
+        "response_schema_sha256": usage.schema_sha256,
+        "records": [record.model_dump(mode="json") for record in records],
+    }
+    payload["artifact_sha256"] = ModelSurfaceReviewArtifact.calculate_artifact_sha256(payload)
+    return ModelSurfaceReviewArtifact.model_validate(payload)
+
+
+def _requests() -> tuple[
+    SoliditySymbolIndex,
+    SolidityGraphSet,
+    InvariantSuite,
+    list[ModelSurfaceReviewRequest],
+]:
+    index, graphs, invariants = _inventory()
+    requests = build_model_surface_requests(
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+    )
+    return index, graphs, invariants, requests
+
+
+def test_surface_requests_cover_full_deterministic_inventory() -> None:
+    _, _, _, requests = _requests()
+
+    assert len(requests) == 9
+    assert requests == sorted(requests, key=lambda request: request.surface_id)
+    assert set(request.kind for request in requests) == set(ModelReviewSurfaceKind)
+    assert all(
+        request.contract
+        and request.function_or_state_surface
+        and (request.allowed_locations or request.allowed_symbols)
+        and request.invariant_considered
+        for request in requests
+    )
+
+
+def test_surface_request_plan_distributes_critical_surfaces_across_lineages(
     config_factory: Callable[..., AuditConfig],
 ) -> None:
     config = config_factory()
-    index, graphs, invariants = _inventory()
-    records = [
-        _usage("source_audit", config.models.source_audit.primary, "request-1"),
-        _usage("business_logic", config.models.business_logic.primary, "request-2"),
-    ]
-    contexts = [
-        _context("source_audit", index, graphs, invariants),
-        _context("business_logic", index, graphs, invariants),
-    ]
+    _, _, _, requests = _requests()
+
+    assignments = plan_model_surface_review_assignments(config, requests)
+
+    assigned_roles = {
+        request.surface_id: [
+            role for role, role_requests in assignments.items() if request in role_requests
+        ]
+        for request in requests
+    }
+    assert all(
+        len(assigned_roles[request.surface_id]) == (3 if request.critical else 1)
+        for request in requests
+    )
+    assert all(
+        role_requests == sorted(role_requests, key=lambda item: item.surface_id)
+        for role_requests in assignments.values()
+    )
+
+
+def test_surface_request_plan_excludes_unapproved_lineage(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    base = config_factory()
+    excluded = next(
+        entry.root_lineage
+        for entry in base.models.registry
+        if entry.canonical_model_id == base.models.configuration.primary
+    )
+    approved = tuple(
+        lineage for lineage in base.privacy.approved_model_lineages if lineage != excluded
+    )
+    config = base.model_copy(
+        update={"privacy": base.privacy.model_copy(update={"approved_model_lineages": approved})}
+    )
+    _, _, _, requests = _requests()
+
+    assignments = plan_model_surface_review_assignments(config, requests)
+
+    for request in requests:
+        assigned = sum(request in role_requests for role_requests in assignments.values())
+        assert assigned == (2 if request.critical else 1)
+
+
+def test_context_delivery_or_successful_usage_without_response_earns_no_credit(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = config_factory()
+    index, graphs, invariants, _ = _requests()
+    usage = _usage("source_audit", config.models.source_audit.primary, "request-context-only")
 
     coverage = build_model_review_coverage(
         config,
-        usage_records=records,
-        contexts=contexts,
+        usage_records=[usage],
+        review_artifacts=[],
         index=index,
         graphs=graphs,
         invariants=invariants,
         economic_simulations=[],
     )
 
-    assert set(coverage.by_kind) == set(ModelReviewSurfaceKind)
-    expected_denominators = {
-        ModelReviewSurfaceKind.CONTRACT: 1,
-        ModelReviewSurfaceKind.ENTRY_POINT: 2,
-        ModelReviewSurfaceKind.PRIVILEGE_FUNCTION: 1,
-        ModelReviewSurfaceKind.ASSET_FUNCTION: 1,
-        ModelReviewSurfaceKind.CALL: 1,
-        ModelReviewSurfaceKind.STATE: 1,
-        ModelReviewSurfaceKind.INVARIANT: 1,
-        ModelReviewSurfaceKind.TEMPLATE: 1,
-    }
-    assert {
-        kind: metric.denominator for kind, metric in coverage.by_kind.items()
-    } == expected_denominators
-    assert all(metric.numerator == metric.denominator for metric in coverage.by_kind.values())
+    assert coverage.overall.denominator == 9
+    assert coverage.overall.numerator == 0
+    assert all(not surface.evidence_references for surface in coverage.surfaces)
+    assert not coverage.critical_gate_passed
+
+
+def test_three_independent_response_lineages_cover_critical_surfaces(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = config_factory()
+    index, graphs, invariants, requests = _requests()
+    usages = [
+        _usage("source_audit", config.models.source_audit.primary, "request-1"),
+        _usage("business_logic", config.models.business_logic.primary, "request-2"),
+        _usage("configuration", config.models.configuration.primary, "request-3"),
+    ]
+
+    coverage = build_model_review_coverage(
+        config,
+        usage_records=usages,
+        review_artifacts=[_artifact(requests, usage) for usage in usages],
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+    )
+
     assert coverage.overall.numerator == coverage.overall.denominator == 9
     assert coverage.critical.numerator == coverage.critical.denominator == 9
     assert coverage.critical_gate_passed
-    assert all(
-        surface.reviewer_roles == ["business_logic", "source_audit"]
-        and len(surface.root_lineages) == 2
-        for surface in coverage.surfaces
-    )
+    assert all(len(surface.root_lineages) == 3 for surface in coverage.surfaces)
+    assert all(len(surface.evidence_references) == 3 for surface in coverage.surfaces)
     assert ModelReviewCoverage.model_validate_json(coverage.model_dump_json()) == coverage
 
 
-def test_mock_reviews_cannot_be_credited_by_an_unrelated_real_request(
+def test_mock_and_unregistered_models_are_retained_as_no_credit(
     config_factory: Callable[..., AuditConfig],
 ) -> None:
     config = config_factory()
-    index, graphs, invariants = _inventory()
-    usage_records = [
-        _usage(
-            "source_audit",
-            config.models.source_audit.primary,
-            "mock-source",
-        ).model_copy(update={"execution_evidence": ExecutionEvidenceKind.MOCK}),
-        _usage(
-            "business_logic",
-            config.models.business_logic.primary,
-            "mock-business",
-        ).model_copy(update={"execution_evidence": ExecutionEvidenceKind.MOCK}),
-        _usage(
-            "configuration",
-            config.models.configuration.primary,
-            "real-unrelated",
-        ),
-    ]
+    index, graphs, invariants, requests = _requests()
+    mock = _usage(
+        "source_audit",
+        config.models.source_audit.primary,
+        "request-mock",
+        execution_evidence=ExecutionEvidenceKind.MOCK,
+    )
+    unknown = _usage("source_audit", "unknown/unqualified", "request-unknown")
 
     coverage = build_model_review_coverage(
         config,
-        usage_records=usage_records,
-        contexts=[
-            _context("source_audit", index, graphs, invariants),
-            _context("business_logic", index, graphs, invariants),
-        ],
+        usage_records=[mock, unknown],
+        review_artifacts=[_artifact(requests, mock), _artifact(requests, unknown)],
         index=index,
         graphs=graphs,
         invariants=invariants,
         economic_simulations=[],
     )
 
-    assert coverage.overall.denominator > 0
     assert coverage.overall.numerator == 0
-    assert not coverage.critical_gate_passed
+    assert all(len(surface.evidence_references) == 2 for surface in coverage.surfaces)
+    assert all(
+        all(not reference.credited for reference in surface.evidence_references)
+        for surface in coverage.surfaces
+    )
     assert any("mock model usage was excluded" in item for item in coverage.limitations)
+    assert any("unregistered model" in item for item in coverage.limitations)
 
 
-def test_critical_surface_gate_cannot_be_masked_by_complete_aggregate_coverage(
+def test_same_lineage_aliases_do_not_inflate_independence(
     config_factory: Callable[..., AuditConfig],
 ) -> None:
-    config = config_factory()
-    index, graphs, invariants = _inventory()
-    second_graphs = graphs.model_copy(
+    base = config_factory()
+    source = base.models.source_audit.primary
+    alias = "mirror/borealis-secure"
+    registry = [
+        entry.model_copy(update={"aliases": (alias,)})
+        if entry.canonical_model_id == source
+        else entry
+        for entry in base.models.registry
+    ]
+    config = base.model_copy(
         update={
-            "edges": [
-                edge for edge in graphs.edges if edge.graph is not SolidityGraphKind.ASSET_FLOW
-            ]
+            "models": base.models.model_copy(
+                update={
+                    "registry": tuple(registry),
+                    "source_audit": base.models.source_audit.model_copy(
+                        update={"fallbacks": [alias]}
+                    ),
+                }
+            )
         }
     )
+    index, graphs, invariants, requests = _requests()
+    usages = [
+        _usage("source_audit", source, "request-canonical"),
+        _usage("source_audit", alias, "request-alias"),
+    ]
     coverage = build_model_review_coverage(
         config,
-        usage_records=[
-            _usage("source_audit", config.models.source_audit.primary, "request-1"),
-            _usage("business_logic", config.models.business_logic.primary, "request-2"),
-        ],
-        contexts=[
-            _context("source_audit", index, graphs, invariants),
-            _context("business_logic", index, second_graphs, invariants),
-        ],
+        usage_records=usages,
+        review_artifacts=[_artifact(requests, usage) for usage in usages],
         index=index,
         graphs=graphs,
         invariants=invariants,
@@ -402,15 +524,86 @@ def test_critical_surface_gate_cannot_be_masked_by_complete_aggregate_coverage(
     )
 
     assert coverage.overall.numerator == coverage.overall.denominator
-    assert coverage.critical.numerator == coverage.critical.denominator - 1
-    asset_surface = next(
-        surface
-        for surface in coverage.surfaces
-        if surface.kind is ModelReviewSurfaceKind.ASSET_FUNCTION
+    assert all(len(surface.root_lineages) == 1 for surface in coverage.surfaces)
+    assert coverage.critical.numerator == 0
+    assert not coverage.critical_gate_passed
+
+
+def test_request_manifest_or_response_hash_splice_is_not_credited(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = config_factory()
+    index, graphs, invariants, requests = _requests()
+    usage = _usage("source_audit", config.models.source_audit.primary, "request-splice")
+    artifact = _artifact(requests, usage, manifest_sha256="9" * 64)
+    coverage = build_model_review_coverage(
+        config,
+        usage_records=[usage],
+        review_artifacts=[artifact],
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
     )
-    assert asset_surface.reviewed
-    assert len(asset_surface.root_lineages) == 1
+
+    assert coverage.overall.numerator == 0
+    assert all(
+        "manifest hash was inconsistent" in surface.evidence_references[0].reason
+        for surface in coverage.surfaces
+    )
+
+
+def test_inconclusive_and_not_reviewed_records_are_explicit_no_credit(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = config_factory()
+    index, graphs, invariants, requests = _requests()
+    usages = [
+        _usage("source_audit", config.models.source_audit.primary, "request-inconclusive"),
+        _usage("business_logic", config.models.business_logic.primary, "request-not-reviewed"),
+    ]
+    artifacts = [
+        _artifact(requests, usages[0], status=ModelSurfaceReviewStatus.INCONCLUSIVE),
+        _artifact(requests, usages[1], status=ModelSurfaceReviewStatus.NOT_REVIEWED),
+    ]
+    coverage = build_model_review_coverage(
+        config,
+        usage_records=usages,
+        review_artifacts=artifacts,
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+    )
+
+    assert coverage.overall.numerator == 0
+    assert {reference.status for reference in coverage.surfaces[0].evidence_references} == {
+        ModelSurfaceReviewStatus.INCONCLUSIVE,
+        ModelSurfaceReviewStatus.NOT_REVIEWED,
+    }
+
+
+def test_role_mismatch_is_not_credited_and_gate_fails(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = config_factory()
+    index, graphs, invariants, requests = _requests()
+    usage = _usage("source_audit", config.models.source_audit.primary, "request-role")
+    artifact = _artifact(requests, usage).model_copy(update={"review_role": "verifier"})
+    coverage = build_model_review_coverage(
+        config,
+        usage_records=[usage],
+        review_artifacts=[artifact],
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+    )
+
+    assert coverage.overall.numerator == 0
+    assert all(
+        "not an allowed investigator role" in surface.evidence_references[0].reason
+        for surface in coverage.surfaces
+    )
     gate = model_review_critical_surface_gate(coverage, required=True)
-    assert gate.required
-    assert not gate.passed
-    assert gate.artifacts == ["model-review-coverage.json"]
+    assert gate.required and not gate.passed

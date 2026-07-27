@@ -633,14 +633,16 @@ def render_markdown(report: AuditReport) -> str:
                 f"{model_coverage.critical.numerator}/{model_coverage.critical.denominator}",
                 f"- Critical-surface gate passed: {model_coverage.critical_gate_passed}",
                 "",
-                "| Surface | Kind | Critical | Successful roles | Root lineages |",
-                "| --- | --- | --- | --- | --- |",
+                "| Surface | Kind | Critical | Credited response records | "
+                "Successful roles | Root lineages |",
+                "| --- | --- | --- | ---: | --- | --- |",
             ]
         )
         for surface in model_coverage.surfaces:
+            credited_records = sum(reference.credited for reference in surface.evidence_references)
             lines.append(
                 f"| {_text(surface.label)} | {_text(surface.kind.value)} | "
-                f"{surface.critical} | "
+                f"{surface.critical} | {credited_records} | "
                 f"{_text(', '.join(surface.reviewer_roles) or 'none')} | "
                 f"{_text(', '.join(surface.root_lineages) or 'none')} |"
             )

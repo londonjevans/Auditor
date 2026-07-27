@@ -101,6 +101,8 @@ from mmaudit.models.schemas import (
     LocationValidation,
     MaximumAssuranceAssessment,
     ModelReviewCoverage,
+    ModelSurfaceReviewArtifact,
+    ModelSurfaceReviewRequest,
     ModelVote,
     PriorAuditComparison,
     PropertyCorpus,
@@ -150,7 +152,9 @@ from mmaudit.orchestration.manifest import (
 )
 from mmaudit.orchestration.model_coverage import (
     build_model_review_coverage,
+    build_model_surface_requests,
     model_review_critical_surface_gate,
+    plan_model_surface_review_assignments,
 )
 from mmaudit.orchestration.prior_audit import (
     build_prior_audit_comparison,
@@ -467,6 +471,8 @@ class AuditPipeline:
         formal_runs: list[FormalToolRun] = []
         solidity_coverage: SolidityCoverage | None = None
         model_review_coverage: ModelReviewCoverage | None = None
+        model_surface_review_artifacts: list[ModelSurfaceReviewArtifact] = []
+        model_surface_review_assignments: dict[str, list[ModelSurfaceReviewRequest]] = {}
         generated_tests: list[GeneratedFoundryTestSpec] = []
         reproductions: list[ReproductionResult] = []
         reproduction_resolutions: list[CandidateReproductionResolution] = []
@@ -925,6 +931,15 @@ class AuditPipeline:
                 require_endpoint_cost_bound=not scanner_only,
             )
         )
+        model_surface_review_assignments = plan_model_surface_review_assignments(
+            self.config,
+            build_model_surface_requests(
+                index=solidity_index,
+                graphs=solidity_graphs,
+                invariants=solidity_invariants,
+                economic_simulations=economic_simulations,
+            ),
+        )
 
         context_builder: ContextBuilder | None = None
         if not scanner_only and terminal_code is ExitCode.SUCCESS:
@@ -1009,7 +1024,12 @@ class AuditPipeline:
                     budget_halted = True
                     return None
 
-            def build_specialist_context(role: str, **kwargs: Any) -> Any | None:
+            def build_specialist_context(
+                role: str,
+                *,
+                request_model_surface_reviews: bool = False,
+                **kwargs: Any,
+            ) -> Any | None:
                 return build_context(
                     f"specialist:{role}",
                     requested_budget=specialist_context_budget(
@@ -1017,6 +1037,7 @@ class AuditPipeline:
                         total_context_bytes=(self.config.repository.max_total_context_bytes),
                         planned_packages=context_builder.planned_packages,
                     ),
+                    request_model_surface_reviews=request_model_surface_reviews,
                     **kwargs,
                 )
 
@@ -1065,7 +1086,14 @@ class AuditPipeline:
             )
             tasks: list[tuple[str, asyncio.Task[Any]]] = []
             for role, agent_type in agent_specs:
-                package = build_context(role, threat_model=threat_model)
+                package = build_context(
+                    role,
+                    threat_model=threat_model,
+                    requested_model_surfaces=model_surface_review_assignments.get(
+                        role,
+                        [],
+                    ),
+                )
                 if package is None:
                     break
                 packages.append(package)
@@ -1097,6 +1125,10 @@ class AuditPipeline:
                     package = build_specialist_context(
                         role,
                         threat_model=threat_model,
+                        requested_model_surfaces=model_surface_review_assignments.get(
+                            f"specialist:{role}",
+                            [],
+                        ),
                     )
                     if package is None:
                         break
@@ -1105,6 +1137,8 @@ class AuditPipeline:
                 try:
                     batch = await task
                     candidates.extend(batch.findings)
+                    if batch.surface_review_artifact is not None:
+                        model_surface_review_artifacts.append(batch.surface_review_artifact)
                     if batch.findings and time_to_first_candidate_seconds is None:
                         time_to_first_candidate_seconds = time.monotonic() - run_started_monotonic
                 except BudgetExhaustedError as exc:
@@ -1140,6 +1174,8 @@ class AuditPipeline:
                 try:
                     batch = await task
                     candidates.extend(batch.findings)
+                    if batch.surface_review_artifact is not None:
+                        model_surface_review_artifacts.append(batch.surface_review_artifact)
                     if batch.findings and time_to_first_candidate_seconds is None:
                         time_to_first_candidate_seconds = time.monotonic() - run_started_monotonic
                 except BudgetExhaustedError as exc:
@@ -1616,12 +1652,6 @@ class AuditPipeline:
             incomplete.append("audited source changed during the run")
             terminal_code = ExitCode.SCANNER_FAILURE
         if solidity_coverage is not None:
-            solidity_coverage = with_model_review_coverage(
-                solidity_coverage,
-                solidity_index,
-                packages,
-                solidity_graphs,
-            )
             solidity_coverage = with_invariant_review_coverage(
                 solidity_coverage,
                 invariant_review,
@@ -1643,15 +1673,37 @@ class AuditPipeline:
                     ),
                 }
             )
+        private_model_review_path = run_dir / "private" / "model-review-artifacts.json"
+        write_json(
+            private_model_review_path,
+            {
+                "schema_version": REPORT_SCHEMA_VERSION,
+                "artifacts": [
+                    artifact.model_dump(mode="json")
+                    for artifact in sorted(
+                        model_surface_review_artifacts,
+                        key=lambda item: item.request_id,
+                    )
+                ],
+            },
+        )
+        private_model_review_path.chmod(0o600)
         model_review_coverage = build_model_review_coverage(
             self.config,
             usage_records=usage.records,
-            contexts=packages,
+            review_artifacts=model_surface_review_artifacts,
             index=solidity_index,
             graphs=solidity_graphs,
             invariants=solidity_invariants,
             economic_simulations=economic_simulations,
         )
+        if solidity_coverage is not None:
+            solidity_coverage = with_model_review_coverage(
+                solidity_coverage,
+                solidity_index,
+                model_review_coverage,
+                solidity_graphs,
+            )
         quality_gates = _evaluate_quality_gates(
             config=self.config,
             solidity_projects=solidity_projects,
@@ -1738,15 +1790,6 @@ class AuditPipeline:
             for request_role in successful_usage_roles
             if (specialist_role := canonical_specialist_role(request_role)) is not None
         }
-        model_review_coverage = build_model_review_coverage(
-            self.config,
-            usage_records=usage.records,
-            contexts=packages,
-            index=solidity_index,
-            graphs=solidity_graphs,
-            invariants=solidity_invariants,
-            economic_simulations=economic_simulations,
-        )
         if solidity_coverage is not None:
             high_critical_candidate_ids = {
                 candidate.candidate_id
@@ -1935,6 +1978,7 @@ class AuditPipeline:
                 judge_completed=("judge" in successful_usage_roles or candidate_groups_count == 0),
                 coverage=solidity_coverage,
                 model_review_coverage=model_review_coverage,
+                model_surface_review_artifacts=model_surface_review_artifacts,
                 model_usage=usage.records,
                 scope_assessment=scope_assessment,
                 benchmark_verification=benchmark_verification,

@@ -7,16 +7,16 @@ import json
 from dataclasses import dataclass
 from typing import Literal
 
-from mmaudit.agents.base import load_prompt
+from mmaudit.agents.base import FindingReviewResult, load_prompt
 from mmaudit.config import AuditConfig, model_family
 from mmaudit.constants import (
     ALL_SPECIALIST_ROLES,
     SPECIALIST_AUXILIARY_ROLES,
     SPECIALIST_INVESTIGATOR_ROLES,
 )
-from mmaudit.models.openrouter import OpenRouterClient
+from mmaudit.models.openrouter import OpenRouterClient, OpenRouterSchemaError
 from mmaudit.models.schemas import (
-    CandidateBatch,
+    CandidateReviewBatch,
     ContextPackage,
     Evidence,
     Finding,
@@ -30,6 +30,10 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.models.usage import is_creditable_usage_record
 from mmaudit.orchestration.context import render_context
+from mmaudit.orchestration.model_review_evidence import (
+    ModelReviewEvidenceError,
+    seal_model_surface_review_artifact,
+)
 
 
 @dataclass(frozen=True)
@@ -40,7 +44,7 @@ class SpecialistRoleDefinition:
     context_priorities: tuple[str, ...]
     exclusions: tuple[str, ...] = ()
     role_kind: Literal["investigator", "auxiliary"] = "investigator"
-    response_schema: str = "CandidateBatch"
+    response_schema: str = "CandidateReviewBatch"
     schema_name: str = ""
     max_context_bytes: int = 256_000
 
@@ -500,7 +504,7 @@ def build_specialist_execution_records(
 
 
 class SpecialistFindingAgent:
-    """Run one blind specialist pass with a strict CandidateBatch response."""
+    """Run one blind specialist pass with explicit surface-review evidence."""
 
     def __init__(
         self,
@@ -517,10 +521,10 @@ class SpecialistFindingAgent:
         self.role = role
         self.definition = SPECIALIST_ROLE_REGISTRY[role]
 
-    async def run(self, context: ContextPackage) -> CandidateBatch:
+    async def run(self, context: ContextPackage) -> FindingReviewResult:
         configured = self.config.models.role(self.role)
         request_role = f"specialist:{self.role}"
-        result = await self.client.complete(
+        completion = await self.client.complete_with_evidence(
             role=request_role,
             models=[configured.primary, *configured.fallbacks],
             system_prompt="\n\n".join(
@@ -533,19 +537,22 @@ class SpecialistFindingAgent:
                 )
             ),
             user_prompt=render_context(context),
-            response_model=CandidateBatch,
+            response_model=CandidateReviewBatch,
             schema_name=self.definition.effective_schema_name(),
         )
-        usage = next(
-            (
-                record
-                for record in reversed(self.client.usage.records)
-                if record.role == request_role and is_creditable_usage_record(record)
-            ),
-            None,
-        )
-        requested = usage.requested_model if usage else configured.primary
-        returned = usage.returned_model if usage else None
+        result = completion.value
+        usage = completion.usage_record
+        try:
+            surface_review_artifact = seal_model_surface_review_artifact(
+                context=context,
+                completion=completion,
+            )
+        except ModelReviewEvidenceError:
+            raise OpenRouterSchemaError(
+                "model response did not provide valid requested-surface evidence"
+            ) from None
+        requested = usage.requested_model
+        returned = usage.returned_model
         family = model_family(requested)
         scanner_fingerprints = {finding.fingerprint for finding in context.scanner_findings}
         stamped = []
@@ -592,7 +599,10 @@ class SpecialistFindingAgent:
                     }
                 )
             )
-        return CandidateBatch(findings=stamped)
+        return FindingReviewResult(
+            findings=tuple(stamped),
+            surface_review_artifact=surface_review_artifact,
+        )
 
 
 class ReportQualityAgent:

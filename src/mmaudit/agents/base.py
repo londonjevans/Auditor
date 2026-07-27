@@ -3,19 +3,25 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from importlib.resources import files
 
 from mmaudit.config import AuditConfig, model_family
-from mmaudit.models.openrouter import OpenRouterClient
+from mmaudit.models.openrouter import OpenRouterClient, OpenRouterSchemaError
 from mmaudit.models.schemas import (
-    CandidateBatch,
+    CandidateFinding,
+    CandidateReviewBatch,
     ContextPackage,
     Evidence,
+    ModelSurfaceReviewArtifact,
     ModelVote,
     ThreatModel,
 )
-from mmaudit.models.usage import is_creditable_usage_record
 from mmaudit.orchestration.context import render_context
+from mmaudit.orchestration.model_review_evidence import (
+    ModelReviewEvidenceError,
+    seal_model_surface_review_artifact,
+)
 
 
 def load_prompt(name: str) -> str:
@@ -45,6 +51,14 @@ class AgentBase:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class FindingReviewResult:
+    """Stamped candidates plus the exact response-backed surface evidence."""
+
+    findings: tuple[CandidateFinding, ...]
+    surface_review_artifact: ModelSurfaceReviewArtifact | None
+
+
 class ThreatModelAgent(AgentBase):
     role = "threat_model"
     prompt_file = "threat_model.md"
@@ -61,26 +75,28 @@ class ThreatModelAgent(AgentBase):
 
 
 class FindingAgent(AgentBase):
-    async def run(self, context: ContextPackage) -> CandidateBatch:
-        result = await self.client.complete(
+    async def run(self, context: ContextPackage) -> FindingReviewResult:
+        completion = await self.client.complete_with_evidence(
             role=self.role,
             models=self.configured_models,
             system_prompt=self.system_prompt,
             user_prompt=render_context(context),
-            response_model=CandidateBatch,
+            response_model=CandidateReviewBatch,
             schema_name=f"mmaudit_{self.role}_findings",
         )
-        primary = self.config.models.role(self.role).primary
-        usage = next(
-            (
-                record
-                for record in reversed(self.client.usage.records)
-                if record.role == self.role and is_creditable_usage_record(record)
-            ),
-            None,
-        )
-        requested = usage.requested_model if usage else primary
-        returned = usage.returned_model if usage else None
+        result = completion.value
+        usage = completion.usage_record
+        try:
+            surface_review_artifact = seal_model_surface_review_artifact(
+                context=context,
+                completion=completion,
+            )
+        except ModelReviewEvidenceError:
+            raise OpenRouterSchemaError(
+                "model response did not provide valid requested-surface evidence"
+            ) from None
+        requested = usage.requested_model
+        returned = usage.returned_model
         family = model_family(requested)
         trusted_scanner_fingerprints = {finding.fingerprint for finding in context.scanner_findings}
         stamped = []
@@ -128,4 +144,7 @@ class FindingAgent(AgentBase):
                     }
                 )
             )
-        return CandidateBatch(findings=stamped)
+        return FindingReviewResult(
+            findings=tuple(stamped),
+            surface_review_artifact=surface_review_artifact,
+        )
