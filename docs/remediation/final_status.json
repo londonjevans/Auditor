@@ -31,7 +31,7 @@
     "real_authentication_validated": true,
     "canary_artifact_validation": "PASSED",
     "model_completion_cost_usd": 0.0,
-    "checkpoint_commit": null
+    "checkpoint_commit": "a333ff9df5c1b680c110c0e011682dfbf4e7aa42"
   },
   "defects": {
     "total": 13,
