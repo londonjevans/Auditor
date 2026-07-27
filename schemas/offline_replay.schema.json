@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmaudit.local/schemas/offline_replay.schema.json",
+  "title": "mmaudit deterministic offline replay evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_by",
+    "status",
+    "run_id",
+    "manifest_sha256",
+    "run_verification_sha256",
+    "model_provider_contacted",
+    "remote_network_policy",
+    "loopback_policy",
+    "components",
+    "missing_kinds",
+    "replay_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "generated_by": {
+      "const": "mmaudit"
+    },
+    "status": {
+      "enum": [
+        "replayed",
+        "drifted",
+        "incomplete"
+      ]
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "run_verification_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "model_provider_contacted": {
+      "const": false
+    },
+    "remote_network_policy": {
+      "const": "denied"
+    },
+    "loopback_policy": {
+      "const": "local_only"
+    },
+    "components": {
+      "type": "array",
+      "maxItems": 200000,
+      "items": {
+        "$ref": "#/$defs/component"
+      }
+    },
+    "missing_kinds": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "$ref": "#/$defs/componentKind"
+      }
+    },
+    "replay_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "optionalSha256": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "componentKind": {
+      "enum": [
+        "scanner",
+        "saved_test",
+        "counterexample"
+      ]
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "identifier",
+        "status",
+        "executed",
+        "expected_state",
+        "observed_state",
+        "expected_sha256",
+        "observed_sha256",
+        "limitations"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/componentKind"
+        },
+        "identifier": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "status": {
+          "enum": [
+            "matched",
+            "drifted",
+            "blocked"
+          ]
+        },
+        "executed": {
+          "type": "boolean"
+        },
+        "expected_state": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "observed_state": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expected_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "observed_sha256": {
+          "$ref": "#/$defs/optionalSha256"
+        },
+        "limitations": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        }
+      }
+    }
+  }
+}

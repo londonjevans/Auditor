@@ -1,0 +1,8 @@
+title = "mmaudit trusted gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "mmaudit private output is never part of the audited source"
+paths = ['''(^|/)\.mmaudit/''']

@@ -1,0 +1,12 @@
+{
+  "assets": ["Synthetic records"],
+  "trust_boundaries": [],
+  "attacker_controlled_inputs": ["query"],
+  "identities_and_roles": ["synthetic user"],
+  "sensitive_data": ["synthetic tenant data"],
+  "external_integrations": [],
+  "attack_surfaces": ["local fixture function"],
+  "missing_controls": ["parameterized query"],
+  "review_targets": ["app.py"]
+}
+

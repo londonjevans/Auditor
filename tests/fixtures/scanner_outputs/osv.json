@@ -1,0 +1,21 @@
+{
+  "results": [
+    {
+      "source": {"path": "requirements.txt", "type": "lockfile"},
+      "packages": [
+        {
+          "package": {"name": "Flask", "version": "0.12", "ecosystem": "PyPI"},
+          "vulnerabilities": [
+            {
+              "id": "GHSA-SYNTHETIC-0001",
+              "aliases": ["CVE-SYNTHETIC-0001"],
+              "summary": "Synthetic vulnerable dependency",
+              "database_specific": {"severity": "HIGH"}
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+

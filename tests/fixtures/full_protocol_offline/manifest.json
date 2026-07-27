@@ -1,0 +1,73 @@
+{
+  "schema_version": "1.0",
+  "generated_by": "mmaudit",
+  "expectations": {
+    "protocol_address": "0x1111111111111111111111111111111111111111",
+    "source_path": "src/FullProtocol.sol",
+    "contract_name": "FullProtocol",
+    "compiler_artifact_path": "compiler/FullProtocol.json",
+    "snapshot_path": "snapshot.json",
+    "prior_audit_path": "audit/prior.json",
+    "admin_role_id": "0xa49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c21775",
+    "admin_member": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "relayer_role_id": "0xe2b7fb3b832174769106daebcfd6d1970523240dda11281102db9363b83b0dc4",
+    "relayer_member": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "timelock_address": "0x2222222222222222222222222222222222222222",
+    "minimum_delay_seconds": 172800,
+    "oracle_address": "0x3333333333333333333333333333333333333333",
+    "oracle_feed_decimals": 8,
+    "oracle_heartbeat_seconds": 3600,
+    "prior_ids": [
+      "PRIOR-RELAYER-001"
+    ]
+  },
+  "fixture_files": [
+    {
+      "path": "README.md",
+      "sha256": "b3c8ec2632ad5ad687b8e3e745d6184842697d20ab8d0057de5e86fd426ac9c2",
+      "size": 175
+    },
+    {
+      "path": "audit/prior.json",
+      "sha256": "ed5a46da036b886fcba8aa33826bbb4f120d8fdb52d258f7cecafaef82912f5a",
+      "size": 618
+    },
+    {
+      "path": "compiler/FullProtocol.json",
+      "sha256": "be77aa8955ae5d9ba02e15098a5c39957a4fd137ba029fe9adb37df9e99ebe50",
+      "size": 2586
+    },
+    {
+      "path": "foundry.toml",
+      "sha256": "8ebc758a846907ce75cfbca9fbf000fed72d89fa02aac11a3d1765066feadaf7",
+      "size": 147
+    },
+    {
+      "path": "script/Deploy.s.sol",
+      "sha256": "b53a58fec815b2f0f2b2e77b8b0dd7094d3a14d1b565fbb5017d36e191e9d29c",
+      "size": 379
+    },
+    {
+      "path": "service/relayer.py",
+      "sha256": "dd77077e5870b73fe36f5f820f9e3061c90c741c0ce658bb8da937cf2ae7cf29",
+      "size": 338
+    },
+    {
+      "path": "snapshot.json",
+      "sha256": "1d85403411a937636ed70a776d3544fe5af1b6c124cd28ddcc1ed857b88dfe52",
+      "size": 7001
+    },
+    {
+      "path": "src/FullProtocol.sol",
+      "sha256": "6f7fdbefaa96a4dc7c9077bcda4123eee14d77d4c78bf160724f990e4b5f784c",
+      "size": 1811
+    },
+    {
+      "path": "test/FullProtocol.t.sol",
+      "sha256": "52506fd232241cd476b72c40f921391aabc0e92a4e585af7c93dcf2e0efc6670",
+      "size": 2034
+    }
+  ],
+  "fixture_tree_sha256": "92bfc0bd06923ac02e12f661f12c4f7cd642b9388c84a6d6db447715d26684c3",
+  "manifest_sha256": "bb640b91d8285ec38bc624e77d393b66705017304e0a376e44f38e102411f67a"
+}

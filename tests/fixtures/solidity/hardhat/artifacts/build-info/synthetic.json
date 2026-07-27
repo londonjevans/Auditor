@@ -1,0 +1,104 @@
+{
+  "input": {
+    "sources": {
+      "contracts/Token.sol": {}
+    }
+  },
+  "output": {
+    "sources": {
+      "contracts/Token.sol": {
+        "ast": {
+          "nodeType": "SourceUnit",
+          "nodes": [
+            {
+              "id": 10,
+              "nodeType": "ContractDefinition",
+              "contractKind": "contract",
+              "name": "Token",
+              "src": "58:400:0",
+              "baseContracts": [],
+              "nodes": [
+                {
+                  "id": 11,
+                  "nodeType": "VariableDeclaration",
+                  "name": "balanceOf",
+                  "stateVariable": true,
+                  "visibility": "public",
+                  "mutability": "mutable",
+                  "src": "75:53:0"
+                },
+                {
+                  "id": 12,
+                  "nodeType": "ModifierDefinition",
+                  "name": "onlyMinter",
+                  "src": "160:97:0"
+                },
+                {
+                  "id": 13,
+                  "nodeType": "FunctionDefinition",
+                  "kind": "function",
+                  "name": "mint",
+                  "visibility": "external",
+                  "stateMutability": "nonpayable",
+                  "src": "263:103:0",
+                  "modifiers": [
+                    {
+                      "nodeType": "ModifierInvocation",
+                      "modifierName": {
+                        "nodeType": "IdentifierPath",
+                        "name": "onlyMinter",
+                        "namePath": "onlyMinter"
+                      },
+                      "src": "315:10:0"
+                    }
+                  ],
+                  "body": {
+                    "nodeType": "Block",
+                    "statements": [
+                      {
+                        "nodeType": "ExpressionStatement",
+                        "expression": {
+                          "nodeType": "FunctionCall",
+                          "expression": {
+                            "nodeType": "Identifier",
+                            "name": "_mint"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "id": 14,
+                  "nodeType": "FunctionDefinition",
+                  "kind": "function",
+                  "name": "_mint",
+                  "visibility": "internal",
+                  "stateMutability": "nonpayable",
+                  "src": "372:82:0",
+                  "modifiers": [],
+                  "body": {
+                    "nodeType": "Block",
+                    "statements": []
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "contracts": {
+      "contracts/Token.sol": {
+        "Token": {
+          "evm": {
+            "deployedBytecode": {
+              "sourceMap": "0:1:0"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+

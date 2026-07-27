@@ -1,0 +1,165 @@
+{
+  "schema_version": "1.0",
+  "generated_by": "mmaudit",
+  "release_id": "release-001-2026-07-27",
+  "repository_state": "uncommitted-worktree-no-initial-commit",
+  "status": "blocked_technical",
+  "total_gates": 12,
+  "passed_gates": 8,
+  "blocked_gates": [
+    "doctor",
+    "maximum_assurance_run",
+    "model_benchmark",
+    "replay"
+  ],
+  "failed_gates": [],
+  "safe_local_gates_complete": true,
+  "all_required_gates_passed": false,
+  "gates": [
+    {
+      "gate_id": "artifacts",
+      "status": "passed",
+      "command": "env -u OPENROUTER_API_KEY .venv/bin/mmaudit scan --config mmaudit.example.toml --repo tests/fixtures/full_protocol_offline --output /private/tmp/mmaudit-release-scan --no-color; .venv/bin/mmaudit verify-run --manifest /private/tmp/mmaudit-release-scan/runs/20260727T103753Z-73d1b7ca/run-evidence-manifest.json --run-dir /private/tmp/mmaudit-release-scan/runs/20260727T103753Z-73d1b7ca --repo tests/fixtures/full_protocol_offline --config mmaudit.example.toml --output /private/tmp/mmaudit-release-scan-verification.json --no-color",
+      "exit_code": 0,
+      "result": "scanner-only run completed; 30 artifacts matched the sealed manifest; SARIF 2.1.0 parsed; verify-run reported current with zero mismatches",
+      "mocked": false,
+      "blocker": null,
+      "evidence": [
+        "manifest_sha256=b2d5743c3d1ec3c82102ac99fc93fa0576f7bad9e594e2b9df30a6903d59b6e0",
+        "sarif_sha256=29fb3fde7cfed1ffcb0bf860c6f8c3e081a3a923b11fc45d3442fd871e45e0d5",
+        "verification_sha256=dcca9c2c683d9f07cc8a17e0519da97e3a160d551d5daaf9b2811b23e598d12f"
+      ]
+    },
+    {
+      "gate_id": "benchmark_certificate",
+      "status": "passed",
+      "command": ".venv/bin/pytest -q tests/unit/test_benchmark_certificate.py tests/unit/test_cli.py::test_benchmark_certificate_cli_success_and_current_verification",
+      "exit_code": 0,
+      "result": "8 passed in 0.24s; the CLI sealed and reverified a current file-backed certificate",
+      "mocked": false,
+      "blocker": null,
+      "evidence": []
+    },
+    {
+      "gate_id": "doctor",
+      "status": "blocked_technical",
+      "command": "env -u OPENROUTER_API_KEY .venv/bin/mmaudit doctor --config mmaudit.example.toml --repo . --output /private/tmp/mmaudit-release-doctor --allow-code-egress --no-color",
+      "exit_code": 2,
+      "result": "local checks ran and failed closed on missing provider credential, placeholder model selection, and unavailable hardened isolation",
+      "mocked": false,
+      "blocker": "doctor cannot pass until an operator supplies immutable non-placeholder model selections, a provider credential, and an available hardened execution backend",
+      "evidence": []
+    },
+    {
+      "gate_id": "manifests",
+      "status": "passed",
+      "command": ".venv/bin/python scripts/validate_release_evidence.py",
+      "exit_code": 0,
+      "result": "benchmark, model-corpus, economic, adversarial, full-protocol, traceability, and release manifests validated",
+      "mocked": false,
+      "blocker": null,
+      "evidence": [
+        "economic_cases=18",
+        "full_protocol_files=9",
+        "model_cases=4"
+      ]
+    },
+    {
+      "gate_id": "maximum_assurance_run",
+      "status": "blocked_technical",
+      "command": "env -u OPENROUTER_API_KEY .venv/bin/mmaudit run --config mmaudit.example.toml --repo tests/fixtures/full_protocol_offline --output /private/tmp/mmaudit-release-maximum --profile maximum-assurance --require-maximum-assurance --allow-code-egress --no-color",
+      "exit_code": 2,
+      "result": "the real local preflight emitted an INCONCLUSIVE report and stopped before dynamic or model execution",
+      "mocked": false,
+      "blocker": "no supported hardened dynamic-execution backend is available; required traceability rows and runtime assurance clauses remain non-complete",
+      "evidence": [
+        "maximum_assurance_status=INCONCLUSIVE",
+        "run_id=20260727T103715Z-44eadad5"
+      ]
+    },
+    {
+      "gate_id": "model_benchmark",
+      "status": "blocked_technical",
+      "command": "env -u OPENROUTER_API_KEY .venv/bin/mmaudit models benchmark --config mmaudit.example.toml --corpus benchmarks/model_corpus/manifest.json --model PROVIDER_A/MODEL_ID_A --allow-code-egress --output /private/tmp/mmaudit-release-model-benchmark.json --no-color",
+      "exit_code": 2,
+      "result": "real-provider benchmark failed safely before provider construction; 7 deterministic model-benchmark and egress-control tests passed in 0.22s",
+      "mocked": true,
+      "blocker": "the configured target lacks an immutable lineage and no provider credential or committed operator-selected model is available",
+      "evidence": [
+        "tests/unit/test_cli.py::test_models_benchmark_requires_explicit_egress_before_provider_access",
+        "tests/unit/test_model_benchmark.py"
+      ]
+    },
+    {
+      "gate_id": "mypy",
+      "status": "passed",
+      "command": ".venv/bin/mypy",
+      "exit_code": 0,
+      "result": "strict mypy passed 101 configured source files",
+      "mocked": false,
+      "blocker": null,
+      "evidence": []
+    },
+    {
+      "gate_id": "pytest",
+      "status": "passed",
+      "command": ".venv/bin/pytest -q",
+      "exit_code": 0,
+      "result": "complete test suite passed 635 tests with 9 documented technical skips in 138.49s; unavailable integrations were not claimed",
+      "mocked": false,
+      "blocker": null,
+      "evidence": []
+    },
+    {
+      "gate_id": "replay",
+      "status": "blocked_technical",
+      "command": ".venv/bin/pytest -q tests/unit/test_replay.py tests/integration/test_offline_replay.py",
+      "exit_code": null,
+      "result": "4 deterministic mocked replay tests passed and the conditional real Foundry replay integration skipped",
+      "mocked": true,
+      "blocker": "real local Foundry replay requires a hardened isolation backend that is unavailable on this host",
+      "evidence": [
+        "tests/integration/test_offline_replay.py",
+        "tests/unit/test_replay.py"
+      ]
+    },
+    {
+      "gate_id": "ruff_check",
+      "status": "passed",
+      "command": ".venv/bin/ruff check .",
+      "exit_code": 0,
+      "result": "Ruff checks passed repository-wide",
+      "mocked": false,
+      "blocker": null,
+      "evidence": []
+    },
+    {
+      "gate_id": "ruff_format",
+      "status": "passed",
+      "command": ".venv/bin/ruff format .",
+      "exit_code": 0,
+      "result": "repository-wide Ruff formatting left 206 files unchanged",
+      "mocked": false,
+      "blocker": null,
+      "evidence": []
+    },
+    {
+      "gate_id": "schemas",
+      "status": "passed",
+      "command": ".venv/bin/python scripts/validate_release_evidence.py",
+      "exit_code": 0,
+      "result": "every published JSON schema parsed as strict draft 2020-12",
+      "mocked": false,
+      "blocker": null,
+      "evidence": [
+        "schemas=18"
+      ]
+    }
+  ],
+  "limitations": [
+    "maximum-assurance traceability still contains required partially implemented rows",
+    "no provider credential or immutable operator model selection is available for real model evaluation",
+    "no supported hardened dynamic-execution backend or pinned rootless runtime is available"
+  ],
+  "report_sha256": "4f2c0ea1da9cb83cad2ca80fbaa271250ca55618821a6d1d8c999aa01f210e22"
+}

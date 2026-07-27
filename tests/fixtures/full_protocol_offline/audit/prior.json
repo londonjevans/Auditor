@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "findings": [
+    {
+      "prior_id": "PRIOR-RELAYER-001",
+      "title": "BLIND-PRIOR-RELAYER-REPLAY-CANARY",
+      "severity": "high",
+      "cwe": [
+        "CWE-841"
+      ],
+      "previous_state": "remediated",
+      "locations": [
+        {
+          "path": "src/FullProtocol.sol",
+          "start_line": 38,
+          "end_line": 38,
+          "historical_content_sha256": "8aa757fba4a8fb230f30e81794be427c1872578c17f881a279b9ab4f87717dd9",
+          "remediated_content_sha256": "1caffe5f0789e2e6be8ccb43b218c98cb172e9fd80072723feeb22c95eae38e5"
+        }
+      ]
+    }
+  ]
+}

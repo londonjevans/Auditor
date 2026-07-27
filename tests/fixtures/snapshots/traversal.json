@@ -1,0 +1,47 @@
+{
+  "balances": [],
+  "capture_source": "operator_supplied",
+  "chain": {
+    "block_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "block_number": 1,
+    "block_timestamp": 1700000000,
+    "chain_id": 31337,
+    "network_label": "synthetic-local"
+  },
+  "configuration": [],
+  "contains_secrets": false,
+  "contains_source_code": false,
+  "contracts": [
+    {
+      "address": "0x1111111111111111111111111111111111111111",
+      "label": "TraversalBinding",
+      "runtime_bytecode": "0x6000",
+      "runtime_bytecode_sha256": "f3df0a62b10f205b0f29768aa3d69e777154caaa179f64aabb0a4899c666b017",
+      "source_binding": {
+        "compiler": {
+          "compiler_version": "0.8.24+commit.e11b9ed9",
+          "evm_version": "paris",
+          "metadata_bytecode_hash": "none",
+          "optimizer_enabled": true,
+          "optimizer_runs": 200,
+          "settings_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "via_ir": false
+        },
+        "compiler_artifact_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "contract_name": "TraversalBinding",
+        "immutables": [],
+        "libraries": [],
+        "source_path": "../outside/TraversalBinding.sol",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    }
+  ],
+  "format": "mmaudit-offline-deployment",
+  "oracles": [],
+  "proxies": [],
+  "roles": [],
+  "schema_version": "1.0",
+  "snapshot_id": "traversal-source-binding",
+  "snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "timelocks": []
+}

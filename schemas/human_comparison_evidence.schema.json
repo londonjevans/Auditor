@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmaudit.local/schemas/human_comparison_evidence.schema.json",
+  "title": "mmaudit blinded human-comparison evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "comparison_id",
+    "corpus_sha256",
+    "benchmark_report_sha256",
+    "reports_generated_blind",
+    "ground_truth_withheld_from_humans",
+    "ground_truth_withheld_from_mmaudit",
+    "blinding_protocol_sha256",
+    "same_corpus",
+    "same_scope",
+    "same_time_budget",
+    "same_evidence_access",
+    "review_protocol_sha256",
+    "human_reviewer_count",
+    "adjudicators_independent",
+    "adjudicator_count",
+    "adjudication_sha256",
+    "precision",
+    "recall",
+    "evidence_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "comparison_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "corpus_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "benchmark_report_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "reports_generated_blind": {
+      "type": "boolean"
+    },
+    "ground_truth_withheld_from_humans": {
+      "type": "boolean"
+    },
+    "ground_truth_withheld_from_mmaudit": {
+      "type": "boolean"
+    },
+    "blinding_protocol_sha256": {
+      "$ref": "#/$defs/optionalSha256"
+    },
+    "same_corpus": {
+      "type": "boolean"
+    },
+    "same_scope": {
+      "type": "boolean"
+    },
+    "same_time_budget": {
+      "type": "boolean"
+    },
+    "same_evidence_access": {
+      "type": "boolean"
+    },
+    "review_protocol_sha256": {
+      "$ref": "#/$defs/optionalSha256"
+    },
+    "human_reviewer_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "adjudicators_independent": {
+      "type": "boolean"
+    },
+    "adjudicator_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "adjudication_sha256": {
+      "$ref": "#/$defs/optionalSha256"
+    },
+    "precision": {
+      "$ref": "#/$defs/optionalMetricEvidence"
+    },
+    "recall": {
+      "$ref": "#/$defs/optionalMetricEvidence"
+    },
+    "evidence_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "optionalSha256": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "successes",
+        "trials"
+      ],
+      "properties": {
+        "successes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000000
+        },
+        "trials": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000
+        }
+      }
+    },
+    "metricEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mmaudit",
+        "human"
+      ],
+      "properties": {
+        "mmaudit": {
+          "$ref": "#/$defs/sample"
+        },
+        "human": {
+          "$ref": "#/$defs/sample"
+        }
+      }
+    },
+    "optionalMetricEvidence": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/metricEvidence"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

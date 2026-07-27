@@ -1,0 +1,10 @@
+[profile.default]
+src = "src"
+test = "test"
+out = "out"
+libs = []
+optimizer = true
+optimizer_runs = 200
+invariant.runs = 32
+invariant.depth = 2
+

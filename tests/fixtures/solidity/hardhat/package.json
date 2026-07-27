@@ -1,0 +1,12 @@
+{
+  "name": "synthetic-hardhat-fixture",
+  "private": true,
+  "devDependencies": {
+    "hardhat": "^2.0.0"
+  },
+  "scripts": {
+    "build": "hardhat compile",
+    "test": "hardhat test"
+  }
+}
+

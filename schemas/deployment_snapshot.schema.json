@@ -1,0 +1,692 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmaudit.local/schemas/deployment_snapshot.schema.json",
+  "title": "mmaudit hash-linked offline deployment snapshot",
+  "description": "Source-free, secret-free observations at one exact chain block. Canonical hash and cross-reference constraints are enforced by the typed loader.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "format",
+    "snapshot_id",
+    "capture_source",
+    "contains_source_code",
+    "contains_secrets",
+    "chain",
+    "contracts",
+    "proxies",
+    "roles",
+    "timelocks",
+    "oracles",
+    "balances",
+    "configuration",
+    "snapshot_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "format": {
+      "const": "mmaudit-offline-deployment"
+    },
+    "snapshot_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "capture_source": {
+      "enum": [
+        "operator_supplied",
+        "read_only_import"
+      ]
+    },
+    "contains_source_code": {
+      "const": false
+    },
+    "contains_secrets": {
+      "const": false
+    },
+    "chain": {
+      "$ref": "#/$defs/chain"
+    },
+    "contracts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10000,
+      "items": {
+        "$ref": "#/$defs/contract"
+      }
+    },
+    "proxies": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "$ref": "#/$defs/proxy"
+      }
+    },
+    "roles": {
+      "type": "array",
+      "maxItems": 100000,
+      "items": {
+        "$ref": "#/$defs/role"
+      }
+    },
+    "timelocks": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "$ref": "#/$defs/timelock"
+      }
+    },
+    "oracles": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "$ref": "#/$defs/oracle"
+      }
+    },
+    "balances": {
+      "type": "array",
+      "maxItems": 100000,
+      "items": {
+        "$ref": "#/$defs/balance"
+      }
+    },
+    "configuration": {
+      "type": "array",
+      "maxItems": 100000,
+      "items": {
+        "$ref": "#/$defs/configuration"
+      }
+    },
+    "snapshot_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "address": {
+      "type": "string",
+      "pattern": "^0x[0-9a-f]{40}$"
+    },
+    "bytes32": {
+      "type": "string",
+      "pattern": "^0x[0-9a-f]{64}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "addressList": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "$ref": "#/$defs/address"
+      }
+    },
+    "chain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "chain_id",
+        "block_number",
+        "block_hash",
+        "block_timestamp",
+        "network_label"
+      ],
+      "properties": {
+        "chain_id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "block_number": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "block_hash": {
+          "$ref": "#/$defs/bytes32"
+        },
+        "block_timestamp": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "network_label": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "compilerBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "compiler_version",
+        "evm_version",
+        "optimizer_enabled",
+        "optimizer_runs",
+        "via_ir",
+        "metadata_bytecode_hash",
+        "settings_sha256"
+      ],
+      "properties": {
+        "compiler_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+[A-Za-z0-9.+-]*$"
+        },
+        "evm_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,49}$"
+        },
+        "optimizer_enabled": {
+          "type": "boolean"
+        },
+        "optimizer_runs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "via_ir": {
+          "type": "boolean"
+        },
+        "metadata_bytecode_hash": {
+          "enum": [
+            "ipfs",
+            "bzzr1",
+            "none"
+          ]
+        },
+        "settings_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "libraryBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_path",
+        "library_name",
+        "address",
+        "start",
+        "length"
+      ],
+      "properties": {
+        "source_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "library_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$]{0,199}$"
+        },
+        "address": {
+          "$ref": "#/$defs/address"
+        },
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 24575
+        },
+        "length": {
+          "const": 20
+        }
+      }
+    },
+    "immutableBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identifier",
+        "start",
+        "length",
+        "value"
+      ],
+      "properties": {
+        "identifier": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$"
+        },
+        "start": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 24575
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024
+        },
+        "value": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 2050,
+          "pattern": "^0x[0-9a-f]+$"
+        }
+      }
+    },
+    "sourceBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_path",
+        "contract_name",
+        "source_sha256",
+        "compiler_artifact_sha256",
+        "compiler",
+        "libraries",
+        "immutables"
+      ],
+      "properties": {
+        "source_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "contract_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$]{0,199}$"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "compiler_artifact_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "compiler": {
+          "$ref": "#/$defs/compilerBinding"
+        },
+        "libraries": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "$ref": "#/$defs/libraryBinding"
+          }
+        },
+        "immutables": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "$ref": "#/$defs/immutableBinding"
+          }
+        }
+      }
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "address",
+        "label",
+        "runtime_bytecode",
+        "runtime_bytecode_sha256",
+        "source_binding"
+      ],
+      "properties": {
+        "address": {
+          "$ref": "#/$defs/address"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$.-]{0,199}$"
+        },
+        "runtime_bytecode": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 49154,
+          "pattern": "^0x(?:[0-9a-f]{2})+$"
+        },
+        "runtime_bytecode_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sourceBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "proxy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proxy_address",
+        "kind",
+        "implementation_address",
+        "admin_address",
+        "beacon_address",
+        "implementation_slot",
+        "admin_slot",
+        "beacon_slot"
+      ],
+      "properties": {
+        "proxy_address": {
+          "$ref": "#/$defs/address"
+        },
+        "kind": {
+          "enum": [
+            "transparent",
+            "uups",
+            "beacon",
+            "minimal",
+            "unknown"
+          ]
+        },
+        "implementation_address": {
+          "$ref": "#/$defs/address"
+        },
+        "admin_address": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/address"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "beacon_address": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/address"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "implementation_slot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/bytes32"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "admin_slot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/bytes32"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "beacon_slot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/bytes32"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_address",
+        "role_id",
+        "role_label",
+        "admin_role_id",
+        "members"
+      ],
+      "properties": {
+        "contract_address": {
+          "$ref": "#/$defs/address"
+        },
+        "role_id": {
+          "$ref": "#/$defs/bytes32"
+        },
+        "role_label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "pattern": "^[A-Z][A-Z0-9_]{0,99}$"
+        },
+        "admin_role_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/bytes32"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "members": {
+          "$ref": "#/$defs/addressList"
+        }
+      }
+    },
+    "timelock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_address",
+        "minimum_delay_seconds",
+        "proposers",
+        "executors",
+        "cancellers"
+      ],
+      "properties": {
+        "contract_address": {
+          "$ref": "#/$defs/address"
+        },
+        "minimum_delay_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "proposers": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/addressList"
+            },
+            {
+              "minItems": 1
+            }
+          ]
+        },
+        "executors": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/addressList"
+            },
+            {
+              "minItems": 1
+            }
+          ]
+        },
+        "cancellers": {
+          "$ref": "#/$defs/addressList"
+        }
+      }
+    },
+    "oracle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "consumer_address",
+        "feed_address",
+        "feed_decimals",
+        "heartbeat_seconds",
+        "observed_answer",
+        "updated_at",
+        "sequencer_feed_address",
+        "sequencer_grace_period_seconds"
+      ],
+      "properties": {
+        "consumer_address": {
+          "$ref": "#/$defs/address"
+        },
+        "feed_address": {
+          "$ref": "#/$defs/address"
+        },
+        "feed_decimals": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "heartbeat_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "observed_answer": {
+          "type": "integer",
+          "minimum": -57896044618658097711785492504343953926634992332820282019728792003956564819968,
+          "maximum": 57896044618658097711785492504343953926634992332820282019728792003956564819967
+        },
+        "updated_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "sequencer_feed_address": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/address"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sequencer_grace_period_seconds": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "balance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "account_address",
+        "asset_address",
+        "amount",
+        "decimals",
+        "symbol"
+      ],
+      "properties": {
+        "account_address": {
+          "$ref": "#/$defs/address"
+        },
+        "asset_address": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/address"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "amount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935
+        },
+        "decimals": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "symbol": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$"
+        }
+      }
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_address",
+        "key",
+        "kind",
+        "value",
+        "storage_slot"
+      ],
+      "properties": {
+        "contract_address": {
+          "$ref": "#/$defs/address"
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,199}$"
+        },
+        "kind": {
+          "enum": [
+            "uint",
+            "int",
+            "bool",
+            "address",
+            "bytes32"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "storage_slot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/bytes32"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

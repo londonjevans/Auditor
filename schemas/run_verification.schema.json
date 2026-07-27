@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmaudit.local/schemas/run_verification.schema.json",
+  "title": "mmaudit read-only run verification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_by",
+    "status",
+    "run_id",
+    "manifest_sha256",
+    "mismatches",
+    "verification_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "generated_by": {
+      "const": "mmaudit"
+    },
+    "status": {
+      "enum": [
+        "current",
+        "stale"
+      ]
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "mismatches": {
+      "type": "array",
+      "maxItems": 200000,
+      "items": {
+        "$ref": "#/$defs/mismatch"
+      }
+    },
+    "verification_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "optionalSha256": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "optionalSize": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "mismatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "category",
+        "identifier",
+        "kind",
+        "expected_sha256",
+        "observed_sha256",
+        "expected_size",
+        "observed_size"
+      ],
+      "properties": {
+        "category": {
+          "enum": [
+            "manifest",
+            "source",
+            "configuration",
+            "prompt",
+            "model",
+            "tool",
+            "compiler",
+            "isolation",
+            "seed",
+            "corpus",
+            "harness",
+            "reproduction",
+            "coverage",
+            "artifact",
+            "certificate"
+          ]
+        },
+        "identifier": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "kind": {
+          "enum": [
+            "missing",
+            "unexpected",
+            "changed",
+            "unsafe",
+            "unverifiable"
+          ]
+        },
+        "expected_sha256": {
+          "$ref": "#/$defs/optionalSha256"
+        },
+        "observed_sha256": {
+          "$ref": "#/$defs/optionalSha256"
+        },
+        "expected_size": {
+          "$ref": "#/$defs/optionalSize"
+        },
+        "observed_size": {
+          "$ref": "#/$defs/optionalSize"
+        }
+      }
+    }
+  }
+}

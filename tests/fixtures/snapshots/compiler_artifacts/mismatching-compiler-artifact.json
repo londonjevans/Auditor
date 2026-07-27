@@ -1,0 +1,49 @@
+{
+  "contractName": "SyntheticVault",
+  "deployedBytecode": {
+    "immutableReferences": {
+      "42": [
+        {
+          "length": 4,
+          "start": 22
+        }
+      ]
+    },
+    "linkReferences": {
+      "lib/SyntheticLibrary.sol": {
+        "SyntheticLibrary": [
+          {
+            "length": 20,
+            "start": 2
+          }
+        ]
+      }
+    },
+    "object": "0x61ff00000000000000000000000000000000000000000000000000006001"
+  },
+  "metadata": {
+    "compiler": {
+      "version": "0.8.25+commit.b61c2a91"
+    },
+    "settings": {
+      "compilationTarget": {
+        "src/SyntheticVault.sol": "SyntheticVault"
+      },
+      "evmVersion": "shanghai",
+      "libraries": {
+        "lib/SyntheticLibrary.sol": {
+          "SyntheticLibrary": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      },
+      "metadata": {
+        "bytecodeHash": "ipfs"
+      },
+      "optimizer": {
+        "enabled": true,
+        "runs": 999
+      },
+      "viaIR": true
+    }
+  },
+  "sourceName": "src/SyntheticVault.sol"
+}

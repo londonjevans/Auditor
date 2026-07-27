@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmaudit.local/schemas/full_protocol_acceptance_manifest.schema.json",
+  "title": "mmaudit full-protocol offline acceptance manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_by",
+    "expectations",
+    "fixture_files",
+    "fixture_tree_sha256",
+    "manifest_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "generated_by": {
+      "const": "mmaudit"
+    },
+    "expectations": {
+      "$ref": "#/$defs/expectations"
+    },
+    "fixture_files": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "items": {
+        "$ref": "#/$defs/fileBinding"
+      }
+    },
+    "fixture_tree_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "address": {
+      "type": "string",
+      "pattern": "^0x[0-9a-f]{40}$"
+    },
+    "bytes32": {
+      "type": "string",
+      "pattern": "^0x[0-9a-f]{64}$"
+    },
+    "expectations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocol_address",
+        "source_path",
+        "contract_name",
+        "compiler_artifact_path",
+        "snapshot_path",
+        "prior_audit_path",
+        "admin_role_id",
+        "admin_member",
+        "relayer_role_id",
+        "relayer_member",
+        "timelock_address",
+        "minimum_delay_seconds",
+        "oracle_address",
+        "oracle_feed_decimals",
+        "oracle_heartbeat_seconds",
+        "prior_ids"
+      ],
+      "properties": {
+        "protocol_address": {
+          "$ref": "#/$defs/address"
+        },
+        "source_path": {
+          "const": "src/FullProtocol.sol"
+        },
+        "contract_name": {
+          "const": "FullProtocol"
+        },
+        "compiler_artifact_path": {
+          "const": "compiler/FullProtocol.json"
+        },
+        "snapshot_path": {
+          "const": "snapshot.json"
+        },
+        "prior_audit_path": {
+          "const": "audit/prior.json"
+        },
+        "admin_role_id": {
+          "$ref": "#/$defs/bytes32"
+        },
+        "admin_member": {
+          "$ref": "#/$defs/address"
+        },
+        "relayer_role_id": {
+          "$ref": "#/$defs/bytes32"
+        },
+        "relayer_member": {
+          "$ref": "#/$defs/address"
+        },
+        "timelock_address": {
+          "$ref": "#/$defs/address"
+        },
+        "minimum_delay_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "oracle_address": {
+          "$ref": "#/$defs/address"
+        },
+        "oracle_feed_decimals": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "oracle_heartbeat_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "prior_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        }
+      }
+    },
+    "fileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "size"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000000
+        }
+      }
+    }
+  }
+}

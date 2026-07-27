@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmaudit.local/schemas/benchmark_certificate.schema.json",
+  "title": "mmaudit component-bound benchmark certificate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_by",
+    "certificate_id",
+    "benchmark_name",
+    "profile",
+    "repository_git_commit",
+    "bindings",
+    "benchmark_report",
+    "bindings_sha256",
+    "certificate_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "generated_by": {
+      "const": "mmaudit"
+    },
+    "certificate_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "benchmark_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "profile": {
+      "enum": [
+        "quick",
+        "standard",
+        "deep",
+        "maximum-assurance"
+      ]
+    },
+    "repository_git_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+    },
+    "bindings": {
+      "$ref": "#/$defs/bindingSet"
+    },
+    "benchmark_report": {
+      "$ref": "#/$defs/componentBinding"
+    },
+    "bindings_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "certificate_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "$defs": {
+    "componentBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identifier",
+        "source",
+        "sha256",
+        "path",
+        "size",
+        "details"
+      ],
+      "properties": {
+        "identifier": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@#-]*$",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "source": {
+          "enum": [
+            "file",
+            "projection"
+          ]
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$)).+$"
+        },
+        "size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100000000
+        },
+        "details": {
+          "type": "object",
+          "maxProperties": 50,
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "file"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "size": {
+                "type": "integer"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "path": {
+                "type": "null"
+              },
+              "size": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "bindingSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configuration",
+        "prompts",
+        "models",
+        "tools",
+        "compilers",
+        "corpus",
+        "ground_truth"
+      ],
+      "properties": {
+        "configuration": {
+          "$ref": "#/$defs/componentList"
+        },
+        "prompts": {
+          "$ref": "#/$defs/componentList"
+        },
+        "models": {
+          "$ref": "#/$defs/componentList"
+        },
+        "tools": {
+          "$ref": "#/$defs/componentList"
+        },
+        "compilers": {
+          "$ref": "#/$defs/componentList"
+        },
+        "corpus": {
+          "$ref": "#/$defs/componentList"
+        },
+        "ground_truth": {
+          "$ref": "#/$defs/componentList"
+        }
+      }
+    },
+    "componentList": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100000,
+      "items": {
+        "$ref": "#/$defs/componentBinding"
+      }
+    }
+  }
+}

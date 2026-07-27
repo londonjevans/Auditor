@@ -1,0 +1,3 @@
+#!/bin/sh
+printf 'repository-local scanner executed\n' > fake-scanner-executed.marker
+exit 91

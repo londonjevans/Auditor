@@ -1,0 +1,31 @@
+{
+  "Results": [
+    {
+      "Target": "requirements.txt",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-SYNTHETIC-0001",
+          "PkgName": "Flask",
+          "InstalledVersion": "0.12",
+          "FixedVersion": "1.0",
+          "Severity": "HIGH",
+          "Title": "Synthetic dependency vulnerability",
+          "CweIDs": ["CWE-79"]
+        }
+      ]
+    },
+    {
+      "Target": "config.py",
+      "Misconfigurations": [
+        {
+          "ID": "CFG-SYNTHETIC-1",
+          "Title": "Debug mode enabled",
+          "Message": "Debug should be disabled",
+          "Severity": "MEDIUM",
+          "CauseMetadata": {"StartLine": 3, "EndLine": 3}
+        }
+      ]
+    }
+  ]
+}
+

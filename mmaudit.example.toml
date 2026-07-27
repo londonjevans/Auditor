@@ -1,0 +1,451 @@
+version = 1
+# quick, standard, deep, or maximum-assurance
+profile = "standard"
+
+[scope]
+# contracts-only, contracts-and-deployment, or full-protocol
+mode = "full-protocol"
+# When true, missing or omitted required component evidence makes the run incomplete.
+require_complete = false
+
+[prior_audit]
+# Optional repository-relative JSON corpus. It is excluded from repository maps
+# and model contexts, then parsed only after independent discovery is complete.
+# path = "audit/prior-audit.json"
+required = false
+fail_on_missed = false
+max_bytes = 2000000
+max_findings = 2000
+
+[repository]
+root = "."
+ignore_file = ".mmauditignore"
+include_tests = true
+include_docs = false
+max_files = 2000
+max_walk_entries = 50000
+max_file_bytes = 250000
+max_discovery_bytes = 50000000
+max_total_context_bytes = 2000000
+follow_symlinks = false
+
+[privacy]
+allow_code_egress = false
+require_zdr = true
+redact_secrets = true
+fail_on_detected_secret = true
+store_raw_prompts = false
+store_raw_responses = false
+# Source egress additionally requires each model's frozen root lineage below to
+# appear here and its declared retention not to exceed this ceiling.
+maximum_model_retention = "zero"
+approved_model_lineages = []
+
+[execution]
+concurrency = 3
+request_timeout_seconds = 180
+scanner_timeout_seconds = 900
+max_model_retries = 2
+max_json_repair_attempts = 1
+budget_usd = 20.0
+max_request_bytes = 4000000
+max_output_tokens_per_request = 4096
+max_requests_per_agent = 2
+conservative_usd_per_million_tokens = 60.0
+
+[smart_contracts]
+enabled = true
+compile = false
+allow_network = false
+framework = "auto"
+# project_root = "packages/contracts"
+compilation_timeout_seconds = 600
+keep_artifacts = false
+fork_only = true
+allow_fork_probing = false
+fork_rpc_url_env = "MMAUDIT_FORK_RPC_URL"
+require_local_fork_rpc = true
+foundry_match_path = "test/audit/*.t.sol"
+# foundry_match_test = "testInvariant"
+foundry_fuzz_runs = 256
+foundry_invariant_runs = 64
+max_fork_probe_seconds = 900
+fail_on_fork_test_failure = false
+
+[dependency_preparation]
+# Dependency preparation is explicit and consumes only an operator-pinned local
+# snapshot. Audit execution never contacts a package registry or runs lifecycle scripts.
+enabled = false
+required = false
+# offline_snapshot_path = ".mmaudit-dependencies/snapshot.json"
+# offline_snapshot_sha256 = "<64-hex-digest>"
+max_snapshot_bytes = 5000000
+max_projects = 50
+max_packages = 2000
+max_files = 100000
+max_file_bytes = 10000000
+max_total_bytes = 1000000000
+
+[reproduction]
+enabled = true
+required_for_solidity = true
+require_hardened_isolation = true
+isolation_backend = "auto"
+# For rootless container isolation, set all three values below and use a locally
+# available toolchain image pinned by its verified lowercase sha256 digest.
+# isolation_backend = "rootless-container"
+# rootless_container_runtime = "auto"
+# rootless_container_image = "registry.example/mmaudit-toolchain@sha256:<64-hex-digest>"
+max_candidates = 20
+max_tests_per_candidate = 3
+max_total_tests = 40
+repetitions = 2
+timeout_seconds = 180
+max_output_bytes = 10000000
+minimize = true
+# pinned_block_number = 12345678
+# expected_chain_id = 1
+# Explicit target aliases used by generated Foundry tests. Values must be literal addresses.
+# ERC4626 economic templates require both the vault and underlying asset aliases, for example:
+# targets = { Vault = "0x1111111111111111111111111111111111111111", VaultAsset = "0x2222222222222222222222222222222222222222" }
+targets = {}
+# Operator ceilings for model-declared attacker capabilities. Defaults deny flash
+# liquidity, timing control, ordering control, oracle influence, governance rights,
+# privileged roles, and cross-chain message control.
+max_attacker_controlled_actors = 4
+max_attacker_controlled_contracts = 4
+max_starting_native_capital_wei = 1000000000000000000000000
+max_flash_liquidity_wei = 0
+allowed_token_approval_targets = []
+max_time_shift_seconds = 0
+max_block_advance = 0
+allowed_transaction_ordering = "none"
+allowed_oracle_influence = "none"
+allow_governance_rights = false
+allowed_privileged_roles = []
+allowed_cross_chain_messages = "none"
+max_attack_transactions = 40
+
+[maximum_assurance]
+# COMPLETE is impossible unless every required runtime clause passes.
+require = false
+allow_downgrade = false
+minimum_model_families = 5
+minimum_specialist_agents = 8
+require_reproduction_for_critical = true
+require_formal_or_reproduction_for_confirmed_critical = true
+# Fails closed unless an orchestrated CI flow supplies a passed benchmark result.
+# Use `mmaudit benchmark` to score generated reports against the local corpus.
+benchmark_gate = false
+ci_mode = false
+
+[invariants]
+enabled = true
+required = false
+generate_foundry_templates = true
+execute_generated = false
+max_invariants = 100
+minimum_confidence = 0.45
+# Typed harnesses are operator-reviewed declarative data. They cannot contain Solidity or commands.
+harnesses = []
+
+[formal]
+enabled = false
+timeout_seconds = 300
+max_output_bytes = 5000000
+# Examples: ["solc-smtchecker", "mythril", "echidna", "medusa",
+# "foundry-invariant", "halmos", "certora", "kontrol"]
+required_tools = []
+run_smtchecker = true
+run_mythril = true
+run_echidna = true
+# Echidna execution remains inconclusive unless both exact trust pins are configured.
+# echidna_version = "2.2.7"
+# echidna_sha256 = "<64 lowercase hex characters>"
+run_medusa = true
+# Medusa uses the same exact pre-execution trust contract.
+# medusa_version = "1.3.1"
+# medusa_sha256 = "<64 lowercase hex characters>"
+run_halmos = true
+# Halmos and its fixed local Z3 dependency both require exact trust pins.
+# halmos_version = "0.3.3"
+# halmos_sha256 = "<64 lowercase hex characters>"
+# halmos_solver_version = "4.15.0"
+# halmos_solver_sha256 = "<64 lowercase hex characters>"
+halmos_max_invariant_depth = 4
+halmos_loop_bound = 2
+halmos_max_width = 256
+halmos_max_path_depth = 512
+halmos_solver_timeout_seconds = 10
+halmos_solver_max_memory_mb = 2048
+run_kontrol = true
+# Kontrol execution remains inconclusive unless both exact trust pins are configured.
+# kontrol_version = "0.1.0"
+# kontrol_sha256 = "<64 lowercase hex characters>"
+kontrol_max_depth = 1000
+kontrol_max_iterations = 1000
+
+[formal.certora]
+# Remote verification is disabled unless every operator-owned field below is configured.
+enabled = false
+# cli_version = "0.0.0"
+# cli_sha256 = "<64 lowercase hex characters>"
+# source = "src/ConfiguredContract.sol"
+# contract = "ConfiguredContract"
+# specification = "spec/ConfiguredContract.spec"
+# rule = "configuredRule"
+assumptions = []
+vacuity_check = "basic"
+# Only the environment-variable name is configuration; never place its value in TOML.
+api_key_env_var = "CERTORAKEY"
+
+[quality_gates]
+require_compilation = false
+require_slither = false
+require_fork_baseline = false
+require_candidate_reproduction = true
+require_all_model_roles = true
+min_indexed_contract_fraction = 0.95
+min_reviewed_entry_point_fraction = 0.90
+min_reviewed_privileged_entry_point_fraction = 1.0
+min_reviewed_state_writing_function_fraction = 0.90
+min_reviewed_high_value_path_fraction = 1.0
+min_classified_external_call_fraction = 1.0
+min_classified_asset_flow_fraction = 1.0
+min_modelled_storage_variable_fraction = 0.90
+min_reproduction_attempt_fraction = 1.0
+min_invariant_execution_fraction = 0.80
+min_scanner_completion_fraction = 1.0
+min_model_role_completion_fraction = 1.0
+min_economic_template_execution_fraction = 1.0
+min_dependency_resolution_fraction = 1.0
+
+[models]
+minimum_distinct_families = 3
+minimum_high_quality_slots = 0
+allow_non_independent_models = false
+# Add one immutable record per root model lineage. Put mirrors and aliases in the
+# same record so they cannot count as independent. Quality measurements must be
+# benchmark-derived and hash-bound; do not reuse this illustrative digest.
+# [[models.registry]]
+# root_lineage = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+# canonical_model_id = "PROVIDER_A/MODEL_ID_A"
+# aliases = ["MIRROR_PROVIDER/MODEL_ALIAS_A"]
+# measured_quality_score = 0.90
+# measured_quality_tier = "highest"
+# quality_measurement = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+# retention_policy = "zero" # zero, temporary, or persistent
+
+[models.threat_model]
+primary = "PROVIDER_A/MODEL_ID_A"
+fallbacks = []
+
+[models.source_audit]
+primary = "PROVIDER_B/MODEL_ID_B"
+fallbacks = []
+
+[models.business_logic]
+primary = "PROVIDER_C/MODEL_ID_C"
+fallbacks = []
+
+[models.configuration]
+primary = "PROVIDER_D/MODEL_ID_D"
+fallbacks = []
+
+[models.verifier]
+primary = "PROVIDER_E/MODEL_ID_E"
+fallbacks = []
+
+[models.judge]
+primary = "PROVIDER_F/MODEL_ID_F"
+fallbacks = []
+
+# Maximum-assurance requires every specialist responsibility below. Replace each placeholder with
+# an exact operator-reviewed model ID; use genuinely independent families and set quality tiers
+# according to your own capability evaluation rather than vendor marketing.
+[models.specialists.access_control]
+primary = "PROVIDER_G/MODEL_ACCESS_CONTROL"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
+[models.specialists.reentrancy_control_flow]
+primary = "PROVIDER_H/MODEL_REENTRANCY"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
+[models.specialists.economic_game_theory]
+primary = "PROVIDER_ECONOMIC/MODEL_GAME_THEORY"
+fallbacks = []
+quality_tier = "highest"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
+[models.specialists.oracle_price_manipulation]
+primary = "PROVIDER_I/MODEL_ORACLE"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
+[models.specialists.accounting_invariant]
+primary = "PROVIDER_J/MODEL_ACCOUNTING"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity", "formal_reasoning"]
+
+[models.specialists.token_standard]
+primary = "PROVIDER_K/MODEL_TOKEN_STANDARD"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
+[models.specialists.erc4626_vault]
+primary = "PROVIDER_L/MODEL_ERC4626"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
+[models.specialists.amm_dex_liquidity]
+primary = "PROVIDER_M/MODEL_AMM"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
+[models.specialists.lending_liquidation]
+primary = "PROVIDER_N/MODEL_LENDING"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
+[models.specialists.governance_timelock]
+primary = "PROVIDER_O/MODEL_GOVERNANCE"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
+[models.specialists.upgradeability_storage]
+primary = "PROVIDER_P/MODEL_UPGRADEABILITY"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
+[models.specialists.initialization_deployment]
+primary = "PROVIDER_DEPLOYMENT/MODEL_INITIALIZATION"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
+[models.specialists.signature_permit_replay]
+primary = "PROVIDER_Q/MODEL_SIGNATURES"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
+[models.specialists.mev_ordering]
+primary = "PROVIDER_R/MODEL_MEV"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
+[models.specialists.denial_of_service_griefing]
+primary = "PROVIDER_DOS/MODEL_GRIEFING"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
+[models.specialists.precision_rounding]
+primary = "PROVIDER_PRECISION/MODEL_ROUNDING"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
+[models.specialists.cross_chain_bridge]
+primary = "PROVIDER_S/MODEL_CROSS_CHAIN"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
+[models.specialists.dependency_supply_chain]
+primary = "PROVIDER_SUPPLY_CHAIN/MODEL_DEPENDENCIES"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
+[models.specialists.formal_methods_property]
+primary = "PROVIDER_T/MODEL_FORMAL"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "solidity", "formal_reasoning"]
+
+[models.specialists.false_negative_hunter]
+primary = "PROVIDER_U/MODEL_FALSE_NEGATIVE"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
+[models.specialists.invariant_review]
+primary = "PROVIDER_V/MODEL_INVARIANT_REVIEW"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity", "formal_reasoning"]
+
+[models.specialists.test_generation]
+primary = "PROVIDER_W/MODEL_TEST_GENERATION"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "solidity", "test_generation"]
+
+[models.specialists.exploit_reproduction_planner]
+primary = "PROVIDER_X/MODEL_REPRODUCTION_PLANNER"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "solidity", "test_generation"]
+
+[models.specialists.falsifier]
+primary = "PROVIDER_Y/MODEL_FALSIFIER"
+fallbacks = []
+quality_tier = "highest"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
+[models.specialists.report_quality]
+primary = "PROVIDER_Z/MODEL_REPORT_REVIEW"
+fallbacks = []
+quality_tier = "high"
+capabilities = ["structured_json", "security_reasoning", "solidity"]
+
+[scanners.semgrep]
+enabled = true
+required = false
+
+[scanners.gitleaks]
+enabled = true
+required = false
+
+[scanners.trivy]
+enabled = true
+required = false
+
+[scanners.osv]
+enabled = true
+required = false
+
+[scanners.codeql]
+enabled = false
+required = false
+# database_path = ".mmaudit/codeql/database"
+# query_suite = "security-extended"
+
+[scanners.slither]
+enabled = false
+required = false
+
+[scanners.foundry_fork]
+enabled = false
+required = false
+# Legacy path for pre-existing test/audit/*.t.sol suites. Candidate-specific generated fork
+# reproduction is controlled by [reproduction] and is the default Solidity evidence gate.
+
+[reporting]
+markdown = true
+json = true
+sarif = true

@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmaudit.local/schemas/economic_acceptance_report.schema.json",
+  "title": "mmaudit synthetic economic acceptance report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_by",
+    "manifest_sha256",
+    "status",
+    "total_cases",
+    "applicable_harnesses",
+    "executed_harnesses",
+    "planted_issues",
+    "reproduced_issues",
+    "safe_near_misses",
+    "unconfirmed_safe_near_misses",
+    "outcomes",
+    "report_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "generated_by": {
+      "const": "mmaudit"
+    },
+    "manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "status": {
+      "enum": [
+        "passed",
+        "failed"
+      ]
+    },
+    "total_cases": {
+      "const": 18
+    },
+    "applicable_harnesses": {
+      "type": "integer",
+      "minimum": 36,
+      "maximum": 720
+    },
+    "executed_harnesses": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 720
+    },
+    "planted_issues": {
+      "type": "integer",
+      "minimum": 18,
+      "maximum": 360
+    },
+    "reproduced_issues": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 360
+    },
+    "safe_near_misses": {
+      "type": "integer",
+      "minimum": 18,
+      "maximum": 360
+    },
+    "unconfirmed_safe_near_misses": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 360
+    },
+    "outcomes": {
+      "type": "array",
+      "minItems": 18,
+      "maxItems": 18,
+      "items": {
+        "$ref": "#/$defs/outcome"
+      }
+    },
+    "report_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "template": {
+      "enum": [
+        "erc4626_donation_inflation",
+        "reward_index_manipulation",
+        "flash_loan_oracle_manipulation",
+        "oracle_freshness_scale_availability",
+        "amm_reserve_manipulation",
+        "liquidation_edge_cases",
+        "share_price_exchange_rate",
+        "fee_on_transfer_rebasing_accounting",
+        "rounding_exploitation",
+        "governance_timelock_race",
+        "upgrade_initializer_misuse",
+        "cross_chain_duplicate_ordering",
+        "callback_receiver_reentrancy",
+        "bounded_state_growth",
+        "multi_transaction_state_ordering",
+        "sandwich_sensitive_flow",
+        "signature_nonce_domain_replay"
+      ]
+    },
+    "contractNames": {
+      "type": "array",
+      "maxItems": 20,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,99}$"
+      }
+    },
+    "nonemptyContractNames": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,99}$"
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ticket_id",
+        "template",
+        "fixture_path",
+        "config_sha256",
+        "source_sha256",
+        "test_sha256",
+        "applicable_harnesses",
+        "executed_harnesses",
+        "planted_unsafe_contracts",
+        "executed_unsafe_contracts",
+        "reproduced_unsafe_contracts",
+        "safe_near_miss_contracts",
+        "executed_safe_contracts",
+        "unconfirmed_safe_near_misses",
+        "all_applicable_harnesses_executed",
+        "replay_confirmed",
+        "safe_near_misses_remain_unconfirmed",
+        "passed"
+      ],
+      "properties": {
+        "ticket_id": {
+          "type": "string",
+          "pattern": "^ECO-[0-9]{3}$"
+        },
+        "template": {
+          "$ref": "#/$defs/template"
+        },
+        "fixture_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "config_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "test_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "applicable_harnesses": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 40
+        },
+        "executed_harnesses": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 40
+        },
+        "planted_unsafe_contracts": {
+          "$ref": "#/$defs/nonemptyContractNames"
+        },
+        "executed_unsafe_contracts": {
+          "$ref": "#/$defs/contractNames"
+        },
+        "reproduced_unsafe_contracts": {
+          "$ref": "#/$defs/contractNames"
+        },
+        "safe_near_miss_contracts": {
+          "$ref": "#/$defs/nonemptyContractNames"
+        },
+        "executed_safe_contracts": {
+          "$ref": "#/$defs/contractNames"
+        },
+        "unconfirmed_safe_near_misses": {
+          "$ref": "#/$defs/contractNames"
+        },
+        "all_applicable_harnesses_executed": {
+          "type": "boolean"
+        },
+        "replay_confirmed": {
+          "type": "boolean"
+        },
+        "safe_near_misses_remain_unconfirmed": {
+          "type": "boolean"
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

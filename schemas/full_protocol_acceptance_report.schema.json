@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmaudit.local/schemas/full_protocol_acceptance_report.schema.json",
+  "title": "mmaudit full-protocol offline acceptance report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_by",
+    "manifest_sha256",
+    "snapshot_id",
+    "snapshot_sha256",
+    "snapshot_comparison_sha256",
+    "prior_audit_sha256",
+    "status",
+    "total_checks",
+    "passed_checks",
+    "failed_checks",
+    "source_bound_contracts",
+    "source_bound_contracts_matched",
+    "prior_findings",
+    "prior_findings_remediated",
+    "live_network_contacted",
+    "model_provider_contacted",
+    "checks",
+    "limitations",
+    "report_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "generated_by": {
+      "const": "mmaudit"
+    },
+    "manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "snapshot_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "snapshot_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "snapshot_comparison_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "prior_audit_sha256": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "status": {
+      "enum": [
+        "passed",
+        "failed"
+      ]
+    },
+    "total_checks": {
+      "const": 10
+    },
+    "passed_checks": {
+      "$ref": "#/$defs/count"
+    },
+    "failed_checks": {
+      "type": "array",
+      "maxItems": 10,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/checkId"
+      }
+    },
+    "source_bound_contracts": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000
+    },
+    "source_bound_contracts_matched": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000
+    },
+    "prior_findings": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2000
+    },
+    "prior_findings_remediated": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2000
+    },
+    "live_network_contacted": {
+      "type": "boolean"
+    },
+    "model_provider_contacted": {
+      "type": "boolean"
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 10,
+      "maxItems": 10,
+      "items": {
+        "$ref": "#/$defs/check"
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "maxItems": 20,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      }
+    },
+    "report_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10
+    },
+    "checkId": {
+      "enum": [
+        "admin_role",
+        "deployment_consistency",
+        "full_protocol_scope",
+        "offline_execution",
+        "oracle_configuration",
+        "prior_blinding",
+        "prior_remediation",
+        "relayer_assumption",
+        "source_binding",
+        "timelock_configuration"
+      ]
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "check_id",
+        "passed",
+        "evidence"
+      ],
+      "properties": {
+        "check_id": {
+          "$ref": "#/$defs/checkId"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      }
+    }
+  }
+}

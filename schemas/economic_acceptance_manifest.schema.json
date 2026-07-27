@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmaudit.local/schemas/economic_acceptance_manifest.schema.json",
+  "title": "mmaudit synthetic economic acceptance manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_by",
+    "cases",
+    "manifest_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "generated_by": {
+      "const": "mmaudit"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 18,
+      "maxItems": 18,
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    },
+    "manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "template": {
+      "enum": [
+        "erc4626_donation_inflation",
+        "reward_index_manipulation",
+        "flash_loan_oracle_manipulation",
+        "oracle_freshness_scale_availability",
+        "amm_reserve_manipulation",
+        "liquidation_edge_cases",
+        "share_price_exchange_rate",
+        "fee_on_transfer_rebasing_accounting",
+        "rounding_exploitation",
+        "governance_timelock_race",
+        "upgrade_initializer_misuse",
+        "cross_chain_duplicate_ordering",
+        "callback_receiver_reentrancy",
+        "bounded_state_growth",
+        "multi_transaction_state_ordering",
+        "sandwich_sensitive_flow",
+        "signature_nonce_domain_replay"
+      ]
+    },
+    "contractNames": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,99}$"
+      }
+    },
+    "fixturePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^tests/fixtures/solidity/economic_[A-Za-z0-9_/-]*$"
+    },
+    "solidityPath": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 500,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*//)[A-Za-z0-9_./-]+\\.sol$"
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ticket_id",
+        "template",
+        "fixture_path",
+        "config_path",
+        "config_sha256",
+        "source_path",
+        "source_sha256",
+        "test_path",
+        "test_sha256",
+        "unsafe_contracts",
+        "safe_contracts"
+      ],
+      "properties": {
+        "ticket_id": {
+          "type": "string",
+          "pattern": "^ECO-[0-9]{3}$"
+        },
+        "template": {
+          "$ref": "#/$defs/template"
+        },
+        "fixture_path": {
+          "$ref": "#/$defs/fixturePath"
+        },
+        "config_path": {
+          "const": "foundry.toml"
+        },
+        "config_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_path": {
+          "$ref": "#/$defs/solidityPath"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "test_path": {
+          "$ref": "#/$defs/solidityPath"
+        },
+        "test_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "unsafe_contracts": {
+          "$ref": "#/$defs/contractNames"
+        },
+        "safe_contracts": {
+          "$ref": "#/$defs/contractNames"
+        }
+      }
+    }
+  }
+}

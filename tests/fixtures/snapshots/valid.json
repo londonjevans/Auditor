@@ -1,0 +1,189 @@
+{
+  "balances": [
+    {
+      "account_address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": 1000000000000000000,
+      "asset_address": null,
+      "decimals": 18,
+      "symbol": "ETH"
+    },
+    {
+      "account_address": "0x2222222222222222222222222222222222222222",
+      "amount": 5000000,
+      "asset_address": "0x6666666666666666666666666666666666666666",
+      "decimals": 6,
+      "symbol": "TEST"
+    }
+  ],
+  "capture_source": "operator_supplied",
+  "chain": {
+    "block_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "block_number": 123456,
+    "block_timestamp": 1700000000,
+    "chain_id": 31337,
+    "network_label": "synthetic-local"
+  },
+  "configuration": [
+    {
+      "contract_address": "0x1111111111111111111111111111111111111111",
+      "key": "implementation",
+      "kind": "address",
+      "storage_slot": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "value": "0x2222222222222222222222222222222222222222"
+    },
+    {
+      "contract_address": "0x2222222222222222222222222222222222222222",
+      "key": "fee_bps",
+      "kind": "uint",
+      "storage_slot": null,
+      "value": "25"
+    },
+    {
+      "contract_address": "0x2222222222222222222222222222222222222222",
+      "key": "paused",
+      "kind": "bool",
+      "storage_slot": null,
+      "value": "false"
+    }
+  ],
+  "contains_secrets": false,
+  "contains_source_code": false,
+  "contracts": [
+    {
+      "address": "0x1111111111111111111111111111111111111111",
+      "label": "SyntheticProxy",
+      "runtime_bytecode": "0x6000",
+      "runtime_bytecode_sha256": "f3df0a62b10f205b0f29768aa3d69e777154caaa179f64aabb0a4899c666b017",
+      "source_binding": null
+    },
+    {
+      "address": "0x2222222222222222222222222222222222222222",
+      "label": "SyntheticVault",
+      "runtime_bytecode": "0x6000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000002a00006001",
+      "runtime_bytecode_sha256": "ab0a978d7cd390bbaeaf93e246b2343a405dfd3cd6d7105738218f2b6b0b2792",
+      "source_binding": {
+        "compiler": {
+          "compiler_version": "0.8.24+commit.e11b9ed9",
+          "evm_version": "paris",
+          "metadata_bytecode_hash": "none",
+          "optimizer_enabled": true,
+          "optimizer_runs": 200,
+          "settings_sha256": "31142a12a1daa47299f52de8eecbcb12f32ba9c1b050c787896b64a2bebade1a",
+          "via_ir": false
+        },
+        "compiler_artifact_sha256": "6ab71421e1dbd5a871329f7080a72266a3f010a8ad67f0ab549661da5df5b495",
+        "contract_name": "SyntheticVault",
+        "immutables": [
+          {
+            "identifier": "42",
+            "length": 4,
+            "start": 22,
+            "value": "0x0000002a"
+          }
+        ],
+        "libraries": [
+          {
+            "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "length": 20,
+            "library_name": "SyntheticLibrary",
+            "source_path": "lib/SyntheticLibrary.sol",
+            "start": 2
+          }
+        ],
+        "source_path": "src/SyntheticVault.sol",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "address": "0x3333333333333333333333333333333333333333",
+      "label": "SyntheticTimelock",
+      "runtime_bytecode": "0x6002",
+      "runtime_bytecode_sha256": "1a33f434c3fc58e156600f1814ef65f7c14ef8f9d2647208ff106b232120c871",
+      "source_binding": null
+    },
+    {
+      "address": "0x4444444444444444444444444444444444444444",
+      "label": "SyntheticFeed",
+      "runtime_bytecode": "0x6003",
+      "runtime_bytecode_sha256": "07060149296c18b5684056facdb3e0172823fde3a737f2446b86d8b85cc6f1ba",
+      "source_binding": null
+    },
+    {
+      "address": "0x5555555555555555555555555555555555555555",
+      "label": "SyntheticSequencerFeed",
+      "runtime_bytecode": "0x6004",
+      "runtime_bytecode_sha256": "cbfddd4fe8d86ad472875fab25112def547fa6d63ab7439dd6c550fcdefb893b",
+      "source_binding": null
+    },
+    {
+      "address": "0x6666666666666666666666666666666666666666",
+      "label": "SyntheticToken",
+      "runtime_bytecode": "0x6005",
+      "runtime_bytecode_sha256": "06cbb90a0d018afe617b924efe969973abae63f35999d12364864a3e8cd3dcb1",
+      "source_binding": null
+    }
+  ],
+  "format": "mmaudit-offline-deployment",
+  "oracles": [
+    {
+      "consumer_address": "0x2222222222222222222222222222222222222222",
+      "feed_address": "0x4444444444444444444444444444444444444444",
+      "feed_decimals": 8,
+      "heartbeat_seconds": 3600,
+      "observed_answer": 200000000000,
+      "sequencer_feed_address": "0x5555555555555555555555555555555555555555",
+      "sequencer_grace_period_seconds": 3600,
+      "updated_at": 1699999900
+    }
+  ],
+  "proxies": [
+    {
+      "admin_address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "admin_slot": "0x0000000000000000000000000000000000000000000000000000000000000002",
+      "beacon_address": null,
+      "beacon_slot": null,
+      "implementation_address": "0x2222222222222222222222222222222222222222",
+      "implementation_slot": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "kind": "transparent",
+      "proxy_address": "0x1111111111111111111111111111111111111111"
+    }
+  ],
+  "roles": [
+    {
+      "admin_role_id": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "contract_address": "0x2222222222222222222222222222222222222222",
+      "members": [
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "role_id": "0x1111111111111111111111111111111111111111111111111111111111111111",
+      "role_label": "UPGRADER_ROLE"
+    },
+    {
+      "admin_role_id": null,
+      "contract_address": "0x3333333333333333333333333333333333333333",
+      "members": [
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      "role_id": "0x2222222222222222222222222222222222222222222222222222222222222222",
+      "role_label": "PROPOSER_ROLE"
+    }
+  ],
+  "schema_version": "1.0",
+  "snapshot_id": "synthetic-local-123456",
+  "snapshot_sha256": "cd64bd7b8b746d04e627d477374e6bcd005b056c50aa36bf2f558314adf14f69",
+  "timelocks": [
+    {
+      "cancellers": [
+        "0xcccccccccccccccccccccccccccccccccccccccc"
+      ],
+      "contract_address": "0x3333333333333333333333333333333333333333",
+      "executors": [
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      "minimum_delay_seconds": 172800,
+      "proposers": [
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    }
+  ]
+}

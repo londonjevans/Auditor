@@ -1,0 +1,148 @@
+{
+  "schema_version": "1.0",
+  "format": "mmaudit-offline-deployment",
+  "snapshot_id": "full-protocol-offline-1700000000",
+  "capture_source": "operator_supplied",
+  "contains_source_code": false,
+  "contains_secrets": false,
+  "chain": {
+    "chain_id": 31337,
+    "block_number": 17000000,
+    "block_hash": "0xabababababababababababababababababababababababababababababababab",
+    "block_timestamp": 1700000000,
+    "network_label": "synthetic-offline"
+  },
+  "contracts": [
+    {
+      "address": "0x1111111111111111111111111111111111111111",
+      "label": "FullProtocol",
+      "runtime_bytecode": "0x608060405234801561000f575f80fd5b50600436106100a6575f3560e01c80639412a0451161006e5780639412a0451461017d578063a1f2618d14610190578063b25ca2a91461019a578063d33219b4146101ad578063e1200d31146101c0578063f851a440146101c9575f80fd5b80631cb44dfc146100aa57806339bc3c81146100bf57806375b238fc146100f65780637dc0d1d01461012b578063926d7d7f14610156575b5f80fd5b6100bd6100b8366004610394565b6101db565b005b6100e16100cd3660046103c1565b60046020525f908152604090205460ff1681565b60405190151581526020015b60405180910390f35b61011d7fa49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c2177581565b6040519081526020016100ed565b60025461013e906001600160a01b031681565b6040516001600160a01b0390911681526020016100ed565b61011d7fe2b7fb3b832174769106daebcfd6d1970523240dda11281102db9363b83b0dc481565b6100bd61018b3660046103c1565b6102b9565b61011d6202a30081565b60035461013e906001600160a01b031681565b60015461013e906001600160a01b031681565b61011d610e1081565b5f5461013e906001600160a01b031681565b6001546001600160a01b031633146102295760405162461bcd60e51b815260206004820152600c60248201526b6e6f742074696d656c6f636b60a01b60448201526064015b60405180910390fd5b6001600160a01b0381166102685760405162461bcd60e51b81526020600482015260066024820152656f7261636c6560d01b6044820152606401610220565b600280546001600160a01b038381166001600160a01b0319831681179093556040519116919082907f078c3b417dadf69374a59793b829c52001247130433427049317bde56607b1b7905f90a35050565b6003546001600160a01b031633146103015760405162461bcd60e51b815260206004820152600b60248201526a3737ba103932b630bcb2b960a91b6044820152606401610220565b5f8181526004602052604090205460ff16156103525760405162461bcd60e51b815260206004820152601060248201526f1b595cdcd859d94818dbdb9cdd5b595960821b6044820152606401610220565b5f81815260046020526040808220805460ff191660011790555182917fc3f483ac248a4aa219cb201effaa29f842e6ab48fe5e57f8318d53f7f6e59f7391a250565b5f602082840312156103a4575f80fd5b81356001600160a01b03811681146103ba575f80fd5b9392505050565b5f602082840312156103d1575f80fd5b503591905056fea164736f6c6343000814000a",
+      "runtime_bytecode_sha256": "83dd0904bb09cd5ed342803549a901cb80964fc21261fd8aa11733c04e4d3d76",
+      "source_binding": {
+        "source_path": "src/FullProtocol.sol",
+        "contract_name": "FullProtocol",
+        "source_sha256": "6f7fdbefaa96a4dc7c9077bcda4123eee14d77d4c78bf160724f990e4b5f784c",
+        "compiler_artifact_sha256": "be77aa8955ae5d9ba02e15098a5c39957a4fd137ba029fe9adb37df9e99ebe50",
+        "compiler": {
+          "compiler_version": "0.8.20+commit.a1b79de6",
+          "evm_version": "shanghai",
+          "optimizer_enabled": true,
+          "optimizer_runs": 200,
+          "via_ir": false,
+          "metadata_bytecode_hash": "none",
+          "settings_sha256": "4afb2c1f516050001e59a2f46684ecce7314c7d26f4e22a9cb6904e4cb59cfde"
+        },
+        "libraries": [],
+        "immutables": []
+      }
+    },
+    {
+      "address": "0x2222222222222222222222222222222222222222",
+      "label": "SyntheticTimelock",
+      "runtime_bytecode": "0x6001",
+      "runtime_bytecode_sha256": "9e67b12fd8c58953460459cad7a6d4dd7d6d57594affce8206d1397c9c4db543",
+      "source_binding": null
+    },
+    {
+      "address": "0x3333333333333333333333333333333333333333",
+      "label": "SyntheticOracle",
+      "runtime_bytecode": "0x6002",
+      "runtime_bytecode_sha256": "1a33f434c3fc58e156600f1814ef65f7c14ef8f9d2647208ff106b232120c871",
+      "source_binding": null
+    }
+  ],
+  "proxies": [],
+  "roles": [
+    {
+      "contract_address": "0x1111111111111111111111111111111111111111",
+      "role_id": "0xa49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c21775",
+      "role_label": "ADMIN_ROLE",
+      "admin_role_id": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "members": [
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    },
+    {
+      "contract_address": "0x1111111111111111111111111111111111111111",
+      "role_id": "0xe2b7fb3b832174769106daebcfd6d1970523240dda11281102db9363b83b0dc4",
+      "role_label": "RELAYER_ROLE",
+      "admin_role_id": "0xa49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c21775",
+      "members": [
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    }
+  ],
+  "timelocks": [
+    {
+      "contract_address": "0x2222222222222222222222222222222222222222",
+      "minimum_delay_seconds": 172800,
+      "proposers": [
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "executors": [
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "cancellers": [
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    }
+  ],
+  "oracles": [
+    {
+      "consumer_address": "0x1111111111111111111111111111111111111111",
+      "feed_address": "0x3333333333333333333333333333333333333333",
+      "feed_decimals": 8,
+      "heartbeat_seconds": 3600,
+      "observed_answer": 200000000000,
+      "updated_at": 1699999900,
+      "sequencer_feed_address": null,
+      "sequencer_grace_period_seconds": null
+    }
+  ],
+  "balances": [],
+  "configuration": [
+    {
+      "contract_address": "0x1111111111111111111111111111111111111111",
+      "key": "admin",
+      "kind": "address",
+      "value": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "storage_slot": null
+    },
+    {
+      "contract_address": "0x1111111111111111111111111111111111111111",
+      "key": "authorized_relayer",
+      "kind": "address",
+      "value": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "storage_slot": null
+    },
+    {
+      "contract_address": "0x1111111111111111111111111111111111111111",
+      "key": "minimum_delay_seconds",
+      "kind": "uint",
+      "value": "172800",
+      "storage_slot": null
+    },
+    {
+      "contract_address": "0x1111111111111111111111111111111111111111",
+      "key": "oracle",
+      "kind": "address",
+      "value": "0x3333333333333333333333333333333333333333",
+      "storage_slot": null
+    },
+    {
+      "contract_address": "0x1111111111111111111111111111111111111111",
+      "key": "oracle_heartbeat_seconds",
+      "kind": "uint",
+      "value": "3600",
+      "storage_slot": null
+    },
+    {
+      "contract_address": "0x1111111111111111111111111111111111111111",
+      "key": "timelock",
+      "kind": "address",
+      "value": "0x2222222222222222222222222222222222222222",
+      "storage_slot": null
+    }
+  ],
+  "snapshot_sha256": "407798d04c1c966bbf5a20f8aa019b3c694b2db129e0a6e2e1c333296ea7a446"
+}

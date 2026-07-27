@@ -1,0 +1,3 @@
+#!/bin/sh
+printf 'repository-local git executed\n' > fake-git-executed.marker
+exit 90

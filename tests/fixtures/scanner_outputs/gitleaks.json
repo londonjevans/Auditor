@@ -1,0 +1,11 @@
+[
+  {
+    "RuleID": "generic-api-key",
+    "Description": "Synthetic token-shaped value",
+    "File": "config.py",
+    "StartLine": 3,
+    "EndLine": 3,
+    "Secret": "REDACTED"
+  }
+]
+

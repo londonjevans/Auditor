@@ -1,0 +1,26 @@
+rules:
+  - id: mmaudit.python.subprocess-shell
+    languages: [python]
+    severity: ERROR
+    message: subprocess with shell=True can permit command injection
+    metadata:
+      cwe: CWE-78
+    patterns:
+      - pattern: subprocess.$FUNC(..., shell=True, ...)
+  - id: mmaudit.python.os-system
+    languages: [python]
+    severity: WARNING
+    message: os.system executes a shell command and requires strict input control
+    metadata:
+      cwe: CWE-78
+    pattern: os.system(...)
+  - id: mmaudit.python.pickle-load
+    languages: [python]
+    severity: WARNING
+    message: pickle deserialization is unsafe for attacker-controlled data
+    metadata:
+      cwe: CWE-502
+    pattern-either:
+      - pattern: pickle.load(...)
+      - pattern: pickle.loads(...)
+

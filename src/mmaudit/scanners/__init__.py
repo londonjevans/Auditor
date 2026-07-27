@@ -1,0 +1,1 @@
+"""Trusted deterministic scanner adapters."""

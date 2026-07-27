@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmaudit.local/schemas/adversarial_acceptance_report.schema.json",
+  "title": "mmaudit hostile-repository acceptance report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_by",
+    "manifest_sha256",
+    "status",
+    "total_cases",
+    "safe_cases",
+    "rejected_before_host_execution",
+    "deterministically_contained",
+    "real_isolation_contained",
+    "hostile_host_executions",
+    "real_isolation_executed",
+    "blocked_integrations",
+    "outcomes",
+    "report_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "generated_by": {
+      "const": "mmaudit"
+    },
+    "manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "status": {
+      "enum": [
+        "passed",
+        "fail_closed",
+        "failed"
+      ]
+    },
+    "total_cases": {
+      "const": 10
+    },
+    "safe_cases": {
+      "$ref": "#/$defs/count"
+    },
+    "rejected_before_host_execution": {
+      "$ref": "#/$defs/count"
+    },
+    "deterministically_contained": {
+      "$ref": "#/$defs/count"
+    },
+    "real_isolation_contained": {
+      "$ref": "#/$defs/count"
+    },
+    "hostile_host_executions": {
+      "$ref": "#/$defs/count"
+    },
+    "real_isolation_executed": {
+      "type": "boolean"
+    },
+    "blocked_integrations": {
+      "type": "array",
+      "maxItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "const": "real_rootless_containment"
+      }
+    },
+    "outcomes": {
+      "type": "array",
+      "minItems": 10,
+      "maxItems": 10,
+      "items": {
+        "$ref": "#/$defs/outcome"
+      }
+    },
+    "report_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10
+    },
+    "caseId": {
+      "enum": [
+        "crafted_names",
+        "environment_read",
+        "fake_binaries",
+        "home_read",
+        "network_socket",
+        "output_abuse",
+        "path_traversal",
+        "process_resource_abuse",
+        "prompt_injection",
+        "symlink_escape"
+      ]
+    },
+    "boundary": {
+      "enum": [
+        "reject_or_encode",
+        "private_environment",
+        "reject_before_execution",
+        "private_home",
+        "deny_in_rootless_boundary",
+        "bounded_output",
+        "reject_or_read_only_root",
+        "bounded_process",
+        "untrusted_evidence",
+        "reject_before_copy"
+      ]
+    },
+    "disposition": {
+      "enum": [
+        "rejected_before_host_execution",
+        "deterministically_contained",
+        "real_isolation_contained"
+      ]
+    },
+    "evidenceKind": {
+      "enum": [
+        "path_normalization",
+        "repository_code_fail_closed",
+        "external_executable_validation",
+        "bounded_output",
+        "bounded_process",
+        "untrusted_context",
+        "workspace_validation",
+        "rootless_runtime"
+      ]
+    },
+    "optionalBackend": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "limitations": {
+      "type": "array",
+      "maxItems": 10,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "expected_boundary",
+        "disposition",
+        "evidence_kind",
+        "hostile_repository_code_executed_on_host",
+        "real_isolation_backend",
+        "limitations",
+        "passed"
+      ],
+      "properties": {
+        "case_id": {
+          "$ref": "#/$defs/caseId"
+        },
+        "expected_boundary": {
+          "$ref": "#/$defs/boundary"
+        },
+        "disposition": {
+          "$ref": "#/$defs/disposition"
+        },
+        "evidence_kind": {
+          "$ref": "#/$defs/evidenceKind"
+        },
+        "hostile_repository_code_executed_on_host": {
+          "type": "boolean"
+        },
+        "real_isolation_backend": {
+          "$ref": "#/$defs/optionalBackend"
+        },
+        "limitations": {
+          "$ref": "#/$defs/limitations"
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

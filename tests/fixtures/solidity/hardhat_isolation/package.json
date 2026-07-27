@@ -1,0 +1,11 @@
+{
+  "name": "mmaudit-synthetic-hardhat-isolation",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "compile": "hardhat compile"
+  },
+  "devDependencies": {
+    "hardhat": "0.0.0-synthetic"
+  }
+}

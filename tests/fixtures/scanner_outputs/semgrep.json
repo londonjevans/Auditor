@@ -1,0 +1,17 @@
+{
+  "results": [
+    {
+      "check_id": "python.lang.security.audit.formatted-sql-query",
+      "path": "app.py",
+      "start": {"line": 13, "col": 11},
+      "end": {"line": 13, "col": 70},
+      "extra": {
+        "message": "User input reaches a formatted SQL query",
+        "severity": "ERROR",
+        "metadata": {"cwe": ["CWE-89"]}
+      }
+    }
+  ],
+  "errors": []
+}
+

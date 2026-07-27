@@ -1,0 +1,16 @@
+[profile.default]
+src = "src"
+test = "test"
+out = "out"
+cache_path = "cache"
+auto_detect_solc = false
+offline = true
+ffi = false
+
+[fuzz]
+runs = 2
+
+[invariant]
+runs = 2
+depth = 1
+fail_on_revert = false

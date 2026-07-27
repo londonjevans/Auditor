@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmaudit.local/schemas/maximum_assurance_traceability.schema.json",
+  "title": "mmaudit Maximum Assurance Traceability",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_by",
+    "last_verified_commit",
+    "requirements"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "generated_by": {"const": "mmaudit"},
+    "last_verified_commit": {"type": "string", "minLength": 1},
+    "requirements": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requirement_id",
+          "description",
+          "implementation_status",
+          "implementation_paths",
+          "unit_tests",
+          "real_integration_tests",
+          "runtime_artifacts",
+          "required_for_complete",
+          "downgrade_reason",
+          "last_verified_commit"
+        ],
+        "properties": {
+          "requirement_id": {
+            "type": "string",
+            "pattern": "^MA-[A-Z0-9-]{3,48}$"
+          },
+          "description": {"type": "string", "minLength": 1},
+          "implementation_status": {
+            "enum": [
+              "implemented",
+              "partially_implemented",
+              "unavailable",
+              "unimplemented"
+            ]
+          },
+          "implementation_paths": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1}
+          },
+          "unit_tests": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1}
+          },
+          "real_integration_tests": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1}
+          },
+          "runtime_artifacts": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1}
+          },
+          "required_for_complete": {"type": "boolean"},
+          "downgrade_reason": {"type": ["string", "null"]},
+          "last_verified_commit": {"type": "string", "minLength": 1}
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "implementation_status": {"const": "implemented"}
+              },
+              "required": ["implementation_status"]
+            },
+            "then": {
+              "properties": {
+                "implementation_paths": {"minItems": 1},
+                "runtime_artifacts": {"minItems": 1},
+                "downgrade_reason": {"type": "null"}
+              },
+              "anyOf": [
+                {
+                  "properties": {
+                    "unit_tests": {"minItems": 1}
+                  }
+                },
+                {
+                  "properties": {
+                    "real_integration_tests": {"minItems": 1}
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

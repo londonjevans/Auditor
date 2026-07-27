@@ -1,0 +1,31 @@
+{
+  "balances": [],
+  "capture_source": "operator_supplied",
+  "chain": {
+    "block_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "block_number": 1,
+    "block_timestamp": 1700000000,
+    "chain_id": 31337,
+    "network_label": "synthetic-local"
+  },
+  "configuration": [],
+  "contains_secrets": false,
+  "contains_source_code": false,
+  "contracts": [
+    {
+      "address": "0x1111111111111111111111111111111111111111",
+      "label": "MalformedHash",
+      "runtime_bytecode": "0x6000",
+      "runtime_bytecode_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "source_binding": null
+    }
+  ],
+  "format": "mmaudit-offline-deployment",
+  "oracles": [],
+  "proxies": [],
+  "roles": [],
+  "schema_version": "1.0",
+  "snapshot_id": "malformed-bytecode-hash",
+  "snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "timelocks": []
+}

@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmaudit.local/schemas/release_gate_report.schema.json",
+  "title": "mmaudit maximum-assurance release gate report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_by",
+    "release_id",
+    "repository_state",
+    "status",
+    "total_gates",
+    "passed_gates",
+    "blocked_gates",
+    "failed_gates",
+    "safe_local_gates_complete",
+    "all_required_gates_passed",
+    "gates",
+    "limitations",
+    "report_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "generated_by": {
+      "const": "mmaudit"
+    },
+    "release_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "repository_state": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "status": {
+      "enum": [
+        "complete",
+        "blocked_technical",
+        "failed"
+      ]
+    },
+    "total_gates": {
+      "const": 12
+    },
+    "passed_gates": {
+      "$ref": "#/$defs/count"
+    },
+    "blocked_gates": {
+      "type": "array",
+      "maxItems": 12,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/gateId"
+      }
+    },
+    "failed_gates": {
+      "type": "array",
+      "maxItems": 12,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/gateId"
+      }
+    },
+    "safe_local_gates_complete": {
+      "type": "boolean"
+    },
+    "all_required_gates_passed": {
+      "type": "boolean"
+    },
+    "gates": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "items": {
+        "$ref": "#/$defs/gate"
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1000
+      }
+    },
+    "report_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 12
+    },
+    "gateId": {
+      "enum": [
+        "artifacts",
+        "benchmark_certificate",
+        "doctor",
+        "manifests",
+        "maximum_assurance_run",
+        "model_benchmark",
+        "mypy",
+        "pytest",
+        "replay",
+        "ruff_check",
+        "ruff_format",
+        "schemas"
+      ]
+    },
+    "gateStatus": {
+      "enum": [
+        "passed",
+        "blocked_technical",
+        "failed"
+      ]
+    },
+    "optionalExitCode": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "optionalBlocker": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gate_id",
+        "status",
+        "command",
+        "exit_code",
+        "result",
+        "mocked",
+        "blocker",
+        "evidence"
+      ],
+      "properties": {
+        "gate_id": {
+          "$ref": "#/$defs/gateId"
+        },
+        "status": {
+          "$ref": "#/$defs/gateStatus"
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "exit_code": {
+          "$ref": "#/$defs/optionalExitCode"
+        },
+        "result": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "mocked": {
+          "type": "boolean"
+        },
+        "blocker": {
+          "$ref": "#/$defs/optionalBlocker"
+        },
+        "evidence": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        }
+      }
+    }
+  }
+}

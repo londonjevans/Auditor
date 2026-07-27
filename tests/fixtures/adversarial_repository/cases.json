@@ -1,0 +1,85 @@
+{
+  "schema_version": "1.0",
+  "generated_by": "mmaudit",
+  "cases": [
+    {
+      "case_id": "crafted_names",
+      "expected_boundary": "reject_or_encode"
+    },
+    {
+      "case_id": "environment_read",
+      "expected_boundary": "private_environment"
+    },
+    {
+      "case_id": "fake_binaries",
+      "expected_boundary": "reject_before_execution"
+    },
+    {
+      "case_id": "home_read",
+      "expected_boundary": "private_home"
+    },
+    {
+      "case_id": "network_socket",
+      "expected_boundary": "deny_in_rootless_boundary"
+    },
+    {
+      "case_id": "output_abuse",
+      "expected_boundary": "bounded_output"
+    },
+    {
+      "case_id": "path_traversal",
+      "expected_boundary": "reject_or_read_only_root"
+    },
+    {
+      "case_id": "process_resource_abuse",
+      "expected_boundary": "bounded_process"
+    },
+    {
+      "case_id": "prompt_injection",
+      "expected_boundary": "untrusted_evidence"
+    },
+    {
+      "case_id": "symlink_escape",
+      "expected_boundary": "reject_before_copy"
+    }
+  ],
+  "fixture_files": [
+    {
+      "path": "bin/git",
+      "sha256": "ab68372864acd46d866e8e2693dc5beda8edabb88423da1463d31e13b038be94",
+      "size": 86
+    },
+    {
+      "path": "bin/semgrep",
+      "sha256": "e660107ae610a2dc8f2b396271620668ee45b9b213d4a3f4547941db735715ae",
+      "size": 94
+    },
+    {
+      "path": "contracts/PromptInjection.sol",
+      "sha256": "471a5c38d1a315fa487e645c23ba93e238c58fe53d1228e1b54eb75e3e68a8f6",
+      "size": 362
+    },
+    {
+      "path": "crafted/markdown_[local](target).sol",
+      "sha256": "aaef2fb8d89295cbdc6d2262460b48cb6b8f36e172f907d48c6e9198699ad3d4",
+      "size": 100
+    },
+    {
+      "path": "hardhat.config.js",
+      "sha256": "0aa782b43a5ba4aaf0cef8bd6e5e2d37b6d2b741c2c77635ffb4f330b185957f",
+      "size": 151
+    },
+    {
+      "path": "package.json",
+      "sha256": "73d25ff326ea2c3d5c88bce57b2c53a284b1c9a72a94f050c0fab1cbb9b49385",
+      "size": 96
+    },
+    {
+      "path": "probes/runtime_probe.js",
+      "sha256": "6390fb92f0c0310b1d25a264761698409037ece27072775973d162f4c49d52e2",
+      "size": 1518
+    }
+  ],
+  "fixture_tree_sha256": "780f9eee712db18e5e363039dcd1072dcb0cfbccdb3c87a733a4a54b8b1d8748",
+  "manifest_sha256": "b918fd902ef431577b1ffdab6fd343523078fc823e4b083487824021225aada6"
+}

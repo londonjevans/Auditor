@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmaudit.local/schemas/run_evidence_manifest.schema.json",
+  "title": "mmaudit hash-linked run evidence manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_by",
+    "tool_version",
+    "run_id",
+    "repository_root_name",
+    "git_commit",
+    "sources",
+    "source_tree_sha256",
+    "bindings",
+    "artifacts",
+    "manifest_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "generated_by": {
+      "const": "mmaudit"
+    },
+    "tool_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "repository_root_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "git_commit": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40,64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sources": {
+      "type": "array",
+      "maxItems": 100000,
+      "items": {
+        "$ref": "#/$defs/fileBinding"
+      }
+    },
+    "source_tree_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "bindings": {
+      "$ref": "#/$defs/bindingSet"
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100000,
+      "items": {
+        "$ref": "#/$defs/fileBinding"
+      }
+    },
+    "manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "fileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "size"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "hashBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identifier",
+        "sha256",
+        "details"
+      ],
+      "properties": {
+        "identifier": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@#-]*$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "details": {
+          "type": "object",
+          "maxProperties": 50,
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        }
+      }
+    },
+    "bindingSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configuration",
+        "prompts",
+        "models",
+        "tools",
+        "compilers",
+        "isolation",
+        "seeds",
+        "corpora",
+        "harnesses",
+        "reproductions",
+        "coverage"
+      ],
+      "properties": {
+        "configuration": {
+          "$ref": "#/$defs/configurationBindings"
+        },
+        "prompts": {
+          "$ref": "#/$defs/standardBindings"
+        },
+        "models": {
+          "$ref": "#/$defs/standardBindings"
+        },
+        "tools": {
+          "$ref": "#/$defs/standardBindings"
+        },
+        "compilers": {
+          "$ref": "#/$defs/standardBindings"
+        },
+        "isolation": {
+          "$ref": "#/$defs/standardBindings"
+        },
+        "seeds": {
+          "$ref": "#/$defs/largeBindings"
+        },
+        "corpora": {
+          "$ref": "#/$defs/standardBindings"
+        },
+        "harnesses": {
+          "$ref": "#/$defs/largeBindings"
+        },
+        "reproductions": {
+          "$ref": "#/$defs/largeBindings"
+        },
+        "coverage": {
+          "$ref": "#/$defs/standardBindings"
+        }
+      }
+    },
+    "configurationBindings": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {
+        "$ref": "#/$defs/hashBinding"
+      }
+    },
+    "standardBindings": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10000,
+      "items": {
+        "$ref": "#/$defs/hashBinding"
+      }
+    },
+    "largeBindings": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100000,
+      "items": {
+        "$ref": "#/$defs/hashBinding"
+      }
+    }
+  }
+}

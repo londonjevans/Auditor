@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mmaudit.local/schemas/adversarial_acceptance_manifest.schema.json",
+  "title": "mmaudit hostile-repository acceptance manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_by",
+    "cases",
+    "fixture_files",
+    "fixture_tree_sha256",
+    "manifest_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "generated_by": {
+      "const": "mmaudit"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 10,
+      "maxItems": 10,
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    },
+    "fixture_files": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "items": {
+        "$ref": "#/$defs/fileBinding"
+      }
+    },
+    "fixture_tree_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "caseId": {
+      "enum": [
+        "crafted_names",
+        "environment_read",
+        "fake_binaries",
+        "home_read",
+        "network_socket",
+        "output_abuse",
+        "path_traversal",
+        "process_resource_abuse",
+        "prompt_injection",
+        "symlink_escape"
+      ]
+    },
+    "boundary": {
+      "enum": [
+        "reject_or_encode",
+        "private_environment",
+        "reject_before_execution",
+        "private_home",
+        "deny_in_rootless_boundary",
+        "bounded_output",
+        "reject_or_read_only_root",
+        "bounded_process",
+        "untrusted_evidence",
+        "reject_before_copy"
+      ]
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "expected_boundary"
+      ],
+      "properties": {
+        "case_id": {
+          "$ref": "#/$defs/caseId"
+        },
+        "expected_boundary": {
+          "$ref": "#/$defs/boundary"
+        }
+      }
+    },
+    "fileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "size"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        }
+      }
+    }
+  }
+}

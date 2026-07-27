@@ -1,0 +1,320 @@
+{
+  "schema_version": "1.0",
+  "generated_by": "mmaudit",
+  "cases": [
+    {
+      "ticket_id": "ECO-001",
+      "template": "fee_on_transfer_rebasing_accounting",
+      "fixture_path": "tests/fixtures/solidity/economic_token_behavior",
+      "config_path": "foundry.toml",
+      "config_sha256": "dbd2c04090968e119c7986c1c0ebfc6b28808b7cd2f6e66cde1df1d847c437df",
+      "source_path": "src/TokenBehavior.sol",
+      "source_sha256": "54f185f9cb2fc3f60491ad78ce441a3c927b08a3989eff763b9d8e1c4b4fd727",
+      "test_path": "test/TokenBehavior.t.sol",
+      "test_sha256": "959e9837a38f706f7ca34e829bcb8e9cf329c20b563a958ef0fef3dde97cced4",
+      "unsafe_contracts": [
+        "UnsafeFeeAccountingInvariant",
+        "UnsafeRebaseAccountingInvariant"
+      ],
+      "safe_contracts": [
+        "SafeFeeAccountingInvariant",
+        "SafeRebaseAccountingInvariant"
+      ]
+    },
+    {
+      "ticket_id": "ECO-002",
+      "template": "rounding_exploitation",
+      "fixture_path": "tests/fixtures/solidity/economic_rounding",
+      "config_path": "foundry.toml",
+      "config_sha256": "de257e7edd50b836bc462d24fb706a44f78ccb2e65e273f59530bcd767cbee92",
+      "source_path": "src/RoundingAccounting.sol",
+      "source_sha256": "9b3c6c65732444ce3beb9ea106f8ce8da6e247fd4043afbac233282fd514fb52",
+      "test_path": "test/RoundingAccounting.t.sol",
+      "test_sha256": "5c6c022d5c46ed5f32e19a08f3e11b50f2afe9093a7a73a481d3821699f84e5f",
+      "unsafe_contracts": [
+        "UnsafeRoundingInvariant"
+      ],
+      "safe_contracts": [
+        "SafeRoundingInvariant"
+      ]
+    },
+    {
+      "ticket_id": "ECO-003",
+      "template": "sandwich_sensitive_flow",
+      "fixture_path": "tests/fixtures/solidity/economic_ordering",
+      "config_path": "foundry.toml",
+      "config_sha256": "ed7ce69aa1be5207a7888e3cfdf018b0c31ddd3a17e26de18f8a6174404e986d",
+      "source_path": "src/OrderedSettlement.sol",
+      "source_sha256": "cc1144636922cee91b624cb75ede2d2ea652bd4e520d2e6263370832f88eb557",
+      "test_path": "test/OrderedSettlement.t.sol",
+      "test_sha256": "7464b036dac27b7ddc4ab7251199d7514bf3f62f61fff8141a85d2f01a48deed",
+      "unsafe_contracts": [
+        "UnsafeOrderingInvariant"
+      ],
+      "safe_contracts": [
+        "SafeOrderingInvariant"
+      ]
+    },
+    {
+      "ticket_id": "ECO-004",
+      "template": "erc4626_donation_inflation",
+      "fixture_path": "tests/fixtures/solidity/economic_erc4626",
+      "config_path": "foundry.toml",
+      "config_sha256": "2863b6dc09ab4835bc5211b7bcfcaf45573587b0497e23483b3da01502b6079f",
+      "source_path": "src/EconomicVaults.sol",
+      "source_sha256": "66acdd499d4e1ca31de83684f9a46b27ab3f1c2949df4451b3699d3b2630872c",
+      "test_path": "test/EconomicVaults.t.sol",
+      "test_sha256": "ab9d1bbea13df219dbdce767ec41cd0b0aec96ad54838d0d7ddfdddc83cf76f8",
+      "unsafe_contracts": [
+        "UnsafeERC4626Invariant"
+      ],
+      "safe_contracts": [
+        "SafeERC4626Invariant"
+      ]
+    },
+    {
+      "ticket_id": "ECO-005",
+      "template": "flash_loan_oracle_manipulation",
+      "fixture_path": "tests/fixtures/solidity/economic_temporary_liquidity_oracle",
+      "config_path": "foundry.toml",
+      "config_sha256": "2863b6dc09ab4835bc5211b7bcfcaf45573587b0497e23483b3da01502b6079f",
+      "source_path": "src/TemporaryLiquidityOracle.sol",
+      "source_sha256": "33de252034fffb216da56e7006a6d51f18473dad8e6f2dc7e204d24b99b4f2d7",
+      "test_path": "test/TemporaryLiquidityOracle.t.sol",
+      "test_sha256": "cd6fe294b05507dc00a5d1f4ff4f8a2c51b08e05a53b5f9e0c5e0c53adfa4e8a",
+      "unsafe_contracts": [
+        "UnsafeTemporaryLiquidityInvariant"
+      ],
+      "safe_contracts": [
+        "SafeTemporaryLiquidityInvariant"
+      ]
+    },
+    {
+      "ticket_id": "ECO-006",
+      "template": "amm_reserve_manipulation",
+      "fixture_path": "tests/fixtures/solidity/economic_amm_reserves",
+      "config_path": "foundry.toml",
+      "config_sha256": "2863b6dc09ab4835bc5211b7bcfcaf45573587b0497e23483b3da01502b6079f",
+      "source_path": "src/ReservePricing.sol",
+      "source_sha256": "8e0a71e9f7277bfb3c6e5117811fa8cf7b0a8c4401e72d8428ab8f9fd83d71d3",
+      "test_path": "test/ReservePricing.t.sol",
+      "test_sha256": "3c2db92754c9bb754fefc84941c0b844600c034c4832b944e3c604f00491e6af",
+      "unsafe_contracts": [
+        "UnsafeSpotReservePricingInvariant"
+      ],
+      "safe_contracts": [
+        "SafeProtectedReservePricingInvariant"
+      ]
+    },
+    {
+      "ticket_id": "ECO-007",
+      "template": "oracle_freshness_scale_availability",
+      "fixture_path": "tests/fixtures/solidity/economic_oracle_guards",
+      "config_path": "foundry.toml",
+      "config_sha256": "ed7ce69aa1be5207a7888e3cfdf018b0c31ddd3a17e26de18f8a6174404e986d",
+      "source_path": "src/OracleGuards.sol",
+      "source_sha256": "0eac862061ffb1c7714abf9c90f7fbfb91adb17de45436a89b0a4741b52b817e",
+      "test_path": "test/OracleGuards.t.sol",
+      "test_sha256": "623b1d6e7879fd2990d6e6cd095423b4b3fa9c3fd3ce64d8b71387d256f4b510",
+      "unsafe_contracts": [
+        "UnsafeOracleGuardInvariant"
+      ],
+      "safe_contracts": [
+        "SafeOracleGuardInvariant"
+      ]
+    },
+    {
+      "ticket_id": "ECO-008",
+      "template": "liquidation_edge_cases",
+      "fixture_path": "tests/fixtures/solidity/economic_liquidation",
+      "config_path": "foundry.toml",
+      "config_sha256": "2863b6dc09ab4835bc5211b7bcfcaf45573587b0497e23483b3da01502b6079f",
+      "source_path": "src/LiquidationBoundary.sol",
+      "source_sha256": "b2beb2483a72827f93f73aebc92cdf50d098fb9c4c1b9c4a32c8c6fdc374c1d8",
+      "test_path": "test/LiquidationBoundary.t.sol",
+      "test_sha256": "dfaccaf2b57ad3a015edb2bb4c49cfd623f5cc9a871301f63fbb69af3a7de972",
+      "unsafe_contracts": [
+        "UnsafeHealthyPositionLiquidationInvariant"
+      ],
+      "safe_contracts": [
+        "SafeHealthyPositionLiquidationInvariant"
+      ]
+    },
+    {
+      "ticket_id": "ECO-009",
+      "template": "reward_index_manipulation",
+      "fixture_path": "tests/fixtures/solidity/economic_reward_accounting",
+      "config_path": "foundry.toml",
+      "config_sha256": "af647d74470b80444cc83e735b290367637080a45599e460f3561cbffbdc6518",
+      "source_path": "src/RewardAccounting.sol",
+      "source_sha256": "368db17c6b7d1ddd9ac2e644252dccae25e8371407c9473351b74854106071ee",
+      "test_path": "test/RewardAccounting.t.sol",
+      "test_sha256": "61b41c7d9ca2e615e2c595a92ec25992ab8faca3e10f57fb81df6b4dc1bad618",
+      "unsafe_contracts": [
+        "UnsafeClaimOnceInvariant",
+        "UnsafeRewardIndexInvariant"
+      ],
+      "safe_contracts": [
+        "SafeClaimOnceInvariant",
+        "SafeRewardIndexInvariant"
+      ]
+    },
+    {
+      "ticket_id": "ECO-010",
+      "template": "share_price_exchange_rate",
+      "fixture_path": "tests/fixtures/solidity/economic_share_price",
+      "config_path": "foundry.toml",
+      "config_sha256": "2863b6dc09ab4835bc5211b7bcfcaf45573587b0497e23483b3da01502b6079f",
+      "source_path": "src/SharePriceBoundary.sol",
+      "source_sha256": "956673b7c9b685c2080ddc67d73cf1fa7fc6c7378115d9ede0d039da671d4521",
+      "test_path": "test/SharePriceBoundary.t.sol",
+      "test_sha256": "12035ef2100c7d6a99922a29a37cda5f99561de767abf2c25b7d91944b250d62",
+      "unsafe_contracts": [
+        "UnsafeReportedAssetRateInvariant"
+      ],
+      "safe_contracts": [
+        "SafeObservedAssetRateInvariant"
+      ]
+    },
+    {
+      "ticket_id": "ECO-011",
+      "template": "governance_timelock_race",
+      "fixture_path": "tests/fixtures/solidity/economic_governance",
+      "config_path": "foundry.toml",
+      "config_sha256": "ed7ce69aa1be5207a7888e3cfdf018b0c31ddd3a17e26de18f8a6174404e986d",
+      "source_path": "src/GovernanceLifecycle.sol",
+      "source_sha256": "bc5c43aeac60a1df94f80db37d0f81dbcfb9be166d69dc87c80b84fa688a01be",
+      "test_path": "test/GovernanceLifecycle.t.sol",
+      "test_sha256": "fa2756f0ffa97246b56f134fb6c65409c42696d834d4c8af2eedacc89982e4e8",
+      "unsafe_contracts": [
+        "UnsafeGovernanceInvariant"
+      ],
+      "safe_contracts": [
+        "SafeGovernanceInvariant"
+      ]
+    },
+    {
+      "ticket_id": "ECO-012",
+      "template": "upgrade_initializer_misuse",
+      "fixture_path": "tests/fixtures/solidity/economic_upgrade_initializer",
+      "config_path": "foundry.toml",
+      "config_sha256": "ed7ce69aa1be5207a7888e3cfdf018b0c31ddd3a17e26de18f8a6174404e986d",
+      "source_path": "src/UpgradeInitializer.sol",
+      "source_sha256": "b77e1da3278842c3f9bda3cec68655296c6a0e2a74ed86d93cef0e9ff0520691",
+      "test_path": "test/UpgradeInitializer.t.sol",
+      "test_sha256": "6412a09aed06b8ac36db751fa003a777cb57629e293815ff8cc9bede8a7420af",
+      "unsafe_contracts": [
+        "UnsafeUpgradeInvariant"
+      ],
+      "safe_contracts": [
+        "SafeUpgradeInvariant"
+      ]
+    },
+    {
+      "ticket_id": "ECO-013",
+      "template": "signature_nonce_domain_replay",
+      "fixture_path": "tests/fixtures/solidity/economic_signature_replay",
+      "config_path": "foundry.toml",
+      "config_sha256": "b92abe5605ebd3bdd1709d18055760f5e660113c103740b22532bd4995f895ca",
+      "source_path": "src/SignedClaims.sol",
+      "source_sha256": "55a44ccd98b718e7543193180b9a000e60e4c4b5debc0c5771f9700d3ae881a4",
+      "test_path": "test/SignedClaims.t.sol",
+      "test_sha256": "2bcafe39220dcf63cdfc938e274104e77d9cfbf5778b13d99578e147a14c7ddb",
+      "unsafe_contracts": [
+        "UnsafeSignatureReplayInvariant"
+      ],
+      "safe_contracts": [
+        "SafeSignatureReplayInvariant"
+      ]
+    },
+    {
+      "ticket_id": "ECO-014",
+      "template": "cross_chain_duplicate_ordering",
+      "fixture_path": "tests/fixtures/solidity/economic_cross_chain",
+      "config_path": "foundry.toml",
+      "config_sha256": "ed7ce69aa1be5207a7888e3cfdf018b0c31ddd3a17e26de18f8a6174404e986d",
+      "source_path": "src/MessageInbox.sol",
+      "source_sha256": "37ff795be5be8668427b69ed36ab686165c9b9f3e8362493ff80d8e05b0eccca",
+      "test_path": "test/MessageInbox.t.sol",
+      "test_sha256": "e1831086a2394f7da369da56b9fec7dae1c0767e2cb785f3ec4aaa822f9ac9f7",
+      "unsafe_contracts": [
+        "UnsafeMessageInvariant"
+      ],
+      "safe_contracts": [
+        "SafeMessageInvariant"
+      ]
+    },
+    {
+      "ticket_id": "ECO-015",
+      "template": "callback_receiver_reentrancy",
+      "fixture_path": "tests/fixtures/solidity/economic_callback",
+      "config_path": "foundry.toml",
+      "config_sha256": "ed7ce69aa1be5207a7888e3cfdf018b0c31ddd3a17e26de18f8a6174404e986d",
+      "source_path": "src/CallbackAccounting.sol",
+      "source_sha256": "4f5da4093aacd4ebe4fa6913f43bd92c7f928c7e0b31f0f3615b9a48990dd824",
+      "test_path": "test/CallbackAccounting.t.sol",
+      "test_sha256": "d2c1134752198e4b3a568d4bc75aa6042507a911a6e91145923a5282bdca2fb3",
+      "unsafe_contracts": [
+        "UnsafeCallbackInvariant"
+      ],
+      "safe_contracts": [
+        "SafeCallbackInvariant"
+      ]
+    },
+    {
+      "ticket_id": "ECO-016",
+      "template": "bounded_state_growth",
+      "fixture_path": "tests/fixtures/solidity/economic_state_growth",
+      "config_path": "foundry.toml",
+      "config_sha256": "ed7ce69aa1be5207a7888e3cfdf018b0c31ddd3a17e26de18f8a6174404e986d",
+      "source_path": "src/StateGrowth.sol",
+      "source_sha256": "0cc3e5f009c8a8545a209a7be1b080fd4cc76e46926adb11eeda6a32fe49185f",
+      "test_path": "test/StateGrowth.t.sol",
+      "test_sha256": "102991fcfdf50dd2b20365d19122c101e535835e814421ed9556f7b3acb57ec6",
+      "unsafe_contracts": [
+        "UnsafeStateGrowthInvariant"
+      ],
+      "safe_contracts": [
+        "SafeStateGrowthInvariant"
+      ]
+    },
+    {
+      "ticket_id": "ECO-017",
+      "template": "fee_on_transfer_rebasing_accounting",
+      "fixture_path": "tests/fixtures/solidity/economic_erc20_returns",
+      "config_path": "foundry.toml",
+      "config_sha256": "dbd2c04090968e119c7986c1c0ebfc6b28808b7cd2f6e66cde1df1d847c437df",
+      "source_path": "src/ERC20Returns.sol",
+      "source_sha256": "ebba35d293576bf22d19f0ba063e67be2ea1fe84c929c234f639a7931589187d",
+      "test_path": "test/ERC20Returns.t.sol",
+      "test_sha256": "9fc814b972684de92982fb773eca5b10807e686bf7765c163ff55276eeac72c0",
+      "unsafe_contracts": [
+        "UnsafeFalseReturnInvariant",
+        "UnsafeShortReturnInvariant"
+      ],
+      "safe_contracts": [
+        "SafeFalseReturnInvariant",
+        "SafeMissingReturnInvariant",
+        "SafeShortReturnInvariant"
+      ]
+    },
+    {
+      "ticket_id": "ECO-018",
+      "template": "multi_transaction_state_ordering",
+      "fixture_path": "tests/fixtures/solidity/economic_state_ordering",
+      "config_path": "foundry.toml",
+      "config_sha256": "8f34187ec1b0441f1cd697336fce483d7023aefe21325c44e498cba1f535f494",
+      "source_path": "src/StateOrdering.sol",
+      "source_sha256": "d6b36f10b20b074325684a0735d7695ae5065217a0c05c2dfc8547189f558a62",
+      "test_path": "test/StateOrdering.t.sol",
+      "test_sha256": "608858a746cd5c408ccc1a69a1e9a5cb891e7ad79b1db3fd736d720dbe31af7e",
+      "unsafe_contracts": [
+        "UnsafeStateOrderingInvariant"
+      ],
+      "safe_contracts": [
+        "SafeStateOrderingInvariant"
+      ]
+    }
+  ],
+  "manifest_sha256": "afd1b18d0e47daeb744b9512d605f25830c844b52312d57aa63c85f56121afde"
+}
