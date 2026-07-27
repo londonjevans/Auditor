@@ -10,7 +10,7 @@ LAST_COMPLETED_TICKET: EVAL-001
 NEXT_ACTION: No implementation action is authorized by the completed evaluation; convert the separately recorded defects into bounded remediation tickets in a future implementation task, and resume blocked real integrations only when their prerequisites are supplied.
 LAST_VALIDATION_COMMAND: .venv/bin/python duplicate-key/semantic evaluation validator; frozen-source/archive/config/prompt/schema/source/binary/runtime hash validators; evaluation content scan; git diff --check
 LAST_VALIDATION_RESULT: PASS — exactly seven requested artifacts parsed without duplicate keys; 45 requirements, 65 implementation tickets, four meta dispositions, all 69 frozen headings, two hash-bound PROVEN_REAL rows, all verdict/model/benchmark/isolation/tool/link assertions, every recorded source and binary hash, both retained runtime-report hashes, whitespace, and secret-pattern checks passed.
-LAST_CHECKPOINT_COMMIT: 655567d16e3aba3bd139964c75cc8a4c7688a878 — `Add Corrovera brand system`.
+LAST_CHECKPOINT_COMMIT: a3f82b133726796661ce202ba67704415d8c2d09 — `Evaluate maximum-assurance release candidate`.
 REMAINING_ACTIONABLE_TICKETS: 0
 BLOCKED_TICKETS: DYN-002 real Echidna and DYN-003 real Medusa binary integration subtasks are BLOCKED_TECHNICAL because no local binaries are installed; SYM-001 real Halmos target integration is BLOCKED_TECHNICAL because no hardened isolation backend is available; FORM-001 real configured Certora service integration is BLOCKED_TECHNICAL because certoraRun and configured CI credential/connectivity are unavailable; FORM-002 real Kontrol proof integration is BLOCKED_TECHNICAL because no local kontrol binary is installed; ISO-002, ISO-004, and E2E-002 real rootless containment integrations and other rootless/nested OS-isolation integration subtasks remain BLOCKED_TECHNICAL because no rootless runtime or pinned test image is configured; MODEL-002 real-provider execution is BLOCKED_TECHNICAL locally because no provider credential or committed operator model selection is available, while its conditional default-branch CI path and deterministic fake-provider coverage are complete; MAN-003 real isolated Foundry replay integration is BLOCKED_TECHNICAL in this sandbox because sandbox-exec cannot be nested and no other hardened backend is configured, while the conditional integration test is present; RELEASE-001 is BLOCKED_TECHNICAL because doctor, the real-provider model benchmark, the maximum-assurance run, and real isolated replay cannot pass without those prerequisites, while all eight safe local release gates are complete.
 
@@ -119,9 +119,9 @@ BLOCKED_TICKETS: DYN-002 real Echidna and DYN-003 real Medusa binary integration
   containment, isolated replay, the local snapshot importer, a public time-split
   corpus, a private holdout, and an identical-scope expert comparison remain blocked,
   unimplemented, or unexecuted as classified in the artifacts.
-- **Checkpoint commit:** Pending creation of the isolated docs-only evaluation
-  checkpoint; the hash will be recorded in a follow-up metadata commit.
-- **Exact next safe action:** Create the isolated docs-only checkpoint and push all
+- **Checkpoint commit:** `a3f82b133726796661ce202ba67704415d8c2d09`
+  (`Evaluate maximum-assurance release candidate`).
+- **Exact next safe action:** Commit this checkpoint-pointer metadata and push all
   evaluation work through the configured SSH remote. Do not remediate production
   implementation within this completed evaluation task.
 
