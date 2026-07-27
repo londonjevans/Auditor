@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.0",
+  "ticket_id": "EVAL-DEFECT-004",
+  "baseline_commit": "e304807cf942542706b88544fa216516f8f95cad",
+  "implementation_commit": "f9dc2e3c96e0eb64a9e13a3f22b9d18192bddfd1",
+  "executed_at": "2026-07-27T17:14:50Z",
+  "implementation": [
+    {
+      "path": "src/mmaudit/orchestration/assurance.py",
+      "sha256": "80bd6dbf3173b89d082d8f04404954bd914240f9176278fb4618b6b090fa9b87"
+    },
+    {
+      "path": "src/mmaudit/scanners/slither.py",
+      "sha256": "23939b5b7813e32d355211d28193b50326608c8cf2dfbb7d8b78dfc236334fa3"
+    },
+    {
+      "path": "src/mmaudit/scanners/base.py",
+      "sha256": "7bd988fa6ce0a4522ecf8e8dfe775fd1d8705c1eba05885acc94e507b5e9abed"
+    }
+  ],
+  "regression": {
+    "test": "tests/unit/test_assurance.py::test_exact_maximum_assurance_portfolio_fails_closed[required_slither_missing]",
+    "command": ".venv/bin/pytest -q 'tests/unit/test_assurance.py::test_exact_maximum_assurance_portfolio_fails_closed[required_slither_missing]' tests/unit/test_scanners_reporting.py -k 'slither or required_slither_missing'",
+    "result": "PASS",
+    "tests_passed": 9,
+    "tests_deselected": 56,
+    "duration_seconds": 0.90,
+    "assay": {
+      "slither_records": 0,
+      "other_real_shaped_scanner_records_retained": true,
+      "slither_clause_passed": false,
+      "maximum_assurance_complete": false
+    }
+  },
+  "required_slither_evidence": [
+    "exactly one scanner record named slither",
+    "successful process status and exit code zero",
+    "strict validated Slither machine envelope",
+    "non-empty bounded raw-output provenance",
+    "matching executable version and SHA-256 trust pins",
+    "sealed execution-observation digest",
+    "adversarially preflighted isolation attestation"
+  ],
+  "installed_tool": {
+    "name": "slither",
+    "path": "/Users/josevans/anaconda3/bin/slither",
+    "version": "0.11.5",
+    "sha256": "1a95e1d6b88b600e219d40643ddb7353e0822d19b930d315828ea1f98bcd9aaf",
+    "availability_is_execution": false,
+    "certified_execution_observed": false
+  },
+  "real_integration_boundary": {
+    "status": "BLOCKED_TECHNICAL",
+    "reason": "No adversarially certified local isolation backend is available, so installed Slither was not executed or credited as a certified maximum-assurance scanner record.",
+    "tracking_ticket": "REM-INTEGRATIONS-001"
+  }
+}

@@ -69,7 +69,8 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Acceptance criteria:** The `required_slither_missing` assay fails and no other
   scanner can satisfy the Slither clause.
 - **Dependencies:** `EVAL-DEFECT-003`.
-- **Status:** `IN_PROGRESS`
+- **Status:** `COMPLETE`
+- **Next action:** None; continue with `REM-OPENROUTER-001`.
 
 ## REM-OPENROUTER-001 — Exact OpenRouter client and cost ledger
 
@@ -82,7 +83,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   cannot exceed `250.00 USD`; malformed, truncated, mismatched, timed-out,
   rate-limited, and unavailable responses never count as reviews.
 - **Dependencies:** `EVAL-DEFECT-004`.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
 
 ## REM-MODELS-001 — Production model registry and qualification
 

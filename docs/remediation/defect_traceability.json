@@ -38,11 +38,11 @@
       "id": "EVAL-DEFECT-004",
       "summary": "Missing Slither can be hidden by another scanner.",
       "baseline_path": "src/mmaudit/orchestration/assurance.py",
-      "status": "QUEUED",
-      "regression_test": null,
-      "runtime_artifact": null,
-      "acceptance_command": null,
-      "completion_commit": null
+      "status": "COMPLETE",
+      "regression_test": "tests/unit/test_assurance.py::test_exact_maximum_assurance_portfolio_fails_closed[required_slither_missing]",
+      "runtime_artifact": "docs/remediation/runtime/eval_defect_004.json",
+      "acceptance_command": ".venv/bin/pytest -q 'tests/unit/test_assurance.py::test_exact_maximum_assurance_portfolio_fails_closed[required_slither_missing]' tests/unit/test_scanners_reporting.py -k 'slither or required_slither_missing'",
+      "completion_commit": "f9dc2e3c96e0eb64a9e13a3f22b9d18192bddfd1"
     },
     {
       "id": "EVAL-DEFECT-005",

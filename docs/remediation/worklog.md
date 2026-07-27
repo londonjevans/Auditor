@@ -4,12 +4,12 @@ The seven files under `docs/evaluation/` are immutable baseline evidence from
 commit `e304807cf942542706b88544fa216516f8f95cad`.
 
 AUTORUN_STATUS: IN_PROGRESS
-CURRENT_TICKET: EVAL-DEFECT-004
-LAST_COMPLETED_TICKET: EVAL-DEFECT-003
-NEXT_ACTION: Checkpoint the EVAL-DEFECT-003 fail-closed portfolio, then validate the independent exact-Slither gate for EVAL-DEFECT-004.
-LAST_COMMAND: .venv/bin/pytest -q
-LAST_RESULT: PASS — 867 tests passed and 9 real-integration tests skipped with explicit prerequisites in 152.18s.
-REMAINING_CODE_DEFECTS: 10
+CURRENT_TICKET: REM-OPENROUTER-001
+LAST_COMPLETED_TICKET: EVAL-DEFECT-004
+NEXT_ACTION: Checkpoint the exact-Slither gate ledger, then audit the current OpenRouter request, routing, response-validation, and atomic-cost implementation against REM-OPENROUTER-001.
+LAST_COMMAND: .venv/bin/pytest -q 'tests/unit/test_assurance.py::test_exact_maximum_assurance_portfolio_fails_closed[required_slither_missing]' tests/unit/test_scanners_reporting.py -k 'slither or required_slither_missing'
+LAST_RESULT: PASS — 9 tests passed and 56 were deselected in 0.90s; other scanner evidence cannot satisfy the exact Slither clause.
+REMAINING_CODE_DEFECTS: 9
 REMAINING_REAL_INTEGRATIONS: OpenRouter exact-model smoke/qualification/specialist review; certified-isolation Foundry and Slither; Echidna; Medusa; Halmos; formal proof engine; rootless isolation; isolated replay; product benchmark reports
 BLOCKED_EXTERNAL_PREREQUISITES: Echidna, Medusa, Kontrol, Certora, rootless runtime/image, private holdout, and independently adjudicated expert comparison are not yet evidenced as available
 OPENROUTER_COST_USED_USD: 0.00
@@ -296,3 +296,28 @@ LAST_CHECKPOINT_COMMIT: f9dc2e3c96e0eb64a9e13a3f22b9d18192bddfd1
 - **Checkpoint commit:** `f9dc2e3c96e0eb64a9e13a3f22b9d18192bddfd1`.
 - **Exact next safe action:** Checkpoint this ticket and continue
   `EVAL-DEFECT-004`.
+
+## 2026-07-27 — EVAL-DEFECT-004
+
+- **Status:** `COMPLETE`
+- **Defensive objective:** Prevent any scanner other than one exact, successful,
+  strict-machine-output Slither execution from satisfying the maximum-assurance
+  Slither clause.
+- **Completed changes:** The independent `slither_execution` clause accepts
+  exactly one Slither record only when it has real execution evidence, an
+  adversarially preflighted isolation attestation, exact version/checksum pins,
+  exit code zero, strict validated output, and a matching observation digest.
+  Generic scanner success and Foundry execution remain separate clauses.
+- **Acceptance command:** `.venv/bin/pytest -q
+  'tests/unit/test_assurance.py::test_exact_maximum_assurance_portfolio_fails_closed[required_slither_missing]'
+  tests/unit/test_scanners_reporting.py -k 'slither or
+  required_slither_missing'` → PASS, `9 passed, 56 deselected in 0.90s`.
+- **Runtime artifact:** `docs/remediation/runtime/eval_defect_004.json`.
+- **Real integration boundary:** Slither `0.11.5` is installed and hashed, but
+  no certified isolation backend is available. Availability was not counted as
+  execution; the real Slither run remains `BLOCKED_TECHNICAL` under
+  `REM-INTEGRATIONS-001`.
+- **Result:** `COMPLETE` for the false-COMPLETE code defect.
+- **Implementation commit:** `f9dc2e3c96e0eb64a9e13a3f22b9d18192bddfd1`.
+- **Exact next safe action:** Record this ledger checkpoint and continue
+  `REM-OPENROUTER-001`.
