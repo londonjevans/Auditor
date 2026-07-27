@@ -1,10 +1,25 @@
-# mmaudit
+<picture>
+  <source
+    media="(prefers-color-scheme: dark)"
+    srcset="assets/brand/corrovera/logos/corrovera-lockup-horizontal-reversed.svg"
+  >
+  <img
+    src="assets/brand/corrovera/logos/corrovera-lockup-horizontal.svg"
+    alt="Corrovera Security"
+    width="480"
+  >
+</picture>
 
-`mmaudit` is a read-only, repository-aware defensive security auditor. It combines local deterministic
-scanners and Solidity program modelling with independent base and specialist model roles, typed
-stateful/invariant testing, optional formal engines, an adversarial verifier and falsifier,
-deterministic location and consensus checks, and an evidence-capped final judge. It emits Markdown,
-versioned JSON, and SARIF 2.1.0.
+# Corrovera Security — mmaudit
+
+`mmaudit` is Corrovera Security's read-only, repository-aware defensive security audit engine. It
+combines local deterministic scanners and Solidity program modelling with independent base and
+specialist model roles, typed stateful/invariant testing, optional formal engines, an adversarial
+verifier and falsifier, deterministic location and consensus checks, and an evidence-capped final
+judge. It emits branded Markdown, versioned JSON, and SARIF 2.1.0.
+
+The editable identity system, report templates, social imagery, web icons, and production guidance
+are in the [Corrovera brand kit](assets/brand/corrovera/README.md).
 
 It does **not** exploit targets, scan networks, test credentials, contact production systems, modify
 application code, create fixes, open issues or pull requests, deploy anything, or execute

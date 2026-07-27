@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 1754" role="img" aria-labelledby="title">
+  <title id="title">Corrovera Security A4 letterhead</title>
+  <rect width="1240" height="1754" fill="#F6F4EE"/>
+  <g transform="translate(72 54) scale(.42)">
+    <path d="M10 10h15l47 47-15 15z" fill="#2CE0C2"/>
+    <path d="M103 10h15L71 57 56 72z" fill="#5BD7DB"/>
+    <path d="M10 118h15l47-47-15-15z" fill="#3155C6"/>
+    <path d="M103 118h15L71 71 56 56z" fill="#5870FF"/>
+    <path d="M64 40 88 64 64 88 40 64z" fill="#D9E4E8" stroke="#FFFFFF" stroke-width="2"/>
+    <circle cx="64" cy="64" r="4" fill="#08131E"/>
+  </g>
+  <text x="140" y="91" fill="#08131E" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="25" font-weight="650" letter-spacing="6">CORROVERA</text>
+  <text x="142" y="120" fill="#365163" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="12" font-weight="650" letter-spacing="5">SECURITY</text>
+  <path d="M72 158h1096" stroke="#D9E4E8" stroke-width="2"/>
+  <path d="M72 158h188" stroke="#2CE0C2" stroke-width="3"/>
+  <g opacity=".035" transform="translate(790 430) scale(2.6)">
+    <path d="M10 10h15l47 47-15 15z" fill="#08131E"/>
+    <path d="M103 10h15L71 57 56 72z" fill="#08131E"/>
+    <path d="M10 118h15l47-47-15-15z" fill="#08131E"/>
+    <path d="M103 118h15L71 71 56 56z" fill="#08131E"/>
+    <path d="M64 40 88 64 64 88 40 64z" fill="none" stroke="#08131E" stroke-width="3"/>
+  </g>
+  <path d="M72 1642h1096" stroke="#D9E4E8" stroke-width="2"/>
+  <text x="72" y="1685" fill="#365163" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="15">Independent minds. Corroborated truth.</text>
+  <text x="1168" y="1685" text-anchor="end" fill="#08131E" font-family="IBM Plex Mono, SFMono-Regular, Consolas, monospace" font-size="15">corrovera.com</text>
+</svg>

@@ -6,13 +6,75 @@ credentials, RPC URLs, or operational attack instructions.
 
 AUTORUN_STATUS: FINISHED_BLOCKED_TECHNICAL
 CURRENT_TICKET: None
-LAST_COMPLETED_TICKET: E2E-003
+LAST_COMPLETED_TICKET: BRAND-001
 NEXT_ACTION: No safe actionable ticket remains; await operator-provided pinned rootless containment, immutable non-placeholder model/provider configuration, and the other recorded local tool prerequisites before rerunning blocked real integrations.
 LAST_VALIDATION_COMMAND: .venv/bin/ruff format .; .venv/bin/ruff check .; .venv/bin/mypy; .venv/bin/pytest -q; make release-evidence PYTHON=.venv/bin/python
-LAST_VALIDATION_RESULT: PASS — Ruff left 206 files unchanged and reported no issues; strict mypy passed 101 source files; pytest passed 635 tests with 9 documented technical skips in 138.49s; all 18 schemas and persisted release evidence validated with release_status=blocked_technical.
+LAST_VALIDATION_RESULT: PASS — Ruff left 208 files unchanged and reported no issues; strict mypy passed 101 source files; pytest passed 636 tests with 9 documented technical skips in 141.99s; all 18 schemas and persisted release evidence validated with release_status=blocked_technical; 27 PNG exports, the favicon ICO, all SVG/XML, HTML, and JSON brand assets validated.
 LAST_CHECKPOINT_COMMIT: cd7142260069ce047e52f5c0ddbe47f6d9e2a3a5 — initial complete repository checkpoint, `Add maximum-assurance audit platform`.
 REMAINING_ACTIONABLE_TICKETS: 0
 BLOCKED_TICKETS: DYN-002 real Echidna and DYN-003 real Medusa binary integration subtasks are BLOCKED_TECHNICAL because no local binaries are installed; SYM-001 real Halmos target integration is BLOCKED_TECHNICAL because no hardened isolation backend is available; FORM-001 real configured Certora service integration is BLOCKED_TECHNICAL because certoraRun and configured CI credential/connectivity are unavailable; FORM-002 real Kontrol proof integration is BLOCKED_TECHNICAL because no local kontrol binary is installed; ISO-002, ISO-004, and E2E-002 real rootless containment integrations and other rootless/nested OS-isolation integration subtasks remain BLOCKED_TECHNICAL because no rootless runtime or pinned test image is configured; MODEL-002 real-provider execution is BLOCKED_TECHNICAL locally because no provider credential or committed operator model selection is available, while its conditional default-branch CI path and deterministic fake-provider coverage are complete; MAN-003 real isolated Foundry replay integration is BLOCKED_TECHNICAL in this sandbox because sandbox-exec cannot be nested and no other hardened backend is configured, while the conditional integration test is present; RELEASE-001 is BLOCKED_TECHNICAL because doctor, the real-provider model benchmark, the maximum-assurance run, and real isolated replay cannot pass without those prerequisites, while all eight safe local release gates are complete.
+
+## 2026-07-27 — BRAND-001
+
+- **Status:** `COMPLETE`
+- **Defensive objective:** Establish a production-ready Corrovera Security identity
+  and make generated assurance reports unmistakably branded without weakening report
+  qualifications or evidence semantics.
+- **Completed changes:**
+  - Created custom horizontal, stacked, symbol-only, wordmark, reversed, and
+    single-color logo masters with high-resolution PNG exports.
+  - Generated and retained wide, portrait, and square evidence-convergence imagery;
+    preserved the exact built-in image-generation prompts and usage constraints.
+  - Added browser, PWA, Apple, transparent-mark, and detailed app icons; social
+    banners; audit cover, running header/footer, severity, letterhead, presentation,
+    business-card, email-signature, and paged-print templates.
+  - Added platform-neutral JSON tokens, CSS tokens, domain architecture, accessibility
+    guidance, visual rules, brand voice, and a complete asset inventory.
+  - Branded Markdown output as the Corrovera Security Assurance Report with the
+    approved tagline and `corrovera.ai` engine attribution; updated package metadata
+    and repository presentation.
+- **Files changed:**
+  - `assets/brand/corrovera/`
+  - `README.md`
+  - `pyproject.toml`
+  - `src/mmaudit/reporting/markdown.py`
+  - `tests/unit/test_scanners_reporting.py`
+  - `tests/integration/test_pipeline.py`
+  - `docs/codex_work_queue.md`
+  - `docs/codex_worklog.md`
+- **Commands run:**
+  - Rendered SVG preview/export assets with macOS Quick Look and resized exact outputs
+    with `sips`.
+  - `find assets/brand/corrovera -name '*.svg' -print0 | xargs -0 xmllint --noout`
+    and `xmllint --html --noout assets/brand/corrovera/templates/email-signature.html`.
+  - Parsed both brand JSON files with `.venv/bin/python -m json.tool`.
+  - Validated PNG signatures and dimensions with a bounded local Python check; checked
+    the ICO header.
+  - `.venv/bin/ruff format src/mmaudit/reporting/markdown.py
+    tests/unit/test_scanners_reporting.py tests/integration/test_pipeline.py`.
+  - `.venv/bin/ruff check src/mmaudit/reporting/markdown.py
+    tests/unit/test_scanners_reporting.py tests/integration/test_pipeline.py`.
+  - `.venv/bin/pytest -q
+    tests/unit/test_scanners_reporting.py::test_markdown_uses_corrovera_report_identity
+    tests/unit/test_scanners_reporting.py::test_markdown_distinguishes_status_and_escapes_html
+    tests/integration/test_pipeline.py::test_latest_report_refresh_does_not_follow_hardlink`.
+  - `.venv/bin/ruff format .`; `.venv/bin/ruff check .`; `.venv/bin/mypy`;
+    `.venv/bin/pytest -q`; `make release-evidence PYTHON=.venv/bin/python`.
+- **Test results:** Visual review passed for the core logo, A4 report cover, social
+  card, presentation title, A4 letterhead, app icon, and severity badges. All SVG,
+  HTML, JSON, PNG, and ICO checks passed; `27` PNGs had valid headers and expected
+  key dimensions. Focused reporting coverage passed `3` tests. Ruff passed; strict
+  mypy passed `101` source files; the full suite passed `636` tests with `9`
+  documented technical skips in `141.99s`; release evidence remained valid across
+  all `18` schemas.
+- **Unresolved issues:** Font binaries are intentionally not redistributed. The
+  email logo URL must be hosted before signature rollout. `mmaudit` emits branded
+  Markdown, while final PDF production still requires an HTML/Markdown renderer;
+  the supplied print stylesheet supports that handoff without claiming an embedded
+  PDF engine.
+- **Exact next safe action:** Deploy the approved assets to the registered domain
+  surfaces and configure channel-specific copy when those external properties are
+  placed in scope.
 
 ## Final ticket disposition
 

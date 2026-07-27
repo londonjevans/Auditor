@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" role="img" aria-labelledby="title">
+  <title id="title">Corrovera evidence lattice pattern</title>
+  <defs>
+    <pattern id="grid" width="80" height="80" patternUnits="userSpaceOnUse">
+      <path d="M80 0H0v80" fill="none" stroke="#365163" stroke-opacity=".14"/>
+      <circle cx="0" cy="0" r="2" fill="#2CE0C2" fill-opacity=".28"/>
+    </pattern>
+    <pattern id="diamonds" width="160" height="160" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect x="48" y="48" width="64" height="64" fill="none" stroke="#5870FF" stroke-opacity=".10"/>
+    </pattern>
+  </defs>
+  <rect width="800" height="800" fill="url(#grid)"/>
+  <rect width="800" height="800" fill="url(#diamonds)"/>
+  <g fill="none" stroke-linecap="square">
+    <path d="M-40 640 400 200 840 640" stroke="#2CE0C2" stroke-opacity=".11" stroke-width="4"/>
+    <path d="M-40 160 400 600 840 160" stroke="#5870FF" stroke-opacity=".10" stroke-width="4"/>
+    <circle cx="400" cy="400" r="184" stroke="#D9E4E8" stroke-opacity=".08"/>
+    <circle cx="400" cy="400" r="260" stroke="#D9E4E8" stroke-opacity=".05"/>
+  </g>
+</svg>

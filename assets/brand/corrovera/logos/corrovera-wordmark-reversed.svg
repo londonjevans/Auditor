@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 306 48" role="img" aria-labelledby="title">
+  <title id="title">Corrovera reversed wordmark</title>
+  <g fill="none" stroke="#F6F4EE" stroke-width="4" stroke-linecap="square" stroke-linejoin="miter">
+    <path d="M27 6H12a8 8 0 0 0-8 8v20a8 8 0 0 0 8 8h15"/>
+    <rect x="38" y="6" width="25" height="36" rx="8"/>
+    <path d="M72 42V6h13a9 9 0 0 1 0 18H72m12 0 11 18"/>
+    <path d="M106 42V6h13a9 9 0 0 1 0 18h-13m12 0 11 18"/>
+    <rect x="140" y="6" width="25" height="36" rx="8"/>
+    <path d="m174 6 12 36 12-36"/>
+    <path d="M231 6h-23v36h23M208 24h19"/>
+    <path d="M242 42V6h13a9 9 0 0 1 0 18h-13m12 0 11 18"/>
+    <path d="m276 42 12-36 12 36m-20-13h16"/>
+  </g>
+</svg>

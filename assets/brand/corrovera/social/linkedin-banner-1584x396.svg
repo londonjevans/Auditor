@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1584 396" role="img" aria-labelledby="title">
+  <title id="title">Corrovera Security LinkedIn banner</title>
+  <rect width="1584" height="396" fill="#08131E"/>
+  <g opacity=".15" fill="none" stroke="#365163">
+    <path d="M0 99h1584M0 198h1584M0 297h1584"/>
+    <path d="M264 0v396M660 0v396M1056 0v396M1452 0v396"/>
+  </g>
+  <g transform="translate(96 78) scale(.78)">
+    <path d="M10 10h15l47 47-15 15z" fill="#2CE0C2"/>
+    <path d="M103 10h15L71 57 56 72z" fill="#5BD7DB"/>
+    <path d="M10 118h15l47-47-15-15z" fill="#3155C6"/>
+    <path d="M103 118h15L71 71 56 56z" fill="#5870FF"/>
+    <path d="M64 40 88 64 64 88 40 64z" fill="#D9E4E8"/>
+  </g>
+  <text x="220" y="135" fill="#F6F4EE" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="46" font-weight="650" letter-spacing="9">CORROVERA</text>
+  <text x="224" y="181" fill="#9EB6C2" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="18" font-weight="650" letter-spacing="9">SECURITY</text>
+  <text x="220" y="268" fill="#D9E4E8" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="31">Independent minds. <tspan fill="#2CE0C2">Corroborated truth.</tspan></text>
+  <text x="220" y="319" fill="#627D8A" font-family="IBM Plex Mono, SFMono-Regular, Consolas, monospace" font-size="17">corrovera.com · corrovera.ai · corrovera.io</text>
+  <g transform="translate(1240 40)" opacity=".85">
+    <path d="M0 0h24l151 151-24 24z" fill="#2CE0C2"/>
+    <path d="M280 0h24L153 151l24 24z" fill="#5BD7DB"/>
+    <path d="M0 304h24l151-151-24-24z" fill="#3155C6"/>
+    <path d="M280 304h24L153 153l24-24z" fill="#5870FF"/>
+    <path d="m152 102 50 50-50 50-50-50z" fill="#D9E4E8"/>
+  </g>
+</svg>

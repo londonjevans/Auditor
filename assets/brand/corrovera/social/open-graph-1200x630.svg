@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Corrovera Security</title>
+  <desc id="desc">Open Graph card for Corrovera Security with the tagline Independent minds. Corroborated truth.</desc>
+  <rect width="1200" height="630" fill="#08131E"/>
+  <g opacity=".16" fill="none" stroke="#365163">
+    <path d="M0 126h1200M0 315h1200M0 504h1200"/>
+    <path d="M180 0v630M480 0v630M780 0v630M1080 0v630"/>
+    <circle cx="950" cy="315" r="230"/>
+    <circle cx="950" cy="315" r="150"/>
+  </g>
+  <g transform="translate(74 62) scale(.56)">
+    <path d="M10 10h15l47 47-15 15z" fill="#2CE0C2"/>
+    <path d="M103 10h15L71 57 56 72z" fill="#5BD7DB"/>
+    <path d="M10 118h15l47-47-15-15z" fill="#3155C6"/>
+    <path d="M103 118h15L71 71 56 56z" fill="#5870FF"/>
+    <path d="M64 40 88 64 64 88 40 64z" fill="#D9E4E8"/>
+  </g>
+  <text x="158" y="106" fill="#F6F4EE" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="29" font-weight="650" letter-spacing="7">CORROVERA</text>
+  <text x="160" y="137" fill="#9EB6C2" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="13" font-weight="650" letter-spacing="6">SECURITY</text>
+  <text x="74" y="308" fill="#F6F4EE" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="62" font-weight="600">Independent minds.</text>
+  <text x="74" y="382" fill="#2CE0C2" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="62" font-weight="600">Corroborated truth.</text>
+  <text x="76" y="456" fill="#9EB6C2" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="23">Multi-agent security assurance backed by reproducible evidence.</text>
+  <text x="76" y="561" fill="#D9E4E8" font-family="IBM Plex Mono, SFMono-Regular, Consolas, monospace" font-size="18">corrovera.com</text>
+  <g transform="translate(792 158)">
+    <path d="M0 0h30l164 164-30 30z" fill="#2CE0C2" opacity=".78"/>
+    <path d="M286 0h30L152 164l30 30z" fill="#5BD7DB" opacity=".74"/>
+    <path d="M0 316h30l164-164-30-30z" fill="#3155C6" opacity=".78"/>
+    <path d="M286 316h30L152 152l30-30z" fill="#5870FF" opacity=".82"/>
+    <path d="m158 102 56 56-56 56-56-56z" fill="#D9E4E8" stroke="#F6F4EE" stroke-width="3"/>
+    <circle cx="158" cy="158" r="8" fill="#08131E"/>
+  </g>
+</svg>

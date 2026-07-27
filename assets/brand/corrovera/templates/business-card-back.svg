@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1050 600" role="img" aria-labelledby="title">
+  <title id="title">Corrovera Security business card back</title>
+  <rect width="1050" height="600" fill="#F6F4EE"/>
+  <g transform="translate(397 172) scale(2)">
+    <path d="M10 10h15l47 47-15 15z" fill="#2CE0C2"/>
+    <path d="M103 10h15L71 57 56 72z" fill="#5BD7DB"/>
+    <path d="M10 118h15l47-47-15-15z" fill="#3155C6"/>
+    <path d="M103 118h15L71 71 56 56z" fill="#5870FF"/>
+    <path d="M64 40 88 64 64 88 40 64z" fill="#FFFFFF" stroke="#D9E4E8"/>
+    <circle cx="64" cy="64" r="4" fill="#08131E"/>
+  </g>
+  <text x="525" y="502" text-anchor="middle" fill="#08131E" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="23" font-weight="550" letter-spacing="1">Independent minds. Corroborated truth.</text>
+</svg>

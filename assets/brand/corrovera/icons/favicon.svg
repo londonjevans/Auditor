@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Corrovera Security</title>
+  <rect width="64" height="64" rx="12" fill="#08131E"/>
+  <path d="M8 8h8l21 21-8 8z" fill="#2CE0C2"/>
+  <path d="M48 8h8L35 29l-8 8z" fill="#5BD7DB"/>
+  <path d="M8 56h8l21-21-8-8z" fill="#3155C6"/>
+  <path d="M48 56h8L35 35l-8-8z" fill="#5870FF"/>
+  <path d="m32 20 12 12-12 12-12-12z" fill="#F6F4EE" stroke="#D9E4E8"/>
+  <circle cx="32" cy="32" r="2.5" fill="#08131E"/>
+</svg>

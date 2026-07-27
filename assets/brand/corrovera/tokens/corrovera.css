@@ -1,0 +1,48 @@
+:root {
+  --corrovera-midnight: #08131e;
+  --corrovera-ink: #0d2030;
+  --corrovera-slate: #365163;
+  --corrovera-mist: #d9e4e8;
+  --corrovera-paper: #f6f4ee;
+  --corrovera-white: #ffffff;
+  --corrovera-teal: #2ce0c2;
+  --corrovera-cobalt: #5870ff;
+  --corrovera-amber: #e7b75f;
+  --corrovera-critical: #c9364a;
+  --corrovera-high: #e56545;
+  --corrovera-medium: #d79a2b;
+  --corrovera-low: #2b82c9;
+  --corrovera-informational: #627d8a;
+  --corrovera-positive: #13866f;
+  --corrovera-font-sans: Inter, "Helvetica Neue", Arial, sans-serif;
+  --corrovera-font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  --corrovera-space: 0.5rem;
+  --corrovera-radius-sm: 0.25rem;
+  --corrovera-radius-md: 0.5rem;
+  --corrovera-radius-lg: 1rem;
+  --corrovera-content-width: 75rem;
+}
+
+.corrovera-surface {
+  color: var(--corrovera-ink);
+  background: var(--corrovera-paper);
+  font-family: var(--corrovera-font-sans);
+}
+
+.corrovera-surface--dark {
+  color: var(--corrovera-paper);
+  background: var(--corrovera-midnight);
+}
+
+.corrovera-data {
+  font-family: var(--corrovera-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.corrovera-eyebrow {
+  color: var(--corrovera-slate);
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}

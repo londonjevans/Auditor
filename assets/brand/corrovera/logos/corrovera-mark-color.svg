@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">Corrovera Security mark</title>
+  <desc id="desc">Four independent evidence paths converge into one verified crystalline center.</desc>
+  <g fill="none" stroke-linejoin="miter">
+    <path d="M10 10h15l47 47-15 15z" fill="#2CE0C2"/>
+    <path d="M103 10h15L71 57 56 72z" fill="#5BD7DB"/>
+    <path d="M10 118h15l47-47-15-15z" fill="#3155C6"/>
+    <path d="M103 118h15L71 71 56 56z" fill="#5870FF"/>
+    <path d="M64 40 88 64 64 88 40 64z" fill="#D9E4E8" fill-opacity=".92" stroke="#F6F4EE" stroke-width="2"/>
+    <path d="m64 47 17 17-17 17-17-17z" fill="#F6F4EE" fill-opacity=".75" stroke="#FFFFFF" stroke-width="1.5"/>
+    <path d="M64 47v34M47 64h34" stroke="#9EB6C2" stroke-width="1.5"/>
+    <circle cx="10" cy="10" r="3.5" fill="#2CE0C2"/>
+    <circle cx="118" cy="10" r="3.5" fill="#5BD7DB"/>
+    <circle cx="10" cy="118" r="3.5" fill="#3155C6"/>
+    <circle cx="118" cy="118" r="3.5" fill="#5870FF"/>
+    <circle cx="64" cy="64" r="3.5" fill="#08131E"/>
+  </g>
+</svg>

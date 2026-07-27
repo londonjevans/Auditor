@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 100" role="img" aria-labelledby="title">
+  <title id="title">Corrovera Security report page footer</title>
+  <rect width="1600" height="100" fill="#F6F4EE"/>
+  <path d="M48 16h1504" stroke="#D9E4E8" stroke-width="2"/>
+  <text x="48" y="60" fill="#627D8A" font-family="IBM Plex Mono, SFMono-Regular, Consolas, monospace" font-size="13">{CLASSIFICATION} · SHA-256 {REPORT_HASH}</text>
+  <text x="800" y="60" text-anchor="middle" fill="#365163" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="14">Independent minds. Corroborated truth.</text>
+  <text x="1552" y="60" text-anchor="end" fill="#08131E" font-family="IBM Plex Mono, SFMono-Regular, Consolas, monospace" font-size="14">corrovera.com · {PAGE}</text>
+</svg>

@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 112" role="img" aria-labelledby="title desc">
+  <title id="title">Corrovera Security severity badges</title>
+  <desc id="desc">Critical, high, medium, low, informational, and resolved audit finding badges.</desc>
+  <rect width="920" height="112" fill="#F6F4EE"/>
+  <g font-family="IBM Plex Mono, SFMono-Regular, Consolas, monospace" font-size="15" font-weight="600" letter-spacing="1.5">
+    <g transform="translate(16 30)">
+      <rect width="132" height="52" rx="5" fill="#C9364A"/>
+      <circle cx="25" cy="26" r="6" fill="#FFFFFF"/>
+      <text x="43" y="32" fill="#FFFFFF">CRITICAL</text>
+    </g>
+    <g transform="translate(164 30)">
+      <rect width="116" height="52" rx="5" fill="#E56545"/>
+      <circle cx="25" cy="26" r="6" fill="#FFFFFF"/>
+      <text x="43" y="32" fill="#FFFFFF">HIGH</text>
+    </g>
+    <g transform="translate(296 30)">
+      <rect width="132" height="52" rx="5" fill="#D79A2B"/>
+      <circle cx="25" cy="26" r="6" fill="#08131E"/>
+      <text x="43" y="32" fill="#08131E">MEDIUM</text>
+    </g>
+    <g transform="translate(444 30)">
+      <rect width="108" height="52" rx="5" fill="#2B82C9"/>
+      <circle cx="25" cy="26" r="6" fill="#FFFFFF"/>
+      <text x="43" y="32" fill="#FFFFFF">LOW</text>
+    </g>
+    <g transform="translate(568 30)">
+      <rect width="154" height="52" rx="5" fill="#627D8A"/>
+      <circle cx="25" cy="26" r="6" fill="#FFFFFF"/>
+      <text x="43" y="32" fill="#FFFFFF">INFO</text>
+    </g>
+    <g transform="translate(738 30)">
+      <rect width="166" height="52" rx="5" fill="#13866F"/>
+      <path d="m18 26 6 6 12-14" fill="none" stroke="#FFFFFF" stroke-width="4"/>
+      <text x="47" y="32" fill="#FFFFFF">RESOLVED</text>
+    </g>
+  </g>
+</svg>

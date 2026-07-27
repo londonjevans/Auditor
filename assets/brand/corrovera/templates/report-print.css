@@ -1,0 +1,262 @@
+@page {
+  size: A4;
+  margin: 19mm 18mm 18mm;
+
+  @top-left {
+    color: #365163;
+    content: "CORROVERA SECURITY";
+    font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+    font-size: 7pt;
+    letter-spacing: 0.16em;
+  }
+
+  @top-right {
+    color: #365163;
+    content: "SECURITY ASSURANCE REPORT";
+    font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+    font-size: 7pt;
+    letter-spacing: 0.08em;
+  }
+
+  @bottom-left {
+    color: #365163;
+    content: "Independent minds. Corroborated truth.";
+    font-family: Inter, "Helvetica Neue", Arial, sans-serif;
+    font-size: 7pt;
+  }
+
+  @bottom-right {
+    color: #365163;
+    content: counter(page);
+    font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+    font-size: 7pt;
+  }
+}
+
+@page :first {
+  margin: 0;
+
+  @top-left {
+    content: none;
+  }
+
+  @top-right {
+    content: none;
+  }
+
+  @bottom-left {
+    content: none;
+  }
+
+  @bottom-right {
+    content: none;
+  }
+}
+
+:root {
+  color: #0d2030;
+  background: #f6f4ee;
+  font-family: Inter, "Helvetica Neue", Arial, sans-serif;
+  font-size: 10pt;
+  line-height: 1.55;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+body > h1:first-of-type {
+  align-items: flex-start;
+  background:
+    linear-gradient(135deg, rgb(44 224 194 / 18%), transparent 36%),
+    linear-gradient(315deg, rgb(88 112 255 / 24%), transparent 42%),
+    #08131e;
+  color: #f6f4ee;
+  display: flex;
+  flex-direction: column;
+  font-size: 34pt;
+  justify-content: center;
+  letter-spacing: -0.035em;
+  margin: 0;
+  min-height: 297mm;
+  padding: 28mm 24mm 60mm;
+  page-break-after: always;
+  position: relative;
+}
+
+body > h1:first-of-type::before {
+  color: #2ce0c2;
+  content: "CORROVERA / SECURITY";
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 8pt;
+  font-weight: 600;
+  left: 24mm;
+  letter-spacing: 0.18em;
+  position: absolute;
+  top: 24mm;
+}
+
+body > h1:first-of-type::after {
+  border-bottom: 1.5px solid #2ce0c2;
+  border-left: 1.5px solid #5870ff;
+  content: "";
+  height: 34mm;
+  position: absolute;
+  right: 24mm;
+  top: 24mm;
+  transform: rotate(-45deg);
+  width: 34mm;
+}
+
+body > h1:first-of-type + p {
+  color: #d9e4e8;
+  font-size: 15pt;
+  font-style: normal;
+  left: 24mm;
+  margin: 0;
+  position: absolute;
+  top: 160mm;
+  z-index: 2;
+}
+
+body > h1:first-of-type + p + p {
+  color: #9fb4bf;
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 8pt;
+  left: 24mm;
+  margin: 0;
+  position: absolute;
+  top: 178mm;
+  z-index: 2;
+}
+
+h2,
+h3,
+h4 {
+  break-after: avoid;
+  color: #0d2030;
+  page-break-after: avoid;
+}
+
+h2 {
+  border-bottom: 1px solid #b7cbd3;
+  font-size: 20pt;
+  letter-spacing: -0.02em;
+  margin: 12mm 0 5mm;
+  padding-bottom: 2.5mm;
+}
+
+h2::before {
+  color: #13866f;
+  content: "// ";
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 11pt;
+}
+
+h3 {
+  font-size: 14pt;
+  margin: 8mm 0 3mm;
+}
+
+p,
+li {
+  orphans: 3;
+  widows: 3;
+}
+
+a {
+  color: #13866f;
+  text-decoration-thickness: 0.75px;
+  text-underline-offset: 2px;
+}
+
+code {
+  background: #e5edef;
+  border-radius: 2px;
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.88em;
+  padding: 0.08em 0.28em;
+}
+
+pre {
+  background: #0d2030;
+  border-left: 3px solid #2ce0c2;
+  border-radius: 3px;
+  color: #d9e4e8;
+  overflow-wrap: anywhere;
+  padding: 4mm;
+  white-space: pre-wrap;
+}
+
+pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+blockquote {
+  background: #e8eeee;
+  border-left: 3px solid #e7b75f;
+  color: #0d2030;
+  margin: 5mm 0;
+  padding: 3mm 4mm;
+}
+
+table {
+  border-collapse: collapse;
+  font-size: 8.5pt;
+  margin: 4mm 0 7mm;
+  width: 100%;
+}
+
+thead {
+  display: table-header-group;
+}
+
+tr {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+th {
+  background: #0d2030;
+  color: #f6f4ee;
+  font-size: 7.5pt;
+  letter-spacing: 0.04em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+th,
+td {
+  border: 1px solid #c8d6db;
+  padding: 2.2mm 2.5mm;
+  vertical-align: top;
+}
+
+tbody tr:nth-child(even) {
+  background: #edf1f0;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid #b7cbd3;
+  margin: 8mm 0;
+}
+
+@media screen {
+  body {
+    margin: 0 auto;
+    max-width: 960px;
+    padding: 32px;
+  }
+
+  body > h1:first-of-type {
+    min-height: 900px;
+  }
+}
+

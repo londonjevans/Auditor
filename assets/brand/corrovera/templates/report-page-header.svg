@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 180" role="img" aria-labelledby="title">
+  <title id="title">Corrovera Security report page header</title>
+  <rect width="1600" height="180" fill="#F6F4EE"/>
+  <g transform="translate(48 35) scale(.58)">
+    <path d="M10 10h15l47 47-15 15z" fill="#2CE0C2"/>
+    <path d="M103 10h15L71 57 56 72z" fill="#5BD7DB"/>
+    <path d="M10 118h15l47-47-15-15z" fill="#3155C6"/>
+    <path d="M103 118h15L71 71 56 56z" fill="#5870FF"/>
+    <path d="M64 40 88 64 64 88 40 64z" fill="#FFFFFF" stroke="#D9E4E8"/>
+  </g>
+  <text x="138" y="82" fill="#08131E" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="27" font-weight="650" letter-spacing="6">CORROVERA</text>
+  <text x="140" y="115" fill="#365163" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="12" font-weight="650" letter-spacing="5">SECURITY</text>
+  <text x="1548" y="82" text-anchor="end" fill="#365163" font-family="IBM Plex Mono, SFMono-Regular, Consolas, monospace" font-size="16">{CLIENT_OR_PROTOCOL}</text>
+  <text x="1548" y="112" text-anchor="end" fill="#627D8A" font-family="IBM Plex Mono, SFMono-Regular, Consolas, monospace" font-size="13">{REPORT_ID} · {VERSION}</text>
+  <path d="M48 154h1500" stroke="#D9E4E8" stroke-width="2"/>
+  <path d="M48 154h260" stroke="#2CE0C2" stroke-width="3"/>
+</svg>

@@ -2925,4 +2925,8 @@ async def test_latest_report_refresh_does_not_follow_hardlink(
     result = await pipeline.run(scanner_only=True)
     assert result.exit_code is ExitCode.SUCCESS
     assert outside.read_text(encoding="utf-8") == "sentinel\n"
-    assert (latest / "audit-report.md").read_text(encoding="utf-8").startswith("# mmaudit")
+    assert (
+        (latest / "audit-report.md")
+        .read_text(encoding="utf-8")
+        .startswith("# Corrovera Security Assurance Report")
+    )

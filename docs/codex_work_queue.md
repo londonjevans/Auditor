@@ -713,6 +713,23 @@ and report serialization.
 - **Dependencies:** All required tickets above.
 - **Status:** `BLOCKED_TECHNICAL`
 
+## Product identity and reporting
+
+### BRAND-001 — Corrovera Security identity system
+
+- **Objective:** Provide a coherent production identity and apply it to generated
+  security-assurance reports.
+- **Files/modules:** `assets/brand/corrovera/`, `README.md`, package metadata,
+  Markdown reporting, reporting tests.
+- **Acceptance criteria:** The kit includes editable logo variants, generated master
+  imagery, color and typography tokens, web/app icons, social formats, audit-report
+  and business templates, usage guidance, and reproducible image prompts; generated
+  Markdown reports carry the Corrovera name, tagline, and engine identity.
+- **Tests:** Visual inspection; SVG/XML, HTML, JSON, PNG/ICO, exact-dimension, Ruff,
+  mypy, focused reporting, full pytest, and release-evidence validation.
+- **Dependencies:** None.
+- **Status:** `COMPLETE`
+
 ## Next action
 
 No safe actionable ticket remains. Resume `E2E-002` and the four blocked

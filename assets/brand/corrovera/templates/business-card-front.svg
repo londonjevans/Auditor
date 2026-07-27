@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1050 600" role="img" aria-labelledby="title">
+  <title id="title">Corrovera Security business card front</title>
+  <rect width="1050" height="600" fill="#08131E"/>
+  <g transform="translate(76 68) scale(.68)">
+    <path d="M10 10h15l47 47-15 15z" fill="#2CE0C2"/>
+    <path d="M103 10h15L71 57 56 72z" fill="#5BD7DB"/>
+    <path d="M10 118h15l47-47-15-15z" fill="#3155C6"/>
+    <path d="M103 118h15L71 71 56 56z" fill="#5870FF"/>
+    <path d="M64 40 88 64 64 88 40 64z" fill="#D9E4E8"/>
+  </g>
+  <text x="180" y="121" fill="#F6F4EE" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="34" font-weight="650" letter-spacing="7">CORROVERA</text>
+  <text x="182" y="157" fill="#9EB6C2" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="15" font-weight="650" letter-spacing="7">SECURITY</text>
+  <text x="76" y="392" fill="#F6F4EE" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="39" font-weight="600">{NAME}</text>
+  <text x="77" y="437" fill="#2CE0C2" font-family="IBM Plex Mono, SFMono-Regular, Consolas, monospace" font-size="18" letter-spacing="2">{TITLE}</text>
+  <text x="77" y="511" fill="#9EB6C2" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="18">{EMAIL}</text>
+  <text x="974" y="511" text-anchor="end" fill="#F6F4EE" font-family="IBM Plex Mono, SFMono-Regular, Consolas, monospace" font-size="18">corrovera.com</text>
+  <path d="M77 550h897" stroke="#365163"/>
+</svg>

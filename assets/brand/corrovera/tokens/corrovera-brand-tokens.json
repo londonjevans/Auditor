@@ -1,0 +1,57 @@
+{
+  "brand": {
+    "name": "Corrovera Security",
+    "tagline": "Independent minds. Corroborated truth.",
+    "primary_domain": "corrovera.com",
+    "engine_domain": "corrovera.ai",
+    "developer_domain": "corrovera.io"
+  },
+  "color": {
+    "midnight": "#08131E",
+    "ink": "#0D2030",
+    "slate": "#365163",
+    "mist": "#D9E4E8",
+    "paper": "#F6F4EE",
+    "white": "#FFFFFF",
+    "verification_teal": "#2CE0C2",
+    "corroboration_cobalt": "#5870FF",
+    "signal_amber": "#E7B75F",
+    "severity": {
+      "critical": "#C9364A",
+      "high": "#E56545",
+      "medium": "#D79A2B",
+      "low": "#2B82C9",
+      "informational": "#627D8A",
+      "positive": "#13866F"
+    }
+  },
+  "typography": {
+    "display": {
+      "family": "Inter",
+      "fallback": "Helvetica Neue, Arial, sans-serif",
+      "weights": [500, 600, 700]
+    },
+    "body": {
+      "family": "Inter",
+      "fallback": "Helvetica Neue, Arial, sans-serif",
+      "weights": [400, 500, 600]
+    },
+    "data": {
+      "family": "IBM Plex Mono",
+      "fallback": "SFMono-Regular, Consolas, monospace",
+      "weights": [400, 500, 600]
+    }
+  },
+  "layout": {
+    "base_spacing_px": 8,
+    "content_max_width_px": 1200,
+    "logo_clearspace_mark_ratio": 0.25,
+    "minimum_logo_width_px": 180,
+    "minimum_mark_size_px": 24,
+    "corner_radius_px": {
+      "small": 4,
+      "medium": 8,
+      "large": 16
+    }
+  }
+}

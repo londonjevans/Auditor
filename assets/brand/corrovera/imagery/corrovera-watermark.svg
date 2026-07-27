@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">Corrovera Security watermark</title>
+  <g fill="none" stroke="#365163" stroke-opacity=".14" stroke-width="4">
+    <path d="M10 10h15l47 47-15 15z"/>
+    <path d="M103 10h15L71 57 56 72z"/>
+    <path d="M10 118h15l47-47-15-15z"/>
+    <path d="M103 118h15L71 71 56 56z"/>
+    <path d="M64 40 88 64 64 88 40 64z"/>
+    <path d="M64 47v34M47 64h34" stroke-width="2"/>
+  </g>
+</svg>

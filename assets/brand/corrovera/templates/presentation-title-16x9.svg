@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" role="img" aria-labelledby="title">
+  <title id="title">Corrovera Security presentation title template</title>
+  <rect width="1920" height="1080" fill="#08131E"/>
+  <g opacity=".18" stroke="#365163" fill="none">
+    <path d="M0 180h1920M0 540h1920M0 900h1920"/>
+    <path d="M240 0v1080M720 0v1080M1200 0v1080M1680 0v1080"/>
+  </g>
+  <g transform="translate(104 92) scale(.52)">
+    <path d="M10 10h15l47 47-15 15z" fill="#2CE0C2"/>
+    <path d="M103 10h15L71 57 56 72z" fill="#5BD7DB"/>
+    <path d="M10 118h15l47-47-15-15z" fill="#3155C6"/>
+    <path d="M103 118h15L71 71 56 56z" fill="#5870FF"/>
+    <path d="M64 40 88 64 64 88 40 64z" fill="#D9E4E8"/>
+  </g>
+  <text x="190" y="135" fill="#F6F4EE" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="30" font-weight="650" letter-spacing="7">CORROVERA SECURITY</text>
+  <text x="104" y="430" fill="#2CE0C2" font-family="IBM Plex Mono, SFMono-Regular, Consolas, monospace" font-size="22" letter-spacing="3">{PRESENTATION_TYPE}</text>
+  <text x="100" y="532" fill="#F6F4EE" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="76" font-weight="600">{PRESENTATION_TITLE}</text>
+  <text x="104" y="600" fill="#9EB6C2" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="30">{SUBTITLE_OR_CLIENT}</text>
+  <g transform="translate(1440 585)">
+    <circle cx="170" cy="170" r="154" fill="none" stroke="#365163" stroke-width="2"/>
+    <path d="M-40-40 182 182" stroke="#2CE0C2" stroke-width="26" opacity=".72"/>
+    <path d="m380-40-222 222" stroke="#5BD7DB" stroke-width="26" opacity=".68"/>
+    <path d="m-40 380 222-222" stroke="#3155C6" stroke-width="26" opacity=".72"/>
+    <path d="M380 380 158 158" stroke="#5870FF" stroke-width="26" opacity=".76"/>
+    <path d="m170 108 62 62-62 62-62-62z" fill="#D9E4E8" stroke="#F6F4EE" stroke-width="3"/>
+    <circle cx="170" cy="170" r="8" fill="#08131E"/>
+  </g>
+  <text x="104" y="980" fill="#627D8A" font-family="IBM Plex Mono, SFMono-Regular, Consolas, monospace" font-size="17">{DATE} · {CLASSIFICATION}</text>
+  <text x="1816" y="980" text-anchor="end" fill="#2CE0C2" font-family="IBM Plex Mono, SFMono-Regular, Consolas, monospace" font-size="17">corrovera.com</text>
+</svg>
