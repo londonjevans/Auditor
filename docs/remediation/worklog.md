@@ -4,16 +4,16 @@ The seven files under `docs/evaluation/` are immutable baseline evidence from
 commit `e304807cf942542706b88544fa216516f8f95cad`.
 
 AUTORUN_STATUS: IN_PROGRESS
-CURRENT_TICKET: REM-MODELS-001
+CURRENT_TICKET: EVAL-DEFECT-005
 LAST_COMPLETED_TICKET: REM-OPENROUTER-001
-NEXT_ACTION: Create and push the isolated no-spend model-qualification checkpoint, initialize the ignored cumulative ledger, then execute one explicitly controlled paid transport smoke.
-LAST_COMMAND: git commit -m "Add fail-closed model qualification"
-LAST_RESULT: PASS — isolated no-spend implementation checkpoint a946ae6a6b1cee37e0a0994df64dacd30f3a8889 created from the fully validated source state.
+NEXT_ACTION: Replace context-delivery credit with exact, validated, response-authored per-surface records and preserve explicit no-credit outcomes.
+LAST_COMMAND: .venv/bin/ruff format --check . && .venv/bin/ruff check . && .venv/bin/mypy
+LAST_RESULT: PASS — 254 files were formatted, Ruff passed, and strict mypy passed for 114 source files after the full suite passed with 1328 tests and 10 explicit external-integration skips.
 REMAINING_CODE_DEFECTS: 9
 REMAINING_REAL_INTEGRATIONS: OpenRouter exact-model smoke/qualification/specialist review; certified-isolation Foundry and Slither; Echidna; Medusa; Halmos; formal proof engine; rootless isolation; isolated replay; product benchmark reports
-BLOCKED_EXTERNAL_PREREQUISITES: Echidna, Medusa, Kontrol, Certora, rootless runtime/image, private holdout, and independently adjudicated expert comparison are not yet evidenced as available
-OPENROUTER_COST_USED_USD: 0.00
-LAST_CHECKPOINT_COMMIT: a946ae6a6b1cee37e0a0994df64dacd30f3a8889
+BLOCKED_EXTERNAL_PREREQUISITES: Operator-reviewed production model lineage mapping; Echidna; Medusa; Kontrol; Certora; rootless runtime/image; private holdout; and independently adjudicated expert comparison are not yet evidenced as available
+OPENROUTER_COST_USED_USD: 0.00118674
+LAST_CHECKPOINT_COMMIT: e219c0fe208dc48fbc2969590b11099d7d15fe34
 
 ## Immutable baseline
 
@@ -38,7 +38,7 @@ LAST_CHECKPOINT_COMMIT: a946ae6a6b1cee37e0a0994df64dacd30f3a8889
 
 ## 2026-07-27 — REM-SECRET-001
 
-- **Status:** `IN_PROGRESS`
+- **Status:** `COMPLETE`
 - **Defensive objective:** Create an explicit, allowlisted, in-memory
   operator-secret interface and prove the provider credential cannot enter target
   input, child tools, containers, model messages, public artifacts, or errors.
@@ -578,6 +578,82 @@ LAST_CHECKPOINT_COMMIT: a946ae6a6b1cee37e0a0994df64dacd30f3a8889
   found no remaining checkpoint blocker in mock/REAL promotion, campaign/ledger
   provenance, budget accounting, exact model/route enforcement, selection
   binding, or secret/private-artifact exposure. No provider request occurred.
-- **Exact next safe action:** Complete the independent final diff review, then
-  create and push an isolated checkpoint before considering a separately
-  labelled one-call transport smoke.
+- **Real provider smoke attempt 1:** After checkpoint `a946ae6`, the dedicated
+  ignored mode-`0600` ledger was initialized with the immutable `250 USD` cap.
+  Authentication, exact-model catalog lookup, exact AkashML endpoint validation,
+  ZDR metadata validation, and request construction succeeded. The one paid
+  Qwen request returned the exact model but `finish_reason=length` after using
+  the original `256`-token ceiling for reasoning, so strict validation rejected
+  it and no review or smoke success was credited. The ledger has one
+  `uncertain_accounted` entry for `0.00046222 USD`, zero active reservations,
+  and no secret-bearing fields. A materially different retry caps reasoning at
+  `64` tokens, excludes reasoning content, and raises the bounded total output
+  ceiling to `512`; local harness/OpenRouter validation passed with `110 passed,
+  1 opt-in skip`.
+- **Real provider smoke attempt 2:** The bounded reasoning configuration passed
+  the prior truncation boundary and the provider returned the exact requested
+  model at the response envelope, but OpenRouter router metadata identified the
+  selected model as the dated canonical variant
+  `qwen/qwen3.6-35b-a3b-20260415`. Because that did not equal the frozen exact
+  request ID, the client rejected it as an unapproved identity substitution and
+  credited no successful request. The dedicated ledger now contains two
+  `uncertain_accounted` entries totaling `0.00118674 USD`, zero active
+  reservations, and zero overruns. Per the two-attempt rule, the paid smoke is
+  `INCONCLUSIVE`; no third paid retry is authorized until the
+  requested-versus-canonical identity is resolved from official frozen metadata
+  and reflected in a new exact candidate set.
+- **Requested/canonical identity remediation:** Certification now permits a router
+  selected model to use only the exact requested ID or the canonical slug bound by
+  a complete REAL discovery artifact. The top-level response still must equal the
+  exact requested ID. Unmanifested discovery must match the same authenticated,
+  owned client session; frozen campaign discovery must match its exact manifest
+  artifact and run provenance. Usage, generation refetch, benchmark verification,
+  qualification, and selection all retain the requested/canonical/catalog/
+  discovery hash chain.
+- **Negative regressions:** Unbound canonical identities, wrong canonical
+  identities, mixed provider-attempt identities, a canonical top-level response,
+  and spliced discovery manifests all fail closed. No new paid request was made.
+- **Focused validation:** `.venv/bin/pytest -q
+  tests/unit/test_openrouter.py tests/unit/test_candidate_benchmark.py
+  tests/unit/test_candidate_benchmark_cli.py
+  tests/unit/test_candidate_benchmark_campaign.py
+  tests/unit/test_generation_evidence.py tests/unit/test_model_benchmark.py
+  tests/unit/test_model_benchmark_portfolio.py
+  tests/unit/test_model_qualification.py
+  tests/unit/test_qualification_workflow.py tests/unit/test_usage.py
+  tests/unit/test_model_surface_review_schema.py
+  tests/integration/test_real_openrouter_provider.py` — PASS, `282 passed, 1
+  explicitly skipped in 10.79s`.
+- **Full-suite correction:** The first full run failed with `1218 passed, 110
+  failed, 10 skipped in 175.06s` because two shared synthetic REAL usage helpers
+  omitted the newly mandatory actual/canonical routing identity. Production
+  checks were not weakened. The corrected focused command `.venv/bin/pytest -q
+  tests/unit/test_assurance.py tests/unit/test_model_coverage.py` passed `115`
+  tests in `0.51s`.
+- **Final validation:** `.venv/bin/pytest -q` — PASS, `1328 passed, 10 skipped in
+  174.84s`; `.venv/bin/ruff format --check .` — PASS, `254` files; `.venv/bin/ruff
+  check .` — PASS; `.venv/bin/mypy` — PASS, `114` source files.
+- **Runtime evidence:**
+  `docs/remediation/runtime/rem_models_001_identity_binding.json` and
+  `docs/remediation/runtime/rem_models_001_provider_attempts.json`.
+- **Result:** `PARTIAL`. The safe exact-identity code slice is complete at
+  checkpoint `e219c0fe208dc48fbc2969590b11099d7d15fe34`; real provider execution
+  remains `INCONCLUSIVE`, no model is qualified, and operator lineage review is
+  outstanding. Maximum-assurance credit remains false.
+- **Exact next safe action:** Continue `EVAL-DEFECT-005` with response-authored,
+  source-validated per-surface review records.
+
+## 2026-07-27 — EVAL-DEFECT-005
+
+- **Status:** `IN_PROGRESS`
+- **Defensive objective:** Prevent mere context delivery from counting as
+  substantive model review. Credit only exact requested surfaces explicitly
+  returned in a completed, validated response and bound to approved model,
+  lineage, request, role, source location or symbol, and evidence hashes.
+- **Initial safe slice:** Added strict response-record and locally sealed artifact
+  schemas with exact stable-surface set, role, and hash consistency checks. The
+  orchestration and coverage migration remains in progress; schema tests alone do
+  not resolve the baseline defect.
+- **Exact next safe action:** Add deterministic requested-surface descriptors,
+  an evidence-returning completion API, response batches, local artifact sealing,
+  and response-only coverage accounting.

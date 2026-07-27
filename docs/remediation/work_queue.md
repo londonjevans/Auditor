@@ -104,21 +104,41 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   lineage mapping is mandatory; production selection is `all_eligible_tier_a`;
   minimum certified ensemble counts are enforced from completed real requests.
 - **Dependencies:** `REM-OPENROUTER-001`.
-- **Status:** `IN_PROGRESS`
-- **Next action:** Finish final no-spend validation and checkpoint the hardened
-  scorer, non-zero fixture denominators, crash-safe journal, reconciled cost
-  accounting, and actual-journal qualification capability before any paid model
-  call.
+- **Status:** `PARTIAL`
+- **Real-provider substatus:** `INCONCLUSIVE` after two bounded paid attempts;
+  neither response earned review or qualification credit. Evidence:
+  `docs/remediation/runtime/rem_models_001_provider_attempts.json`. No third paid
+  retry is authorized under the no-progress rule.
+- **Completed safe portion:** Hardened scoring, non-zero fixture denominators,
+  crash-safe journaling, reconciled attempt-level cost accounting, actual-journal
+  qualification capability, and frozen requested-to-canonical model identity
+  binding are locally validated.
+- **Runtime artifacts:** `docs/remediation/runtime/rem_models_001_identity_binding.json`
+  and `docs/remediation/runtime/rem_models_001_provider_attempts.json`.
+- **Remaining boundary:** No model is qualified; the lineage mapping is not
+  operator-reviewed; no successful real benchmark or specialist review exists.
+- **Next action:** Defer additional paid qualification work, checkpoint the
+  fail-closed identity binding, and continue the independent safe coverage work in
+  `EVAL-DEFECT-005`.
 
 ## EVAL-DEFECT-005 — Context delivery is credited as model review
 
 - **Objective:** Credit only explicit, valid, substantive per-surface review records.
+- **Files/modules:** `src/mmaudit/models/schemas.py`,
+  `src/mmaudit/orchestration/model_coverage.py`, context rendering, finding agents,
+  pipeline artifact retention, Solidity coverage projection, prompts, and focused
+  unit/integration tests.
 - **Acceptance criteria:** Strict reviewer output records every requested stable
   surface with status, role, rationale, location/symbol, invariant, assumptions,
   and confidence; generic, malformed, truncated, failed, invalid-location,
   duplicate-alias, unqualified, or missing records receive no credit.
-- **Dependencies:** `REM-MODELS-001`.
-- **Status:** `QUEUED`
+- **Dependencies:** The safe identity/qualification infrastructure portion of
+  `REM-MODELS-001` is satisfied. Real paid qualification remains deferred and
+  cannot receive coverage credit.
+- **Status:** `IN_PROGRESS`
+- **Next action:** Replace context-token credit with exact requested-surface
+  response records, deterministic sealing and source/symbol validation, then invert
+  the old context-only regression.
 
 ## EVAL-DEFECT-006 — Quality hashes are not benchmark-resolved
 

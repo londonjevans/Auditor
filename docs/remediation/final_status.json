@@ -12,14 +12,29 @@
   },
   "openrouter": {
     "budget_cap_usd": 250.0,
-    "cost_used_usd": 0.0,
-    "real_calls": 0,
-    "invalid_calls": 0,
+    "cost_used_usd": 0.00118674,
+    "cost_used_usd_exact": "0.00118674",
+    "real_calls": 2,
+    "successful_real_calls": 0,
+    "invalid_calls": 2,
+    "cost_ledger_sha256": "8cc34cef6d098e2e124a87049549f527f8f59ff28ce29a3901211d84a4385e69",
+    "provider_attempt_artifact": "docs/remediation/runtime/rem_models_001_provider_attempts.json",
     "client_control_path": {
       "status": "COMPLETE_LOCAL_PROTOCOL_VALIDATION",
       "runtime_artifact": "docs/remediation/runtime/rem_openrouter_001.json",
       "checkpoint_commit": "40cb4e7cdf155401618553304cc69623d69fe69f4",
       "real_completion_executed": false,
+      "real_completion_status": "NOT_EXECUTED",
+      "maximum_assurance_credit": false
+    },
+    "provider_execution": {
+      "status": "INCONCLUSIVE",
+      "attempted_real_calls": 2,
+      "successful_real_calls": 0,
+      "credited_real_calls": 0,
+      "cost_used_usd_exact": "0.00118674",
+      "runtime_artifact": "docs/remediation/runtime/rem_models_001_provider_attempts.json",
+      "third_retry_authorized": false,
       "maximum_assurance_credit": false
     },
     "credential_validation": {
@@ -29,6 +44,13 @@
       "transport_failures_before_fix": 1,
       "cost_usd": 0.0
     },
+    "model_qualification": {
+      "status": "PARTIAL",
+      "lineage_mapping_operator_reviewed": false,
+      "real_benchmark_completed": false,
+      "identity_binding_artifact": "docs/remediation/runtime/rem_models_001_identity_binding.json",
+      "identity_binding_checkpoint": "e219c0fe208dc48fbc2969590b11099d7d15fe34"
+    },
     "qualified_models": []
   },
   "secret_boundary": {
@@ -37,7 +59,7 @@
     "ambient_key_ignored": true,
     "real_authentication_validated": true,
     "canary_artifact_validation": "PASSED",
-    "model_completion_cost_usd": 0.0,
+    "ticket_scoped_model_completion_cost_usd": 0.0,
     "checkpoint_commit": "a333ff9df5c1b680c110c0e011682dfbf4e7aa42"
   },
   "defects": {
@@ -47,5 +69,5 @@
   },
   "release_status": "NOT_A_RELEASE_CANDIDATE",
   "independent_evaluation_handoff": null,
-  "reason": "Remediation has begun; the immutable baseline verdict remains authoritative until a fresh independent evaluation."
+  "reason": "Four of thirteen evaluated defects are fixed. Model qualification remains partial, both bounded provider completion attempts are inconclusive and uncredited, and this is not a release candidate."
 }

@@ -1,0 +1,65 @@
+{
+  "schema_version": "1.0",
+  "ticket": "REM-MODELS-001",
+  "evidence_kind": "bounded_provider_attempt_summary",
+  "status": "INCONCLUSIVE",
+  "baseline_commit": "e304807cf942542706b88544fa216516f8f95cad",
+  "base_checkpoint": "a946ae6a6b1cee37e0a0994df64dacd30f3a8889",
+  "command_and_result_evidence": "docs/remediation/worklog.md#2026-07-27--rem-models-001",
+  "exact_requested_model": "qwen/qwen3.6-35b-a3b",
+  "configured_provider_endpoint": "akashml/fp8",
+  "observed_provider_name": "AkashML",
+  "observed_canonical_model": "qwen/qwen3.6-35b-a3b-20260415",
+  "attempted_paid_calls": 2,
+  "successful_paid_calls": 0,
+  "invalid_or_incomplete_calls": 2,
+  "accounted_cost_usd": "0.00118674",
+  "cost_ledger": {
+    "private_relative_path": ".mmaudit/control/openrouter-cost-ledger.json",
+    "sha256": "8cc34cef6d098e2e124a87049549f527f8f59ff28ce29a3901211d84a4385e69",
+    "cap_usd": "250",
+    "entry_count": 2,
+    "statuses": [
+      "uncertain_accounted",
+      "uncertain_accounted"
+    ],
+    "active_reservations": 0,
+    "reservation_overruns": 0
+  },
+  "attempts": [
+    {
+      "ordinal": 1,
+      "accounted_cost_usd": "0.00046222",
+      "validation_outcome": "REJECTED_TRUNCATED",
+      "finish_reason": "length",
+      "review_credited": false,
+      "source_state": "clean checkpoint a946ae6a6b1cee37e0a0994df64dacd30f3a8889",
+      "request_id": null,
+      "generation_id": null,
+      "timestamps": null,
+      "latency_ms": null,
+      "token_counts": null,
+      "missing_evidence_reason": "The failed call record was process-local before a durable smoke evidence sink existed."
+    },
+    {
+      "ordinal": 2,
+      "accounted_cost_usd": "0.00072452",
+      "validation_outcome": "REJECTED_UNBOUND_CANONICAL_IDENTITY",
+      "finish_reason": "stop",
+      "review_credited": false,
+      "source_state": "dirty follow-up with bounded reasoning/output adjustment; an exact source snapshot was not retained",
+      "request_id": null,
+      "generation_id": null,
+      "timestamps": null,
+      "latency_ms": null,
+      "token_counts": null,
+      "missing_evidence_reason": "The failed call record was process-local before a durable smoke evidence sink existed."
+    }
+  ],
+  "public_artifact_contains_secret_or_raw_provider_content": false,
+  "limitations": [
+    "This artifact records only facts independently recoverable from the durable cost ledger and contemporaneous worklog.",
+    "Unavailable request identifiers, generation identifiers, timestamps, latency, and token counts were not reconstructed or fabricated.",
+    "No provider review, model qualification, or maximum-assurance model-review credit was earned."
+  ]
+}

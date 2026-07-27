@@ -48,7 +48,7 @@
       "id": "EVAL-DEFECT-005",
       "summary": "Model surface coverage measures supplied context rather than substantive review.",
       "baseline_path": "src/mmaudit/orchestration/model_coverage.py",
-      "status": "QUEUED",
+      "status": "IN_PROGRESS",
       "regression_test": null,
       "runtime_artifact": null,
       "acceptance_command": null,

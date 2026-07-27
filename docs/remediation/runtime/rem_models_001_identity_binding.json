@@ -1,0 +1,103 @@
+{
+  "schema_version": "1.0",
+  "ticket_id": "REM-MODELS-001",
+  "evidence_kind": "exact_requested_canonical_identity_binding",
+  "status": "PARTIAL",
+  "baseline_commit": "e304807cf942542706b88544fa216516f8f95cad",
+  "implementation_commit": "e219c0fe208dc48fbc2969590b11099d7d15fe34",
+  "implementation_tree": "a18ea157cb2247a229c431849bbf99ff5cf561fa",
+  "implementation": [
+    {
+      "path": "src/mmaudit/models/openrouter.py",
+      "sha256": "b4325adc110325ead82bfcdd8147b4ff727980bd4c9fa3ac651549c8a48e74d2"
+    },
+    {
+      "path": "src/mmaudit/models/usage.py",
+      "sha256": "37f7a5afed416e8821cb7e0d642c72ee4a930d83285b793253073c2d20c15495"
+    },
+    {
+      "path": "src/mmaudit/models/generation_evidence.py",
+      "sha256": "dc798b791989121256db1b4927cea5fb72b926863fdc8281736875359c95bf3a"
+    },
+    {
+      "path": "src/mmaudit/models/qualification.py",
+      "sha256": "ba6d0717f6051d81afbad06eef79656cae327f8901aa0f183953e1eebc34e5f7"
+    },
+    {
+      "path": "src/mmaudit/models/qualification_workflow.py",
+      "sha256": "7dc941b41b728e92c1d50ea2ddc178f3e1dab7b510b79fe4b5eaba823e112e71"
+    },
+    {
+      "path": "src/mmaudit/models/candidate_benchmark.py",
+      "sha256": "d88ba4e9a05d40c1025262f6892ce9d3f8df8f8de891c6290600c1b46878ac82"
+    },
+    {
+      "path": "src/mmaudit/benchmark/models.py",
+      "sha256": "8f89fb05c4e1c025cdda092f25673a84daa3052026b3bef0ee8eb9e9b51cb2ea"
+    },
+    {
+      "path": "src/mmaudit/cli.py",
+      "sha256": "28263959b6ea21f66f14ff06027e33483f95f56d82c57e2caf6e3543650550c3"
+    },
+    {
+      "path": "src/mmaudit/models/schemas.py",
+      "sha256": "e0ec9133d8d36f6d4ec456944eef42558a922bfb451133c7b25158712b6a2d1d"
+    },
+    {
+      "path": "tests/integration/test_real_openrouter_provider.py",
+      "sha256": "20f4fcbfcf6f266443e22589fdc4d8b4a14b59d6cc967a8a78a2f591b8bdd501"
+    }
+  ],
+  "validated_controls": {
+    "top_level_response_model_must_equal_exact_requested_id": true,
+    "router_selected_model_may_use_frozen_canonical_slug": true,
+    "canonical_slug_requires_real_discovery_evidence": true,
+    "unmanifested_discovery_requires_same_authenticated_owned_session": true,
+    "manifested_discovery_requires_exact_artifact_and_provenance_binding": true,
+    "router_attempt_models_must_equal_selected_model": true,
+    "actual_selected_model_recorded": true,
+    "catalog_and_discovery_hashes_recorded": true,
+    "generation_refetch_reconciles_actual_selected_model": true,
+    "qualification_chain_reconciles_requested_canonical_and_discovery_identity": true,
+    "unbound_or_spliced_identity_rejected": true,
+    "model_mismatch_and_top_level_alias_rejected": true
+  },
+  "focused_validation": {
+    "command": ".venv/bin/pytest -q tests/unit/test_openrouter.py tests/unit/test_candidate_benchmark.py tests/unit/test_candidate_benchmark_cli.py tests/unit/test_candidate_benchmark_campaign.py tests/unit/test_generation_evidence.py tests/unit/test_model_benchmark.py tests/unit/test_model_benchmark_portfolio.py tests/unit/test_model_qualification.py tests/unit/test_qualification_workflow.py tests/unit/test_usage.py tests/unit/test_model_surface_review_schema.py tests/integration/test_real_openrouter_provider.py",
+    "result": "PASS",
+    "tests_passed": 282,
+    "tests_skipped": 1,
+    "duration_seconds": 10.79,
+    "skip_reason": "Paid provider tests require explicit MMAUDIT_RUN_REAL_PROVIDER_TESTS=1."
+  },
+  "full_validation": {
+    "fixture_repair_command": ".venv/bin/pytest -q tests/unit/test_assurance.py tests/unit/test_model_coverage.py",
+    "fixture_repair_result": "PASS; 115 passed in 0.51s",
+    "test_command": ".venv/bin/pytest -q",
+    "test_result": "PASS; 1328 passed, 10 skipped in 174.84s",
+    "format_command": ".venv/bin/ruff format --check .",
+    "format_result": "PASS; 254 files already formatted",
+    "lint_command": ".venv/bin/ruff check .",
+    "lint_result": "PASS",
+    "type_command": ".venv/bin/mypy",
+    "type_result": "PASS; 114 source files"
+  },
+  "real_provider_boundary": {
+    "status": "INCONCLUSIVE",
+    "attempted_paid_calls": 2,
+    "successful_paid_calls": 0,
+    "credited_paid_calls": 0,
+    "accounted_cost_usd": "0.00118674",
+    "attempt_evidence": "docs/remediation/runtime/rem_models_001_provider_attempts.json",
+    "third_retry_authorized": false,
+    "additional_paid_call_executed_for_this_identity_fix": false
+  },
+  "result": {
+    "safe_code_status": "COMPLETE",
+    "real_model_qualification_status": "INCONCLUSIVE",
+    "qualified_models": 0,
+    "operator_reviewed_lineages": false,
+    "maximum_assurance_credit": false,
+    "next_ticket": "EVAL-DEFECT-005"
+  }
+}
