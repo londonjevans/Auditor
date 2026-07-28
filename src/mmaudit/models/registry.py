@@ -9,10 +9,15 @@ import stat
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, Self
+
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from mmaudit.config import AuditConfig, ModelQualityTier, model_lineage_index
 from mmaudit.constants import ALL_MODEL_ROLES, OPENROUTER_DEFAULT_BASE_URL
+from mmaudit.models.identifiers import require_exact_openrouter_model_id
+from mmaudit.models.qualification import QualificationBindings, VerifiedProductionQualification
+from mmaudit.models.schemas import AuditProfile, StrictModel
 
 _QUALITY_TIER_RANK: dict[str, int] = {
     "standard": 0,
@@ -30,6 +35,206 @@ _MAX_CACHE_BYTES = 20_000_000
 
 class ModelRegistryError(RuntimeError):
     """Raised when configured models cannot meet audit requirements."""
+
+
+class ProductionModelQualificationBinding(StrictModel):
+    """One exact, non-secret model binding resolved from verified Tier A evidence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    exact_model_id: str
+    canonical_model_slug: str
+    root_lineage: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    approved_provider_endpoint: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
+    approved_provider_name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9 ._:/()&+-]{0,199}$")
+    endpoint_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    model_metadata_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    pricing_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    approved_roles: tuple[str, ...] = Field(min_length=1, max_length=128)
+    quality_measurement_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    qualification_result_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    benchmark_report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    benchmark_verification_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    fresh_benchmark_evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    benchmark_case_count: int = Field(ge=1)
+    evaluated_at: datetime
+    expires_at: datetime
+
+    @field_validator("exact_model_id", "canonical_model_slug")
+    @classmethod
+    def model_id_is_exact(cls, value: str) -> str:
+        return require_exact_openrouter_model_id(value)
+
+    @field_validator("approved_roles")
+    @classmethod
+    def roles_are_safe_sorted_unique(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if value != tuple(sorted(set(value))) or any(
+            not role
+            or len(role) > 128
+            or not role[0].islower()
+            or any(
+                not (character.islower() or character.isdigit() or character in "_:.-")
+                for character in role
+            )
+            for role in value
+        ):
+            raise ValueError("approved production roles must be safe, unique, and sorted")
+        return value
+
+    @field_validator("evaluated_at", "expires_at")
+    @classmethod
+    def qualification_time_is_whole_second_utc(cls, value: datetime) -> datetime:
+        return _whole_second_utc(value)
+
+    @model_validator(mode="after")
+    def qualification_window_is_valid(self) -> Self:
+        if self.expires_at <= self.evaluated_at:
+            raise ValueError("production model qualification must expire after evaluation")
+        return self
+
+
+class ProductionQualificationValidation(StrictModel):
+    """Sanitized deterministic evidence for one production-qualification decision."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    observed_at: datetime
+    required: bool
+    valid: bool
+    configured_model_ids: tuple[str, ...]
+    qualified_model_ids: tuple[str, ...]
+    model_bindings: tuple[ProductionModelQualificationBinding, ...]
+    qualification_artifact_sha256: str | None
+    qualification_verification_sha256: str | None
+    candidate_registry_sha256: str | None
+    qualification_policy_sha256: str | None
+    qualification_bindings: QualificationBindings | None
+    expected_bindings_sha256: str | None
+    release_observation_sha256: str | None
+    production_effective_config_sha256: str | None
+    production_selection_sha256: str | None
+    selection_verification_sha256: str | None
+    qualification_capability_sha256: str | None
+    errors: tuple[str, ...]
+    validation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a stable JSON-compatible representation without model content."""
+
+        return self.model_dump(mode="json")
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> Self:
+        """Bound and validate an untrusted serialized runtime artifact."""
+
+        try:
+            encoded = json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("production qualification validation is not JSON-compatible") from exc
+        if len(encoded) > 2_000_000:
+            raise ValueError("production qualification validation exceeds the byte limit")
+        return cls.model_validate(payload)
+
+    @field_validator("observed_at")
+    @classmethod
+    def observed_at_is_whole_second_utc(cls, value: datetime) -> datetime:
+        return _whole_second_utc(value)
+
+    @field_validator("configured_model_ids", "qualified_model_ids")
+    @classmethod
+    def model_ids_are_exact_sorted_unique(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if value != tuple(sorted(set(value))) or len(value) > 128:
+            raise ValueError("production model IDs must be unique, sorted, and bounded")
+        for model_id in value:
+            require_exact_openrouter_model_id(model_id)
+        return value
+
+    @field_validator(
+        "qualification_artifact_sha256",
+        "qualification_verification_sha256",
+        "candidate_registry_sha256",
+        "qualification_policy_sha256",
+        "expected_bindings_sha256",
+        "release_observation_sha256",
+        "production_effective_config_sha256",
+        "production_selection_sha256",
+        "selection_verification_sha256",
+        "qualification_capability_sha256",
+    )
+    @classmethod
+    def optional_hash_is_canonical(cls, value: str | None) -> str | None:
+        if value is not None and (
+            len(value) != 64 or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise ValueError("qualification validation hashes must be lowercase SHA-256")
+        return value
+
+    @field_validator("errors")
+    @classmethod
+    def errors_are_sorted_unique_and_bounded(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if (
+            value != tuple(sorted(set(value)))
+            or len(value) > 512
+            or any(not error or len(error) > 1_000 for error in value)
+        ):
+            raise ValueError("qualification validation errors must be bounded and sorted")
+        return value
+
+    @model_validator(mode="after")
+    def bindings_state_and_hash_are_consistent(self) -> Self:
+        binding_ids = tuple(binding.exact_model_id for binding in self.model_bindings)
+        if binding_ids != self.qualified_model_ids:
+            raise ValueError("qualification model bindings differ from qualified model IDs")
+        if any(
+            binding.evaluated_at > self.observed_at or binding.expires_at <= self.observed_at
+            for binding in self.model_bindings
+        ):
+            raise ValueError(
+                "qualification model bindings must be evaluated and current at observation time"
+            )
+        expected_valid = not self.errors
+        if self.valid is not expected_valid:
+            raise ValueError("qualification validation state differs from its errors")
+        binding_hashes = (
+            self.qualification_artifact_sha256,
+            self.qualification_verification_sha256,
+            self.candidate_registry_sha256,
+            self.qualification_policy_sha256,
+            self.expected_bindings_sha256,
+            self.release_observation_sha256,
+            self.production_effective_config_sha256,
+            self.production_selection_sha256,
+            self.selection_verification_sha256,
+            self.qualification_capability_sha256,
+        )
+        if self.qualified_model_ids and any(value is None for value in binding_hashes):
+            raise ValueError("qualified models require every qualification binding")
+        if not self.qualified_model_ids and any(value is not None for value in binding_hashes):
+            raise ValueError("empty qualification evidence cannot claim binding hashes")
+        if self.qualified_model_ids and self.qualification_bindings is None:
+            raise ValueError("qualified models require normalized qualification bindings")
+        if not self.qualified_model_ids and self.qualification_bindings is not None:
+            raise ValueError("empty qualification evidence cannot claim normalized bindings")
+        if self.qualification_bindings is not None and (
+            self.expected_bindings_sha256
+            != _canonical_sha256(self.qualification_bindings.model_dump(mode="json"))
+        ):
+            raise ValueError("normalized qualification bindings differ from their hash")
+        if self.required and self.valid and not self.qualified_model_ids:
+            raise ValueError("required qualification validation cannot pass without models")
+        expected_hash = _canonical_sha256(
+            self.model_dump(mode="json", exclude={"validation_sha256"})
+        )
+        if self.validation_sha256 != expected_hash:
+            raise ValueError("production qualification validation self-hash is inconsistent")
+        return self
 
 
 class ModelRegistry:
@@ -136,12 +341,28 @@ class ModelRegistry:
         *,
         zdr_model_ids: set[str] | None = None,
         source_egress_requested: bool = False,
+        production_qualification: VerifiedProductionQualification | None = None,
+        require_verified_qualification: bool | None = None,
+        qualification_now: datetime | None = None,
     ) -> list[str]:
-        """Validate provider capabilities and operator-bound source-egress policy."""
+        """Validate provider capabilities, source egress, and production qualification."""
 
         metadata_ids = [str(item.get("id", "")) for item in models]
         by_id = {model_id: item for model_id, item in zip(metadata_ids, models, strict=True)}
         errors: list[str] = []
+        qualification_required = (
+            config.profile is AuditProfile.MAXIMUM_ASSURANCE
+            if require_verified_qualification is None
+            else require_verified_qualification
+        )
+        if qualification_required or production_qualification is not None:
+            qualification_validation = ModelRegistry.validate_production_qualification(
+                config,
+                production_qualification,
+                required=qualification_required,
+                now=qualification_now,
+            )
+            errors.extend(qualification_validation.errors)
         duplicate_metadata_ids = sorted(
             model_id
             for model_id in set(metadata_ids)
@@ -170,7 +391,8 @@ class ModelRegistry:
                     )
             else:
                 if (
-                    _QUALITY_TIER_RANK[lineage.measured_quality_tier]
+                    not qualification_required
+                    and _QUALITY_TIER_RANK[lineage.measured_quality_tier]
                     < _QUALITY_TIER_RANK[required_tier]
                 ):
                     errors.append(
@@ -196,6 +418,130 @@ class ModelRegistry:
             ):
                 errors.append(f"model has no currently advertised ZDR endpoint: {model_id}")
         return list(dict.fromkeys(errors))
+
+    @staticmethod
+    def validate_production_qualification(
+        config: AuditConfig,
+        qualification: VerifiedProductionQualification | None,
+        *,
+        required: bool = True,
+        now: datetime | None = None,
+    ) -> ProductionQualificationValidation:
+        """Resolve exact configured production models against opaque Tier A evidence."""
+
+        observed_at = _whole_second_utc(now)
+        configured_requirements = _configured_primary_model_requirements(config)
+        configured_ids = tuple(sorted({model_id for _, model_id in configured_requirements}))
+        errors: list[str] = []
+        qualified_ids: tuple[str, ...] = ()
+        model_bindings: tuple[ProductionModelQualificationBinding, ...] = ()
+        artifact_sha256: str | None = None
+        qualification_verification_sha256: str | None = None
+        candidate_registry_sha256: str | None = None
+        qualification_policy_sha256: str | None = None
+        qualification_bindings: QualificationBindings | None = None
+        expected_bindings_sha256: str | None = None
+        release_observation_sha256: str | None = None
+        production_effective_config_sha256: str | None = None
+        production_selection_sha256: str | None = None
+        selection_verification_sha256: str | None = None
+        capability_sha256: str | None = None
+
+        if qualification is None:
+            if required:
+                errors.append(
+                    "verified production qualification is required; "
+                    "configured quality hashes are not authorization"
+                )
+        else:
+            if type(qualification) is not VerifiedProductionQualification:
+                errors.append("production qualification capability has an invalid type")
+            else:
+                try:
+                    qualification = qualification.require_current(now=observed_at)
+                except ValueError as exc:
+                    errors.append(str(exc))
+                else:
+                    qualified_ids = tuple(model.exact_model_id for model in qualification.models)
+                    model_bindings = tuple(
+                        ProductionModelQualificationBinding(
+                            exact_model_id=model.exact_model_id,
+                            canonical_model_slug=model.canonical_model_slug,
+                            root_lineage=model.root_lineage,
+                            approved_provider_endpoint=model.approved_provider_endpoint,
+                            approved_provider_name=model.approved_provider_name,
+                            endpoint_snapshot_sha256=model.endpoint_snapshot_sha256,
+                            model_metadata_snapshot_sha256=(model.model_metadata_snapshot_sha256),
+                            pricing_snapshot_sha256=model.pricing_snapshot_sha256,
+                            approved_roles=model.approved_roles,
+                            quality_measurement_sha256=model.quality_measurement_sha256,
+                            qualification_result_sha256=model.qualification_result_sha256,
+                            benchmark_report_sha256=model.benchmark_report_sha256,
+                            benchmark_verification_sha256=(model.benchmark_verification_sha256),
+                            fresh_benchmark_evidence_sha256=(model.fresh_benchmark_evidence_sha256),
+                            benchmark_case_count=model.benchmark_case_count,
+                            evaluated_at=model.evaluated_at,
+                            expires_at=model.expires_at,
+                        )
+                        for model in qualification.models
+                    )
+                    artifact_sha256 = qualification.artifact_sha256
+                    qualification_verification_sha256 = (
+                        qualification.qualification_verification_sha256
+                    )
+                    candidate_registry_sha256 = qualification.candidate_registry_sha256
+                    qualification_policy_sha256 = qualification.policy_sha256
+                    qualification_bindings = qualification.bindings
+                    expected_bindings_sha256 = qualification.expected_bindings_sha256
+                    release_observation_sha256 = qualification.release_observation_sha256
+                    production_effective_config_sha256 = (
+                        qualification.production_effective_config_sha256
+                    )
+                    production_selection_sha256 = qualification.production_selection_sha256
+                    selection_verification_sha256 = qualification.selection_verification_sha256
+                    capability_sha256 = qualification.capability_sha256
+                    errors.extend(
+                        _validate_configured_production_models(
+                            config,
+                            configured_requirements=configured_requirements,
+                            configured_ids=configured_ids,
+                            qualification=qualification,
+                            observed_at=observed_at,
+                        )
+                    )
+
+        errors = sorted(set(errors))
+        payload: dict[str, Any] = {
+            "schema_version": "1.0",
+            "observed_at": observed_at.isoformat().replace("+00:00", "Z"),
+            "required": required,
+            "valid": not errors,
+            "configured_model_ids": list(configured_ids),
+            "qualified_model_ids": list(qualified_ids),
+            "model_bindings": [binding.model_dump(mode="json") for binding in model_bindings],
+            "qualification_artifact_sha256": artifact_sha256,
+            "qualification_verification_sha256": qualification_verification_sha256,
+            "candidate_registry_sha256": candidate_registry_sha256,
+            "qualification_policy_sha256": qualification_policy_sha256,
+            "qualification_bindings": (
+                qualification_bindings.model_dump(mode="json")
+                if qualification_bindings is not None
+                else None
+            ),
+            "expected_bindings_sha256": expected_bindings_sha256,
+            "release_observation_sha256": release_observation_sha256,
+            "production_effective_config_sha256": production_effective_config_sha256,
+            "production_selection_sha256": production_selection_sha256,
+            "selection_verification_sha256": selection_verification_sha256,
+            "qualification_capability_sha256": capability_sha256,
+            "errors": errors,
+        }
+        return ProductionQualificationValidation.model_validate(
+            {
+                **payload,
+                "validation_sha256": _canonical_sha256(payload),
+            }
+        )
 
 
 def extract_zdr_model_ids(payload: Any) -> set[str]:
@@ -252,6 +598,123 @@ def _configured_model_requirements(
             for index, model_id in enumerate(role_config.fallbacks)
         )
     return requirements
+
+
+def _configured_primary_model_requirements(config: AuditConfig) -> list[tuple[str, str]]:
+    requirements = [(role, config.models.role(role).primary) for role in ALL_MODEL_ROLES]
+    requirements.extend(
+        (role, config.models.specialists[role].primary)
+        for role in sorted(config.models.specialists)
+    )
+    return requirements
+
+
+def _validate_configured_production_models(
+    config: AuditConfig,
+    *,
+    configured_requirements: list[tuple[str, str]],
+    configured_ids: tuple[str, ...],
+    qualification: VerifiedProductionQualification,
+    observed_at: datetime,
+) -> list[str]:
+    errors: list[str] = []
+    qualified_ids = tuple(model.exact_model_id for model in qualification.models)
+    if config.profile is AuditProfile.MAXIMUM_ASSURANCE or config.maximum_assurance.require:
+        pins = config.maximum_assurance.qualification
+        bindings = qualification.bindings
+        if qualification.policy_sha256 != pins.policy_sha256:
+            errors.append(
+                "verified production qualification policy differs from "
+                "the maximum-assurance release pin"
+            )
+        if (
+            bindings.benchmark_corpus_version != pins.corpus_version
+            or bindings.benchmark_corpus_sha256 != pins.corpus_sha256
+        ):
+            errors.append(
+                "verified production benchmark corpus differs from "
+                "the maximum-assurance release pin"
+            )
+        if (
+            bindings.benchmark_ground_truth_version != pins.ground_truth_version
+            or bindings.benchmark_ground_truth_sha256 != pins.ground_truth_sha256
+        ):
+            errors.append(
+                "verified production benchmark ground truth differs from "
+                "the maximum-assurance release pin"
+            )
+    if qualification.production_effective_config_sha256 != config.stable_hash():
+        errors.append("verified production qualification binds a different effective configuration")
+    if configured_ids != qualified_ids:
+        errors.append(
+            "configured exact production model set differs from all_eligible_tier_a selection"
+        )
+
+    fallback_roles = [
+        role
+        for role in (*ALL_MODEL_ROLES, *tuple(sorted(config.models.specialists)))
+        if config.models.role(role).fallbacks
+    ]
+    if fallback_roles:
+        errors.append(
+            "verified production selection forbids configured model fallbacks: "
+            + ", ".join(fallback_roles)
+        )
+
+    lineage_by_id = model_lineage_index(config)
+    approved_lineages = set(config.privacy.approved_model_lineages)
+    configured_endpoints = set(config.models.provider_policy.only) | set(
+        config.models.provider_policy.order
+    )
+    for role, model_id in configured_requirements:
+        try:
+            model = qualification.model_for(model_id, now=observed_at)
+        except ValueError:
+            errors.append(f"exact model lacks verified Tier A qualification: {model_id}")
+            continue
+        lineage = lineage_by_id.get(model_id.lower())
+        if lineage is None:
+            errors.append(f"verified production model lacks an immutable lineage: {model_id}")
+        elif lineage.root_lineage != model.root_lineage:
+            errors.append(f"verified production root lineage differs: {model_id}")
+        elif lineage.canonical_model_id != model.exact_model_id:
+            errors.append(
+                f"selected production model must be the canonical lineage record: {model_id}"
+            )
+        elif lineage.quality_measurement != model.quality_measurement:
+            errors.append(
+                f"configured quality measurement differs from verified qualification "
+                f"result: {model_id}"
+            )
+        elif lineage.measured_quality_score != model.overall_score:
+            errors.append(
+                f"configured quality score differs from verified qualification result: {model_id}"
+            )
+        elif lineage.measured_quality_tier != "highest":
+            errors.append(
+                f"configured quality tier differs from verified Tier A qualification: {model_id}"
+            )
+        if model.root_lineage not in approved_lineages:
+            errors.append(f"verified production root lineage is not approved: {model_id}")
+        if role not in model.approved_roles:
+            errors.append(f"verified Tier A qualification does not approve {role} role: {model_id}")
+        if model.approved_provider_endpoint not in configured_endpoints:
+            errors.append(
+                f"verified production endpoint is not configured: "
+                f"{model_id} requires {model.approved_provider_endpoint}"
+            )
+    return errors
+
+
+def _whole_second_utc(value: datetime | None) -> datetime:
+    observed_at = datetime.now(UTC).replace(microsecond=0) if value is None else value
+    if (
+        observed_at.tzinfo is None
+        or observed_at.utcoffset() != timedelta(0)
+        or observed_at.microsecond != 0
+    ):
+        raise ValueError("qualification validation time must be a whole-second UTC timestamp")
+    return observed_at
 
 
 def _canonical_sha256(value: Any) -> str:

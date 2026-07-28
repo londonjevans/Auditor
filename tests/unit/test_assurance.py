@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import pickle
 from dataclasses import replace
 from datetime import UTC, datetime
 
@@ -15,7 +16,11 @@ from mmaudit.benchmark.certificate import (
     FileBackedBenchmarkVerificationEvidence,
 )
 from mmaudit.config import model_lineage_index, validate_model_independence
-from mmaudit.constants import ALL_SPECIALIST_ROLES, SPECIALIST_INVESTIGATOR_ROLES
+from mmaudit.constants import (
+    ALL_SPECIALIST_ROLES,
+    SPECIALIST_INVESTIGATOR_ROLES,
+)
+from mmaudit.models.qualification import VerifiedProductionQualification
 from mmaudit.models.schemas import (
     AnalysisState,
     AuditProfile,
@@ -56,6 +61,8 @@ from mmaudit.models.schemas import (
     ModelReviewSurfaceKind,
     ModelSurfaceReviewArtifact,
     ModelSurfaceReviewCitation,
+    ModelSurfaceReviewEvidenceObservation,
+    ModelSurfaceReviewReachability,
     ModelSurfaceReviewRecord,
     ModelSurfaceReviewRequest,
     ModelSurfaceReviewStatus,
@@ -87,10 +94,13 @@ from mmaudit.models.schemas import (
     TransactionOrderingCapability,
     UsageRecord,
 )
+from mmaudit.models.usage import candidate_falsifier_role, is_creditable_usage_record
 from mmaudit.orchestration.assurance import (
     FULL_SEMANTIC_GRAPHS,
     AssuranceRuntime,
     MaximumAssuranceContract,
+    ProviderSessionProvenance,
+    _issue_provider_session_provenance,
 )
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.orchestration.replay import (
@@ -108,6 +118,42 @@ from mmaudit.traceability import (
     TraceabilityRequirement,
     build_traceability_matrix,
 )
+from tests.qualification_support import (
+    bind_usage_to_qualification as _bind_base_usage_to_qualification,
+)
+from tests.qualification_support import (
+    synthetic_production_qualification as _synthetic_production_qualification,
+)
+
+
+def _bind_usage_to_qualification(
+    record: UsageRecord,
+    qualification: VerifiedProductionQualification,
+    now: datetime,
+) -> UsageRecord:
+    bound = _bind_base_usage_to_qualification(record, qualification, now)
+    model = qualification.model_for(record.requested_model, now=now)
+    return bound.model_copy(
+        update={
+            "routing": {
+                **bound.routing,
+                "qualified_exact_model_id": model.exact_model_id,
+                "qualified_canonical_model_slug": model.canonical_model_slug,
+                "qualified_root_lineage": model.root_lineage,
+                "qualified_provider_endpoint": model.approved_provider_endpoint,
+                "qualified_provider_name": model.approved_provider_name,
+                "qualified_endpoint_snapshot_sha256": model.endpoint_snapshot_sha256,
+                "qualified_model_metadata_snapshot_sha256": (model.model_metadata_snapshot_sha256),
+                "qualified_pricing_snapshot_sha256": model.pricing_snapshot_sha256,
+                "qualified_roles": list(model.approved_roles),
+                "qualification_verified_at": qualification.verified_at.isoformat(),
+                "qualification_expires_at": model.expires_at.isoformat(),
+                "endpoint_snapshot_sha256": model.endpoint_snapshot_sha256,
+                "endpoint_pricing_sha256": model.pricing_snapshot_sha256,
+                "model_metadata_snapshot_sha256": model.model_metadata_snapshot_sha256,
+            }
+        }
+    )
 
 
 def _specialists(*, families: int = 8) -> dict[str, dict[str, object]]:
@@ -205,6 +251,7 @@ def _complete_model_coverage(
     artifacts: list[ModelSurfaceReviewArtifact] = []
     for role in ("business_logic", "configuration", "source_audit"):
         usage = next(record for record in usage_records if record.role == role)
+        citation = ModelSurfaceReviewCitation(location=location, symbol="Vault")
         record = ModelSurfaceReviewRecord(
             surface_id=request.surface_id,
             contract=request.contract,
@@ -212,8 +259,21 @@ def _complete_model_coverage(
             review_role=role,
             status=ModelSurfaceReviewStatus.REVIEWED_NO_ISSUE,
             rationale="Synthetic substantive review found no invariant violation.",
-            citation=ModelSurfaceReviewCitation(location=location, symbol="Vault"),
+            citation=citation,
             invariant_considered=request.invariant_considered,
+            evidence_observations=(
+                ModelSurfaceReviewEvidenceObservation(
+                    citation=citation,
+                    observed_behavior="The cited contract surface was checked for state transitions.",
+                    security_relevance="The observed transitions preserve the declared contract invariant.",
+                ),
+            ),
+            reachability=ModelSurfaceReviewReachability(
+                entry_point=citation,
+                path=(citation,),
+                actor_or_caller="synthetic contract caller",
+                preconditions=(),
+            ),
             assumptions=(),
             confidence=1,
         )
@@ -226,6 +286,7 @@ def _complete_model_coverage(
             "requested_surface_manifest_sha256": (
                 ModelSurfaceReviewArtifact.calculate_requested_surface_manifest_sha256([request])
             ),
+            "rendered_context_sha256": "0" * 64,
             "prompt_sha256": usage.prompt_sha256,
             "response_sha256": usage.response_sha256,
             "validated_response_sha256": usage.validated_response_sha256,
@@ -415,7 +476,10 @@ def _real_model_usage(now: datetime) -> list[UsageRecord]:
             "source_audit",
             "business_logic",
             "configuration",
+            "verifier",
+            "judge",
             "falsifier",
+            *(f"whole_protocol_review:{index}" for index in range(4)),
             *(f"specialist:{role}" for role in ALL_SPECIALIST_ROLES),
         }
     )
@@ -424,6 +488,12 @@ def _real_model_usage(now: datetime) -> list[UsageRecord]:
         "source_audit": "bravo/borealis-secure",
         "business_logic": "charlie/cirrus-secure",
         "configuration": "delta/denali-secure",
+        "verifier": "echo/equinox-secure",
+        "judge": "foxtrot/fjord-secure",
+        "whole_protocol_review:0": "specialist-0/model-0",
+        "whole_protocol_review:1": "specialist-1/model-1",
+        "whole_protocol_review:2": "specialist-2/model-2",
+        "whole_protocol_review:3": "specialist-3/model-3",
     }
     specialist_models = {
         f"specialist:{role}": f"specialist-{index % 8}/model-{index % 8}"
@@ -633,8 +703,8 @@ def _real_slither_scanner(now: datetime) -> ScannerRun:
     )
 
 
-def _complete_runtime() -> AssuranceRuntime:
-    now = datetime.now(UTC)
+def _complete_runtime(config=None) -> AssuranceRuntime:
+    now = datetime.now(UTC).replace(microsecond=0)
     model_usage = _real_model_usage(now)
     model_review_coverage, model_surface_review_artifacts = _complete_model_coverage(model_usage)
     project = SolidityProjectMetadata(
@@ -804,6 +874,12 @@ def _complete_runtime() -> AssuranceRuntime:
         model_review_coverage=model_review_coverage,
         model_surface_review_artifacts=model_surface_review_artifacts,
         model_usage=model_usage,
+        provider_session=_issue_provider_session_provenance(
+            execution_evidence=ExecutionEvidenceKind.REAL,
+            pipeline_owned=True,
+            trusted_concrete_client=True,
+            usage_evidence_consistent=True,
+        ),
         offline_replay=_real_offline_replay(),
         replay_run_id="synthetic-assurance-run",
         replay_manifest_sha256="1" * 64,
@@ -844,6 +920,17 @@ def _complete_runtime() -> AssuranceRuntime:
             ),
         }
     )
+    if config is not None:
+        qualification = _synthetic_production_qualification(config, now)
+        runtime = replace(
+            runtime,
+            production_qualification=qualification,
+            artifacts={*runtime.artifacts, "model-qualification-runtime.json"},
+            model_usage=[
+                _bind_usage_to_qualification(record, qualification, now)
+                for record in runtime.model_usage
+            ],
+        )
     return runtime
 
 
@@ -961,12 +1048,379 @@ def test_maximum_assurance_rejects_missing_model_families(config_factory) -> Non
 
 def test_maximum_assurance_complete_requires_all_runtime_clauses(config_factory) -> None:
     config = _maximum_config(config_factory)
-    assessment = MaximumAssuranceContract(config).evaluate(_complete_runtime())
+    assessment = MaximumAssuranceContract(config).evaluate(_complete_runtime(config))
     assert assessment.status is MaximumAssuranceStatus.COMPLETE
     assert not assessment.downgraded
     assert all(
         requirement.passed for requirement in assessment.requirements if requirement.required
     )
+    certified_ensemble = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "certified_model_ensemble"
+    )
+    assert "candidate falsifier lineages=N/A" in certified_ensemble.detail
+
+
+def test_certified_ensemble_requires_twenty_four_specialist_responsibilities(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    reduced_usage = [
+        record
+        for record in runtime.model_usage
+        if record.role
+        not in {
+            "specialist:access_control",
+            "specialist:reentrancy_control_flow",
+        }
+    ]
+
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(runtime, model_usage=reduced_usage)
+    )
+    ensemble = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "certified_model_ensemble"
+    )
+
+    assert not ensemble.passed
+    assert "specialist responsibilities=23/24" in ensemble.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_certified_ensemble_requires_four_whole_protocol_lineages(config_factory) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    reduced_usage = [
+        record for record in runtime.model_usage if record.role != "whole_protocol_review:3"
+    ]
+
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(runtime, model_usage=reduced_usage)
+    )
+    ensemble = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "certified_model_ensemble"
+    )
+
+    assert not ensemble.passed
+    assert "whole-protocol lineages=3/4" in ensemble.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_certified_ensemble_requires_response_backed_critical_surface_lineages(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    reduced_usage = [record for record in runtime.model_usage if record.role != "source_audit"]
+
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(runtime, model_usage=reduced_usage)
+    )
+    ensemble = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "certified_model_ensemble"
+    )
+
+    assert not ensemble.passed
+    assert "critical surfaces=0 with minimum lineages=0/3" in ensemble.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_zero_critical_surface_denominator_cannot_pass_maximum_assurance(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    assert runtime.model_review_coverage is not None
+    coverage_payload = runtime.model_review_coverage.model_dump(mode="json")
+    coverage_payload["surfaces"][0]["critical"] = False
+    coverage_payload["critical"] = _model_metric(
+        0,
+        0,
+        "synthetic empty critical-surface denominator",
+    ).model_dump(mode="json")
+    coverage_payload["critical_gate_passed"] = True
+    coverage = ModelReviewCoverage.model_validate(coverage_payload)
+
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(runtime, model_review_coverage=coverage)
+    )
+    clauses = {requirement.engine: requirement for requirement in assessment.requirements}
+
+    assert not clauses["critical_model_surface_review"].passed
+    assert "denominator is zero" in clauses["critical_model_surface_review"].detail
+    assert not clauses["certified_model_ensemble"].passed
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_provider_session_provenance_cannot_be_constructed_or_serialized() -> None:
+    with pytest.raises(TypeError, match="only be issued by the pipeline"):
+        ProviderSessionProvenance()
+
+    capability = _issue_provider_session_provenance(
+        execution_evidence=ExecutionEvidenceKind.REAL,
+        pipeline_owned=True,
+        trusted_concrete_client=True,
+        usage_evidence_consistent=True,
+    )
+    with pytest.raises(TypeError, match="cannot be serialized"):
+        pickle.dumps(capability)
+
+
+def test_forged_provider_session_without_private_issuer_cannot_receive_real_credit(
+    config_factory,
+) -> None:
+    forged = object.__new__(ProviderSessionProvenance)
+    object.__setattr__(forged, "_issuer", object())
+    object.__setattr__(forged, "execution_evidence", ExecutionEvidenceKind.REAL)
+    object.__setattr__(forged, "pipeline_owned", True)
+    object.__setattr__(forged, "trusted_concrete_client", True)
+    object.__setattr__(forged, "usage_evidence_consistent", True)
+    config = _maximum_config(config_factory)
+
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(_complete_runtime(config), provider_session=forged)
+    )
+
+    clauses = {requirement.engine: requirement for requirement in assessment.requirements}
+    assert not clauses["real_provider_session_provenance"].passed
+    assert not clauses["real_model_execution"].passed
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+@pytest.mark.parametrize(
+    "provider_session",
+    [
+        None,
+        _issue_provider_session_provenance(
+            execution_evidence=ExecutionEvidenceKind.MOCK,
+            pipeline_owned=False,
+            trusted_concrete_client=True,
+            usage_evidence_consistent=True,
+        ),
+        _issue_provider_session_provenance(
+            execution_evidence=ExecutionEvidenceKind.REAL,
+            pipeline_owned=False,
+            trusted_concrete_client=True,
+            usage_evidence_consistent=True,
+        ),
+        _issue_provider_session_provenance(
+            execution_evidence=ExecutionEvidenceKind.REAL,
+            pipeline_owned=True,
+            trusted_concrete_client=False,
+            usage_evidence_consistent=True,
+        ),
+        _issue_provider_session_provenance(
+            execution_evidence=ExecutionEvidenceKind.REAL,
+            pipeline_owned=True,
+            trusted_concrete_client=True,
+            usage_evidence_consistent=False,
+        ),
+    ],
+    ids=["missing", "mock", "injected-real", "non-concrete", "usage-mismatch"],
+)
+def test_real_model_credit_requires_owned_provider_session_provenance(
+    config_factory,
+    provider_session: ProviderSessionProvenance | None,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = replace(_complete_runtime(config), provider_session=provider_session)
+
+    assessment = MaximumAssuranceContract(config).evaluate(runtime)
+
+    clauses = {requirement.engine: requirement for requirement in assessment.requirements}
+    assert not clauses["real_provider_session_provenance"].passed
+    assert not clauses["real_model_execution"].passed
+    assert not clauses["qualified_model_selection_execution"].passed
+    assert not clauses["critical_model_surface_review"].passed
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_shape_only_model_quality_cannot_satisfy_runtime_qualification(config_factory) -> None:
+    config = _maximum_config(config_factory)
+
+    assessment = MaximumAssuranceContract(config).evaluate(_complete_runtime())
+
+    qualification = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "production_model_qualification"
+    )
+    real_models = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "real_model_execution"
+    )
+    assert not qualification.passed
+    assert not real_models.passed
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+@pytest.mark.parametrize(
+    "missing_hash",
+    [
+        "qualification_artifact_sha256",
+        "qualification_verification_sha256",
+        "production_selection_sha256",
+        "selection_verification_sha256",
+        "qualification_result_sha256",
+    ],
+)
+def test_each_missing_usage_qualification_join_revokes_surface_credit(
+    config_factory,
+    missing_hash: str,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    usage: list[UsageRecord] = []
+    for record in runtime.model_usage:
+        if record.role == "source_audit":
+            routing = dict(record.routing)
+            routing.pop(missing_hash)
+            record = record.model_copy(update={"routing": routing})
+        usage.append(record)
+
+    assessment = MaximumAssuranceContract(config).evaluate(replace(runtime, model_usage=usage))
+
+    critical_review = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "critical_model_surface_review"
+    )
+    assert not critical_review.passed
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "canonical_model",
+        "qualified_exact_model_id",
+        "qualified_canonical_model_slug",
+        "qualified_root_lineage",
+        "qualified_provider_endpoint",
+        "qualified_provider_name",
+        "qualified_endpoint_snapshot_sha256",
+        "qualified_model_metadata_snapshot_sha256",
+        "qualified_pricing_snapshot_sha256",
+        "qualified_roles",
+        "qualification_verified_at",
+        "qualification_expires_at",
+        "endpoint_snapshot_sha256",
+        "endpoint_pricing_sha256",
+        "model_metadata_snapshot_sha256",
+    ],
+)
+def test_mismatched_qualified_usage_projection_revokes_runtime_credit(
+    config_factory,
+    fault: str,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    qualification = runtime.production_qualification
+    assert qualification is not None
+    usage: list[UsageRecord] = []
+    for record in runtime.model_usage:
+        if record.role != "source_audit":
+            usage.append(record)
+            continue
+        routing = dict(record.routing)
+        if fault == "canonical_model":
+            mismatched_canonical = "synthetic/canonical-mismatch"
+            routing.update(
+                {
+                    "selected_model": mismatched_canonical,
+                    "canonical_model": mismatched_canonical,
+                    "catalog_identity_binding_sha256": canonical_sha256(
+                        {
+                            "canonical_slug": mismatched_canonical,
+                            "id": record.requested_model,
+                        }
+                    ),
+                }
+            )
+            record = record.model_copy(
+                update={
+                    "actual_model": mismatched_canonical,
+                    "routing": routing,
+                }
+            )
+        else:
+            mismatched_values: dict[str, object] = {
+                "qualified_exact_model_id": "synthetic/unqualified",
+                "qualified_canonical_model_slug": "synthetic/unqualified-canonical",
+                "qualified_root_lineage": f"sha256:{'f' * 64}",
+                "qualified_provider_endpoint": "unqualified-provider",
+                "qualified_provider_name": "Unqualified Provider",
+                "qualified_endpoint_snapshot_sha256": "a" * 64,
+                "qualified_model_metadata_snapshot_sha256": "b" * 64,
+                "qualified_pricing_snapshot_sha256": "c" * 64,
+                "qualified_roles": [],
+                "qualification_verified_at": "2000-01-01T00:00:00+00:00",
+                "qualification_expires_at": "2000-01-02T00:00:00+00:00",
+                "endpoint_snapshot_sha256": "d" * 64,
+                "endpoint_pricing_sha256": "e" * 64,
+                "model_metadata_snapshot_sha256": "f" * 64,
+            }
+            routing[fault] = mismatched_values[fault]
+            record = record.model_copy(update={"routing": routing})
+        assert is_creditable_usage_record(
+            record,
+            require_real=True,
+            require_certification=True,
+        )
+        usage.append(record)
+
+    assessment = MaximumAssuranceContract(config).evaluate(replace(runtime, model_usage=usage))
+
+    selection_execution = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "qualified_model_selection_execution"
+    )
+    assert not selection_execution.passed
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_every_selected_tier_a_model_requires_successful_real_usage(config_factory) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    omitted_model = config.models.verifier.primary
+    partial_usage = [
+        record for record in runtime.model_usage if record.requested_model != omitted_model
+    ]
+    assert partial_usage
+
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(runtime, model_usage=partial_usage)
+    )
+
+    qualification = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "production_model_qualification"
+    )
+    selection_execution = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "qualified_model_selection_execution"
+    )
+    certified_ensemble = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "certified_model_ensemble"
+    )
+    assert qualification.passed
+    assert not selection_execution.passed
+    assert not certified_ensemble.passed
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
 
 
 def test_unrelated_real_requests_cannot_back_mock_model_surface_coverage(
@@ -1105,7 +1559,8 @@ def test_model_surface_coverage_requires_exactly_one_usage_and_artifact(
 
 
 def test_foundry_negative_regression_is_conclusive_engine_execution(config_factory) -> None:
-    runtime = _complete_runtime()
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
     foundry = next(run for run in runtime.scanners if run.scanner == "foundry_fork")
     assert foundry.foundry_summary is not None
     updated = foundry.model_copy(
@@ -1124,7 +1579,7 @@ def test_foundry_negative_regression_is_conclusive_engine_execution(config_facto
     )
     runtime.scanners[runtime.scanners.index(foundry)] = updated
 
-    assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(runtime)
+    assessment = MaximumAssuranceContract(config).evaluate(runtime)
 
     gate = next(
         requirement
@@ -2308,8 +2763,9 @@ def test_incomplete_required_traceability_is_failed_or_explicitly_downgraded(
 
 
 def test_incomplete_nonblocking_traceability_does_not_block(config_factory) -> None:
+    config = _maximum_config(config_factory)
     runtime = replace(
-        _complete_runtime(),
+        _complete_runtime(config),
         traceability=MaximumAssuranceTraceability(
             last_verified_commit="synthetic-test",
             requirements=[
@@ -2324,7 +2780,7 @@ def test_incomplete_nonblocking_traceability_does_not_block(config_factory) -> N
             ],
         ),
     )
-    assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(runtime)
+    assessment = MaximumAssuranceContract(config).evaluate(runtime)
     assert assessment.status is MaximumAssuranceStatus.COMPLETE
     assert not any(
         requirement.engine == "traceability:ma-synthetic-optional"
@@ -2537,10 +2993,6 @@ def test_integrity_bound_reproduction_resolution_satisfies_candidate_clause(
             )
         ],
         falsifier_completed=True,
-        candidate_falsifier_lineages={
-            "sha256:" + ("a" * 64),
-            "sha256:" + ("b" * 64),
-        },
     )
 
     assessment = MaximumAssuranceContract(_maximum_config(config_factory)).evaluate(runtime)
@@ -2613,49 +3065,59 @@ def test_high_critical_cross_examination_requires_two_lineages(config_factory) -
     config = _maximum_config(config_factory)
     contract = MaximumAssuranceContract(config)
     lineage_by_model = model_lineage_index(config)
-    template = _complete_runtime().model_usage[0]
+    complete_runtime = _complete_runtime(config)
+    qualification = complete_runtime.production_qualification
+    assert qualification is not None
+    template = complete_runtime.model_usage[0]
     falsifier_models = [
         config.models.verifier.primary,
         config.models.judge.primary,
     ]
     falsifier_usage: list[UsageRecord] = []
-    for index, model_id in enumerate(falsifier_models):
-        generation_id = f"generation-cross-exam-{index}"
+    for reviewer_index, model_id in enumerate(falsifier_models, start=1):
+        generation_id = f"generation-cross-exam-{reviewer_index}"
+        usage = template.model_copy(
+            update={
+                "request_id": f"request-cross-exam-{reviewer_index}",
+                "role": candidate_falsifier_role("critical-1", reviewer_index),
+                "requested_model": model_id,
+                "returned_model": model_id,
+                "actual_model": model_id,
+                "model_family": model_id,
+                "openrouter_generation_id": generation_id,
+                "routing": {
+                    **template.routing,
+                    "generation_id": generation_id,
+                    "selected_model": model_id,
+                    "canonical_model": model_id,
+                    "catalog_identity_binding_sha256": canonical_sha256(
+                        {
+                            "canonical_slug": model_id,
+                            "id": model_id,
+                        }
+                    ),
+                },
+            }
+        )
         falsifier_usage.append(
-            template.model_copy(
-                update={
-                    "request_id": f"request-cross-exam-{index}",
-                    "role": f"specialist:falsifier:cross_exam_{index}",
-                    "requested_model": model_id,
-                    "returned_model": model_id,
-                    "actual_model": model_id,
-                    "model_family": model_id,
-                    "openrouter_generation_id": generation_id,
-                    "routing": {
-                        **template.routing,
-                        "generation_id": generation_id,
-                        "selected_model": model_id,
-                        "canonical_model": model_id,
-                        "catalog_identity_binding_sha256": canonical_sha256(
-                            {
-                                "canonical_slug": model_id,
-                                "id": model_id,
-                            }
-                        ),
-                    },
-                }
+            _bind_usage_to_qualification(
+                usage,
+                qualification,
+                qualification.verified_at,
             )
         )
-    falsifier_lineages = [
-        lineage_by_model[model_id.lower()].root_lineage for model_id in falsifier_models
-    ]
+    assert (
+        len({lineage_by_model[model_id.lower()].root_lineage for model_id in falsifier_models}) == 2
+    )
     one_lineage = contract.evaluate(
         replace(
-            _complete_runtime(),
+            complete_runtime,
             eligible_high_critical_ids={"critical-1"},
             falsifier_completed=True,
-            candidate_falsifier_lineages={falsifier_lineages[0]},
-            model_usage=[*_complete_runtime().model_usage, falsifier_usage[0]],
+            candidate_falsifier_request_ids={
+                "critical-1": {falsifier_usage[0].request_id},
+            },
+            model_usage=[*complete_runtime.model_usage, falsifier_usage[0]],
         )
     )
     one_lineage_gate = next(
@@ -2667,11 +3129,13 @@ def test_high_critical_cross_examination_requires_two_lineages(config_factory) -
 
     two_lineages = contract.evaluate(
         replace(
-            _complete_runtime(),
+            complete_runtime,
             eligible_high_critical_ids={"critical-1"},
             falsifier_completed=True,
-            candidate_falsifier_lineages=set(falsifier_lineages),
-            model_usage=[*_complete_runtime().model_usage, *falsifier_usage],
+            candidate_falsifier_request_ids={
+                "critical-1": {record.request_id for record in falsifier_usage},
+            },
+            model_usage=[*complete_runtime.model_usage, *falsifier_usage],
         )
     )
     two_lineage_gate = next(
@@ -2680,6 +3144,79 @@ def test_high_critical_cross_examination_requires_two_lineages(config_factory) -
         if requirement.engine == "independent_falsifier"
     )
     assert two_lineage_gate.passed
+
+
+def test_candidate_falsifier_requests_cannot_be_reused_across_candidates(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    contract = MaximumAssuranceContract(config)
+    lineage_by_model = model_lineage_index(config)
+    complete_runtime = _complete_runtime(config)
+    qualification = complete_runtime.production_qualification
+    assert qualification is not None
+    template = complete_runtime.model_usage[0]
+    falsifier_models = [
+        config.models.verifier.primary,
+        config.models.judge.primary,
+    ]
+    falsifier_usage: list[UsageRecord] = []
+    for reviewer_index, model_id in enumerate(falsifier_models, start=1):
+        generation_id = f"generation-per-candidate-{reviewer_index}"
+        usage = template.model_copy(
+            update={
+                "request_id": f"request-per-candidate-{reviewer_index}",
+                "role": candidate_falsifier_role(
+                    "critical-1",
+                    reviewer_index,
+                ),
+                "requested_model": model_id,
+                "returned_model": model_id,
+                "actual_model": model_id,
+                "model_family": model_id,
+                "openrouter_generation_id": generation_id,
+                "routing": {
+                    **template.routing,
+                    "generation_id": generation_id,
+                    "selected_model": model_id,
+                    "canonical_model": model_id,
+                    "catalog_identity_binding_sha256": canonical_sha256(
+                        {
+                            "canonical_slug": model_id,
+                            "id": model_id,
+                        }
+                    ),
+                },
+            }
+        )
+        falsifier_usage.append(
+            _bind_usage_to_qualification(
+                usage,
+                qualification,
+                qualification.verified_at,
+            )
+        )
+    assert (
+        len({lineage_by_model[model_id.lower()].root_lineage for model_id in falsifier_models}) == 2
+    )
+    assessment = contract.evaluate(
+        replace(
+            complete_runtime,
+            eligible_high_critical_ids={"critical-1", "critical-2"},
+            falsifier_completed=True,
+            candidate_falsifier_request_ids={
+                candidate_id: {record.request_id for record in falsifier_usage}
+                for candidate_id in ("critical-1", "critical-2")
+            },
+            model_usage=[*complete_runtime.model_usage, *falsifier_usage],
+        )
+    )
+    clauses = {requirement.engine: requirement for requirement in assessment.requirements}
+
+    assert not clauses["independent_falsifier"].passed
+    assert not clauses["certified_model_ensemble"].passed
+    assert "minimum 0 independent" in clauses["independent_falsifier"].detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
 
 
 def test_downgrade_is_visible_in_markdown_json_and_sarif(config_factory) -> None:

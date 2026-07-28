@@ -18,7 +18,7 @@ from mmaudit.models.schemas import (
     VerificationTest,
     VerificationVerdict,
 )
-from mmaudit.models.usage import is_creditable_usage_record
+from mmaudit.models.usage import candidate_falsifier_role, is_creditable_usage_record
 from mmaudit.orchestration.context import render_context
 
 
@@ -105,6 +105,7 @@ def normalize_cross_examination_response(
     response: CandidateCrossExaminationResponse,
     *,
     candidate_ids: dict[str, str],
+    request_id: str,
     reviewer_index: int,
     requested_model: str,
     returned_model: str | None,
@@ -121,6 +122,7 @@ def normalize_cross_examination_response(
     return [
         CandidateCrossExaminationDecision(
             candidate_id=candidate_ids[decision.candidate_ref],
+            request_id=request_id,
             reviewer_index=reviewer_index,
             requested_model=requested_model,
             returned_model=returned_model,
@@ -157,10 +159,16 @@ class CandidateCrossExaminerAgent:
         candidates: list[CandidateFinding],
         context: ContextPackage,
     ) -> list[CandidateCrossExaminationDecision]:
+        if len(candidates) != 1:
+            raise ValueError("candidate falsifier requests must review exactly one candidate")
         anonymized, candidate_ids = anonymize_cross_examination_candidates(candidates)
         if not anonymized:
             return []
-        request_role = f"specialist:falsifier:cross_exam_{self.reviewer_index}"
+        request_role = candidate_falsifier_role(
+            candidates[0].candidate_id,
+            self.reviewer_index,
+        )
+        usage_start = len(self.client.usage.records)
         response = await self.client.complete(
             role=request_role,
             models=[self.model_id],
@@ -181,20 +189,23 @@ class CandidateCrossExaminerAgent:
             response_model=CandidateCrossExaminationResponse,
             schema_name=(f"mmaudit_candidate_cross_examination_{self.reviewer_index}"),
         )
-        usage = next(
-            (
-                record
-                for record in reversed(self.client.usage.records)
-                if record.role == request_role and is_creditable_usage_record(record)
-            ),
-            None,
-        )
+        matching_usage = [
+            record
+            for record in self.client.usage.records[usage_start:]
+            if record.role == request_role and is_creditable_usage_record(record)
+        ]
+        if len(matching_usage) != 1:
+            raise OpenRouterSchemaError(
+                "candidate falsifier response lacks one exact new completed request record"
+            )
+        usage = matching_usage[0]
         return normalize_cross_examination_response(
             response,
             candidate_ids=candidate_ids,
+            request_id=usage.request_id,
             reviewer_index=self.reviewer_index,
             requested_model=self.model_id,
-            returned_model=usage.returned_model if usage is not None else None,
+            returned_model=usage.returned_model,
             root_lineage=self.root_lineage,
         )
 

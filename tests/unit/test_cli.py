@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
+from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -37,15 +40,64 @@ from mmaudit.benchmark.mutations import (
     MutationTestOutcome,
     score_mutation_outcomes,
 )
-from mmaudit.cli import app
-from mmaudit.config import ConfigError, configured_model_ids
-from mmaudit.constants import ExitCode
+from mmaudit.cli import _load_audit_production_qualification, app
+from mmaudit.config import AuditConfig, ConfigError, configured_model_ids
+from mmaudit.constants import ALL_MODEL_ROLES, ExitCode
+from mmaudit.models.qualification_workflow import seal_qualification_release_bindings
 from mmaudit.models.schemas import AuditProfile
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
+from mmaudit.orchestration.manifest import canonical_sha256
+from tests.conftest import base_config_data, model_registry_entry
+from tests.qualification_support import synthetic_release_observation
+from tests.unit import test_model_qualification as qualification_fixtures
 
 ROOT = Path(__file__).parents[2]
 runner = CliRunner()
 CERTIFICATE_COMMIT = "a" * 40
+
+
+def _derived_production_config() -> AuditConfig:
+    qualification = qualification_fixtures._bundle()
+    results = qualification.artifact.results
+    registry = []
+    for result in results:
+        assert result.root_lineage is not None
+        entry = model_registry_entry(
+            result.exact_model_id,
+            root_lineage=result.root_lineage,
+            measured_quality_score=result.overall_score,
+            measured_quality_tier="highest",
+        )
+        entry["quality_measurement"] = f"sha256:{result.quality_measurement_sha256}"
+        registry.append(entry)
+    data = base_config_data()
+    data["privacy"]["approved_model_lineages"] = sorted(
+        {result.root_lineage for result in results if result.root_lineage is not None}
+    )
+    data["models"].update(
+        {
+            "provider_policy": {
+                "only": sorted({result.approved_provider_endpoint for result in results}),
+                "allow_fallbacks": False,
+            },
+            "registry": registry,
+            **{
+                role: {"primary": results[index].exact_model_id, "fallbacks": []}
+                for index, role in enumerate(ALL_MODEL_ROLES)
+            },
+            "specialists": {
+                "access_control": {
+                    "primary": results[6].exact_model_id,
+                    "fallbacks": [],
+                },
+                "report_quality": {
+                    "primary": results[7].exact_model_id,
+                    "fallbacks": [],
+                },
+            },
+        }
+    )
+    return AuditConfig.model_validate(data)
 
 
 def test_help_lists_required_commands() -> None:
@@ -68,11 +120,331 @@ def test_help_lists_required_commands() -> None:
 
 
 def test_run_help_lists_fork_aliases() -> None:
-    result = runner.invoke(app, ["run", "--help"])
+    result = runner.invoke(app, ["run", "--help"], env={"COLUMNS": "300"})
     assert result.exit_code == 0
     assert "--allow-fork" in result.stdout
     assert "--scope" in result.stdout
     assert "--cost-ledger" in result.stdout
+    assert "--model-qualification-bundle" in result.stdout
+    assert "--model-qualification-policy" in result.stdout
+    assert "--model-qualification-release-bindings" in result.stdout
+    assert "--model-qualification-release-source-root" in result.stdout
+    assert "--model-qualification-corpus" in result.stdout
+    assert "--model-qualification-ground-truth" in result.stdout
+
+
+def test_models_help_lists_release_observation_command() -> None:
+    result = runner.invoke(app, ["models", "--help"], env={"COLUMNS": "300"})
+
+    assert result.exit_code == 0
+    assert "observe-release-bindings" in result.stdout
+
+
+def test_run_requires_complete_production_qualification_input_set(
+    tmp_path: Path,
+    monkeypatch,
+    config_factory,
+) -> None:
+    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config_factory())
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--model-qualification-bundle",
+            str(tmp_path / "bundle.json"),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    normalized = " ".join(result.stdout.split())
+    assert "production qualification requires" in normalized
+    assert "--model-qualification-bundle" in normalized
+    assert "cost-ledger" not in result.stdout
+
+
+def test_scanner_only_rejects_model_qualification_inputs(
+    tmp_path: Path,
+    monkeypatch,
+    config_factory,
+) -> None:
+    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config_factory())
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--scanner-only",
+            "--model-qualification-bundle",
+            str(tmp_path / "bundle.json"),
+            "--model-qualification-policy",
+            str(tmp_path / "policy.toml"),
+            "--model-qualification-release-bindings",
+            str(tmp_path / "bindings.json"),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "model qualification inputs are not accepted for a scanner-only run" in (
+        " ".join(result.stdout.split())
+    )
+
+
+def test_audit_qualification_loader_keeps_benchmark_and_production_config_hashes_distinct(
+    tmp_path: Path,
+    monkeypatch,
+    config_factory,
+) -> None:
+    config = config_factory()
+    pins = config.maximum_assurance.qualification
+    production_hash = config.stable_hash()
+    benchmark_hash = canonical_sha256(config.model_dump(mode="json"))
+    assert production_hash != benchmark_hash
+    policy = SimpleNamespace(policy_sha256=pins.policy_sha256)
+    benchmark_suite = SimpleNamespace(
+        corpus=SimpleNamespace(schema_version=pins.corpus_version),
+        corpus_sha256=pins.corpus_sha256,
+        ground_truth=SimpleNamespace(schema_version=pins.ground_truth_version),
+        ground_truth_sha256=pins.ground_truth_sha256,
+    )
+    resolved = object()
+    resolver_arguments: dict[str, Any] = {}
+
+    def inputs(effective_config_sha256: str) -> tuple[SimpleNamespace, SimpleNamespace]:
+        release = SimpleNamespace(
+            source_commit="1" * 40,
+            source_tree_sha256="2" * 64,
+            effective_config_sha256=effective_config_sha256,
+            prompt_sha256="3" * 64,
+            response_schema_sha256="4" * 64,
+            toolchain_sha256="5" * 64,
+            isolation_sha256="6" * 64,
+            benchmark_corpus_version=pins.corpus_version,
+            benchmark_ground_truth_version=pins.ground_truth_version,
+        )
+        bundle = SimpleNamespace(
+            policy_sha256=policy.policy_sha256,
+            release_bindings=release,
+            qualification_artifact=SimpleNamespace(bindings=release),
+            updated_registry=object(),
+            benchmark_reports=(),
+            trusted_benchmark_evidence=(),
+        )
+        return bundle, release
+
+    bundle, release = inputs(benchmark_hash)
+    monkeypatch.setattr(
+        "mmaudit.cli.load_qualification_workflow_bundle",
+        lambda _path: bundle,
+    )
+    monkeypatch.setattr("mmaudit.cli.load_qualification_policy", lambda _path: policy)
+    monkeypatch.setattr(
+        "mmaudit.cli.load_qualification_release_bindings",
+        lambda _path: release,
+    )
+    monkeypatch.setattr(
+        "mmaudit.cli.resolve_verified_production_qualification",
+        lambda **kwargs: resolver_arguments.update(kwargs) or resolved,
+    )
+    monkeypatch.setattr(
+        "mmaudit.cli.load_model_benchmark_corpus",
+        lambda _path, *, ground_truth_path: benchmark_suite,
+    )
+
+    async def refetch(**_kwargs):
+        return object()
+
+    monkeypatch.setattr("mmaudit.cli._refetch_qualification_generations", refetch)
+    monkeypatch.setattr(
+        "mmaudit.cli._observe_qualification_release",
+        lambda **_kwargs: SimpleNamespace(
+            observed_at=qualification_fixtures._NOW + timedelta(hours=3)
+        ),
+    )
+    paths = {
+        "bundle_path": tmp_path / "bundle.json",
+        "policy_path": tmp_path / "policy.toml",
+        "release_bindings_path": tmp_path / "release-bindings.json",
+        "release_source_root": tmp_path,
+        "corpus_path": tmp_path / "corpus.json",
+        "ground_truth_path": tmp_path / "ground-truth.json",
+        "secrets_env_file": None,
+    }
+
+    loaded = asyncio.run(
+        _load_audit_production_qualification(
+            config=config,
+            scanner_only=False,
+            **paths,
+        )
+    )
+
+    assert loaded is resolved
+    assert release.effective_config_sha256 == benchmark_hash
+    assert resolver_arguments["expected_bindings"] is release
+    assert resolver_arguments["production_effective_config_sha256"] == production_hash
+    assert resolver_arguments["trusted_generation_verification"] is not None
+
+
+def test_audit_qualification_loader_rejects_alternate_policy_before_provider_work(
+    tmp_path: Path,
+    monkeypatch,
+    config_factory,
+) -> None:
+    config = config_factory()
+    pins = config.maximum_assurance.qualification
+    alternate = qualification_fixtures._bundle().policy
+    benchmark_suite = SimpleNamespace(
+        corpus=SimpleNamespace(schema_version=pins.corpus_version),
+        corpus_sha256=pins.corpus_sha256,
+        ground_truth=SimpleNamespace(schema_version=pins.ground_truth_version),
+        ground_truth_sha256=pins.ground_truth_sha256,
+    )
+    provider_called = False
+
+    monkeypatch.setattr(
+        "mmaudit.cli.load_qualification_workflow_bundle",
+        lambda _path: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "mmaudit.cli.load_qualification_policy",
+        lambda _path: alternate,
+    )
+    monkeypatch.setattr(
+        "mmaudit.cli.load_qualification_release_bindings",
+        lambda _path: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "mmaudit.cli.load_model_benchmark_corpus",
+        lambda _path, *, ground_truth_path: benchmark_suite,
+    )
+
+    async def forbidden_refetch(**_kwargs):
+        nonlocal provider_called
+        provider_called = True
+        return object()
+
+    monkeypatch.setattr(
+        "mmaudit.cli._refetch_qualification_generations",
+        forbidden_refetch,
+    )
+
+    with pytest.raises(ConfigError, match="release pins"):
+        asyncio.run(
+            _load_audit_production_qualification(
+                config=config,
+                scanner_only=False,
+                bundle_path=tmp_path / "bundle.json",
+                policy_path=tmp_path / "policy.toml",
+                release_bindings_path=tmp_path / "bindings.json",
+                release_source_root=tmp_path,
+                corpus_path=tmp_path / "corpus.json",
+                ground_truth_path=tmp_path / "ground-truth.json",
+                secrets_env_file=None,
+            )
+        )
+    assert not provider_called
+
+
+def test_audit_qualification_loader_resolves_derived_production_config_without_resealing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = _derived_production_config()
+    qualification = qualification_fixtures._bundle()
+    artifact = qualification.artifact
+    bindings = artifact.bindings
+    release_bindings = seal_qualification_release_bindings(
+        source_commit=bindings.source_commit,
+        source_tree_sha256=bindings.source_tree_sha256,
+        effective_config_sha256=bindings.effective_config_sha256,
+        prompt_sha256=bindings.prompt_sha256,
+        response_schema_sha256=bindings.response_schema_sha256,
+        toolchain_sha256=bindings.toolchain_sha256,
+        isolation_sha256=bindings.isolation_sha256,
+        benchmark_corpus_version=bindings.benchmark_corpus_version,
+        benchmark_ground_truth_version=bindings.benchmark_ground_truth_version,
+    )
+    workflow = SimpleNamespace(
+        policy_sha256=qualification.policy.policy_sha256,
+        release_bindings=release_bindings,
+        qualification_artifact=artifact,
+        updated_registry=qualification.registry,
+        benchmark_reports=(),
+        trusted_benchmark_evidence=qualification.benchmark_evidence,
+    )
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = qualification_fixtures._NOW + timedelta(hours=3)
+            return value if tz is None else value.astimezone(tz)
+
+    monkeypatch.setattr("mmaudit.cli.datetime", FrozenDatetime)
+    monkeypatch.setattr(
+        "mmaudit.cli.load_qualification_workflow_bundle",
+        lambda _path: workflow,
+    )
+    monkeypatch.setattr(
+        "mmaudit.cli.load_qualification_policy",
+        lambda _path: qualification.policy,
+    )
+    monkeypatch.setattr(
+        "mmaudit.cli.load_qualification_release_bindings",
+        lambda _path: release_bindings,
+    )
+    monkeypatch.setattr(
+        "mmaudit.cli.load_model_benchmark_corpus",
+        lambda _path, *, ground_truth_path: SimpleNamespace(ground_truth_path=ground_truth_path),
+    )
+    monkeypatch.setattr(
+        "mmaudit.cli._require_qualification_release_pins",
+        lambda **_kwargs: None,
+    )
+
+    async def refetch(**_kwargs):
+        return object()
+
+    monkeypatch.setattr("mmaudit.cli._refetch_qualification_generations", refetch)
+    monkeypatch.setattr(
+        "mmaudit.cli._observe_qualification_release",
+        lambda **_kwargs: synthetic_release_observation(
+            bindings,
+            observed_at=qualification_fixtures._NOW + timedelta(hours=3),
+        ),
+    )
+    monkeypatch.setattr(
+        "mmaudit.models.qualification._freshly_reverify_production_benchmarks",
+        lambda **_kwargs: qualification.benchmark_evidence,
+    )
+
+    resolved = asyncio.run(
+        _load_audit_production_qualification(
+            config=config,
+            scanner_only=False,
+            bundle_path=tmp_path / "bundle.json",
+            policy_path=tmp_path / "policy.toml",
+            release_bindings_path=tmp_path / "bindings.json",
+            release_source_root=tmp_path,
+            corpus_path=tmp_path / "corpus.json",
+            ground_truth_path=tmp_path / "ground-truth.json",
+            secrets_env_file=None,
+        )
+    )
+
+    assert resolved is not None
+    assert resolved.artifact_sha256 == artifact.artifact_sha256
+    assert resolved.bindings.effective_config_sha256 != config.stable_hash()
+    assert resolved.production_effective_config_sha256 == config.stable_hash()
+    assert {model.quality_measurement for model in resolved.models} == {
+        lineage.quality_measurement for lineage in config.models.registry
+    }
 
 
 def test_models_benchmark_help_lists_blinded_corpus_and_egress_controls() -> None:

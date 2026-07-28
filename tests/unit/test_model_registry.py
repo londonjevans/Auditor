@@ -13,8 +13,13 @@ from mmaudit.config import (
     configured_model_ids,
     validate_model_independence,
 )
-from mmaudit.models.registry import ModelRegistry
+from mmaudit.models.qualification import (
+    VerifiedProductionQualification,
+)
+from mmaudit.models.registry import ModelRegistry, ProductionQualificationValidation
+from mmaudit.models.schemas import AuditProfile
 from tests.conftest import MODEL_IDS, base_config_data, model_registry_entry
+from tests.unit import test_model_qualification as qualification_fixtures
 
 
 def _metadata(config: AuditConfig) -> list[dict[str, Any]]:
@@ -25,6 +30,61 @@ def _metadata(config: AuditConfig) -> list[dict[str, Any]]:
         }
         for model_id in configured_model_ids(config, include_fallbacks=True)
     ]
+
+
+def _verified_production_config_and_capability() -> tuple[
+    AuditConfig, VerifiedProductionQualification, datetime
+]:
+    bundle = qualification_fixtures._bundle()
+    observed_at = qualification_fixtures._NOW + timedelta(hours=4)
+    results = bundle.artifact.results
+    registry = []
+    for result in results:
+        assert result.root_lineage is not None
+        entry = model_registry_entry(
+            result.exact_model_id,
+            root_lineage=result.root_lineage,
+            measured_quality_score=result.overall_score,
+            measured_quality_tier="highest",
+        )
+        entry["quality_measurement"] = f"sha256:{result.quality_measurement_sha256}"
+        registry.append(entry)
+    roles = list(MODEL_IDS)
+    role_models: dict[str, Any] = {
+        role: {"primary": results[index].exact_model_id, "fallbacks": []}
+        for index, role in enumerate(roles)
+    }
+    role_models["specialists"] = {
+        "access_control": {
+            "primary": results[6].exact_model_id,
+            "fallbacks": [],
+        },
+        "report_quality": {
+            "primary": results[7].exact_model_id,
+            "fallbacks": [],
+        },
+    }
+    data = base_config_data()
+    data["privacy"]["approved_model_lineages"] = sorted(
+        {result.root_lineage for result in results if result.root_lineage is not None}
+    )
+    data["models"].update(
+        {
+            "provider_policy": {
+                "only": sorted({result.approved_provider_endpoint for result in results}),
+                "allow_fallbacks": False,
+            },
+            "registry": registry,
+            **role_models,
+        }
+    )
+    config = AuditConfig.model_validate(data)
+    assert bundle.bindings.effective_config_sha256 != config.stable_hash()
+    qualification = qualification_fixtures._resolve_for_test(
+        bundle,
+        production_effective_config_sha256=config.stable_hash(),
+    )
+    return config, qualification, observed_at
 
 
 def test_lineage_record_is_immutable(config_factory) -> None:
@@ -68,6 +128,19 @@ def test_registry_rejects_duplicate_alias_across_lineages() -> None:
 
     with pytest.raises(ValidationError, match="globally unique"):
         AuditConfig.model_validate(data)
+
+
+def test_registry_allows_distinct_exact_models_to_share_one_root_lineage() -> None:
+    data = base_config_data()
+    shared_root = data["models"]["registry"][0]["root_lineage"]
+    data["models"]["registry"][1]["root_lineage"] = shared_root
+
+    config = AuditConfig.model_validate(data)
+
+    assert config.models.registry[0].root_lineage == config.models.registry[1].root_lineage
+    assert (
+        config.models.registry[0].canonical_model_id != config.models.registry[1].canonical_model_id
+    )
 
 
 def test_source_egress_requires_explicit_root_approval(config_factory) -> None:
@@ -194,3 +267,283 @@ def test_model_metadata_cache_rejects_duplicate_json_keys(tmp_path: Path) -> Non
     )
 
     assert ModelRegistry(path).load_cache() is None
+
+
+def test_maximum_assurance_rejects_shape_only_quality_hashes(config_factory) -> None:
+    config = config_factory().model_copy(update={"profile": AuditProfile.MAXIMUM_ASSURANCE})
+
+    errors = ModelRegistry.validate(config, _metadata(config))
+
+    assert (
+        "verified production qualification is required; "
+        "configured quality hashes are not authorization"
+    ) in errors
+
+
+def test_nonproduction_fixture_can_explicitly_disable_qualification_gate(config_factory) -> None:
+    config = config_factory().model_copy(update={"profile": AuditProfile.MAXIMUM_ASSURANCE})
+
+    errors = ModelRegistry.validate(
+        config,
+        _metadata(config),
+        require_verified_qualification=False,
+    )
+
+    assert not any("verified production qualification" in error for error in errors)
+
+
+def test_verified_production_selection_resolves_every_exact_model_and_role() -> None:
+    config, qualification, observed_at = _verified_production_config_and_capability()
+
+    evidence = ModelRegistry.validate_production_qualification(
+        config,
+        qualification,
+        now=observed_at,
+    )
+    errors = ModelRegistry.validate(
+        config,
+        _metadata(config),
+        production_qualification=qualification,
+        require_verified_qualification=True,
+        qualification_now=observed_at,
+    )
+
+    assert evidence.valid
+    assert not errors
+    assert qualification.bindings.effective_config_sha256 != config.stable_hash()
+    assert qualification.production_effective_config_sha256 == config.stable_hash()
+    assert evidence.production_effective_config_sha256 == config.stable_hash()
+    assert evidence.configured_model_ids == evidence.qualified_model_ids
+    assert len(evidence.model_bindings) == 8
+    assert all(binding.approved_provider_name for binding in evidence.model_bindings)
+    assert {binding.qualification_result_sha256 for binding in evidence.model_bindings} == {
+        model.qualification_result_sha256 for model in qualification.models
+    }
+    assert {binding.endpoint_snapshot_sha256 for binding in evidence.model_bindings} == {
+        model.endpoint_snapshot_sha256 for model in qualification.models
+    }
+    assert {binding.model_metadata_snapshot_sha256 for binding in evidence.model_bindings} == {
+        model.model_metadata_snapshot_sha256 for model in qualification.models
+    }
+    assert {binding.pricing_snapshot_sha256 for binding in evidence.model_bindings} == {
+        model.pricing_snapshot_sha256 for model in qualification.models
+    }
+    assert {binding.benchmark_report_sha256 for binding in evidence.model_bindings} == {
+        model.benchmark_report_sha256 for model in qualification.models
+    }
+    assert {binding.benchmark_verification_sha256 for binding in evidence.model_bindings} == {
+        model.benchmark_verification_sha256 for model in qualification.models
+    }
+    assert {binding.fresh_benchmark_evidence_sha256 for binding in evidence.model_bindings} == {
+        model.fresh_benchmark_evidence_sha256 for model in qualification.models
+    }
+    assert {binding.benchmark_case_count for binding in evidence.model_bindings} == {
+        model.benchmark_case_count for model in qualification.models
+    }
+    assert {binding.evaluated_at for binding in evidence.model_bindings} == {
+        model.evaluated_at for model in qualification.models
+    }
+    assert {binding.expires_at for binding in evidence.model_bindings} == {
+        model.expires_at for model in qualification.models
+    }
+    assert ProductionQualificationValidation.from_dict(evidence.as_dict()) == evidence
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        (
+            "quality_measurement",
+            "sha256:" + ("f" * 64),
+            "quality measurement differs",
+        ),
+        ("measured_quality_score", 0.95, "quality score differs"),
+        ("measured_quality_tier", "high", "quality tier differs"),
+    ],
+)
+def test_production_selection_rejects_stale_configured_quality_designations(
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    config, qualification, observed_at = _verified_production_config_and_capability()
+    registry = list(config.models.registry)
+    registry[0] = registry[0].model_copy(update={field: value})
+    changed = config.model_copy(
+        update={
+            "models": config.models.model_copy(update={"registry": tuple(registry)}),
+        }
+    )
+
+    evidence = ModelRegistry.validate_production_qualification(
+        changed,
+        qualification,
+        now=observed_at,
+    )
+
+    assert not evidence.valid
+    assert any(message in error for error in evidence.errors)
+
+
+def test_production_selection_rejects_effective_config_binding_mismatch() -> None:
+    config, qualification, observed_at = _verified_production_config_and_capability()
+    changed = config.model_copy(update={"profile": AuditProfile.MAXIMUM_ASSURANCE})
+
+    evidence = ModelRegistry.validate_production_qualification(
+        changed,
+        qualification,
+        now=observed_at,
+    )
+
+    assert not evidence.valid
+    assert "verified production qualification binds a different effective configuration" in (
+        evidence.errors
+    )
+
+
+def test_maximum_assurance_rejects_alternate_self_hashed_quality_inputs() -> None:
+    config, qualification, observed_at = _verified_production_config_and_capability()
+    maximum = config.model_copy(update={"profile": AuditProfile.MAXIMUM_ASSURANCE})
+
+    evidence = ModelRegistry.validate_production_qualification(
+        maximum,
+        qualification,
+        now=observed_at,
+    )
+
+    assert not evidence.valid
+    assert any("qualification policy differs" in error for error in evidence.errors)
+    assert any("benchmark corpus differs" in error for error in evidence.errors)
+    assert any("benchmark ground truth differs" in error for error in evidence.errors)
+
+
+def test_production_selection_rejects_selected_alias_inheritance() -> None:
+    config, qualification, observed_at = _verified_production_config_and_capability()
+    registry = list(config.models.registry)
+    selected_model = registry[0].canonical_model_id
+    registry[0] = registry[0].model_copy(
+        update={
+            "canonical_model_id": "synthetic/unselected-canonical",
+            "aliases": (selected_model,),
+        }
+    )
+    changed = config.model_copy(
+        update={
+            "models": config.models.model_copy(update={"registry": tuple(registry)}),
+        }
+    )
+
+    evidence = ModelRegistry.validate_production_qualification(
+        changed,
+        qualification,
+        now=observed_at,
+    )
+
+    assert not evidence.valid
+    assert any("must be the canonical lineage record" in error for error in evidence.errors)
+
+
+def test_production_selection_does_not_inherit_qualification_to_an_alias() -> None:
+    config, qualification, observed_at = _verified_production_config_and_capability()
+    source = config.models.source_audit.model_copy(update={"primary": "author0/unqualified-alias"})
+    registry = list(config.models.registry)
+    registry[0] = registry[0].model_copy(
+        update={"aliases": (*registry[0].aliases, "author0/unqualified-alias")}
+    )
+    config = config.model_copy(
+        update={
+            "models": config.models.model_copy(
+                update={
+                    "source_audit": source,
+                    "registry": tuple(registry),
+                }
+            )
+        }
+    )
+
+    evidence = ModelRegistry.validate_production_qualification(
+        config,
+        qualification,
+        now=observed_at,
+    )
+
+    assert not evidence.valid
+    assert "exact model lacks verified Tier A qualification: author0/unqualified-alias" in (
+        evidence.errors
+    )
+    assert any("all_eligible_tier_a" in error for error in evidence.errors)
+
+
+def test_production_qualification_rejects_stale_or_unconfigured_routes() -> None:
+    config, qualification, observed_at = _verified_production_config_and_capability()
+    config = config.model_copy(
+        update={
+            "models": config.models.model_copy(
+                update={
+                    "provider_policy": config.models.provider_policy.model_copy(
+                        update={"only": ("unrelated-provider",)}
+                    )
+                }
+            )
+        }
+    )
+
+    route_evidence = ModelRegistry.validate_production_qualification(
+        config,
+        qualification,
+        now=observed_at,
+    )
+    stale_evidence = ModelRegistry.validate_production_qualification(
+        config,
+        qualification,
+        now=qualification.expires_at,
+    )
+
+    assert not route_evidence.valid
+    assert any("endpoint is not configured" in error for error in route_evidence.errors)
+    assert not stale_evidence.valid
+    assert "verified production qualification is expired" in stale_evidence.errors
+
+
+def test_serialized_production_qualification_validation_rejects_tampering() -> None:
+    config, qualification, observed_at = _verified_production_config_and_capability()
+    evidence = ModelRegistry.validate_production_qualification(
+        config,
+        qualification,
+        now=observed_at,
+    )
+    payload = evidence.as_dict()
+    payload["qualification_artifact_sha256"] = "0" * 64
+
+    with pytest.raises(ValidationError, match="self-hash is inconsistent"):
+        ProductionQualificationValidation.from_dict(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("qualification_result_sha256", "a" * 64),
+        ("benchmark_report_sha256", "b" * 64),
+        ("benchmark_verification_sha256", "c" * 64),
+        ("fresh_benchmark_evidence_sha256", "d" * 64),
+        ("endpoint_snapshot_sha256", "e" * 64),
+        ("model_metadata_snapshot_sha256", "f" * 64),
+        ("pricing_snapshot_sha256", "0" * 64),
+        ("benchmark_case_count", 2),
+    ],
+)
+def test_serialized_production_model_evidence_rejects_tampering(
+    field: str,
+    value: object,
+) -> None:
+    config, qualification, observed_at = _verified_production_config_and_capability()
+    evidence = ModelRegistry.validate_production_qualification(
+        config,
+        qualification,
+        now=observed_at,
+    )
+    payload = evidence.as_dict()
+    payload["model_bindings"][0][field] = value
+
+    with pytest.raises(ValidationError, match="self-hash is inconsistent"):
+        ProductionQualificationValidation.from_dict(payload)

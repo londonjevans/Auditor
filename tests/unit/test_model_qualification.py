@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import asyncio
+import copy
 import hashlib
 import json
-from dataclasses import dataclass
+import pickle
+from dataclasses import FrozenInstanceError, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
 
-from mmaudit.benchmark.models import ModelBenchmarkDimension
-from mmaudit.constants import ALL_SPECIALIST_ROLES
+import mmaudit.models.generation_evidence as generation_evidence_module
+from mmaudit.benchmark.models import ModelBenchmarkDimension, load_model_benchmark_corpus
+from mmaudit.constants import ALL_MODEL_ROLES, ALL_SPECIALIST_ROLES
 from mmaudit.models.discovery import (
     DiscoveryCandidateRoute,
     DiscoveryEndpointMetadataBinding,
@@ -46,8 +51,13 @@ from mmaudit.models.qualification import (
     QualificationVerification,
     SelectionVerification,
     TrustedBenchmarkVerificationEvidence,
+    VerifiedProductionQualification,
+    VerifiedTierAModelQualification,
+    _freshly_reverify_production_benchmarks,
+    _stable_generation_binding,
     evaluate_certified_ensemble,
     load_candidate_registry,
+    resolve_verified_production_qualification,
     seal_candidate_registry,
     seal_model_qualification_artifact,
     seal_model_qualification_result,
@@ -58,19 +68,37 @@ from mmaudit.models.qualification import (
     verify_model_qualification,
     verify_production_selection,
 )
+from mmaudit.models.qualification_workflow import (
+    candidate_generation_verification_requests,
+    run_qualification_workflow,
+)
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     ModelRequestValidationStatus,
     UsageRecord,
 )
+from mmaudit.models.usage import candidate_falsifier_role
 from mmaudit.orchestration.manifest import canonical_sha256
+from tests.qualification_support import synthetic_release_observation
 
 _NOW = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
-_ROLES = tuple(sorted((*ALL_SPECIALIST_ROLES, "whole_protocol_review")))
+_ROOT = Path(__file__).parents[2]
+_ROLES = tuple(
+    sorted(
+        {
+            *ALL_MODEL_ROLES,
+            *ALL_SPECIALIST_ROLES,
+            "whole_protocol_review",
+        }
+    )
+)
 
 
 def _sha(label: str) -> str:
     return hashlib.sha256(label.encode()).hexdigest()
+
+
+_PRODUCTION_CONFIG_SHA256 = _sha("production-effective-config")
 
 
 def _model_id(index: int) -> str:
@@ -243,6 +271,7 @@ def _usage_record(
         "certification_request": True,
         "endpoint_snapshot_sha256": candidate.endpoint_snapshot_sha256,
         "endpoint_pricing_sha256": candidate.pricing_snapshot_sha256,
+        "model_metadata_snapshot_sha256": candidate.model_metadata_snapshot_sha256,
         "catalog_identity_binding_sha256": canonical_sha256(
             {
                 "canonical_slug": candidate.canonical_model_slug,
@@ -372,7 +401,7 @@ def _test_trusted_benchmark_evidence(
         "response_schema_sha256": response_schema_sha256,
         "parsed_responses_sha256": parsed_responses_sha256,
         "generation_evidence_sha256": canonical_sha256(
-            [item.model_dump(mode="json") for item in attestations]
+            [_stable_generation_binding(item) for item in attestations]
         ),
         "case_ids": list(case_ids),
         "usage_records": [
@@ -387,7 +416,12 @@ def _test_trusted_benchmark_evidence(
         "execution_evidence": "real",
         "valid": True,
     }
-    payload["verification_sha256"] = canonical_sha256(payload)
+    payload["verification_sha256"] = canonical_sha256(
+        {
+            **payload,
+            "generation_attestations": [_stable_generation_binding(item) for item in attestations],
+        }
+    )
     return TrustedBenchmarkVerificationEvidence.model_validate(payload)
 
 
@@ -409,7 +443,7 @@ def _bundle(
     root_count: int = 6,
     failed_dimension: ModelBenchmarkDimension | None = None,
     benchmark_execution: ExecutionEvidenceKind = ExecutionEvidenceKind.REAL,
-    validity_days: int = 20,
+    validity_days: int = 6,
 ) -> _Bundle:
     model_ids = tuple(_model_id(index) for index in range(8))
     grouped_ids = {
@@ -591,12 +625,14 @@ def _bundle(
         selection = seal_production_selection(
             artifact=artifact,
             verification=verification,
+            production_effective_config_sha256=_PRODUCTION_CONFIG_SHA256,
             selected_at=_NOW + timedelta(hours=3),
         )
         selection_verification = verify_production_selection(
             selection=selection,
             artifact=artifact,
             qualification_verification=verification,
+            expected_production_effective_config_sha256=_PRODUCTION_CONFIG_SHA256,
             now=_NOW + timedelta(hours=4),
         )
     return _Bundle(
@@ -609,6 +645,37 @@ def _bundle(
         selection=selection,
         selection_verification=selection_verification,
     )
+
+
+def _resolve_for_test(
+    bundle: _Bundle,
+    *,
+    fresh_evidence: tuple[TrustedBenchmarkVerificationEvidence, ...] | None = None,
+    **overrides: object,
+) -> VerifiedProductionQualification:
+    """Exercise resolver logic while the fresh-provider boundary is tested separately."""
+
+    arguments: dict[str, object] = {
+        "artifact": bundle.artifact,
+        "registry": bundle.registry,
+        "policy": bundle.policy,
+        "expected_bindings": bundle.bindings,
+        "benchmark_reports": (),
+        "benchmark_corpus": None,
+        "trusted_generation_verification": None,
+        "trusted_release_observation": synthetic_release_observation(
+            bundle.bindings,
+            observed_at=_NOW + timedelta(hours=3),
+        ),
+        "production_effective_config_sha256": _PRODUCTION_CONFIG_SHA256,
+        "now": _NOW + timedelta(hours=3),
+    }
+    arguments.update(overrides)
+    with patch(
+        "mmaudit.models.qualification._freshly_reverify_production_benchmarks",
+        return_value=(bundle.benchmark_evidence if fresh_evidence is None else fresh_evidence),
+    ):
+        return resolve_verified_production_qualification(**arguments)  # type: ignore[arg-type]
 
 
 def test_pending_lineage_review_loads_and_tier_a_scores_but_is_not_eligible(
@@ -634,6 +701,7 @@ def test_pending_lineage_review_loads_and_tier_a_scores_but_is_not_eligible(
         seal_production_selection(
             artifact=bundle.artifact,
             verification=bundle.verification,
+            production_effective_config_sha256=_PRODUCTION_CONFIG_SHA256,
             selected_at=_NOW + timedelta(hours=3),
         )
 
@@ -685,6 +753,474 @@ def test_complete_real_tier_a_artifact_and_all_eligible_selection_verify() -> No
     assert {model.exact_model_id for model in bundle.selection.models} == set(
         bundle.verification.eligible_tier_a_model_ids
     )
+
+
+def test_verified_production_capability_is_opaque_current_and_exact() -> None:
+    bundle = _bundle()
+    verified_at = _NOW + timedelta(hours=3)
+
+    capability = _resolve_for_test(
+        bundle,
+        production_effective_config_sha256=_PRODUCTION_CONFIG_SHA256,
+        now=verified_at,
+    )
+
+    assert capability.require_current(now=verified_at) is capability
+    assert capability.bindings == bundle.bindings
+    assert capability.expected_bindings_sha256 == canonical_sha256(
+        bundle.bindings.model_dump(mode="json")
+    )
+    assert capability.artifact_sha256 == bundle.artifact.artifact_sha256
+    assert capability.qualification_verification_sha256 == (bundle.verification.verification_sha256)
+    assert capability.production_effective_config_sha256 == _PRODUCTION_CONFIG_SHA256
+    assert bundle.selection is not None
+    assert bundle.selection.production_effective_config_sha256 == _PRODUCTION_CONFIG_SHA256
+    assert capability.production_selection_sha256 == bundle.selection.selection_sha256
+    selection_verification = verify_production_selection(
+        selection=bundle.selection,
+        artifact=bundle.artifact,
+        qualification_verification=bundle.verification,
+        expected_production_effective_config_sha256=_PRODUCTION_CONFIG_SHA256,
+        now=verified_at,
+    )
+    assert capability.selection_verification_sha256 == (selection_verification.verification_sha256)
+    assert len(capability.models) == 8
+    assert len({model.root_lineage for model in capability.models}) == 6
+    expected_results = {result.exact_model_id: result for result in bundle.artifact.results}
+    expected_evidence = {
+        evidence.exact_model_id: evidence for evidence in bundle.benchmark_evidence
+    }
+    for model in capability.models:
+        result = expected_results[model.exact_model_id]
+        evidence = expected_evidence[model.exact_model_id]
+        assert model.qualification_disposition is QualificationDisposition.TIER_A
+        assert model.qualification_result_sha256 == result.result_sha256
+        assert model.benchmark_report_sha256 == result.benchmark_report_sha256
+        assert model.benchmark_verification_sha256 == (result.benchmark_verification_sha256)
+        assert model.fresh_benchmark_evidence_sha256 == evidence.fresh_evidence_sha256
+        assert model.endpoint_snapshot_sha256 == result.endpoint_snapshot_sha256
+        assert model.model_metadata_snapshot_sha256 == (result.model_metadata_snapshot_sha256)
+        assert model.pricing_snapshot_sha256 == result.pricing_snapshot_sha256
+        assert model.approved_roles == result.approved_roles
+        assert model.expires_at == result.expires_at
+        assert model.quality_measurement_sha256 == result.quality_measurement_sha256
+        assert model.quality_measurement == f"sha256:{result.quality_measurement_sha256}"
+        assert model.benchmark_case_count > 0
+    assert capability.model_for(_model_id(0), now=verified_at).exact_model_id == _model_id(0)
+    assert len(capability.production_selection_sha256) == 64
+    assert len(capability.selection_verification_sha256) == 64
+    assert len(capability.capability_sha256) == 64
+    with pytest.raises(FrozenInstanceError):
+        capability.models = ()  # type: ignore[misc]
+    with pytest.raises(TypeError, match="only be issued"):
+        VerifiedProductionQualification()
+    with pytest.raises(ValueError, match="lacks verified"):
+        capability.model_for("other/unqualified-model-1", now=verified_at)
+    with pytest.raises(ValueError, match="expired"):
+        capability.require_current(now=capability.expires_at)
+    object.__setattr__(capability, "capability_sha256", _sha("tampered-capability"))
+    with pytest.raises(ValueError, match="integrity"):
+        capability.require_current(now=verified_at)
+
+
+def test_verified_production_capability_records_fresh_full_benchmark_evidence() -> None:
+    bundle = _bundle()
+    historical = bundle.benchmark_evidence[0]
+    refreshed_attestations = []
+    for attestation in historical.generation_attestations:
+        payload = attestation.model_dump(mode="json", exclude={"evidence_sha256"})
+        payload["retrieved_at"] = (
+            (attestation.retrieved_at + timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+        )
+        payload["evidence_sha256"] = canonical_sha256(payload)
+        refreshed_attestations.append(OpenRouterGenerationEvidence.model_validate(payload))
+    evidence_payload = historical.model_dump(mode="json")
+    evidence_payload["generation_attestations"] = [
+        item.model_dump(mode="json") for item in refreshed_attestations
+    ]
+    refreshed = TrustedBenchmarkVerificationEvidence.model_validate(evidence_payload)
+    capability = _resolve_for_test(
+        bundle,
+        fresh_evidence=(refreshed, *bundle.benchmark_evidence[1:]),
+        production_effective_config_sha256=_PRODUCTION_CONFIG_SHA256,
+        now=_NOW + timedelta(hours=3),
+    )
+    model = capability.model_for(historical.exact_model_id, now=_NOW + timedelta(hours=3))
+
+    assert refreshed.stable_measurement_sha256 == historical.stable_measurement_sha256
+    assert refreshed.fresh_evidence_sha256 != historical.fresh_evidence_sha256
+    assert model.benchmark_verification_sha256 == historical.stable_measurement_sha256
+    assert model.fresh_benchmark_evidence_sha256 == refreshed.fresh_evidence_sha256
+
+
+def test_verified_qualification_capabilities_are_process_local_and_issuer_bound() -> None:
+    capability = _resolve_for_test(_bundle())
+    model = capability.models[0]
+
+    for value in (capability, model):
+        with pytest.raises(TypeError, match=r"cannot be (?:copied|serialized)"):
+            copy.copy(value)
+        with pytest.raises(TypeError, match=r"cannot be (?:copied|serialized)"):
+            copy.deepcopy(value)
+        with pytest.raises(TypeError, match="cannot be serialized"):
+            pickle.dumps(value)
+
+    forged = object.__new__(VerifiedProductionQualification)
+    with pytest.raises(ValueError, match="malformed bindings"):
+        forged.require_current(now=_NOW + timedelta(hours=3))
+
+    forged_model = object.__new__(VerifiedTierAModelQualification)
+    object.__setattr__(capability, "models", (forged_model, *capability.models[1:]))
+    with pytest.raises(ValueError, match="invalid model type"):
+        capability.require_current(now=_NOW + timedelta(hours=3))
+
+
+def test_expired_qualification_cannot_be_revived_with_backdated_resolver_time() -> None:
+    bundle = _bundle()
+    observed_at = _NOW + timedelta(days=8)
+    observation = synthetic_release_observation(
+        bundle.bindings,
+        observed_at=observed_at,
+    )
+
+    with pytest.raises(ValueError, match="trusted release observation"):
+        _resolve_for_test(
+            bundle,
+            trusted_release_observation=observation,
+            now=_NOW + timedelta(hours=3),
+        )
+    with pytest.raises(ValueError, match="expired"):
+        _resolve_for_test(
+            bundle,
+            trusted_release_observation=observation,
+            now=observed_at,
+        )
+
+
+def test_quality_measurement_is_stable_across_verification_and_time_refresh() -> None:
+    original = _bundle().artifact.results[0]
+    refreshed = seal_model_qualification_result(
+        exact_model_id=original.exact_model_id,
+        canonical_model_slug=original.canonical_model_slug,
+        root_lineage=original.root_lineage,
+        approved_provider_endpoint=original.approved_provider_endpoint,
+        approved_provider_name=original.approved_provider_name,
+        endpoint_snapshot_sha256=original.endpoint_snapshot_sha256,
+        model_metadata_snapshot_sha256=original.model_metadata_snapshot_sha256,
+        pricing_snapshot_sha256=original.pricing_snapshot_sha256,
+        benchmark_report_sha256=original.benchmark_report_sha256,
+        benchmark_verification_sha256=_sha("fresh-verification"),
+        disposition=original.disposition,
+        dimensions=original.dimensions,
+        overall_score=original.overall_score,
+        approved_roles=original.approved_roles,
+        evaluated_at=original.evaluated_at + timedelta(days=1),
+        expires_at=original.expires_at + timedelta(days=1) if original.expires_at else None,
+    )
+
+    assert refreshed.quality_measurement_sha256 == original.quality_measurement_sha256
+    assert refreshed.result_sha256 != original.result_sha256
+
+
+def test_fresh_production_reverification_replays_and_rescores_frozen_workflow() -> None:
+    from tests.unit import test_qualification_workflow as workflow_fixtures
+
+    manifest, discovery_evidence, registry = workflow_fixtures._candidate_inputs()
+    report = workflow_fixtures._as_real_report(
+        asyncio.run(workflow_fixtures._mock_report()),
+        candidate=registry.candidates[0],
+    )
+    portfolio, campaign_verification = workflow_fixtures._portfolio_evidence(
+        registry=registry,
+        report=report,
+    )
+    requests = candidate_generation_verification_requests(
+        registry=registry,
+        benchmark_reports=(report,),
+    )
+    attestations = tuple(
+        case.generation_evidence
+        for case in report.results[0].cases
+        if case.generation_evidence is not None
+    )
+    trusted_generation_verification = (
+        generation_evidence_module._issue_trusted_generation_verification(
+            requests=requests,
+            attestations=attestations,
+            verification_started_at=min(item.retrieved_at for item in attestations),
+            issuer=generation_evidence_module._TRUSTED_GENERATION_VERIFICATION_ISSUER,
+        )
+    )
+    corpus = load_model_benchmark_corpus(_ROOT / "benchmarks" / "model_corpus" / "manifest.json")
+    release_bindings = workflow_fixtures._release_bindings(report)
+    workflow = run_qualification_workflow(
+        candidate_registry=registry,
+        discovery_run_manifest=manifest,
+        discovery_evidence=discovery_evidence,
+        policy=workflow_fixtures._policy(),
+        benchmark_suite=corpus,
+        benchmark_portfolio=portfolio,
+        benchmark_reports=(report,),
+        release_bindings=release_bindings,
+        trusted_campaign_verification=campaign_verification,
+        trusted_generation_verification=trusted_generation_verification,
+        trusted_release_observation=synthetic_release_observation(
+            release_bindings,
+            observed_at=workflow_fixtures.NOW + timedelta(hours=1),
+        ),
+        evaluated_at=workflow_fixtures.NOW + timedelta(hours=1),
+        qualification_expires_at=workflow_fixtures.NOW + timedelta(days=6),
+    )
+
+    refreshed_attestations = []
+    for attestation in attestations:
+        payload = attestation.model_dump(mode="json", exclude={"evidence_sha256"})
+        payload["retrieved_at"] = (
+            (attestation.retrieved_at + timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+        )
+        payload["evidence_sha256"] = canonical_sha256(payload)
+        refreshed_attestations.append(OpenRouterGenerationEvidence.model_validate(payload))
+    refreshed_generation_verification = (
+        generation_evidence_module._issue_trusted_generation_verification(
+            requests=requests,
+            attestations=tuple(refreshed_attestations),
+            verification_started_at=min(item.retrieved_at for item in refreshed_attestations),
+            issuer=generation_evidence_module._TRUSTED_GENERATION_VERIFICATION_ISSUER,
+        )
+    )
+    freshly_verified = _freshly_reverify_production_benchmarks(
+        artifact=workflow.qualification_artifact,
+        registry=workflow.updated_registry,
+        benchmark_reports=workflow.benchmark_reports,
+        benchmark_corpus=corpus,
+        trusted_generation_verification=refreshed_generation_verification,
+    )
+
+    assert freshly_verified[0].verification_sha256 == (
+        workflow.trusted_benchmark_evidence[0].verification_sha256
+    )
+    assert freshly_verified[0].stable_measurement_sha256 == (
+        workflow.trusted_benchmark_evidence[0].stable_measurement_sha256
+    )
+    assert freshly_verified[0].fresh_evidence_sha256 != (
+        workflow.trusted_benchmark_evidence[0].fresh_evidence_sha256
+    )
+    assert freshly_verified[0].generation_attestations != (
+        workflow.trusted_benchmark_evidence[0].generation_attestations
+    )
+    assert all(evidence.case_ids for evidence in freshly_verified)
+    assert all(
+        evidence.execution_evidence is ExecutionEvidenceKind.REAL for evidence in freshly_verified
+    )
+
+
+def test_fresh_production_reverification_rejects_self_declared_benchmark_versions() -> None:
+    from tests.unit import test_qualification_workflow as workflow_fixtures
+
+    manifest, discovery_evidence, registry = workflow_fixtures._candidate_inputs()
+    report = workflow_fixtures._as_real_report(
+        asyncio.run(workflow_fixtures._mock_report()),
+        candidate=registry.candidates[0],
+    )
+    portfolio, campaign_verification = workflow_fixtures._portfolio_evidence(
+        registry=registry,
+        report=report,
+    )
+    requests = candidate_generation_verification_requests(
+        registry=registry,
+        benchmark_reports=(report,),
+    )
+    attestations = tuple(
+        case.generation_evidence
+        for case in report.results[0].cases
+        if case.generation_evidence is not None
+    )
+    trusted_generation_verification = (
+        generation_evidence_module._issue_trusted_generation_verification(
+            requests=requests,
+            attestations=attestations,
+            verification_started_at=min(item.retrieved_at for item in attestations),
+            issuer=generation_evidence_module._TRUSTED_GENERATION_VERIFICATION_ISSUER,
+        )
+    )
+    corpus = load_model_benchmark_corpus(_ROOT / "benchmarks" / "model_corpus" / "manifest.json")
+    release_bindings = workflow_fixtures._release_bindings(report)
+    workflow = run_qualification_workflow(
+        candidate_registry=registry,
+        discovery_run_manifest=manifest,
+        discovery_evidence=discovery_evidence,
+        policy=workflow_fixtures._policy(),
+        benchmark_suite=corpus,
+        benchmark_portfolio=portfolio,
+        benchmark_reports=(report,),
+        release_bindings=release_bindings,
+        trusted_campaign_verification=campaign_verification,
+        trusted_generation_verification=trusted_generation_verification,
+        trusted_release_observation=synthetic_release_observation(
+            release_bindings,
+            observed_at=workflow_fixtures.NOW + timedelta(hours=1),
+        ),
+        evaluated_at=workflow_fixtures.NOW + timedelta(hours=1),
+        qualification_expires_at=workflow_fixtures.NOW + timedelta(days=6),
+    )
+
+    for binding_name in (
+        "benchmark_corpus_version",
+        "benchmark_ground_truth_version",
+    ):
+        mismatched_bindings = QualificationBindings.model_validate(
+            workflow.qualification_artifact.bindings.model_copy(
+                update={binding_name: "self-declared-version"}
+            ).model_dump(mode="json")
+        )
+        mismatched_artifact = seal_model_qualification_artifact(
+            created_at=workflow.qualification_artifact.created_at,
+            bindings=mismatched_bindings,
+            results=workflow.qualification_artifact.results,
+        )
+
+        with pytest.raises(ValueError, match="corpus differs from qualification bindings"):
+            _freshly_reverify_production_benchmarks(
+                artifact=mismatched_artifact,
+                registry=workflow.updated_registry,
+                benchmark_reports=workflow.benchmark_reports,
+                benchmark_corpus=corpus,
+                trusted_generation_verification=trusted_generation_verification,
+            )
+
+
+def test_serialized_qualification_bundle_alone_cannot_mint_production_capability() -> None:
+    bundle = _bundle()
+    corpus = load_model_benchmark_corpus(_ROOT / "benchmarks" / "model_corpus" / "manifest.json")
+
+    with pytest.raises(ValueError, match="fresh authenticated generation verification"):
+        resolve_verified_production_qualification(
+            artifact=bundle.artifact,
+            registry=bundle.registry,
+            policy=bundle.policy,
+            expected_bindings=bundle.bindings,
+            benchmark_reports=(),
+            benchmark_corpus=corpus,
+            trusted_generation_verification=None,  # type: ignore[arg-type]
+            trusted_release_observation=synthetic_release_observation(
+                bundle.bindings,
+                observed_at=_NOW + timedelta(hours=3),
+            ),
+            production_effective_config_sha256=_PRODUCTION_CONFIG_SHA256,
+            now=_NOW + timedelta(hours=3),
+        )
+
+
+def test_verified_production_capability_rejects_shape_staleness_and_binding_mismatch() -> None:
+    bundle = _bundle()
+
+    with pytest.raises(ValueError, match="production effective configuration hash"):
+        _resolve_for_test(
+            bundle,
+            production_effective_config_sha256="not-a-hash",
+            now=_NOW + timedelta(hours=3),
+        )
+    with pytest.raises(ValueError, match="fully validated typed value"):
+        _resolve_for_test(
+            bundle,
+            artifact=_sha("shape-only"),  # type: ignore[arg-type]
+            production_effective_config_sha256=_PRODUCTION_CONFIG_SHA256,
+            now=_NOW + timedelta(hours=3),
+        )
+    with pytest.raises(ValueError, match="expired"):
+        expired_at = _NOW + timedelta(days=21)
+        _resolve_for_test(
+            bundle,
+            production_effective_config_sha256=_PRODUCTION_CONFIG_SHA256,
+            trusted_release_observation=synthetic_release_observation(
+                bundle.bindings,
+                observed_at=expired_at,
+            ),
+            now=expired_at,
+        )
+    mismatched = bundle.bindings.model_copy(
+        update={"source_tree_sha256": _sha("different-source-tree")}
+    )
+    with pytest.raises(ValueError, match="differs from qualification bindings"):
+        _resolve_for_test(
+            bundle,
+            expected_bindings=mismatched,
+            production_effective_config_sha256=_PRODUCTION_CONFIG_SHA256,
+            now=_NOW + timedelta(hours=3),
+        )
+
+
+def test_verified_production_capability_rejects_failed_or_incomplete_evidence() -> None:
+    failed_threshold = _bundle(failed_dimension=ModelBenchmarkDimension.ACCESS_CONTROL)
+    with pytest.raises(ValueError, match="thresholds"):
+        _resolve_for_test(
+            failed_threshold,
+            production_effective_config_sha256=_PRODUCTION_CONFIG_SHA256,
+            now=_NOW + timedelta(hours=3),
+        )
+
+    bundle = _bundle()
+    with pytest.raises(ValueError, match="exact non-empty benchmark evidence"):
+        _resolve_for_test(
+            bundle,
+            fresh_evidence=bundle.benchmark_evidence[:-1],
+            production_effective_config_sha256=_PRODUCTION_CONFIG_SHA256,
+            now=_NOW + timedelta(hours=3),
+        )
+    empty_cases = bundle.benchmark_evidence[0].model_copy(
+        update={"case_ids": (), "usage_records": ()}
+    )
+    with pytest.raises(ValueError):
+        _resolve_for_test(
+            bundle,
+            fresh_evidence=(empty_cases, *bundle.benchmark_evidence[1:]),
+            production_effective_config_sha256=_PRODUCTION_CONFIG_SHA256,
+            now=_NOW + timedelta(hours=3),
+        )
+    non_real = _bundle(benchmark_execution=ExecutionEvidenceKind.MOCK)
+    with pytest.raises(ValueError):
+        _resolve_for_test(
+            non_real,
+            production_effective_config_sha256=_PRODUCTION_CONFIG_SHA256,
+            now=_NOW + timedelta(hours=3),
+        )
+
+
+def test_verified_production_capability_rejects_inconclusive_artifact_result() -> None:
+    bundle = _bundle()
+    original = bundle.artifact.results[0]
+    incomplete = seal_model_qualification_result(
+        exact_model_id=original.exact_model_id,
+        canonical_model_slug=original.canonical_model_slug,
+        root_lineage=original.root_lineage,
+        approved_provider_endpoint=original.approved_provider_endpoint,
+        approved_provider_name=original.approved_provider_name,
+        endpoint_snapshot_sha256=original.endpoint_snapshot_sha256,
+        model_metadata_snapshot_sha256=original.model_metadata_snapshot_sha256,
+        pricing_snapshot_sha256=original.pricing_snapshot_sha256,
+        benchmark_report_sha256=original.benchmark_report_sha256,
+        benchmark_verification_sha256=None,
+        disposition=QualificationDisposition.INCONCLUSIVE,
+        dimensions=(),
+        overall_score=0.0,
+        approved_roles=original.approved_roles,
+        evaluated_at=original.evaluated_at,
+        expires_at=None,
+        failure_reasons=("synthetic_incomplete_verification",),
+    )
+    artifact = seal_model_qualification_artifact(
+        created_at=bundle.artifact.created_at,
+        bindings=bundle.bindings,
+        results=(incomplete, *bundle.artifact.results[1:]),
+    )
+
+    with pytest.raises(ValueError, match="cannot contain incomplete"):
+        _resolve_for_test(
+            bundle,
+            artifact=artifact,
+            production_effective_config_sha256=_PRODUCTION_CONFIG_SHA256,
+            now=_NOW + timedelta(hours=3),
+        )
 
 
 @pytest.mark.parametrize("mode", ["missing", "mock"])
@@ -749,7 +1285,14 @@ def test_private_ground_truth_hash_is_required_at_qualification_boundary() -> No
     original = bundle.benchmark_evidence[0]
     payload = original.model_dump(mode="json", exclude={"verification_sha256"})
     payload["benchmark_ground_truth_sha256"] = _sha("different-ground-truth")
-    payload["verification_sha256"] = canonical_sha256(payload)
+    payload["verification_sha256"] = canonical_sha256(
+        {
+            **payload,
+            "generation_attestations": [
+                _stable_generation_binding(item) for item in original.generation_attestations
+            ],
+        }
+    )
     mismatched = TrustedBenchmarkVerificationEvidence.model_validate(payload)
     evidence = (mismatched, *bundle.benchmark_evidence[1:])
 
@@ -904,6 +1447,7 @@ def test_one_model_one_root_verification_cannot_be_selected() -> None:
         seal_production_selection(
             artifact=bundle.artifact,
             verification=undersized,
+            production_effective_config_sha256=_PRODUCTION_CONFIG_SHA256,
             selected_at=_NOW + timedelta(hours=3),
         )
 
@@ -927,10 +1471,16 @@ def test_wrong_release_binding_fails_closed() -> None:
 
 def test_expired_or_excessively_long_tier_a_evidence_fails_closed() -> None:
     expired = _bundle(validity_days=0)
+    stale_window = _bundle(validity_days=8)
     excessive = _bundle(validity_days=31)
 
     assert not expired.verification.valid
     assert any("expired" in error for error in expired.verification.errors)
+    assert not stale_window.verification.valid
+    assert any(
+        "benchmark evidence window exceeds policy" in error
+        for error in stale_window.verification.errors
+    )
     assert not excessive.verification.valid
     assert any("validity exceeds policy" in error for error in excessive.verification.errors)
 
@@ -947,11 +1497,25 @@ def test_selection_verifier_rejects_omission_and_expiry() -> None:
         selection=bundle.selection,
         artifact=bundle.artifact,
         qualification_verification=bundle.verification,
+        expected_production_effective_config_sha256=_PRODUCTION_CONFIG_SHA256,
         now=_NOW + timedelta(days=21),
     )
 
     assert not expired.valid
     assert "production selection is expired" in expired.errors
+
+    wrong_production_config = verify_production_selection(
+        selection=bundle.selection,
+        artifact=bundle.artifact,
+        qualification_verification=bundle.verification,
+        expected_production_effective_config_sha256=_sha("wrong-production-config"),
+        now=_NOW + timedelta(hours=4),
+    )
+    assert not wrong_production_config.valid
+    assert (
+        "production selection binds a different effective configuration"
+        in wrong_production_config.errors
+    )
 
 
 def _artifact_with_different_release_binding(bundle: _Bundle) -> ModelQualificationArtifact:
@@ -975,6 +1539,7 @@ def test_production_selection_rejects_cross_artifact_verification_splice() -> No
         seal_production_selection(
             artifact=different_artifact,
             verification=bundle.verification,
+            production_effective_config_sha256=_PRODUCTION_CONFIG_SHA256,
             selected_at=_NOW + timedelta(hours=3),
         )
 
@@ -992,6 +1557,7 @@ def test_selection_verifier_rejects_cross_artifact_verification_splice() -> None
         selection=spliced_selection,
         artifact=different_artifact,
         qualification_verification=bundle.verification,
+        expected_production_effective_config_sha256=_PRODUCTION_CONFIG_SHA256,
         now=_NOW + timedelta(hours=4),
     )
 
@@ -1020,12 +1586,14 @@ def test_ensemble_rejects_unrelated_valid_evidence_objects() -> None:
     different_selection = seal_production_selection(
         artifact=bundle.artifact,
         verification=bundle.verification,
+        production_effective_config_sha256=_sha("different-production-config"),
         selected_at=_NOW + timedelta(hours=4),
     )
     different_selection_verification = verify_production_selection(
         selection=different_selection,
         artifact=bundle.artifact,
         qualification_verification=bundle.verification,
+        expected_production_effective_config_sha256=_sha("different-production-config"),
         now=_NOW + timedelta(hours=5),
     )
     assert different_selection_verification.valid
@@ -1166,7 +1734,7 @@ def _production_evidence(bundle: _Bundle):
         records.append(
             _usage_record(
                 candidate=candidate,
-                role=f"specialist:falsifier:cross_exam_{index}",
+                role=candidate_falsifier_role("candidate-high", index + 1),
                 request_id=request_id,
                 qualification_artifact_sha256=bundle.artifact.artifact_sha256,
                 production_selection_sha256=bundle.selection.selection_sha256,
@@ -1186,7 +1754,54 @@ def _production_evidence(bundle: _Bundle):
             request_ids=tuple(falsifier_request_ids),
         ),
     )
-    return tuple(records), critical, ("candidate-high",), falsifier
+    return (
+        tuple(_bind_ensemble_usage(bundle, record) for record in records),
+        critical,
+        ("candidate-high",),
+        falsifier,
+    )
+
+
+def _bind_ensemble_usage(bundle: _Bundle, record: UsageRecord) -> UsageRecord:
+    assert bundle.selection is not None
+    assert bundle.selection_verification is not None
+    selected = next(
+        model for model in bundle.selection.models if model.exact_model_id == record.requested_model
+    )
+    result = next(
+        result
+        for result in bundle.artifact.results
+        if result.exact_model_id == record.requested_model
+    )
+    assert result.expires_at is not None
+    return record.model_copy(
+        update={
+            "routing": {
+                **record.routing,
+                "qualified_exact_model_id": selected.exact_model_id,
+                "qualified_canonical_model_slug": selected.canonical_model_slug,
+                "qualified_root_lineage": selected.root_lineage,
+                "qualified_provider_endpoint": selected.approved_provider_endpoint,
+                "qualified_provider_name": selected.approved_provider_name,
+                "qualified_endpoint_snapshot_sha256": result.endpoint_snapshot_sha256,
+                "qualified_model_metadata_snapshot_sha256": (result.model_metadata_snapshot_sha256),
+                "qualified_pricing_snapshot_sha256": result.pricing_snapshot_sha256,
+                "qualified_roles": list(selected.approved_roles),
+                "qualification_verified_at": bundle.verification.verified_at.isoformat(),
+                "qualification_expires_at": result.expires_at.isoformat(),
+                "qualification_artifact_sha256": bundle.artifact.artifact_sha256,
+                "qualification_verification_sha256": bundle.verification.verification_sha256,
+                "production_effective_config_sha256": (
+                    bundle.selection.production_effective_config_sha256
+                ),
+                "production_selection_sha256": bundle.selection.selection_sha256,
+                "selection_verification_sha256": (
+                    bundle.selection_verification.verification_sha256
+                ),
+                "qualification_result_sha256": result.result_sha256,
+            }
+        }
+    )
 
 
 def _evaluate(bundle: _Bundle, **updates):
@@ -1220,17 +1835,41 @@ def test_certified_ensemble_enforces_all_six_runtime_minima() -> None:
     assert len(evaluation.falsifier_candidate_lineages["candidate-high"]) == 2
 
 
-def test_unbound_model_requests_cannot_count_toward_the_ensemble() -> None:
+@pytest.mark.parametrize(
+    "binding",
+    [
+        "canonical_model",
+        "selected_provider_endpoint",
+        "selected_provider_name",
+        "endpoint_snapshot_sha256",
+        "endpoint_pricing_sha256",
+        "model_metadata_snapshot_sha256",
+        "qualified_exact_model_id",
+        "qualified_canonical_model_slug",
+        "qualified_root_lineage",
+        "qualified_provider_endpoint",
+        "qualified_provider_name",
+        "qualified_endpoint_snapshot_sha256",
+        "qualified_model_metadata_snapshot_sha256",
+        "qualified_pricing_snapshot_sha256",
+        "qualified_roles",
+        "qualification_verified_at",
+        "qualification_expires_at",
+        "qualification_artifact_sha256",
+        "qualification_verification_sha256",
+        "production_effective_config_sha256",
+        "production_selection_sha256",
+        "selection_verification_sha256",
+        "qualification_result_sha256",
+    ],
+)
+def test_each_missing_model_evidence_join_revokes_ensemble_credit(binding: str) -> None:
     bundle = _bundle()
     records, _critical, _candidates, _falsifier = _production_evidence(bundle)
     unbound = tuple(
         record.model_copy(
             update={
-                "routing": {
-                    key: value
-                    for key, value in record.routing.items()
-                    if key != "production_selection_sha256"
-                }
+                "routing": {key: value for key, value in record.routing.items() if key != binding}
             }
         )
         for record in records
@@ -1285,11 +1924,12 @@ def test_five_roots_or_one_falsifier_root_cannot_pass() -> None:
     }
     same_root_record = _usage_record(
         candidate=candidate_by_id[_model_id(6)],
-        role="specialist:falsifier:cross_exam_same_root",
+        role=candidate_falsifier_role("candidate-high", 2),
         request_id="falsifier-same-root",
         qualification_artifact_sha256=bundle.artifact.artifact_sha256,
         production_selection_sha256=bundle.selection.selection_sha256,
     )
+    same_root_record = _bind_ensemble_usage(bundle, same_root_record)
     records = (
         *(record for record in records if record.request_id != "falsifier-1"),
         same_root_record,
@@ -1312,7 +1952,7 @@ def test_five_roots_or_one_falsifier_root_cannot_pass() -> None:
 
 
 def _is_falsifier_test_role(role: str) -> bool:
-    return role.startswith("specialist:falsifier:")
+    return role.startswith(("candidate_falsifier:", "specialist:falsifier:"))
 
 
 def _requirement_state(evaluation, name: str) -> str:

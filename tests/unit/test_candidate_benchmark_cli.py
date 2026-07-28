@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 import mmaudit.cli as cli_module
 from mmaudit.benchmark.model_portfolio import load_model_benchmark_portfolio
 from mmaudit.benchmark.models import ModelBenchmarkSuite, load_model_benchmark_corpus
-from mmaudit.config import AuditConfig
+from mmaudit.config import AuditConfig, ConfigError
 from mmaudit.constants import ExitCode
 from mmaudit.models.candidate_benchmark import (
     CandidateBenchmarkExecutionResult,
@@ -124,6 +124,33 @@ def _ledger(tmp_path: Path, config: AuditConfig) -> Path:
         cap_usd=Decimal(str(config.execution.budget_usd)),
     )
     return path
+
+
+def test_candidate_qualification_rejects_alternate_self_hashed_policy(config_factory) -> None:
+    config = _pending_config(config_factory)
+    suite = load_model_benchmark_corpus(CORPUS_PATH)
+    policy = load_qualification_policy(POLICY_PATH)
+    lenient = seal_qualification_policy(
+        created_at=policy.created_at,
+        thresholds=tuple(
+            threshold.model_copy(update={"minimum_score": 0.5}) for threshold in policy.thresholds
+        ),
+        tier_a_minimum_overall_score=0.5,
+        maximum_validity_days=policy.maximum_validity_days,
+        maximum_benchmark_evidence_age_days=policy.maximum_benchmark_evidence_age_days,
+    )
+
+    cli_module._require_qualification_release_pins(
+        config=config,
+        policy=policy,
+        benchmark_suite=suite,
+    )
+    with pytest.raises(ConfigError, match="release pins"):
+        cli_module._require_qualification_release_pins(
+            config=config,
+            policy=lenient,
+            benchmark_suite=suite,
+        )
 
 
 def _candidate_args(
@@ -263,6 +290,11 @@ def test_candidate_mode_rejects_underfilled_policy_before_secret_access(
         maximum_validity_days=policy.maximum_validity_days,
     )
     monkeypatch.setattr(cli_module, "load_qualification_policy", lambda _path: underfilled)
+    monkeypatch.setattr(
+        cli_module,
+        "_require_qualification_release_pins",
+        lambda **_kwargs: None,
+    )
     secret_accessed = False
 
     def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:

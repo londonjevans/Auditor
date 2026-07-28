@@ -62,6 +62,7 @@ from mmaudit.config import (
     ConfigError,
     configured_model_ids,
     load_config,
+    require_maximum_assurance_qualification_pins,
     validate_model_independence,
 )
 from mmaudit.constants import DEFAULT_CONFIG_NAME, VERSION, ExitCode
@@ -89,8 +90,10 @@ from mmaudit.models.openrouter import OpenRouterClient, OpenRouterError
 from mmaudit.models.qualification import (
     CandidateRegistry,
     QualificationPolicy,
+    VerifiedProductionQualification,
     load_candidate_registry,
     load_qualification_policy,
+    resolve_verified_production_qualification,
     validate_candidate_registry_discovery,
     verify_model_qualification,
 )
@@ -100,10 +103,17 @@ from mmaudit.models.qualification_workflow import (
     load_qualification_workflow_bundle,
     refetch_trusted_benchmark_generations,
     run_qualification_workflow,
+    seal_qualification_release_bindings,
     validate_qualification_portfolio_readiness,
     write_qualification_workflow_bundle,
 )
 from mmaudit.models.registry import ModelRegistry, extract_zdr_model_ids
+from mmaudit.models.release_attestation import (
+    TrustedReleaseBindingObservation,
+    measure_qualification_release_environment,
+    observe_and_verify_qualification_release,
+    write_observed_qualification_release_bindings,
+)
 from mmaudit.models.runtime import build_openrouter_runtime_controls
 from mmaudit.models.schemas import (
     AuditProfile,
@@ -1005,6 +1015,11 @@ async def _execute_candidate_registry_benchmark(
 
     registry = load_candidate_registry(candidate_registry_path)
     qualification_policy = load_qualification_policy(qualification_policy_path)
+    _require_qualification_release_pins(
+        config=config,
+        policy=qualification_policy,
+        benchmark_suite=benchmark_corpus,
+    )
     discovery_manifest, discovery_evidence = load_model_discovery_run(discovery_run_path)
     validate_candidate_registry_discovery(
         registry=registry,
@@ -1035,7 +1050,7 @@ async def _execute_candidate_registry_benchmark(
     _preflight_model_benchmark_portfolio_output(output, budget.atomic_ledger)
     if Path(os.path.abspath(output)) == Path(os.path.abspath(campaign_journal_path)):
         raise ConfigError("candidate campaign journal and final portfolio must be distinct")
-    effective_config_sha256 = canonical_sha256(config.model_dump(mode="json"))
+    effective_config_sha256 = config.stable_hash()
     campaign: CandidateBenchmarkCampaignJournal
     if resume_campaign:
         campaign = resume_candidate_benchmark_campaign(
@@ -1092,6 +1107,94 @@ async def _execute_candidate_registry_benchmark(
         raise typer.Exit(ExitCode.MODEL_FAILURE)
 
 
+@models_app.command("observe-release-bindings")
+def models_observe_release_bindings(
+    config_path: ConfigOption,
+    candidate_registry: Annotated[
+        Path,
+        typer.Option("--candidate-registry", help="Self-hashed candidate-registry TOML."),
+    ],
+    corpus: Annotated[
+        Path,
+        typer.Option("--corpus", help="Self-hashed blinded benchmark corpus."),
+    ],
+    ground_truth: Annotated[
+        Path,
+        typer.Option("--ground-truth", help="Separately sealed private benchmark truth."),
+    ],
+    portfolio: Annotated[
+        Path,
+        typer.Option("--portfolio", help="Atomic private model-benchmark portfolio."),
+    ],
+    release_source_root: Annotated[
+        Path,
+        typer.Option(
+            "--release-source-root",
+            help="Clean Git root containing the exact executing mmaudit release.",
+        ),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            help="Fresh mode-0600 bindings path outside the release source tree.",
+        ),
+    ],
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Measure and publish exact non-secret qualification release bindings."""
+
+    config = load_config(config_path)
+    registry = load_candidate_registry(candidate_registry)
+    benchmark_suite = load_model_benchmark_corpus(
+        corpus,
+        ground_truth_path=ground_truth,
+    )
+    _benchmark_portfolio, reports = load_model_benchmark_portfolio(
+        portfolio,
+        candidate_registry=registry,
+        corpus=benchmark_suite,
+    )
+    prompt_sha256, response_schema_sha256 = _benchmark_request_binding_hashes(reports)
+    backend = default_isolation_backend(
+        config.reproduction.isolation_backend,
+        rootless_container_image=config.reproduction.rootless_container_image,
+        rootless_container_runtime=config.reproduction.rootless_container_runtime,
+    )
+    measurement = measure_qualification_release_environment(
+        source_root=release_source_root,
+        isolation_backend=backend,
+    )
+    source_root = release_source_root.resolve(strict=True)
+    output_absolute = Path(os.path.abspath(output))
+    try:
+        output_absolute.relative_to(source_root)
+    except ValueError:
+        pass
+    else:
+        raise ConfigError("release binding output must be outside the release source tree")
+    bindings = seal_qualification_release_bindings(
+        source_commit=measurement.source_commit,
+        source_tree_sha256=measurement.source_tree_sha256,
+        effective_config_sha256=config.stable_hash(),
+        prompt_sha256=prompt_sha256,
+        response_schema_sha256=response_schema_sha256,
+        toolchain_sha256=measurement.toolchain_sha256,
+        isolation_sha256=measurement.isolation_sha256,
+        benchmark_corpus_version=benchmark_suite.corpus.schema_version,
+        benchmark_ground_truth_version=benchmark_suite.ground_truth.schema_version,
+    )
+    write_observed_qualification_release_bindings(output_absolute, bindings)
+    Console(no_color=no_color).print(
+        f"bindings_sha256={bindings.bindings_sha256} "
+        f"source_commit={bindings.source_commit} "
+        f"source_tree_sha256={bindings.source_tree_sha256} "
+        f"toolchain_sha256={bindings.toolchain_sha256} "
+        f"isolation_sha256={bindings.isolation_sha256}",
+        markup=False,
+    )
+
+
 @models_app.command("qualify")
 def models_qualify(
     config_path: ConfigOption,
@@ -1145,6 +1248,13 @@ def models_qualify(
             help="Self-hashed non-secret release bindings JSON.",
         ),
     ],
+    release_source_root: Annotated[
+        Path,
+        typer.Option(
+            "--release-source-root",
+            help="Clean Git root containing the exact executing mmaudit release.",
+        ),
+    ],
     qualification_expires_at: Annotated[
         str,
         typer.Option(
@@ -1181,6 +1291,11 @@ def models_qualify(
             corpus,
             ground_truth_path=ground_truth,
         )
+        _require_qualification_release_pins(
+            config=config,
+            policy=qualification_policy,
+            benchmark_suite=benchmark_suite,
+        )
         benchmark_portfolio, reports = load_model_benchmark_portfolio(
             portfolio,
             candidate_registry=registry,
@@ -1202,13 +1317,18 @@ def models_qualify(
             qualification_policy=qualification_policy,
         )
         expiry = _parse_qualification_timestamp(qualification_expires_at)
-        evaluated_at = datetime.now(UTC).replace(microsecond=0)
         trusted_generation_verification = await _refetch_qualification_generations(
             config=config,
             secrets_env_file=secrets_env_file,
             registry=registry,
             reports=reports,
         )
+        trusted_release_observation = _observe_qualification_release(
+            config=config,
+            release_bindings=bindings,
+            release_source_root=release_source_root,
+        )
+        evaluated_at = trusted_release_observation.observed_at
         bundle = run_qualification_workflow(
             candidate_registry=registry,
             discovery_run_manifest=discovery_manifest,
@@ -1220,6 +1340,7 @@ def models_qualify(
             release_bindings=bindings,
             trusted_campaign_verification=trusted_campaign_verification,
             trusted_generation_verification=trusted_generation_verification,
+            trusted_release_observation=trusted_release_observation,
             evaluated_at=evaluated_at,
             qualification_expires_at=expiry,
         )
@@ -1288,6 +1409,13 @@ def models_verify_qualification(
             help="Original self-hashed release bindings JSON.",
         ),
     ],
+    release_source_root: Annotated[
+        Path,
+        typer.Option(
+            "--release-source-root",
+            help="Clean Git root containing the exact executing mmaudit release.",
+        ),
+    ],
     cost_ledger: Annotated[
         Path | None,
         typer.Option(
@@ -1310,6 +1438,11 @@ def models_verify_qualification(
         benchmark_suite = load_model_benchmark_corpus(
             corpus,
             ground_truth_path=ground_truth,
+        )
+        _require_qualification_release_pins(
+            config=config,
+            policy=qualification_policy,
+            benchmark_suite=benchmark_suite,
         )
         benchmark_portfolio, reports = load_model_benchmark_portfolio(
             portfolio,
@@ -1337,6 +1470,11 @@ def models_verify_qualification(
             registry=registry,
             reports=reports,
         )
+        trusted_release_observation = _observe_qualification_release(
+            config=config,
+            release_bindings=bindings,
+            release_source_root=release_source_root,
+        )
         recomputed = run_qualification_workflow(
             candidate_registry=registry,
             discovery_run_manifest=discovery_manifest,
@@ -1348,14 +1486,15 @@ def models_verify_qualification(
             release_bindings=bindings,
             trusted_campaign_verification=trusted_campaign_verification,
             trusted_generation_verification=trusted_generation_verification,
-            evaluated_at=frozen.evaluated_at,
+            trusted_release_observation=trusted_release_observation,
+            evaluated_at=trusted_release_observation.observed_at,
             qualification_expires_at=frozen.qualification_expires_at,
         )
         if _qualification_semantic_view(recomputed) != _qualification_semantic_view(frozen):
             raise ValueError(
                 "qualification bundle differs from authenticated semantic recomputation"
             )
-        verified_at = datetime.now(UTC).replace(microsecond=0)
+        verified_at = trusted_release_observation.observed_at
         current = verify_model_qualification(
             artifact=frozen.qualification_artifact,
             registry=frozen.updated_registry,
@@ -1531,6 +1670,12 @@ def scan_command(
         output=output,
         budget_usd=None,
         cost_ledger=None,
+        model_qualification_bundle=None,
+        model_qualification_policy=None,
+        model_qualification_release_bindings=None,
+        model_qualification_release_source_root=None,
+        model_qualification_corpus=None,
+        model_qualification_ground_truth=None,
         max_files=None,
         max_file_bytes=None,
         max_context_bytes=None,
@@ -1582,6 +1727,48 @@ def run_command(
         typer.Option(
             "--cost-ledger",
             help="Existing operator-controlled cumulative paid-provider ledger.",
+        ),
+    ] = None,
+    model_qualification_bundle: Annotated[
+        Path | None,
+        typer.Option(
+            "--model-qualification-bundle",
+            help="Private verified model-qualification workflow bundle.",
+        ),
+    ] = None,
+    model_qualification_policy: Annotated[
+        Path | None,
+        typer.Option(
+            "--model-qualification-policy",
+            help="Original self-hashed production qualification policy.",
+        ),
+    ] = None,
+    model_qualification_release_bindings: Annotated[
+        Path | None,
+        typer.Option(
+            "--model-qualification-release-bindings",
+            help="Current self-hashed qualification release bindings.",
+        ),
+    ] = None,
+    model_qualification_release_source_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--model-qualification-release-source-root",
+            help="Clean Git root containing the exact executing mmaudit release.",
+        ),
+    ] = None,
+    model_qualification_corpus: Annotated[
+        Path | None,
+        typer.Option(
+            "--model-qualification-corpus",
+            help="Original provider-visible model qualification corpus.",
+        ),
+    ] = None,
+    model_qualification_ground_truth: Annotated[
+        Path | None,
+        typer.Option(
+            "--model-qualification-ground-truth",
+            help="Original separately sealed model qualification ground truth.",
         ),
     ] = None,
     max_files: Annotated[int | None, typer.Option("--max-files", min=1)] = None,
@@ -1718,6 +1905,12 @@ def run_command(
         output=output,
         budget_usd=budget_usd,
         cost_ledger=cost_ledger,
+        model_qualification_bundle=model_qualification_bundle,
+        model_qualification_policy=model_qualification_policy,
+        model_qualification_release_bindings=model_qualification_release_bindings,
+        model_qualification_release_source_root=model_qualification_release_source_root,
+        model_qualification_corpus=model_qualification_corpus,
+        model_qualification_ground_truth=model_qualification_ground_truth,
         max_files=max_files,
         max_file_bytes=max_file_bytes,
         max_context_bytes=max_context_bytes,
@@ -2201,6 +2394,12 @@ def _execute_audit(
     output: Path | None,
     budget_usd: float | None,
     cost_ledger: Path | None,
+    model_qualification_bundle: Path | None,
+    model_qualification_policy: Path | None,
+    model_qualification_release_bindings: Path | None,
+    model_qualification_release_source_root: Path | None,
+    model_qualification_corpus: Path | None,
+    model_qualification_ground_truth: Path | None,
     max_files: int | None,
     max_file_bytes: int | None,
     max_context_bytes: int | None,
@@ -2268,6 +2467,16 @@ def _execute_audit(
             project_root=project_root,
             fork_rpc_url_env=fork_rpc_url_env,
         )
+        qualification_inputs_supplied = _validate_audit_production_qualification_inputs(
+            scanner_only=scanner_only,
+            bundle_path=model_qualification_bundle,
+            policy_path=model_qualification_policy,
+            release_bindings_path=model_qualification_release_bindings,
+            release_source_root=model_qualification_release_source_root,
+            corpus_path=model_qualification_corpus,
+            ground_truth_path=model_qualification_ground_truth,
+        )
+        production_qualification: VerifiedProductionQualification | None = None
         campaign_ledger: AtomicCostLedger | None = None
         if not scanner_only:
             ledger_path = _selected_cost_ledger_path(config, cost_ledger)
@@ -2281,6 +2490,20 @@ def _execute_audit(
                 cap_usd=Decimal(str(config.execution.budget_usd)),
             )
             operator_secrets = load_operator_secrets(secrets_env_file, required=True)
+        if qualification_inputs_supplied:
+            production_qualification = asyncio.run(
+                _load_audit_production_qualification(
+                    config=config,
+                    scanner_only=scanner_only,
+                    bundle_path=model_qualification_bundle,
+                    policy_path=model_qualification_policy,
+                    release_bindings_path=model_qualification_release_bindings,
+                    release_source_root=model_qualification_release_source_root,
+                    corpus_path=model_qualification_corpus,
+                    ground_truth_path=model_qualification_ground_truth,
+                    secrets_env_file=secrets_env_file,
+                )
+            )
         benchmark_required = (
             config.maximum_assurance.benchmark_gate or config.maximum_assurance.ci_mode
         )
@@ -2337,6 +2560,7 @@ def _execute_audit(
             cost_ledger=campaign_ledger,
             api_key=operator_secrets.openrouter_api_key,
             logger=logger,
+            production_qualification=production_qualification,
         )
         result = asyncio.run(
             pipeline.run(
@@ -2589,6 +2813,194 @@ def _require_real_qualification_portfolio(
     validate_qualification_portfolio_readiness(portfolio=portfolio, policy=policy)
 
 
+def _require_qualification_release_pins(
+    *,
+    config: AuditConfig,
+    policy: QualificationPolicy,
+    benchmark_suite: ModelBenchmarkSuite,
+) -> None:
+    """Bind every production qualification path to release-owned quality inputs."""
+
+    require_maximum_assurance_qualification_pins(
+        config,
+        policy_sha256=policy.policy_sha256,
+        corpus_version=benchmark_suite.corpus.schema_version,
+        corpus_sha256=benchmark_suite.corpus_sha256,
+        ground_truth_version=benchmark_suite.ground_truth.schema_version,
+        ground_truth_sha256=benchmark_suite.ground_truth_sha256,
+    )
+
+
+def _benchmark_request_binding_hashes(
+    reports: tuple[ModelBenchmarkReport, ...],
+) -> tuple[str, str]:
+    """Derive the prompt-set and response-schema hashes from complete report usage."""
+
+    prompt_sets: set[str] = set()
+    schema_hashes: set[str] = set()
+    if not reports:
+        raise ValueError("release binding observation requires non-empty benchmark reports")
+    for report in reports:
+        if len(report.results) != 1 or not report.results[0].cases:
+            raise ValueError("release binding observation requires exact one-model reports")
+        records = tuple(
+            case.usage_record for case in report.results[0].cases if case.usage_record is not None
+        )
+        if len(records) != len(report.results[0].cases):
+            raise ValueError("release binding observation requires complete benchmark usage")
+        prompt_sets.add(canonical_sha256(sorted(record.prompt_sha256 for record in records)))
+        schema_hashes.update(
+            record.schema_sha256 for record in records if record.schema_sha256 is not None
+        )
+        if any(record.schema_sha256 is None for record in records):
+            raise ValueError("release binding observation requires response-schema hashes")
+    if len(prompt_sets) != 1 or len(schema_hashes) != 1:
+        raise ValueError("benchmark request bindings differ across qualification reports")
+    return prompt_sets.pop(), schema_hashes.pop()
+
+
+def _observe_qualification_release(
+    *,
+    config: AuditConfig,
+    release_bindings: object,
+    release_source_root: Path,
+) -> TrustedReleaseBindingObservation:
+    """Reconcile release declarations against executing code and sealed isolation."""
+
+    backend = default_isolation_backend(
+        config.reproduction.isolation_backend,
+        rootless_container_image=config.reproduction.rootless_container_image,
+        rootless_container_runtime=config.reproduction.rootless_container_runtime,
+    )
+    return observe_and_verify_qualification_release(
+        release_bindings=release_bindings,
+        source_root=release_source_root,
+        isolation_backend=backend,
+    )
+
+
+def _validate_audit_production_qualification_inputs(
+    *,
+    scanner_only: bool,
+    bundle_path: Path | None,
+    policy_path: Path | None,
+    release_bindings_path: Path | None,
+    release_source_root: Path | None,
+    corpus_path: Path | None,
+    ground_truth_path: Path | None,
+) -> bool:
+    paths = (
+        bundle_path,
+        policy_path,
+        release_bindings_path,
+        release_source_root,
+        corpus_path,
+        ground_truth_path,
+    )
+    supplied = sum(path is not None for path in paths)
+    if scanner_only:
+        if supplied:
+            raise ConfigError("model qualification inputs are not accepted for a scanner-only run")
+        return False
+    if supplied not in {0, len(paths)}:
+        raise ConfigError(
+            "production qualification requires --model-qualification-bundle, "
+            "--model-qualification-policy, and "
+            "--model-qualification-release-bindings, "
+            "--model-qualification-release-source-root, --model-qualification-corpus, "
+            "and --model-qualification-ground-truth together"
+        )
+    return bool(supplied)
+
+
+async def _load_audit_production_qualification(
+    *,
+    config: AuditConfig,
+    scanner_only: bool,
+    bundle_path: Path | None,
+    policy_path: Path | None,
+    release_bindings_path: Path | None,
+    release_source_root: Path | None,
+    corpus_path: Path | None,
+    ground_truth_path: Path | None,
+    secrets_env_file: Path | None,
+) -> VerifiedProductionQualification | None:
+    supplied = _validate_audit_production_qualification_inputs(
+        scanner_only=scanner_only,
+        bundle_path=bundle_path,
+        policy_path=policy_path,
+        release_bindings_path=release_bindings_path,
+        release_source_root=release_source_root,
+        corpus_path=corpus_path,
+        ground_truth_path=ground_truth_path,
+    )
+    if not supplied:
+        return None
+
+    assert bundle_path is not None
+    assert policy_path is not None
+    assert release_bindings_path is not None
+    assert release_source_root is not None
+    assert corpus_path is not None
+    assert ground_truth_path is not None
+    bundle = load_qualification_workflow_bundle(bundle_path)
+    policy = load_qualification_policy(policy_path)
+    release_bindings = load_qualification_release_bindings(release_bindings_path)
+    benchmark_corpus = load_model_benchmark_corpus(
+        corpus_path,
+        ground_truth_path=ground_truth_path,
+    )
+    _require_qualification_release_pins(
+        config=config,
+        policy=policy,
+        benchmark_suite=benchmark_corpus,
+    )
+    if bundle.policy_sha256 != policy.policy_sha256:
+        raise ValueError("qualification bundle binds a different production policy")
+    if bundle.release_bindings != release_bindings:
+        raise ValueError("qualification bundle binds different release inputs")
+
+    artifact_bindings = bundle.qualification_artifact.bindings
+    release_projection = {
+        "source_commit": release_bindings.source_commit,
+        "source_tree_sha256": release_bindings.source_tree_sha256,
+        "effective_config_sha256": release_bindings.effective_config_sha256,
+        "prompt_sha256": release_bindings.prompt_sha256,
+        "response_schema_sha256": release_bindings.response_schema_sha256,
+        "toolchain_sha256": release_bindings.toolchain_sha256,
+        "isolation_sha256": release_bindings.isolation_sha256,
+        "benchmark_corpus_version": release_bindings.benchmark_corpus_version,
+        "benchmark_ground_truth_version": (release_bindings.benchmark_ground_truth_version),
+    }
+    artifact_projection = {key: getattr(artifact_bindings, key) for key in release_projection}
+    if artifact_projection != release_projection:
+        raise ValueError("qualification artifact differs from current release bindings")
+
+    trusted_generation_verification = await _refetch_qualification_generations(
+        config=config,
+        secrets_env_file=secrets_env_file,
+        registry=bundle.updated_registry,
+        reports=bundle.benchmark_reports,
+    )
+    trusted_release_observation = _observe_qualification_release(
+        config=config,
+        release_bindings=release_bindings,
+        release_source_root=release_source_root,
+    )
+    return resolve_verified_production_qualification(
+        artifact=bundle.qualification_artifact,
+        registry=bundle.updated_registry,
+        policy=policy,
+        expected_bindings=artifact_bindings,
+        benchmark_reports=bundle.benchmark_reports,
+        benchmark_corpus=benchmark_corpus,
+        trusted_generation_verification=trusted_generation_verification,
+        trusted_release_observation=trusted_release_observation,
+        production_effective_config_sha256=config.stable_hash(),
+        now=trusted_release_observation.observed_at,
+    )
+
+
 def _verify_qualification_campaign(
     *,
     config: AuditConfig,
@@ -2615,7 +3027,7 @@ def _verify_qualification_campaign(
         reports=reports,
         candidate_registry=registry,
         corpus=benchmark_suite,
-        effective_config_sha256=canonical_sha256(config.model_dump(mode="json")),
+        effective_config_sha256=config.stable_hash(),
         qualification_policy_sha256=qualification_policy.policy_sha256,
         cost_ledger=ledger,
     )
@@ -2706,6 +3118,7 @@ def _qualification_semantic_view(
 
     payload = bundle.model_dump(mode="json")
     payload.pop("workflow_sha256", None)
+    payload.pop("evaluated_at", None)
     evidence_items = payload.get("trusted_benchmark_evidence", [])
     if isinstance(evidence_items, list):
         for evidence in evidence_items:
@@ -2722,15 +3135,18 @@ def _qualification_semantic_view(
     artifact = payload.get("qualification_artifact")
     if isinstance(artifact, dict):
         artifact.pop("artifact_sha256", None)
+        artifact.pop("created_at", None)
         results = artifact.get("results", [])
         if isinstance(results, list):
             for result in results:
                 if isinstance(result, dict):
                     result.pop("benchmark_verification_sha256", None)
+                    result.pop("evaluated_at", None)
                     result.pop("result_sha256", None)
     verification = payload.get("qualification_verification")
     if isinstance(verification, dict):
         verification.pop("artifact_sha256", None)
+        verification.pop("verified_at", None)
         verification.pop("verification_sha256", None)
     return payload
 

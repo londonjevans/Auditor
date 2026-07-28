@@ -79,10 +79,13 @@ is only a human-readable cross-check.
 | `z-ai/glm-4.7` | `z-ai/glm-4.7-20251222` | `google-vertex` | Google | `16be59dea43a…` | Pending benchmark and lineage review |
 
 Metadata discovery does not qualify a model. The self-hashed Tier A policy
-`d286d1c5f9ed4a5a4c7c62eda7a55e9a1e23e972f21ffe64530ca34ed780224e`
+`f36e89643bb9c74c607222ac6690a5a2dc3d2ac98f0e36b941d3d1cccc293c83`
 was frozen before paid benchmark execution. It requires a perfect score in every
 dimension, at least two disjoint cases for every semantic dimension, three
-prompt-injection cases, and all sixteen structured responses. This is
+prompt-injection cases, all sixteen structured responses, and benchmark evidence
+no older than seven days. Qualification time and expiry are anchored to the
+campaign completion time, so replaying an older portfolio cannot mint a fresh
+validity window. This is
 request-level blinded qualification evidence, not a private holdout or a
 superiority benchmark. Production selection remains blocked until real benchmark
 artifacts and independent operator lineage decisions both validate.

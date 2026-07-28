@@ -17,6 +17,23 @@ from mmaudit.models.schemas import (
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
+def candidate_falsifier_role_prefix(candidate_id: str) -> str:
+    """Return the host-controlled role prefix binding a review to one candidate."""
+
+    if not isinstance(candidate_id, str) or not candidate_id:
+        raise ValueError("candidate falsifier role requires a non-empty candidate ID")
+    candidate_sha256 = hashlib.sha256(candidate_id.encode("utf-8")).hexdigest()
+    return f"candidate_falsifier:{candidate_sha256}"
+
+
+def candidate_falsifier_role(candidate_id: str, reviewer_index: int) -> str:
+    """Return the exact per-candidate role for one of two independent reviewers."""
+
+    if reviewer_index not in {1, 2}:
+        raise ValueError("candidate falsifier reviewer index must be one or two")
+    return f"{candidate_falsifier_role_prefix(candidate_id)}:reviewer_{reviewer_index}"
+
+
 def is_creditable_usage_record(
     record: UsageRecord,
     *,

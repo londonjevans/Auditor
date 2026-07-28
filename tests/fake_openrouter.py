@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 from typing import Any
@@ -313,6 +314,153 @@ def _extract_json(content: str, tag: str) -> Any:
     return json.loads(content.split(start, 1)[1].split(end, 1)[0])
 
 
+def _extract_optional_json(content: str, tag: str) -> Any | None:
+    start = f"<{tag}>\n"
+    end = f"\n</{tag}>"
+    if start not in content or end not in content:
+        return None
+    return json.loads(content.split(start, 1)[1].split(end, 1)[0])
+
+
+def _entity_citation(entity: dict[str, Any], *, symbol: str | None = None) -> dict[str, Any]:
+    resolved_symbol = symbol or entity["id"]
+    return {
+        "location": None,
+        "symbol": resolved_symbol,
+    }
+
+
+def _entry_entities(entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        entity
+        for entity in entities
+        if entity["kind"] in {"function", "constructor"}
+        and (entity["kind"] == "constructor" or entity.get("visibility") in {"public", "external"})
+    ]
+
+
+def _surface_review_path(
+    request: dict[str, Any],
+    *,
+    entities: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+    entities_by_id = {entity["id"]: entity for entity in entities}
+    entries = _entry_entities(entities)
+    entry_by_id = {entry["id"]: entry for entry in entries}
+    subject = entities_by_id.get(request["subject_id"])
+    allowed_symbols = set(request["allowed_symbols"])
+    allowed_locations = request["allowed_locations"]
+
+    if subject is not None:
+        terminal_symbol = next(
+            (
+                symbol
+                for symbol in (
+                    subject["id"],
+                    subject.get("signature"),
+                    subject["name"],
+                )
+                if symbol in allowed_symbols
+            ),
+            None,
+        )
+        if terminal_symbol is None:
+            return None
+        terminal = _entity_citation(subject, symbol=terminal_symbol)
+        if subject["id"] in entry_by_id and request["kind"] in {
+            "entry_point",
+            "privilege_function",
+            "asset_function",
+        }:
+            return terminal, [terminal]
+        if subject["kind"] in {"contract", "interface", "library"}:
+            entry = next(
+                (item for item in entries if item.get("contract_name") == subject["name"]),
+                None,
+            )
+            if entry is not None:
+                return terminal, [_entity_citation(entry), terminal]
+        edge = next(
+            (
+                edge
+                for edge in edges
+                if edge["target_id"] == subject["id"] and edge["source_id"] in entry_by_id
+            ),
+            None,
+        )
+        if edge is not None:
+            return terminal, [_entity_citation(entry_by_id[edge["source_id"]]), terminal]
+
+    if request["kind"] == "call" and allowed_locations:
+        location = allowed_locations[0]
+        edge = next(
+            (
+                item
+                for item in edges
+                if _fake_edge_subject_id(item) == request["subject_id"]
+                if item["path"] == location["path"]
+                and item["start_line"] == location["start_line"]
+                and item["end_line"] == location["end_line"]
+                and item["source_hash"] == location["content_hash"]
+                and item["source_id"] in entry_by_id
+            ),
+            None,
+        )
+        if edge is not None:
+            terminal = {"location": location, "symbol": None}
+            return terminal, [_entity_citation(entry_by_id[edge["source_id"]]), terminal]
+
+    if request["kind"] in {"invariant", "template"}:
+        reachable = [
+            (
+                entry_by_id[edge["source_id"]],
+                entities_by_id[edge["target_id"]],
+            )
+            for edge in edges
+            if edge["source_id"] in entry_by_id
+            and edge["target_id"] in entities_by_id
+            and {
+                entities_by_id[edge["target_id"]]["id"],
+                entities_by_id[edge["target_id"]]["name"],
+                entities_by_id[edge["target_id"]].get("signature"),
+            }
+            & allowed_symbols
+        ]
+        if reachable:
+            entry, terminal_entity = reachable[0]
+            terminal_symbol = next(
+                symbol
+                for symbol in (
+                    terminal_entity["id"],
+                    terminal_entity.get("signature"),
+                    terminal_entity["name"],
+                )
+                if symbol in allowed_symbols
+            )
+            terminal = {"location": None, "symbol": terminal_symbol}
+            return terminal, [_entity_citation(entry), terminal]
+    return None
+
+
+def _fake_edge_subject_id(edge: dict[str, Any]) -> str:
+    payload = {
+        "graph": edge["graph"],
+        "source_id": edge["source_id"],
+        "target_id": edge["target_id"],
+        "label": edge["label"],
+        "path": edge["path"],
+        "start_line": edge["start_line"],
+        "end_line": edge["end_line"],
+        "source_hash": edge["source_hash"],
+        "metadata": edge["metadata"],
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return f"graph-edge:{digest}"
+
+
 def _surface_reviews(
     user_prompt: str,
     *,
@@ -320,13 +468,52 @@ def _surface_reviews(
     status: str = "REVIEWED_NO_ISSUE",
 ) -> list[dict[str, Any]]:
     requests = _extract_json(user_prompt, "TRUSTED_MODEL_SURFACE_REQUESTS_JSON")
+    solidity_facts = _extract_optional_json(user_prompt, "DETERMINISTIC_SOLIDITY_FACTS_JSON") or {}
+    symbol_index = solidity_facts.get("symbol_index") or {}
+    graphs = solidity_facts.get("graphs") or {}
+    entities = symbol_index.get("entities") or []
+    edges = graphs.get("edges") or []
     reviews: list[dict[str, Any]] = []
     for request in requests:
-        allowed_locations = request["allowed_locations"]
-        allowed_symbols = request["allowed_symbols"]
-        symbol = allowed_symbols[0] if allowed_symbols else None
-        location = (
-            None if symbol is not None else (allowed_locations[0] if allowed_locations else None)
+        path_evidence = _surface_review_path(
+            request,
+            entities=entities,
+            edges=edges,
+        )
+        resolved_status = status if path_evidence is not None else "INCONCLUSIVE"
+        if path_evidence is None:
+            allowed_locations = request["allowed_locations"]
+            allowed_symbols = request["allowed_symbols"]
+            citation = {
+                "location": None if allowed_symbols else allowed_locations[0],
+                "symbol": allowed_symbols[0] if allowed_symbols else None,
+            }
+            path: list[dict[str, Any]] = []
+        else:
+            citation, path = path_evidence
+        anchor = citation["symbol"] or request["function_or_state_surface"] or request["contract"]
+        invariant_words = [
+            word.strip(".,:;()[]").casefold()
+            for word in request["invariant_considered"].split()
+            if len(word.strip(".,:;()[]")) >= 3
+        ]
+        invariant_anchor = next(
+            (
+                word
+                for word in invariant_words
+                if word.startswith(
+                    (
+                        "account",
+                        "asset",
+                        "author",
+                        "balance",
+                        "invariant",
+                        "state",
+                        "storage",
+                    )
+                )
+            ),
+            invariant_words[0] if invariant_words else "invariant",
         )
         reviews.append(
             {
@@ -334,13 +521,35 @@ def _surface_reviews(
                 "contract": request["contract"],
                 "function_or_state_surface": request["function_or_state_surface"],
                 "review_role": role,
-                "status": status,
-                "rationale": "The synthetic reviewer explicitly considered this supplied surface.",
-                "citation": {
-                    "location": location,
-                    "symbol": symbol,
-                },
+                "status": resolved_status,
+                "rationale": (
+                    f"The synthetic reviewer traced {anchor} through deterministic graph evidence."
+                ),
+                "citation": citation,
                 "invariant_considered": request["invariant_considered"],
+                "evidence_observations": [
+                    {
+                        "citation": citation,
+                        "observed_behavior": (
+                            f"{anchor} calls, checks, or writes the cited deterministic source state."
+                        ),
+                        "security_relevance": (
+                            f"{anchor} determines whether {invariant_anchor} integrity is preserved."
+                        ),
+                    }
+                ]
+                if path_evidence is not None
+                else [],
+                "reachability": (
+                    {
+                        "entry_point": path[0],
+                        "path": path,
+                        "actor_or_caller": "synthetic authorized caller",
+                        "preconditions": [],
+                    }
+                    if path_evidence is not None
+                    else None
+                ),
                 "assumptions": [],
                 "confidence": 0.9,
             }

@@ -39,10 +39,11 @@ def test_committed_tier_a_policy_is_frozen_and_non_vacuous() -> None:
     policy = load_qualification_policy(ROOT / "config" / "models.maximum-assurance.toml")
 
     assert policy.policy_sha256 == (
-        "d286d1c5f9ed4a5a4c7c62eda7a55e9a1e23e972f21ffe64530ca34ed780224e"
+        "f36e89643bb9c74c607222ac6690a5a2dc3d2ac98f0e36b941d3d1cccc293c83"
     )
     assert policy.tier_a_minimum_overall_score == 1.0
     assert policy.maximum_validity_days == 30
+    assert policy.maximum_benchmark_evidence_age_days == 7
     assert {threshold.dimension for threshold in policy.thresholds} == set(ModelBenchmarkDimension)
     assert all(threshold.minimum_cases >= 2 for threshold in policy.thresholds)
     assert all(threshold.minimum_score == 1.0 for threshold in policy.thresholds)

@@ -202,11 +202,23 @@ def build_run_evidence_manifest(
     solidity_coverage = _read_json_artifact(root, "solidity-coverage.json")
     model_coverage = _read_json_artifact(root, "model-review-coverage.json")
     scope_assessment = _read_json_artifact(root, "scope-assessment.json")
+    qualification_path = root / "model-qualification-runtime.json"
+    if qualification_path.is_symlink() or qualification_path.is_junction():
+        raise ValueError("run model qualification artifact may not be a link")
+    qualification_runtime = (
+        _read_json_artifact(root, "model-qualification-runtime.json")
+        if qualification_path.exists()
+        else None
+    )
 
     bindings = ManifestBindingSet(
         configuration=_configuration_bindings(config),
         prompts=_prompt_bindings(report),
-        models=_model_bindings(config, report),
+        models=_model_bindings(
+            config,
+            report,
+            qualification_runtime=qualification_runtime,
+        ),
         tools=_tool_bindings(config, report),
         compilers=_compiler_bindings(config, compilation),
         isolation=_isolation_bindings(config, report, compilation),
@@ -326,6 +338,8 @@ def _prompt_bindings(report: AuditReport) -> list[ManifestHashBinding]:
 def _model_bindings(
     config: AuditConfig,
     report: AuditReport,
+    *,
+    qualification_runtime: dict[str, Any] | None,
 ) -> list[ManifestHashBinding]:
     roles = [*ALL_MODEL_ROLES, *sorted(config.models.specialists)]
     registry = {
@@ -364,6 +378,133 @@ def _model_bindings(
                     "status": _detail(usage.status),
                 },
             )
+        )
+    bindings.extend(_qualification_bindings(qualification_runtime))
+    return sorted(bindings, key=lambda item: item.identifier)
+
+
+def _qualification_bindings(
+    payload: dict[str, Any] | None,
+) -> list[ManifestHashBinding]:
+    if payload is None:
+        return [
+            _binding(
+                "qualification/runtime-absent",
+                {"present": False},
+                {"state": "not_emitted"},
+            )
+        ]
+
+    # Local import avoids the registry -> qualification -> manifest import cycle.
+    from mmaudit.models.registry import ProductionQualificationValidation
+
+    validation = ProductionQualificationValidation.from_dict(payload)
+    bindings = [
+        ManifestHashBinding(
+            identifier="qualification/runtime-validation",
+            sha256=validation.validation_sha256,
+            details={
+                "valid": str(validation.valid).lower(),
+                "required": str(validation.required).lower(),
+                "configured_models": str(len(validation.configured_model_ids)),
+                "qualified_models": str(len(validation.qualified_model_ids)),
+            },
+        )
+    ]
+    named_hashes = {
+        "artifact": validation.qualification_artifact_sha256,
+        "verification": validation.qualification_verification_sha256,
+        "candidate-registry": validation.candidate_registry_sha256,
+        "policy": validation.qualification_policy_sha256,
+        "expected-bindings": validation.expected_bindings_sha256,
+        "release-observation": validation.release_observation_sha256,
+        "production-effective-config": validation.production_effective_config_sha256,
+        "production-selection": validation.production_selection_sha256,
+        "selection-verification": validation.selection_verification_sha256,
+        "capability": validation.qualification_capability_sha256,
+    }
+    bindings.extend(
+        ManifestHashBinding(
+            identifier=f"qualification/{name}",
+            sha256=value,
+            details={"kind": name},
+        )
+        for name, value in sorted(named_hashes.items())
+        if value is not None
+    )
+    for index, model in enumerate(validation.model_bindings):
+        common_details = {
+            "model": _detail(model.exact_model_id),
+            "root_lineage": model.root_lineage,
+            "provider_endpoint": _detail(model.approved_provider_endpoint),
+            "benchmark_case_count": str(model.benchmark_case_count),
+            "evaluated_at": model.evaluated_at.isoformat(),
+            "expires_at": model.expires_at.isoformat(),
+        }
+        model_hashes = {
+            "result": model.qualification_result_sha256,
+            "benchmark-report": model.benchmark_report_sha256,
+            "benchmark-verification": model.benchmark_verification_sha256,
+            "fresh-benchmark-evidence": model.fresh_benchmark_evidence_sha256,
+            "endpoint-snapshot": model.endpoint_snapshot_sha256,
+            "model-metadata-snapshot": model.model_metadata_snapshot_sha256,
+            "pricing-snapshot": model.pricing_snapshot_sha256,
+        }
+        bindings.extend(
+            ManifestHashBinding(
+                identifier=f"qualification/{kind}/{index:05d}",
+                sha256=sha256,
+                details={**common_details, "kind": kind},
+            )
+            for kind, sha256 in sorted(model_hashes.items())
+        )
+    qualification_inputs = validation.qualification_bindings
+    if qualification_inputs is not None:
+        input_hashes = {
+            "source-tree": (
+                qualification_inputs.source_tree_sha256,
+                {"source_commit": qualification_inputs.source_commit},
+            ),
+            "effective-config": (
+                qualification_inputs.effective_config_sha256,
+                {"kind": "effective_config"},
+            ),
+            "benchmark-prompt": (
+                qualification_inputs.prompt_sha256,
+                {"kind": "prompt_set"},
+            ),
+            "response-schema": (
+                qualification_inputs.response_schema_sha256,
+                {"kind": "structured_output_schema"},
+            ),
+            "toolchain": (
+                qualification_inputs.toolchain_sha256,
+                {"kind": "toolchain"},
+            ),
+            "isolation": (
+                qualification_inputs.isolation_sha256,
+                {"kind": "isolation"},
+            ),
+            "benchmark-corpus": (
+                qualification_inputs.benchmark_corpus_sha256,
+                {"version": qualification_inputs.benchmark_corpus_version},
+            ),
+            "benchmark-ground-truth": (
+                qualification_inputs.benchmark_ground_truth_sha256,
+                {"version": qualification_inputs.benchmark_ground_truth_version},
+            ),
+            "benchmark-portfolio": (
+                qualification_inputs.benchmark_portfolio_sha256,
+                {"kind": "all_candidates"},
+            ),
+        }
+        bindings.extend(
+            ManifestHashBinding(
+                identifier=f"qualification/input/{name}",
+                sha256=sha256,
+                details=details,
+            )
+            for name, (sha256, details) in sorted(input_hashes.items())
         )
     return sorted(bindings, key=lambda item: item.identifier)
 

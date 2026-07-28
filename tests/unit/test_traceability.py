@@ -43,6 +43,18 @@ def test_current_implemented_rows_have_repository_and_runtime_evidence() -> None
     )
 
 
+def test_model_ensemble_traceability_names_qualification_runtime_evidence() -> None:
+    matrix = build_traceability_matrix("test-commit")
+    requirement = next(
+        item for item in matrix.requirements if item.requirement_id == "MA-MODEL-ENSEMBLE"
+    )
+
+    assert "src/mmaudit/models/qualification.py" in requirement.implementation_paths
+    assert "tests/unit/test_model_qualification.py" in requirement.unit_tests
+    assert "model-qualification-runtime.json" in requirement.runtime_artifacts
+    assert requirement.implementation_status is ImplementationStatus.PARTIALLY_IMPLEMENTED
+
+
 @pytest.mark.parametrize(
     ("missing_kind", "expected"),
     [

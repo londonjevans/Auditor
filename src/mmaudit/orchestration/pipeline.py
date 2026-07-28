@@ -53,6 +53,10 @@ from mmaudit.isolation.dependencies import (
     prepare_dependencies,
 )
 from mmaudit.logging import JsonLineHandler, RedactingFilter
+from mmaudit.models.discovery import (
+    DiscoveryCandidateRoute,
+    validate_openrouter_model_discovery,
+)
 from mmaudit.models.endpoint_snapshots import (
     EndpointSnapshotValidationError,
     validate_openrouter_endpoint_snapshot,
@@ -61,7 +65,9 @@ from mmaudit.models.openrouter import (
     OpenRouterAuthenticationError,
     OpenRouterClient,
     OpenRouterError,
+    OpenRouterQualificationRoutingEvidence,
 )
+from mmaudit.models.qualification import VerifiedProductionQualification
 from mmaudit.models.registry import ModelRegistry, extract_zdr_model_ids
 from mmaudit.models.runtime import (
     build_openrouter_runtime_controls,
@@ -124,13 +130,23 @@ from mmaudit.models.schemas import (
     SoliditySymbolIndex,
     ThreatModel,
     TransactionOrderingCapability,
+    UsageRecord,
     VerificationBatch,
     VerificationDecision,
     VerificationTest,
     VerificationVerdict,
 )
-from mmaudit.models.usage import UsageLedger, is_creditable_usage_record
-from mmaudit.orchestration.assurance import AssuranceRuntime, MaximumAssuranceContract
+from mmaudit.models.usage import (
+    UsageLedger,
+    candidate_falsifier_role,
+    is_creditable_usage_record,
+)
+from mmaudit.orchestration.assurance import (
+    AssuranceRuntime,
+    MaximumAssuranceContract,
+    ProviderSessionProvenance,
+    _issue_provider_session_provenance,
+)
 from mmaudit.orchestration.budgets import BudgetExhaustedError, BudgetManager
 from mmaudit.orchestration.consensus import (
     CandidateGroup,
@@ -244,6 +260,7 @@ class AuditPipeline:
         reproduction_runner: ForkReproductionRunner | None = None,
         invariant_runner: FoundryInvariantRunner | None = None,
         formal_runner: FormalRunner | None = None,
+        production_qualification: VerifiedProductionQualification | None = None,
     ) -> None:
         self.config = config.effective()
         self.repo_input = safe_repository_root(repo)
@@ -251,6 +268,7 @@ class AuditPipeline:
         self.client = client
         self.cost_ledger = cost_ledger
         self.api_key = api_key or ""
+        self.production_qualification = production_qualification
         self.logger = logger or logging.getLogger("mmaudit.pipeline")
         self.reproduction_runner = reproduction_runner or ForkReproductionRunner(
             self.config.reproduction,
@@ -355,33 +373,9 @@ class AuditPipeline:
             not scanner_only
             and self.client is not None
             and self.client.execution_evidence is ExecutionEvidenceKind.REAL
+            and (not self._owns_client or type(self.client) is not OpenRouterClient)
         ):
-            client_ledger = self.client.budget.atomic_ledger
-            if self.cost_ledger is None or client_ledger is None:
-                raise ValueError(
-                    "real injected provider clients require the selected cumulative cost ledger"
-                )
-            if client_ledger.path.resolve(strict=True) != self.cost_ledger.path.resolve(
-                strict=True
-            ):
-                raise ValueError(
-                    "real injected provider client does not use the selected cumulative cost ledger"
-                )
-            certification_required = maximum_assurance_model_certification_required(self.config)
-            expected_controls = build_openrouter_runtime_controls(
-                self.config,
-                certification=certification_required,
-                require_single_model_per_role=certification_required,
-            )
-            if (
-                self.client.execution != self.config.execution
-                or self.client.privacy != self.config.privacy
-                or self.client.provider_policy != expected_controls.provider_policy
-                or self.client.reasoning != expected_controls.reasoning
-            ):
-                raise ValueError(
-                    "real injected provider client does not match effective audit controls"
-                )
+            raise ValueError("injected provider clients cannot establish REAL execution provenance")
         benchmark_required = (
             self.config.maximum_assurance.benchmark_gate or self.config.maximum_assurance.ci_mode
         )
@@ -471,7 +465,9 @@ class AuditPipeline:
         formal_runs: list[FormalToolRun] = []
         solidity_coverage: SolidityCoverage | None = None
         model_review_coverage: ModelReviewCoverage | None = None
+        provider_session: ProviderSessionProvenance | None = None
         model_surface_review_artifacts: list[ModelSurfaceReviewArtifact] = []
+        model_surface_review_contexts: dict[str, list[ContextPackage]] = {}
         model_surface_review_assignments: dict[str, list[ModelSurfaceReviewRequest]] = {}
         generated_tests: list[GeneratedFoundryTestSpec] = []
         reproductions: list[ReproductionResult] = []
@@ -959,6 +955,9 @@ class AuditPipeline:
                     logger=self.logger,
                     provider_policy=controls.provider_policy,
                     reasoning=controls.reasoning,
+                    qualification_routing=_openrouter_qualification_routing(
+                        self.production_qualification
+                    ),
                 )
                 self._owns_client = True
                 self.api_key = ""
@@ -1138,7 +1137,12 @@ class AuditPipeline:
                     batch = await task
                     candidates.extend(batch.findings)
                     if batch.surface_review_artifact is not None:
-                        model_surface_review_artifacts.append(batch.surface_review_artifact)
+                        artifact = batch.surface_review_artifact
+                        model_surface_review_artifacts.append(artifact)
+                        model_surface_review_contexts.setdefault(
+                            artifact.request_id,
+                            [],
+                        ).append(batch.surface_review_context)
                     if batch.findings and time_to_first_candidate_seconds is None:
                         time_to_first_candidate_seconds = time.monotonic() - run_started_monotonic
                 except BudgetExhaustedError as exc:
@@ -1175,7 +1179,12 @@ class AuditPipeline:
                     batch = await task
                     candidates.extend(batch.findings)
                     if batch.surface_review_artifact is not None:
-                        model_surface_review_artifacts.append(batch.surface_review_artifact)
+                        artifact = batch.surface_review_artifact
+                        model_surface_review_artifacts.append(artifact)
+                        model_surface_review_contexts.setdefault(
+                            artifact.request_id,
+                            [],
+                        ).append(batch.surface_review_context)
                     if batch.findings and time_to_first_candidate_seconds is None:
                         time_to_first_candidate_seconds = time.monotonic() - run_started_monotonic
                 except BudgetExhaustedError as exc:
@@ -1308,6 +1317,7 @@ class AuditPipeline:
                         cross_examiner_tasks = [
                             (
                                 reviewer_index,
+                                candidate.candidate_id,
                                 root_lineage,
                                 asyncio.create_task(
                                     bounded_call(
@@ -1318,35 +1328,59 @@ class AuditPipeline:
                                             model_id=model_id,
                                             root_lineage=root_lineage,
                                         ).run(
-                                            cross_examination_candidates,
+                                            [candidate],
                                             candidate_falsifier_context,
                                         )
                                     ),
-                                    name=(
-                                        f"model:specialist:falsifier:cross_exam_{reviewer_index}"
-                                    ),
+                                    name=f"model:{
+                                        candidate_falsifier_role(
+                                            candidate.candidate_id,
+                                            reviewer_index,
+                                        )
+                                    }",
                                 ),
                             )
                             for reviewer_index, (model_id, root_lineage) in enumerate(
                                 reviewer_models,
                                 start=1,
                             )
+                            for candidate in cross_examination_candidates
                         ]
-                        for reviewer_index, _root_lineage, task in cross_examiner_tasks:
+                        for (
+                            reviewer_index,
+                            candidate_id,
+                            _root_lineage,
+                            task,
+                        ) in cross_examiner_tasks:
                             try:
                                 cross_examinations.extend(await task)
                             except BudgetExhaustedError as exc:
-                                incomplete.append(f"candidate_falsifier:{reviewer_index}: {exc}")
+                                incomplete.append(
+                                    f"candidate_falsifier:{candidate_id}:{reviewer_index}: {exc}"
+                                )
                                 terminal_code = ExitCode.INCOMPLETE
                                 budget_halted = True
                             except OpenRouterError as exc:
-                                incomplete.append(f"candidate_falsifier:{reviewer_index}: {exc}")
+                                incomplete.append(
+                                    f"candidate_falsifier:{candidate_id}:{reviewer_index}: {exc}"
+                                )
                                 if terminal_code is ExitCode.SUCCESS:
                                     terminal_code = ExitCode.MODEL_FAILURE
                         expected_cross_examinations = 2 * len(cross_examination_candidates)
-                        if (
-                            len(cross_examinations) != expected_cross_examinations
-                            or len({decision.root_lineage for decision in cross_examinations}) != 2
+                        if len(cross_examinations) != expected_cross_examinations or any(
+                            len(
+                                candidate_decisions := [
+                                    decision
+                                    for decision in cross_examinations
+                                    if decision.candidate_id == candidate.candidate_id
+                                ]
+                            )
+                            != 2
+                            or len({decision.root_lineage for decision in candidate_decisions}) != 2
+                            or {decision.reviewer_index for decision in candidate_decisions}
+                            != {1, 2}
+                            or len({decision.request_id for decision in candidate_decisions}) != 2
+                            for candidate in cross_examination_candidates
                         ):
                             incomplete.append(
                                 "candidate cross-examination did not complete two "
@@ -1688,10 +1722,21 @@ class AuditPipeline:
             },
         )
         private_model_review_path.chmod(0o600)
+        provider_session = _provider_session_provenance(
+            client=self.client,
+            pipeline_owned=self._owns_client,
+            usage_records=usage.records,
+        )
+        model_credit_usage = (
+            usage.records
+            if provider_session is None or provider_session.usage_evidence_consistent
+            else []
+        )
         model_review_coverage = build_model_review_coverage(
             self.config,
-            usage_records=usage.records,
+            usage_records=model_credit_usage,
             review_artifacts=model_surface_review_artifacts,
+            review_contexts_by_request=model_surface_review_contexts,
             index=solidity_index,
             graphs=solidity_graphs,
             invariants=solidity_invariants,
@@ -1768,9 +1813,43 @@ class AuditPipeline:
                 incomplete.append(f"report_quality: {exc}")
                 if terminal_code is ExitCode.SUCCESS:
                     terminal_code = ExitCode.MODEL_FAILURE
+        provider_session = _provider_session_provenance(
+            client=self.client,
+            pipeline_owned=self._owns_client,
+            usage_records=usage.records,
+        )
+        model_credit_usage = (
+            usage.records
+            if provider_session is None or provider_session.usage_evidence_consistent
+            else []
+        )
+        if provider_session is not None and not provider_session.usage_evidence_consistent:
+            mismatch_reason = (
+                "provider usage execution evidence differs from the established session"
+            )
+            if mismatch_reason not in incomplete:
+                incomplete.append(mismatch_reason)
+            terminal_code = ExitCode.MODEL_FAILURE
+        model_review_coverage = build_model_review_coverage(
+            self.config,
+            usage_records=model_credit_usage,
+            review_artifacts=model_surface_review_artifacts,
+            review_contexts_by_request=model_surface_review_contexts,
+            index=solidity_index,
+            graphs=solidity_graphs,
+            invariants=solidity_invariants,
+            economic_simulations=economic_simulations,
+        )
+        if solidity_coverage is not None:
+            solidity_coverage = with_model_review_coverage(
+                solidity_coverage,
+                solidity_index,
+                model_review_coverage,
+                solidity_graphs,
+            )
         specialist_execution_records = build_specialist_execution_records(
             self.config,
-            usage_records=usage.records,
+            usage_records=model_credit_usage,
             contexts=packages,
         )
         write_json(
@@ -1783,7 +1862,7 @@ class AuditPipeline:
             },
         )
         successful_usage_roles = {
-            record.role for record in usage.records if is_creditable_usage_record(record)
+            record.role for record in model_credit_usage if is_creditable_usage_record(record)
         }
         successful_specialist_roles = {
             specialist_role
@@ -1923,6 +2002,7 @@ class AuditPipeline:
             "cross-examination.json",
             "specialist-execution.json",
             "model-review-coverage.json",
+            "model-qualification-runtime.json",
             "scope-assessment.json",
             "prior-audit-comparison.json",
             "maximum_assurance_traceability.json",
@@ -1972,14 +2052,21 @@ class AuditPipeline:
                 falsifier_completed=(
                     "falsifier" in successful_specialist_roles or not high_critical
                 ),
-                candidate_falsifier_lineages={
-                    decision.root_lineage for decision in cross_examinations
+                candidate_falsifier_request_ids={
+                    candidate_id: {
+                        decision.request_id
+                        for decision in cross_examinations
+                        if decision.candidate_id == candidate_id
+                    }
+                    for candidate_id in sorted(high_critical)
                 },
                 judge_completed=("judge" in successful_usage_roles or candidate_groups_count == 0),
                 coverage=solidity_coverage,
                 model_review_coverage=model_review_coverage,
                 model_surface_review_artifacts=model_surface_review_artifacts,
                 model_usage=usage.records,
+                provider_session=provider_session,
+                production_qualification=self.production_qualification,
                 scope_assessment=scope_assessment,
                 benchmark_verification=benchmark_verification,
                 benchmark_repository_git_commit=benchmark_repository_git_commit,
@@ -2183,14 +2270,43 @@ class AuditPipeline:
         cache_dir = _safe_output_directory(self.output, "cache")
         registry = ModelRegistry(cache_dir / "openrouter-models.json")
         provider_policy = self.client.provider_policy
+        qualification_now = datetime.now(UTC).replace(microsecond=0)
+        qualification_required = maximum_assurance_model_certification_required(self.config)
+        qualification_validation = registry.validate_production_qualification(
+            self.config,
+            self.production_qualification,
+            required=qualification_required,
+            now=qualification_now,
+        )
+        write_json(
+            run_dir / "model-qualification-runtime.json",
+            qualification_validation.as_dict(),
+        )
+        if not qualification_validation.valid:
+            raise OpenRouterError("; ".join(qualification_validation.errors))
         if source_egress_requested and not self.config.privacy.require_zdr:
             raise OpenRouterError("source egress requires zero-data-retention provider routing")
         if source_egress_requested and not provider_policy.configured_endpoints:
             raise OpenRouterError("source egress requires an explicit provider endpoint allowlist")
+        real_certification_client = (
+            provider_policy.certification
+            and type(self.client) is OpenRouterClient
+            and self.client.execution_evidence is ExecutionEvidenceKind.REAL
+        )
+        models_payload: dict[str, Any] | None = None
         models = None if refresh or provider_policy.certification else registry.load_cache()
-        if models is None:
+        if real_certification_client:
+            await self.client.validate_authentication()
+            models_payload = await self.client.get_certification_model_metadata()
+            raw_models = models_payload.get("data")
+            if not isinstance(raw_models, list):
+                raise OpenRouterError("certification model metadata omitted the model catalog")
+            models = list(raw_models)
+            registry.save_cache(models)
+        elif models is None:
             models = await self.client.list_models()
             registry.save_cache(models)
+        assert models is not None
         zdr_ids: set[str] | None = None
         zdr_payload: dict[str, Any] | None = None
         if self.config.privacy.require_zdr:
@@ -2205,18 +2321,41 @@ class AuditPipeline:
             models,
             zdr_model_ids=zdr_ids,
             source_egress_requested=source_egress_requested,
+            production_qualification=self.production_qualification,
+            require_verified_qualification=qualification_required,
+            qualification_now=qualification_now,
         )
         if errors:
             raise OpenRouterError("; ".join(errors))
         endpoint_snapshots = []
+        endpoint_payloads: dict[str, dict[str, Any]] = {}
+        discovery_payloads = []
+        qualified_models = (
+            {model.exact_model_id: model for model in self.production_qualification.models}
+            if self.production_qualification is not None
+            else {}
+        )
         if provider_policy.configured_endpoints:
-            policy_mode: Literal["only", "order"] = "only" if provider_policy.only else "order"
             for model_id in sorted(set(configured_model_ids(self.config, include_fallbacks=True))):
+                qualified_model = qualified_models.get(model_id)
+                if qualification_required and qualified_model is None:
+                    raise OpenRouterError(
+                        f"exact model lacks current production qualification: {model_id}"
+                    )
+                configured_endpoints = (
+                    (qualified_model.approved_provider_endpoint,)
+                    if qualified_model is not None
+                    else provider_policy.configured_endpoints
+                )
+                policy_mode: Literal["only", "order"] = (
+                    "only" if qualified_model is not None or provider_policy.only else "order"
+                )
                 endpoint_payload = await self.client.get_model_endpoint_metadata(model_id)
+                endpoint_payloads[model_id] = endpoint_payload
                 try:
                     snapshot = validate_openrouter_endpoint_snapshot(
                         exact_model_id=model_id,
-                        configured_provider_endpoints=(provider_policy.configured_endpoints),
+                        configured_provider_endpoints=configured_endpoints,
                         provider_policy_mode=policy_mode,
                         endpoint_payload=endpoint_payload,
                         require_zdr=self.config.privacy.require_zdr,
@@ -2228,7 +2367,39 @@ class AuditPipeline:
                         f"exact provider endpoint validation failed for {model_id}: {exc}"
                     ) from None
                 endpoint_snapshots.append(snapshot)
-                self.client.register_endpoint_snapshot(evidence=snapshot)
+                if real_certification_client:
+                    assert models_payload is not None
+                    discovery_payloads.append(
+                        validate_openrouter_model_discovery(
+                            exact_model_id=model_id,
+                            models_payload=models_payload,
+                            endpoint_snapshot=snapshot,
+                        )
+                    )
+                else:
+                    self.client.register_endpoint_snapshot(evidence=snapshot)
+        if real_certification_client:
+            assert models_payload is not None
+            assert zdr_payload is not None
+            _provenance, discovery_evidence = self.client.seal_real_model_discovery_run(
+                run_id=uuid.uuid4().hex,
+                retrieved_at=datetime.now(UTC).replace(microsecond=0),
+                models_payload=models_payload,
+                zdr_payload=zdr_payload,
+                endpoint_payloads=endpoint_payloads,
+                candidate_routes=tuple(
+                    DiscoveryCandidateRoute(
+                        exact_model_id=model_id,
+                        approved_provider_endpoint=(
+                            qualified_models[model_id].approved_provider_endpoint
+                        ),
+                    )
+                    for model_id in sorted(qualified_models)
+                ),
+                payloads=tuple(sorted(discovery_payloads, key=lambda item: item.exact_model_id)),
+            )
+            for evidence in discovery_evidence:
+                self.client.register_certification_model_discovery(evidence=evidence)
         write_json(
             run_dir / "model-validation.json",
             {
@@ -2241,6 +2412,7 @@ class AuditPipeline:
                 "endpoint_snapshots": [
                     snapshot.model_dump(mode="json") for snapshot in endpoint_snapshots
                 ],
+                "production_qualification": qualification_validation.as_dict(),
                 "source_egress_policy": {
                     "requested": source_egress_requested,
                     "maximum_retention": self.config.privacy.maximum_model_retention,
@@ -2728,6 +2900,7 @@ class AuditPipeline:
             "formal-results.json",
             "solidity-coverage.json",
             "model-review-coverage.json",
+            "model-qualification-runtime.json",
             "scope-assessment.json",
             "prior-audit-comparison.json",
             "reproduction-results.json",
@@ -2784,6 +2957,64 @@ def _configured_models(config: AuditConfig) -> dict[str, str]:
             *sorted(config.models.specialists),
         )
     }
+
+
+def _provider_session_provenance(
+    *,
+    client: OpenRouterClient | None,
+    pipeline_owned: bool,
+    usage_records: list[UsageRecord],
+) -> ProviderSessionProvenance | None:
+    """Bind all provider usage to the one client session that produced it."""
+
+    if client is None:
+        if not usage_records:
+            return None
+        return _issue_provider_session_provenance(
+            execution_evidence=ExecutionEvidenceKind.UNVERIFIED,
+            pipeline_owned=False,
+            trusted_concrete_client=False,
+            usage_evidence_consistent=False,
+        )
+    session_evidence = client.execution_evidence
+    return _issue_provider_session_provenance(
+        execution_evidence=session_evidence,
+        pipeline_owned=pipeline_owned,
+        trusted_concrete_client=type(client) is OpenRouterClient,
+        usage_evidence_consistent=all(
+            record.execution_evidence is session_evidence for record in usage_records
+        ),
+    )
+
+
+def _openrouter_qualification_routing(
+    qualification: VerifiedProductionQualification | None,
+) -> tuple[OpenRouterQualificationRoutingEvidence, ...]:
+    if qualification is None:
+        return ()
+    checked_at = datetime.now(UTC).replace(microsecond=0)
+    qualification.require_current(now=checked_at)
+    return tuple(
+        OpenRouterQualificationRoutingEvidence(
+            exact_model_id=model.exact_model_id,
+            canonical_model_slug=model.canonical_model_slug,
+            root_lineage=model.root_lineage,
+            approved_provider_endpoint=model.approved_provider_endpoint,
+            approved_provider_name=model.approved_provider_name,
+            endpoint_snapshot_sha256=model.endpoint_snapshot_sha256,
+            model_metadata_snapshot_sha256=model.model_metadata_snapshot_sha256,
+            pricing_snapshot_sha256=model.pricing_snapshot_sha256,
+            approved_roles=model.approved_roles,
+            verified_at=qualification.verified_at,
+            expires_at=model.expires_at,
+            qualification_artifact_sha256=qualification.artifact_sha256,
+            qualification_verification_sha256=(qualification.qualification_verification_sha256),
+            production_selection_sha256=qualification.production_selection_sha256,
+            selection_verification_sha256=qualification.selection_verification_sha256,
+            qualification_result_sha256=model.qualification_result_sha256,
+        )
+        for model in qualification.models
+    )
 
 
 def _validated_threat_model(

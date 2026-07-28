@@ -57,6 +57,7 @@ class FindingReviewResult:
 
     findings: tuple[CandidateFinding, ...]
     surface_review_artifact: ModelSurfaceReviewArtifact | None
+    surface_review_context: ContextPackage
 
 
 class ThreatModelAgent(AgentBase):
@@ -76,11 +77,13 @@ class ThreatModelAgent(AgentBase):
 
 class FindingAgent(AgentBase):
     async def run(self, context: ContextPackage) -> FindingReviewResult:
+        request_context = context.model_copy(deep=True)
+        rendered_user_context = render_context(request_context)
         completion = await self.client.complete_with_evidence(
             role=self.role,
             models=self.configured_models,
             system_prompt=self.system_prompt,
-            user_prompt=render_context(context),
+            user_prompt=rendered_user_context,
             response_model=CandidateReviewBatch,
             schema_name=f"mmaudit_{self.role}_findings",
         )
@@ -88,8 +91,9 @@ class FindingAgent(AgentBase):
         usage = completion.usage_record
         try:
             surface_review_artifact = seal_model_surface_review_artifact(
-                context=context,
+                context=request_context,
                 completion=completion,
+                rendered_user_context=rendered_user_context,
             )
         except ModelReviewEvidenceError:
             raise OpenRouterSchemaError(
@@ -98,7 +102,9 @@ class FindingAgent(AgentBase):
         requested = usage.requested_model
         returned = usage.returned_model
         family = model_family(requested)
-        trusted_scanner_fingerprints = {finding.fingerprint for finding in context.scanner_findings}
+        trusted_scanner_fingerprints = {
+            finding.fingerprint for finding in request_context.scanner_findings
+        }
         stamped = []
         for finding in result.findings:
             stable_candidate = hashlib.sha256(
@@ -147,4 +153,5 @@ class FindingAgent(AgentBase):
         return FindingReviewResult(
             findings=tuple(stamped),
             surface_review_artifact=surface_review_artifact,
+            surface_review_context=request_context,
         )

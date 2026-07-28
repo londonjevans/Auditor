@@ -1016,6 +1016,7 @@ class CandidateCrossExaminationDecision(StrictModel):
     """Normalized multi-lineage dissent retained in the audit report."""
 
     candidate_id: str = Field(min_length=1)
+    request_id: str = Field(min_length=1)
     reviewer_index: int = Field(ge=1, le=2)
     requested_model: str = Field(min_length=1)
     returned_model: str | None = None
@@ -1871,6 +1872,64 @@ class ModelSurfaceReviewCitation(StrictModel):
         return self
 
 
+class ModelSurfaceReviewEvidenceObservation(StrictModel):
+    """One source-anchored observation supporting a substantive surface review."""
+
+    citation: ModelSurfaceReviewCitation
+    observed_behavior: str = Field(min_length=12, max_length=1_000)
+    security_relevance: str = Field(min_length=12, max_length=1_000)
+
+    @field_validator("observed_behavior", "security_relevance")
+    @classmethod
+    def observation_fields_are_bounded_plain_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or any(
+            ord(character) < 32 or ord(character) == 127 for character in normalized
+        ):
+            raise ValueError("model surface evidence must be bounded plain text")
+        return normalized
+
+
+class ModelSurfaceReviewReachability(StrictModel):
+    """Structured path evidence connecting an entry point to the reviewed surface."""
+
+    entry_point: ModelSurfaceReviewCitation
+    path: tuple[ModelSurfaceReviewCitation, ...] = Field(min_length=1, max_length=50)
+    actor_or_caller: str = Field(min_length=1, max_length=500)
+    preconditions: tuple[str, ...] = Field(max_length=50)
+
+    @field_validator("actor_or_caller")
+    @classmethod
+    def actor_or_caller_is_bounded_plain_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or any(
+            ord(character) < 32 or ord(character) == 127 for character in normalized
+        ):
+            raise ValueError("model surface reachability actor must be bounded plain text")
+        return normalized
+
+    @field_validator("preconditions")
+    @classmethod
+    def preconditions_are_canonical(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(item.strip() for item in value)
+        if any(
+            not item
+            or len(item) > 500
+            or any(ord(character) < 32 or ord(character) == 127 for character in item)
+            for item in normalized
+        ) or normalized != tuple(sorted(set(normalized))):
+            raise ValueError(
+                "model surface reachability preconditions must be bounded, unique, and sorted"
+            )
+        return normalized
+
+    @model_validator(mode="after")
+    def entry_point_starts_path(self) -> ModelSurfaceReviewReachability:
+        if self.path[0] != self.entry_point:
+            raise ValueError("model surface reachability path must begin at its entry point")
+        return self
+
+
 class ModelSurfaceReviewRecord(StrictModel):
     """One model-authored, surface-specific review statement."""
 
@@ -1882,6 +1941,8 @@ class ModelSurfaceReviewRecord(StrictModel):
     rationale: str = Field(min_length=8, max_length=2_000)
     citation: ModelSurfaceReviewCitation
     invariant_considered: str = Field(min_length=1, max_length=1_000)
+    evidence_observations: tuple[ModelSurfaceReviewEvidenceObservation, ...] = Field(max_length=20)
+    reachability: ModelSurfaceReviewReachability | None
     assumptions: tuple[str, ...] = Field(max_length=50)
     confidence: float = Field(ge=0, le=1)
 
@@ -1912,6 +1973,25 @@ class ModelSurfaceReviewRecord(StrictModel):
         ) or normalized != tuple(sorted(set(normalized))):
             raise ValueError("model surface review assumptions must be bounded, unique, and sorted")
         return normalized
+
+    @model_validator(mode="after")
+    def creditable_review_has_surface_bound_evidence(self) -> ModelSurfaceReviewRecord:
+        if self.status not in {
+            ModelSurfaceReviewStatus.CANDIDATE,
+            ModelSurfaceReviewStatus.REVIEWED_NO_ISSUE,
+        }:
+            return self
+        if not self.evidence_observations or self.reachability is None:
+            raise ValueError(
+                "creditable model surface review requires explicit evidence and reachability"
+            )
+        if any(observation.citation != self.citation for observation in self.evidence_observations):
+            raise ValueError("model surface evidence observations must cite the reviewed surface")
+        if self.reachability.path[-1] != self.citation:
+            raise ValueError(
+                "model surface reachability path must terminate at the reviewed surface"
+            )
+        return self
 
 
 class CandidateReviewBatch(StrictModel):
@@ -1960,6 +2040,7 @@ class ModelSurfaceReviewArtifact(StrictModel):
     requested_surface_ids: tuple[str, ...] = Field(min_length=1, max_length=10_000)
     requested_surface_ids_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     requested_surface_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    rendered_context_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     prompt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     validated_response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -4405,6 +4486,7 @@ class UsageRecord(StrictModel):
     accounted_cost_usd: float = Field(default=0, ge=0)
     routing: dict[str, Any] = Field(default_factory=dict)
     prompt_sha256: str
+    user_prompt_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     response_sha256: str | None = None
     validated_response_sha256: str | None = Field(
         default=None,

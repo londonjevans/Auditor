@@ -56,6 +56,7 @@ def test_candidate_falsifier_rejects_unknown_intake_reference() -> None:
         normalize_cross_examination_response(
             response,
             candidate_ids={"candidate-0001": "candidate-real"},
+            request_id="request-falsifier-1",
             reviewer_index=1,
             requested_model="reviewer/one",
             returned_model="reviewer/one",

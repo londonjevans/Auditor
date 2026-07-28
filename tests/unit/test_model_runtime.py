@@ -87,14 +87,17 @@ def test_qualification_controls_require_endpoint_zdr_no_repair_and_no_provider_f
             ),
             certification=True,
         )
-    with pytest.raises(ConfigError, match="exactly one provider endpoint"):
-        build_openrouter_runtime_controls(
-            config_factory(
-                execution={"max_json_repair_attempts": 0},
-                models={"provider_policy": {"only": ["anthropic", "google-vertex"]}},
-            ),
-            certification=True,
-        )
+    multi_endpoint = build_openrouter_runtime_controls(
+        config_factory(
+            execution={"max_json_repair_attempts": 0},
+            models={"provider_policy": {"only": ["anthropic", "google-vertex"]}},
+        ),
+        certification=True,
+    )
+    assert multi_endpoint.provider_policy.configured_endpoints == (
+        "anthropic",
+        "google-vertex",
+    )
     with pytest.raises(ConfigError, match="model-output repair"):
         build_openrouter_runtime_controls(
             config_factory(

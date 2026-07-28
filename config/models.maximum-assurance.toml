@@ -2,9 +2,10 @@ schema_version = "1.0"
 created_at = 2026-07-27T00:00:00Z
 tier_a_minimum_overall_score = 1.0
 maximum_validity_days = 30
+maximum_benchmark_evidence_age_days = 7
 require_real_execution = true
 require_certification_routing = true
-policy_sha256 = "d286d1c5f9ed4a5a4c7c62eda7a55e9a1e23e972f21ffe64530ca34ed780224e"
+policy_sha256 = "f36e89643bb9c74c607222ac6690a5a2dc3d2ac98f0e36b941d3d1cccc293c83"
 
 # This policy is frozen before paid benchmark execution. Every semantic
 # dimension must pass every assigned disjoint case, and structured output must

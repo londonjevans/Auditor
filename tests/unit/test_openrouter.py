@@ -6,7 +6,8 @@ import hashlib
 import json
 import traceback
 from collections.abc import Callable
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,8 @@ from mmaudit.models.openrouter import (
     OpenRouterPrivacyError,
     OpenRouterProviderPolicy,
     OpenRouterProviderPolicyError,
+    OpenRouterQualificationError,
+    OpenRouterQualificationRoutingEvidence,
     OpenRouterReasoning,
     OpenRouterRequestLimitError,
     OpenRouterSchemaError,
@@ -65,6 +68,41 @@ class OptionalAnswer(BaseModel):
     model_config = ConfigDict(extra="forbid")
     answer: str
     note: str | None = None
+
+
+def _qualification_routing(
+    *,
+    model: str = "alpha/atlas-secure",
+    canonical_model: str | None = None,
+    provider: str = "approved-provider",
+    provider_name: str | None = None,
+    roles: tuple[str, ...] = ("source_audit",),
+    verified_at: datetime | None = None,
+    expires_at: datetime | None = None,
+    endpoint_snapshot_sha256: str = "6" * 64,
+    model_metadata_snapshot_sha256: str = "7" * 64,
+    pricing_snapshot_sha256: str = "8" * 64,
+) -> OpenRouterQualificationRoutingEvidence:
+    now = datetime.now(UTC)
+    verification_time = verified_at or now
+    return OpenRouterQualificationRoutingEvidence(
+        exact_model_id=model,
+        canonical_model_slug=canonical_model or model,
+        root_lineage=f"sha256:{'a' * 64}",
+        approved_provider_endpoint=provider,
+        approved_provider_name=provider_name or provider,
+        endpoint_snapshot_sha256=endpoint_snapshot_sha256,
+        model_metadata_snapshot_sha256=model_metadata_snapshot_sha256,
+        pricing_snapshot_sha256=pricing_snapshot_sha256,
+        approved_roles=roles,
+        verified_at=verification_time,
+        expires_at=expires_at or verification_time + timedelta(days=1),
+        qualification_artifact_sha256="1" * 64,
+        qualification_verification_sha256="2" * 64,
+        production_selection_sha256="3" * 64,
+        selection_verification_sha256="4" * 64,
+        qualification_result_sha256="5" * 64,
+    )
 
 
 def _completion(
@@ -233,6 +271,37 @@ def _model_discovery_run(
     return manifest, evidence[0]
 
 
+def _qualification_routing_for_discovery(
+    evidence: OpenRouterModelDiscoveryEvidence,
+) -> OpenRouterQualificationRoutingEvidence:
+    endpoint = evidence.endpoint_snapshot.endpoint(evidence.approved_provider_endpoint)
+    assert endpoint is not None
+    return _qualification_routing(
+        model=evidence.exact_model_id,
+        canonical_model=evidence.canonical_slug,
+        provider=evidence.approved_provider_endpoint,
+        provider_name=endpoint.provider_name,
+        endpoint_snapshot_sha256=evidence.endpoint_snapshot_sha256,
+        model_metadata_snapshot_sha256=evidence.model_metadata_snapshot_sha256,
+        pricing_snapshot_sha256=endpoint.pricing_sha256,
+    )
+
+
+def _qualification_routing_for_endpoint_snapshot(
+    snapshot: OpenRouterEndpointSnapshotEvidence,
+    *,
+    provider_name: str | None = None,
+) -> OpenRouterQualificationRoutingEvidence:
+    endpoint = snapshot.endpoints[0]
+    return _qualification_routing(
+        model=snapshot.exact_model_id,
+        provider=endpoint.provider_endpoint,
+        provider_name=provider_name or endpoint.provider_name,
+        endpoint_snapshot_sha256=snapshot.snapshot_sha256,
+        pricing_snapshot_sha256=endpoint.pricing_sha256,
+    )
+
+
 def _multi_endpoint_snapshot(
     *,
     shared_provider_name: bool = False,
@@ -298,6 +367,7 @@ def _client(
     run_dir: Path | None = None,
     provider_policy: OpenRouterProviderPolicy | None = None,
     reasoning: OpenRouterReasoning | None = None,
+    qualification_routing: tuple[OpenRouterQualificationRoutingEvidence, ...] | None = None,
 ) -> tuple[OpenRouterClient, httpx.AsyncClient, UsageLedger]:
     transport = httpx.MockTransport(handler)
     http_client = httpx.AsyncClient(
@@ -311,6 +381,9 @@ def _client(
         conservative_usd_per_million_tokens=(config.execution.conservative_usd_per_million_tokens),
         max_requests_per_agent=config.execution.max_requests_per_agent,
     )
+    policy = provider_policy or OpenRouterProviderPolicy()
+    if qualification_routing is None and policy.certification:
+        qualification_routing = (_qualification_routing(provider=policy.configured_endpoints[0]),)
     client = OpenRouterClient(
         api_key=api_key,
         execution=config.execution,
@@ -319,8 +392,9 @@ def _client(
         usage=usage,
         http_client=http_client,
         run_dir=run_dir,
-        provider_policy=provider_policy,
+        provider_policy=policy,
         reasoning=reasoning,
+        qualification_routing=qualification_routing or (),
     )
     return client, http_client, usage
 
@@ -331,6 +405,7 @@ async def _paid_control_client_with_mock_transport(
     budget: BudgetManager,
     handler: Callable[[httpx.Request], httpx.Response],
     provider_policy: OpenRouterProviderPolicy,
+    qualification_routing: tuple[OpenRouterQualificationRoutingEvidence, ...] | None = None,
 ) -> tuple[OpenRouterClient, UsageLedger, httpx.AsyncClient]:
     usage = UsageLedger()
     http_client = httpx.AsyncClient(
@@ -345,6 +420,15 @@ async def _paid_control_client_with_mock_transport(
         usage=usage,
         http_client=http_client,
         provider_policy=provider_policy,
+        qualification_routing=(
+            qualification_routing
+            if qualification_routing is not None
+            else (
+                (_qualification_routing(provider=provider_policy.configured_endpoints[0]),)
+                if provider_policy.certification
+                else ()
+            )
+        ),
     )
     assert client.execution_evidence is ExecutionEvidenceKind.MOCK
     return client, usage, http_client
@@ -553,7 +637,7 @@ async def test_certification_requires_validated_endpoint_pricing_before_send(
         calls += 1
         return _completion_response(
             '{"answer":"bounded"}',
-            provider="approved-provider",
+            provider="Approved Provider",
         )
 
     config = config_factory(execution={"max_json_repair_attempts": 0})
@@ -573,6 +657,7 @@ async def test_certification_requires_validated_endpoint_pricing_before_send(
         atomic_ledger=ledger,
         require_endpoint_cost_bound=True,
     )
+    endpoint_snapshot = _endpoint_snapshot()
     client = OpenRouterClient(
         api_key="synthetic-key",
         execution=config.execution,
@@ -584,6 +669,7 @@ async def test_certification_requires_validated_endpoint_pricing_before_send(
             certification=True,
             only=("approved-provider",),
         ),
+        qualification_routing=(_qualification_routing_for_endpoint_snapshot(endpoint_snapshot),),
     )
     try:
         with pytest.raises(OpenRouterCostControlError, match="validated endpoint pricing"):
@@ -596,7 +682,7 @@ async def test_certification_requires_validated_endpoint_pricing_before_send(
                 schema_name="answer",
             )
         client.register_certification_endpoint_snapshot(
-            evidence=_endpoint_snapshot(),
+            evidence=endpoint_snapshot,
         )
         result = await client.complete(
             role="source_audit",
@@ -666,7 +752,7 @@ async def test_provider_cost_is_parsed_exactly_before_decimal_ledger_reconciliat
         payload = _completion(
             '{"answer":"exact-cost"}',
             cost=0,
-            provider="approved-provider",
+            provider="Approved Provider",
         )
         serialized = json.dumps(payload, sort_keys=True).replace(
             '"cost": 0',
@@ -692,6 +778,13 @@ async def test_provider_cost_is_parsed_exactly_before_decimal_ledger_reconciliat
         atomic_ledger=ledger,
         require_endpoint_cost_bound=True,
     )
+    endpoint_snapshot = _endpoint_snapshot(
+        pricing={
+            "prompt": "0.000001",
+            "completion": "0.001",
+            "request": "0",
+        }
+    )
     client, usage, http_client = await _paid_control_client_with_mock_transport(
         config,
         budget=budget,
@@ -700,17 +793,10 @@ async def test_provider_cost_is_parsed_exactly_before_decimal_ledger_reconciliat
             certification=True,
             only=("approved-provider",),
         ),
+        qualification_routing=(_qualification_routing_for_endpoint_snapshot(endpoint_snapshot),),
     )
     try:
-        client.register_certification_endpoint_snapshot(
-            evidence=_endpoint_snapshot(
-                pricing={
-                    "prompt": "0.000001",
-                    "completion": "0.001",
-                    "request": "0",
-                }
-            )
-        )
+        client.register_certification_endpoint_snapshot(evidence=endpoint_snapshot)
         result = await client.complete(
             role="source_audit",
             models=["alpha/atlas-secure"],
@@ -1060,6 +1146,7 @@ async def test_frozen_discovery_authorizes_and_records_exact_canonical_route(
             certification=True,
             only=("approved-provider",),
         ),
+        qualification_routing=(_qualification_routing_for_discovery(evidence),),
     )
     try:
         client.register_certification_model_discovery(
@@ -1126,6 +1213,7 @@ async def test_canonical_route_must_match_one_frozen_identity(
             certification=True,
             only=("approved-provider",),
         ),
+        qualification_routing=(_qualification_routing_for_discovery(evidence),),
     )
     try:
         if fault != "unbound":
@@ -1169,6 +1257,7 @@ async def test_top_level_returned_model_cannot_use_the_canonical_alias(
             certification=True,
             only=("approved-provider",),
         ),
+        qualification_routing=(_qualification_routing_for_discovery(evidence),),
     )
     try:
         client.register_certification_model_discovery(
@@ -1268,6 +1357,7 @@ async def test_structured_request_and_usage(config_factory) -> None:
     assert observed[0].headers["X-OpenRouter-Title"] == "mmaudit"
     assert body["metadata"]["mmaudit_role"] == "source_audit"
     assert len(body["metadata"]["mmaudit_prompt_sha256"]) == 64
+    assert body["metadata"]["mmaudit_user_prompt_sha256"] == hashlib.sha256(b"user").hexdigest()
     assert len(body["metadata"]["mmaudit_schema_sha256"]) == 64
     assert usage.records[0].reported_cost_usd == 0.01
     assert usage.records[0].returned_model == "alpha/atlas-secure"
@@ -1277,6 +1367,7 @@ async def test_structured_request_and_usage(config_factory) -> None:
     assert usage.records[0].finish_reason == "stop"
     assert usage.records[0].validation_status.value == "valid"
     assert usage.records[0].schema_sha256 == body["metadata"]["mmaudit_schema_sha256"]
+    assert usage.records[0].user_prompt_sha256 == hashlib.sha256(b"user").hexdigest()
     assert (
         usage.records[0].validated_response_sha256 == hashlib.sha256(b'{"answer":"ok"}').hexdigest()
     )
@@ -2117,6 +2208,9 @@ async def test_complete_with_evidence_returns_successful_explicit_fallback_recor
     ]
     assert result.usage_record is usage.records[1]
     assert result.usage_record.fallback_used is True
+    assert all(
+        record.user_prompt_sha256 == hashlib.sha256(b"user").hexdigest() for record in usage.records
+    )
 
 
 @pytest.mark.asyncio
@@ -2146,6 +2240,7 @@ async def test_complete_with_evidence_preserves_non_fallback_exception_behavior(
     assert requested == ["alpha/atlas-secure"]
     assert len(usage.records) == 1
     assert usage.records[0].status == "failed:OpenRouterAuthenticationError"
+    assert usage.records[0].user_prompt_sha256 == hashlib.sha256(b"user").hexdigest()
 
 
 @pytest.mark.asyncio
@@ -2267,14 +2362,394 @@ async def test_certification_request_pins_provider_reasoning_and_single_model(
     assert usage.records[0].configured_provider_endpoints == ["approved-provider"]
 
 
+@pytest.mark.parametrize("fault", ["missing", "role", "model", "provider", "expired"])
+@pytest.mark.asyncio
+async def test_certification_qualification_binding_fails_before_transport(
+    config_factory,
+    fault: str,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    policy = OpenRouterProviderPolicy(
+        certification=True,
+        only=("approved-provider",),
+    )
+    binding = _qualification_routing(
+        model=("bravo/borealis-secure" if fault == "model" else "alpha/atlas-secure"),
+        provider=("other-provider" if fault == "provider" else "approved-provider"),
+        roles=(("business_logic",) if fault == "role" else ("source_audit",)),
+        verified_at=(datetime.now(UTC) - timedelta(days=2) if fault == "expired" else None),
+        expires_at=(datetime.now(UTC) - timedelta(days=1) if fault == "expired" else None),
+    )
+    client, http_client, usage = _client(
+        config_factory(execution={"max_json_repair_attempts": 0}),
+        handler,
+        provider_policy=policy,
+        qualification_routing=(() if fault == "missing" else (binding,)),
+    )
+    try:
+        with pytest.raises(OpenRouterQualificationError):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 0
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_certification_rejects_qualified_endpoint_snapshot_drift_before_transport(
+    config_factory,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    snapshot = _endpoint_snapshot(provider_name="approved-provider")
+    endpoint = snapshot.endpoint("approved-provider")
+    assert endpoint is not None
+    binding = _qualification_routing(
+        endpoint_snapshot_sha256="f" * 64,
+        pricing_snapshot_sha256=endpoint.pricing_sha256,
+    )
+    client, http_client, usage = _client(
+        config_factory(execution={"max_json_repair_attempts": 0}),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(binding,),
+    )
+    client.register_endpoint_snapshot(evidence=snapshot)
+    try:
+        with pytest.raises(OpenRouterQualificationError, match="endpoint or pricing snapshot"):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 0
+    assert usage.records == []
+
+
+@pytest.mark.parametrize(
+    ("endpoint_policy", "model_identity"),
+    [
+        (None, object()),
+        (object(), None),
+    ],
+)
+def test_qualified_production_routing_requires_both_current_runtime_snapshots(
+    endpoint_policy: object | None,
+    model_identity: object | None,
+) -> None:
+    binding = _qualification_routing()
+
+    with pytest.raises(OpenRouterQualificationError, match="current model and endpoint snapshots"):
+        binding.require_current(
+            role="source_audit",
+            model=binding.exact_model_id,
+            provider_endpoints=(binding.approved_provider_endpoint,),
+            now=datetime.now(UTC),
+            endpoint_policy=endpoint_policy,  # type: ignore[arg-type]
+            model_identity=model_identity,  # type: ignore[arg-type]
+            require_runtime_snapshots=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_certification_pins_each_qualified_request_to_its_singleton_endpoint(
+    config_factory,
+) -> None:
+    observed: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(json.loads(request.content))
+        return _completion_response(
+            '{"answer":"qualified singleton"}',
+            provider="approved-provider",
+        )
+
+    snapshot = _endpoint_snapshot(provider_name="approved-provider")
+    endpoint = snapshot.endpoint("approved-provider")
+    assert endpoint is not None
+    binding = _qualification_routing(
+        endpoint_snapshot_sha256=snapshot.snapshot_sha256,
+        pricing_snapshot_sha256=endpoint.pricing_sha256,
+    )
+    client, http_client, usage = _client(
+        config_factory(execution={"max_json_repair_attempts": 0}),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider", "other-qualified-provider"),
+        ),
+        qualification_routing=(binding,),
+    )
+    client.register_endpoint_snapshot(evidence=snapshot)
+    try:
+        result = await client.complete(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="user",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert result.answer == "qualified singleton"
+    assert observed[0]["provider"]["only"] == ["approved-provider"]
+    assert observed[0]["provider"]["allow_fallbacks"] is False
+    assert usage.records[0].configured_provider_endpoints == ["approved-provider"]
+    assert usage.records[0].routing["configured_provider_only"] == ["approved-provider"]
+
+
+@pytest.mark.asyncio
+async def test_certification_rejects_qualified_model_metadata_snapshot_drift(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    manifest, evidence = _model_discovery_run(tmp_path)
+    binding = _qualification_routing_for_discovery(evidence)
+    binding = replace(binding, model_metadata_snapshot_sha256="f" * 64)
+    client, http_client, usage = _client(
+        config_factory(execution={"max_json_repair_attempts": 0}),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(binding,),
+    )
+    client.register_certification_model_discovery(
+        evidence=evidence,
+        manifest=manifest,
+    )
+    try:
+        with pytest.raises(OpenRouterQualificationError, match="model identity snapshot"):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 0
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_certification_records_exact_qualification_hashes_on_request_and_success(
+    config_factory,
+) -> None:
+    observed: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(json.loads(request.content))
+        return _completion_response(
+            '{"answer":"qualified"}',
+            provider="approved-provider",
+        )
+
+    binding = _qualification_routing()
+    client, http_client, usage = _client(
+        config_factory(execution={"max_json_repair_attempts": 0}),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(binding,),
+    )
+    try:
+        result = await client.complete(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="user",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert result.answer == "qualified"
+    expected_metadata = binding.request_metadata()
+    assert {key: observed[0]["metadata"][key] for key in expected_metadata} == expected_metadata
+    expected_routing = binding.routing_evidence()
+    assert {key: usage.records[0].routing[key] for key in expected_routing} == expected_routing
+
+
+@pytest.mark.asyncio
+async def test_certification_normalizes_specialist_role_against_qualification(
+    config_factory,
+) -> None:
+    binding = _qualification_routing(roles=("access_control",))
+    client, http_client, usage = _client(
+        config_factory(execution={"max_json_repair_attempts": 0}),
+        lambda _request: _completion_response(
+            '{"answer":"qualified specialist"}',
+            provider="approved-provider",
+        ),
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(binding,),
+    )
+    try:
+        result = await client.complete(
+            role="specialist:access_control",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="user",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert result.answer == "qualified specialist"
+    assert usage.records[0].routing["qualification_result_sha256"] == (
+        binding.qualification_result_sha256
+    )
+
+
+@pytest.mark.asyncio
+async def test_certification_rejects_returned_provider_name_outside_qualification(
+    config_factory,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response(
+            '{"answer":"wrong provider"}',
+            provider="approved-provider",
+        )
+
+    endpoint_snapshot = _endpoint_snapshot(
+        provider="approved-provider",
+        provider_name="Approved Provider",
+    )
+    endpoint = endpoint_snapshot.endpoint("approved-provider")
+    assert endpoint is not None
+    binding = _qualification_routing(
+        provider_name="Wrong Provider",
+        endpoint_snapshot_sha256=endpoint_snapshot.snapshot_sha256,
+        pricing_snapshot_sha256=endpoint.pricing_sha256,
+    )
+    client, http_client, usage = _client(
+        config_factory(execution={"max_json_repair_attempts": 0}),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(binding,),
+    )
+    client.register_certification_endpoint_snapshot(evidence=endpoint_snapshot)
+    try:
+        with pytest.raises(OpenRouterQualificationError, match="provider response"):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 1
+    assert len(usage.records) == 1
+    assert usage.records[0].status != "success"
+    assert usage.records[0].routing["qualification_result_sha256"] == (
+        binding.qualification_result_sha256
+    )
+
+
+@pytest.mark.asyncio
+async def test_certification_failure_record_retains_exact_qualification_hashes(
+    config_factory,
+) -> None:
+    binding = _qualification_routing()
+    client, http_client, usage = _client(
+        config_factory(
+            execution={
+                "max_json_repair_attempts": 0,
+                "max_model_retries": 0,
+            }
+        ),
+        lambda _request: httpx.Response(503, json={"error": {"message": "unavailable"}}),
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(binding,),
+    )
+    try:
+        with pytest.raises(OpenRouterTransientError):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    expected_routing = binding.routing_evidence()
+    assert {key: usage.records[0].routing[key] for key in expected_routing} == expected_routing
+    assert usage.records[0].status != "success"
+
+
 def test_certification_requires_provider_pin_zdr_and_no_repair(config_factory) -> None:
     with pytest.raises(ValueError, match="endpoint allowlist"):
         OpenRouterProviderPolicy(certification=True)
-    with pytest.raises(ValueError, match="exactly one provider endpoint"):
-        OpenRouterProviderPolicy(
-            certification=True,
-            only=("approved-provider", "second-provider"),
-        )
+    assert OpenRouterProviderPolicy(
+        certification=True,
+        only=("approved-provider", "second-provider"),
+    ).configured_endpoints == ("approved-provider", "second-provider")
     with pytest.raises(OpenRouterPrivacyError, match="zero-data-retention"):
         _client(
             config_factory(
@@ -2396,6 +2871,11 @@ async def test_router_selected_provider_must_match_certification_policy(
 async def test_optional_router_attempts_require_snapshot_bound_provider_display_name(
     config_factory,
 ) -> None:
+    endpoint_snapshot = _endpoint_snapshot(
+        provider="google-vertex",
+        provider_name="Google Vertex",
+    )
+
     def handler(_request: httpx.Request) -> httpx.Response:
         payload = _completion(
             '{"answer":"bound"}',
@@ -2415,13 +2895,9 @@ async def test_optional_router_attempts_require_snapshot_bound_provider_display_
             certification=True,
             only=("google-vertex",),
         ),
+        qualification_routing=(_qualification_routing_for_endpoint_snapshot(endpoint_snapshot),),
     )
-    client.register_certification_endpoint_snapshot(
-        evidence=_endpoint_snapshot(
-            provider="google-vertex",
-            provider_name="Google Vertex",
-        )
-    )
+    client.register_certification_endpoint_snapshot(evidence=endpoint_snapshot)
     try:
         result = await client.complete(
             role="source_audit",

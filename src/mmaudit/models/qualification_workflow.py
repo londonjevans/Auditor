@@ -54,6 +54,7 @@ from mmaudit.models.qualification import (
     verify_and_seal_trusted_benchmark_evidence,
     verify_model_qualification,
 )
+from mmaudit.models.release_attestation import TrustedReleaseBindingObservation
 from mmaudit.models.schemas import ExecutionEvidenceKind, StrictModel
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.reporting.json_report import stable_json
@@ -402,6 +403,7 @@ def run_qualification_workflow(
     release_bindings: QualificationReleaseBindings,
     trusted_campaign_verification: TrustedCandidateBenchmarkCampaignVerification,
     trusted_generation_verification: TrustedGenerationVerification | None,
+    trusted_release_observation: TrustedReleaseBindingObservation,
     evaluated_at: datetime,
     qualification_expires_at: datetime,
 ) -> QualificationWorkflowBundle:
@@ -416,11 +418,6 @@ def run_qualification_workflow(
         label="qualification expiry",
     )
     policy = QualificationPolicy.model_validate(policy.model_dump(mode="json"))
-    if qualification_expires_at <= evaluated_at:
-        raise ValueError("qualification expiry must follow evaluation")
-    if qualification_expires_at > evaluated_at + timedelta(days=policy.maximum_validity_days):
-        raise ValueError("qualification expiry exceeds policy validity")
-
     candidate_registry = CandidateRegistry.model_validate(
         candidate_registry.model_dump(mode="json")
     )
@@ -438,6 +435,35 @@ def run_qualification_workflow(
     release_bindings = QualificationReleaseBindings.model_validate(
         release_bindings.model_dump(mode="json")
     )
+    if type(trusted_release_observation) is not TrustedReleaseBindingObservation:
+        raise ValueError("qualification requires a trusted release observation")
+    trusted_release_observation.require_for(release_bindings)
+    observed_at = trusted_release_observation.observed_at
+    if evaluated_at != observed_at:
+        raise ValueError(
+            "qualification workflow evaluation time differs from the trusted release observation"
+        )
+    campaign_completed_at = _portfolio_completion_anchor(benchmark_portfolio)
+    if campaign_completed_at > observed_at + _FUTURE_SKEW:
+        raise ValueError("qualification benchmark campaign completion is future-dated")
+    if observed_at - campaign_completed_at > timedelta(
+        days=policy.maximum_benchmark_evidence_age_days
+    ):
+        raise ValueError("qualification benchmark evidence exceeds the policy age")
+    if qualification_expires_at <= campaign_completed_at:
+        raise ValueError("qualification expiry must follow benchmark campaign completion")
+    maximum_window_days = min(
+        policy.maximum_validity_days,
+        policy.maximum_benchmark_evidence_age_days,
+    )
+    if qualification_expires_at > campaign_completed_at + timedelta(days=maximum_window_days):
+        raise ValueError("qualification expiry exceeds the policy-bound benchmark window")
+    if (
+        release_bindings.benchmark_corpus_version != benchmark_suite.corpus.schema_version
+        or release_bindings.benchmark_ground_truth_version
+        != benchmark_suite.ground_truth.schema_version
+    ):
+        raise ValueError("qualification release benchmark versions differ from the loaded suite")
     if type(trusted_campaign_verification) is not TrustedCandidateBenchmarkCampaignVerification:
         raise ValueError("qualification requires trusted campaign verification")
     trusted_campaign_verification.require_for(
@@ -450,9 +476,9 @@ def run_qualification_workflow(
         run_manifest=discovery_run_manifest,
         evidence=discovery_evidence,
     )
-    if candidate_registry.created_at > evaluated_at + _FUTURE_SKEW:
+    if candidate_registry.created_at > campaign_completed_at + _FUTURE_SKEW:
         raise ValueError("candidate discovery postdates qualification evaluation")
-    if policy.created_at > evaluated_at + _FUTURE_SKEW:
+    if policy.created_at > campaign_completed_at + _FUTURE_SKEW:
         raise ValueError("qualification policy postdates evaluation")
 
     reports = _validated_exact_report_set(
@@ -576,7 +602,7 @@ def run_qualification_workflow(
             dimensions=dimensions,
             overall_score=overall_score,
             approved_roles=candidate.approved_roles,
-            evaluated_at=evaluated_at,
+            evaluated_at=campaign_completed_at,
             expires_at=expiry,
             failure_reasons=failure_reasons,
         )
@@ -620,7 +646,7 @@ def run_qualification_workflow(
         qualification_policy_sha256=policy.policy_sha256,
     )
     artifact = seal_model_qualification_artifact(
-        created_at=evaluated_at,
+        created_at=campaign_completed_at,
         bindings=bindings,
         results=tuple(results),
     )
@@ -631,11 +657,11 @@ def run_qualification_workflow(
         policy=policy,
         expected_bindings=bindings,
         trusted_benchmark_evidence=trusted_tuple,
-        now=evaluated_at,
+        now=observed_at,
     )
     payload: dict[str, Any] = {
         "schema_version": "1.0",
-        "evaluated_at": evaluated_at.isoformat().replace("+00:00", "Z"),
+        "evaluated_at": campaign_completed_at.isoformat().replace("+00:00", "Z"),
         "qualification_expires_at": qualification_expires_at.isoformat().replace(
             "+00:00",
             "Z",
@@ -749,6 +775,19 @@ def validate_qualification_portfolio_readiness(
             "model qualification requires a journal-bound, policy-matched, "
             "reconciled, complete non-empty all-REAL benchmark portfolio"
         )
+
+
+def _portfolio_completion_anchor(portfolio: ModelBenchmarkPortfolio) -> datetime:
+    """Return the first whole UTC second at or after the last campaign request."""
+
+    ended_at = portfolio.ended_at
+    if ended_at is None:
+        raise ValueError("qualification benchmark portfolio has no completion timestamp")
+    if ended_at.tzinfo is None or ended_at.utcoffset() != timedelta(0):
+        raise ValueError("qualification benchmark completion must be UTC")
+    if ended_at.microsecond:
+        ended_at = (ended_at + timedelta(seconds=1)).replace(microsecond=0)
+    return _utc_second(ended_at, label="qualification benchmark completion")
 
 
 def _validated_exact_report_set(

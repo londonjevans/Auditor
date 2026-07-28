@@ -44,8 +44,6 @@ def build_openrouter_runtime_controls(
             raise ConfigError(
                 "OpenRouter certification requires an explicit provider endpoint allowlist"
             )
-        if len(policy.only or policy.order) != 1:
-            raise ConfigError("OpenRouter certification requires exactly one provider endpoint")
         if policy.allow_fallbacks:
             raise ConfigError("OpenRouter certification forbids provider fallback routing")
         if config.execution.max_json_repair_attempts:

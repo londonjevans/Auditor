@@ -11,6 +11,7 @@ from mmaudit.constants import SPECIALIST_INVESTIGATOR_ROLES
 from mmaudit.models.schemas import (
     AnalysisState,
     AuditProfile,
+    ContextPackage,
     CoverageMetric,
     CoverageProvenance,
     EconomicSimulationPlan,
@@ -36,6 +37,11 @@ from mmaudit.models.schemas import (
     UsageRecord,
 )
 from mmaudit.models.usage import is_creditable_usage_record
+from mmaudit.orchestration.model_review_evidence import (
+    model_review_context_sha256,
+    model_surface_review_excerpt_validation_failures,
+    model_surface_review_record_validation_failures,
+)
 
 _CALL_GRAPHS = frozenset(
     {
@@ -102,6 +108,7 @@ def build_model_review_coverage(
     *,
     usage_records: list[UsageRecord],
     review_artifacts: list[ModelSurfaceReviewArtifact],
+    review_contexts_by_request: dict[str, list[ContextPackage]],
     index: SoliditySymbolIndex | None,
     graphs: SolidityGraphSet | None,
     invariants: InvariantSuite | None,
@@ -131,6 +138,9 @@ def build_model_review_coverage(
         requests=requests,
         usage_records=usage_records,
         review_artifacts=review_artifacts,
+        review_contexts_by_request=review_contexts_by_request,
+        index=index,
+        graphs=graphs,
         limitations=limitations,
     )
     surfaces = sorted(
@@ -336,6 +346,9 @@ def _review_evidence_references(
     requests: list[ModelSurfaceReviewRequest],
     usage_records: list[UsageRecord],
     review_artifacts: list[ModelSurfaceReviewArtifact],
+    review_contexts_by_request: dict[str, list[ContextPackage]],
+    index: SoliditySymbolIndex | None,
+    graphs: SolidityGraphSet | None,
     limitations: set[str],
 ) -> dict[str, list[ModelReviewEvidenceReference]]:
     requests_by_id = {request.surface_id: request for request in requests}
@@ -373,6 +386,13 @@ def _review_evidence_references(
         elif len(usages) != 1:
             reasons.append("artifact request did not join exactly one usage record")
 
+        contexts = review_contexts_by_request.get(artifact.request_id, [])
+        context = contexts[0] if len(contexts) == 1 else None
+        if not contexts:
+            reasons.append("no source review context matched the artifact request")
+        elif len(contexts) != 1:
+            reasons.append("artifact request did not join exactly one source review context")
+
         artifact_requests: list[ModelSurfaceReviewRequest] = []
         unknown_surface_ids = [
             surface_id
@@ -393,6 +413,22 @@ def _review_evidence_references(
             except ValueError:
                 reasons.append("artifact requested-surface manifest hash was inconsistent")
 
+        if context is not None:
+            if artifact.rendered_context_sha256 != model_review_context_sha256(context):
+                reasons.append(
+                    "source review context hash differed from the rendered provider request"
+                )
+            if context.role != artifact.review_role:
+                reasons.append("source review context role differed from the artifact role")
+            if tuple(context.requested_model_surfaces) != tuple(artifact_requests):
+                reasons.append("source review context surfaces differed from the artifact manifest")
+            if not _context_symbol_index_is_subset(context.solidity_index, index):
+                reasons.append(
+                    "source review context symbol index was not an exact inventory subset"
+                )
+            if not _context_graphs_are_subset(context.solidity_graphs, graphs):
+                reasons.append("source review context graphs were not an exact inventory subset")
+
         expected_artifact_hash = ModelSurfaceReviewArtifact.calculate_artifact_sha256(
             artifact.model_dump(mode="json")
         )
@@ -411,6 +447,8 @@ def _review_evidence_references(
                 reasons.append("artifact role differed from its usage record")
             if artifact.prompt_sha256 != usage.prompt_sha256:
                 reasons.append("artifact prompt hash differed from its usage record")
+            if artifact.rendered_context_sha256 != usage.user_prompt_sha256:
+                reasons.append("artifact context hash differed from its usage record")
             if artifact.response_sha256 != usage.response_sha256:
                 reasons.append("artifact response hash differed from its usage record")
             if artifact.validated_response_sha256 != usage.validated_response_sha256:
@@ -454,7 +492,23 @@ def _review_evidence_references(
             if request is None:
                 continue
             record_reasons = [*reasons]
-            record_reasons.extend(_record_validation_failures(request, record))
+            record_reasons.extend(
+                _record_validation_failures(
+                    request,
+                    record,
+                    expected_role=artifact.review_role,
+                    index=index,
+                    graphs=graphs,
+                )
+            )
+            if context is not None:
+                record_reasons.extend(
+                    model_surface_review_excerpt_validation_failures(
+                        context=context,
+                        request=request,
+                        record=record,
+                    )
+                )
             if record.status not in _CREDITABLE_REVIEW_STATUSES:
                 record_reasons.append(
                     f"{record.status.value} is explicit no-credit review evidence"
@@ -491,6 +545,30 @@ def _review_evidence_references(
     return references
 
 
+def _context_symbol_index_is_subset(
+    context_index: SoliditySymbolIndex | None,
+    evaluated_index: SoliditySymbolIndex | None,
+) -> bool:
+    if context_index is None:
+        return False
+    if evaluated_index is None:
+        return False
+    return all(entity in evaluated_index.entities for entity in context_index.entities)
+
+
+def _context_graphs_are_subset(
+    context_graphs: SolidityGraphSet | None,
+    evaluated_graphs: SolidityGraphSet | None,
+) -> bool:
+    if context_graphs is None:
+        return True
+    if evaluated_graphs is None:
+        return False
+    return all(node in evaluated_graphs.nodes for node in context_graphs.nodes) and all(
+        edge in evaluated_graphs.edges for edge in context_graphs.edges
+    )
+
+
 def _configured_models_for_role(config: AuditConfig, role: str) -> frozenset[str]:
     if role in _BASE_REVIEW_ROLES:
         role_config = config.models.role(role)
@@ -506,6 +584,10 @@ def _configured_models_for_role(config: AuditConfig, role: str) -> frozenset[str
 def _record_validation_failures(
     request: ModelSurfaceReviewRequest,
     record: ModelSurfaceReviewRecord,
+    *,
+    expected_role: str,
+    index: SoliditySymbolIndex | None,
+    graphs: SolidityGraphSet | None,
 ) -> list[str]:
     # Artifacts are already schema-validated, but all deterministic joins are
     # repeated here so serialized evidence cannot self-authorize coverage.
@@ -518,11 +600,22 @@ def _record_validation_failures(
         failures.append("record surface label differed from the deterministic request")
     if record.invariant_considered != request.invariant_considered:
         failures.append("record invariant instruction differed from the deterministic request")
+    if record.review_role != expected_role:
+        failures.append("record review role differed from the containing artifact")
     citation = record.citation
     if citation.location is not None and citation.location not in request.allowed_locations:
         failures.append("record cited a location outside the deterministic request")
     if citation.symbol is not None and citation.symbol not in request.allowed_symbols:
         failures.append("record cited a symbol outside the deterministic request")
+    failures.extend(
+        model_surface_review_record_validation_failures(
+            request,
+            record,
+            expected_role,
+            index=index,
+            graphs=graphs,
+        )
+    )
     return failures
 
 
@@ -583,7 +676,7 @@ def _surface_inventory(
                     critical=(entity.path, entity.name) in critical_contracts,
                     locations=location,
                     contract=entity.name,
-                    allowed_symbols=(entity.name,),
+                    allowed_symbols=tuple(sorted({entity.id, entity.name})),
                     invariant_considered=(
                         f"Assess declared security invariants across contract {entity.name}."
                     ),
@@ -677,6 +770,7 @@ def _surface_inventory(
                         sorted(
                             {
                                 invariant.id,
+                                *invariant.entity_ids,
                                 *invariant.functions,
                                 *invariant.state_variables,
                             }
@@ -693,21 +787,66 @@ def _surface_inventory(
             }
         )
         for template in invariant_templates:
+            template_invariants = [
+                invariant
+                for invariant in invariants.invariants
+                if invariant.template is not None and invariant.template.value == template
+            ]
             seeds.append(
                 _SurfaceSeed(
                     kind=ModelReviewSurfaceKind.TEMPLATE,
                     subject_id=f"invariant-template:{template}",
                     label=f"Invariant template: {template}",
                     critical=True,
-                    locations=(),
-                    contract="protocol",
-                    allowed_symbols=(f"invariant-template:{template}",),
+                    locations=tuple(
+                        _sorted_locations(
+                            [
+                                location
+                                for invariant in template_invariants
+                                for location in invariant.locations
+                            ]
+                        )
+                    ),
+                    contract=_shared_invariant_contract(
+                        template_invariants,
+                        entities_by_id,
+                    ),
+                    allowed_symbols=tuple(
+                        sorted(
+                            {
+                                f"invariant-template:{template}",
+                                *(
+                                    entity_id
+                                    for invariant in template_invariants
+                                    for entity_id in invariant.entity_ids
+                                ),
+                                *(
+                                    function
+                                    for invariant in template_invariants
+                                    for function in invariant.functions
+                                ),
+                                *(
+                                    state_variable
+                                    for invariant in template_invariants
+                                    for state_variable in invariant.state_variables
+                                ),
+                            }
+                        )
+                    ),
                     invariant_considered=(f"Assess preservation of invariant template {template}."),
                 )
             )
     for template in sorted({plan.kind.value for plan in economic_simulations if plan.applicable}):
         template_plans = [
             plan for plan in economic_simulations if plan.applicable and plan.kind.value == template
+        ]
+        linked_invariant_ids = {
+            invariant_id for plan in template_plans for invariant_id in plan.invariant_ids
+        }
+        linked_invariants = [
+            invariant
+            for invariant in (invariants.invariants if invariants is not None else [])
+            if invariant.id in linked_invariant_ids
         ]
         seeds.append(
             _SurfaceSeed(
@@ -721,7 +860,29 @@ def _surface_inventory(
                     )
                 ),
                 contract="protocol",
-                allowed_symbols=(f"economic-template:{template}",),
+                allowed_symbols=tuple(
+                    sorted(
+                        {
+                            f"economic-template:{template}",
+                            *linked_invariant_ids,
+                            *(
+                                entity_id
+                                for invariant in linked_invariants
+                                for entity_id in invariant.entity_ids
+                            ),
+                            *(
+                                function
+                                for invariant in linked_invariants
+                                for function in invariant.functions
+                            ),
+                            *(
+                                state_variable
+                                for invariant in linked_invariants
+                                for state_variable in invariant.state_variables
+                            ),
+                        }
+                    )
+                ),
                 invariant_considered=(
                     f"Assess applicability and preservation of economic template {template}."
                 ),
@@ -910,3 +1071,16 @@ def _invariant_contract(
         }
     )
     return contracts[0] if len(contracts) == 1 else "protocol"
+
+
+def _shared_invariant_contract(
+    invariants: list[InvariantSpec],
+    entities_by_id: dict[str, SolidityEntity],
+) -> str:
+    contracts = {
+        contract
+        for invariant in invariants
+        for contract in (_invariant_contract(invariant, entities_by_id),)
+        if contract != "protocol"
+    }
+    return next(iter(contracts)) if len(contracts) == 1 else "protocol"

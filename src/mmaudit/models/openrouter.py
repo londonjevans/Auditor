@@ -14,7 +14,7 @@ import time
 import uuid
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal, TypeVar
@@ -77,6 +77,7 @@ _EXACT_MODEL_ID_PATTERN = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
 )
 _PROVIDER_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,127}$")
+_QUALIFICATION_PROVIDER_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/()&+-]{0,199}$")
 _NON_DIRECT_ROUTING_STRATEGIES = {
     "alias",
     "auto",
@@ -120,6 +121,11 @@ _TRUSTED_ASYNC_CLIENT_SEND = httpx.AsyncClient.send
 _TRUSTED_ASYNC_CLIENT_REQUEST = httpx.AsyncClient.request
 _TRUSTED_ASYNC_CLIENT_STREAM = httpx.AsyncClient.stream
 _TRUSTED_ASYNC_HTTP_TRANSPORT_REQUEST = httpx.AsyncHTTPTransport.handle_async_request
+_QUALIFICATION_FUTURE_SKEW = timedelta(minutes=5)
+_QUALIFICATION_LINEAGE_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
+_QUALIFICATION_ROLE_PATTERN = re.compile(r"^[a-z][a-z0-9_:.-]{0,127}$")
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_PREQUALIFICATION_PROVIDER_ROLES = frozenset({"model_benchmark", "real_provider_smoke"})
 
 
 @dataclass(frozen=True)
@@ -141,8 +147,6 @@ class OpenRouterProviderPolicy:
                 raise ValueError(f"provider.{label} contains an invalid endpoint identifier")
         if self.certification and not (self.only or self.order):
             raise ValueError("certification requires an explicit provider endpoint allowlist")
-        if self.certification and len(self.configured_endpoints) != 1:
-            raise ValueError("certification requires exactly one provider endpoint")
         if self.certification and self.allow_fallbacks:
             raise ValueError("certification cannot allow provider fallbacks")
 
@@ -163,6 +167,163 @@ class OpenRouterProviderPolicy:
         elif self.order:
             payload["order"] = list(self.order)
         return payload
+
+
+@dataclass(frozen=True, slots=True)
+class OpenRouterQualificationRoutingEvidence:
+    """Sanitized, non-authoritative routing projection of verified qualification."""
+
+    exact_model_id: str
+    canonical_model_slug: str
+    root_lineage: str
+    approved_provider_endpoint: str
+    approved_provider_name: str
+    endpoint_snapshot_sha256: str
+    model_metadata_snapshot_sha256: str
+    pricing_snapshot_sha256: str
+    approved_roles: tuple[str, ...]
+    verified_at: datetime
+    expires_at: datetime
+    qualification_artifact_sha256: str
+    qualification_verification_sha256: str
+    production_selection_sha256: str
+    selection_verification_sha256: str
+    qualification_result_sha256: str
+
+    def __post_init__(self) -> None:
+        _require_exact_model_id(self.exact_model_id)
+        _require_exact_model_id(self.canonical_model_slug)
+        if _QUALIFICATION_LINEAGE_PATTERN.fullmatch(self.root_lineage) is None:
+            raise ValueError("qualification routing root lineage is malformed")
+        if _PROVIDER_ID_PATTERN.fullmatch(self.approved_provider_endpoint) is None:
+            raise ValueError("qualification routing provider endpoint is malformed")
+        if _QUALIFICATION_PROVIDER_NAME_PATTERN.fullmatch(self.approved_provider_name) is None:
+            raise ValueError("qualification routing provider name is malformed")
+        if (
+            not self.approved_roles
+            or self.approved_roles != tuple(sorted(set(self.approved_roles)))
+            or any(
+                _QUALIFICATION_ROLE_PATTERN.fullmatch(role) is None for role in self.approved_roles
+            )
+        ):
+            raise ValueError("qualification routing roles must be non-empty, safe, and sorted")
+        if self.verified_at.tzinfo is None or self.verified_at.utcoffset() != timedelta(0):
+            raise ValueError("qualification routing verification time must be UTC")
+        if self.expires_at.tzinfo is None or self.expires_at.utcoffset() != timedelta(0):
+            raise ValueError("qualification routing expiry must be UTC")
+        if self.expires_at <= self.verified_at:
+            raise ValueError("qualification routing expiry must follow verification")
+        for value in (
+            self.qualification_artifact_sha256,
+            self.qualification_verification_sha256,
+            self.production_selection_sha256,
+            self.selection_verification_sha256,
+            self.qualification_result_sha256,
+            self.endpoint_snapshot_sha256,
+            self.model_metadata_snapshot_sha256,
+            self.pricing_snapshot_sha256,
+        ):
+            if _SHA256_PATTERN.fullmatch(value) is None:
+                raise ValueError("qualification routing contains a malformed evidence hash")
+
+    def require_current(
+        self,
+        *,
+        role: str,
+        model: str,
+        provider_endpoints: tuple[str, ...],
+        now: datetime,
+        endpoint_policy: _RegisteredEndpointPolicy | None = None,
+        model_identity: _RegisteredModelIdentity | None = None,
+        require_runtime_snapshots: bool = False,
+    ) -> None:
+        """Fail closed on stale or mismatched per-request routing authority."""
+
+        if model != self.exact_model_id:
+            raise OpenRouterQualificationError(
+                "qualification routing does not bind the exact requested model"
+            )
+        if _qualification_role(role) not in self.approved_roles:
+            raise OpenRouterQualificationError(
+                "qualification routing does not approve the requested review role"
+            )
+        if now.tzinfo is None or now.utcoffset() != timedelta(0):
+            raise OpenRouterQualificationError("qualification routing check requires UTC")
+        if self.verified_at > now + _QUALIFICATION_FUTURE_SKEW:
+            raise OpenRouterQualificationError("qualification routing evidence is future-dated")
+        if self.expires_at <= now:
+            raise OpenRouterQualificationError("qualification routing evidence is expired")
+        if self.approved_provider_endpoint not in provider_endpoints:
+            raise OpenRouterQualificationError(
+                "qualification provider endpoint is outside the configured allowlist"
+            )
+        if require_runtime_snapshots and (endpoint_policy is None or model_identity is None):
+            raise OpenRouterQualificationError(
+                "qualified production routing requires current model and endpoint snapshots"
+            )
+        if endpoint_policy is not None:
+            endpoint = endpoint_policy.endpoint(self.approved_provider_endpoint)
+            if (
+                endpoint_policy.snapshot_sha256 != self.endpoint_snapshot_sha256
+                or endpoint is None
+                or endpoint.pricing_sha256 != self.pricing_snapshot_sha256
+            ):
+                raise OpenRouterQualificationError(
+                    "current endpoint or pricing snapshot differs from qualification"
+                )
+        if model_identity is not None and (
+            model_identity.exact_model_id != self.exact_model_id
+            or model_identity.canonical_slug != self.canonical_model_slug
+            or model_identity.model_metadata_snapshot_sha256 != self.model_metadata_snapshot_sha256
+        ):
+            raise OpenRouterQualificationError(
+                "current model identity snapshot differs from qualification"
+            )
+
+    def request_provider_policy(self) -> OpenRouterProviderPolicy:
+        """Return the exact singleton provider route authorized for this model."""
+
+        return OpenRouterProviderPolicy(
+            certification=True,
+            only=(self.approved_provider_endpoint,),
+            allow_fallbacks=False,
+        )
+
+    def request_metadata(self) -> dict[str, str]:
+        """Return bounded non-secret hashes for OpenRouter request metadata."""
+
+        return {
+            "mmaudit_qualification_artifact_sha256": self.qualification_artifact_sha256,
+            "mmaudit_qualification_verification_sha256": (self.qualification_verification_sha256),
+            "mmaudit_production_selection_sha256": self.production_selection_sha256,
+            "mmaudit_selection_verification_sha256": self.selection_verification_sha256,
+            "mmaudit_qualification_result_sha256": self.qualification_result_sha256,
+            "mmaudit_qualified_endpoint_snapshot_sha256": self.endpoint_snapshot_sha256,
+            "mmaudit_qualified_model_metadata_sha256": self.model_metadata_snapshot_sha256,
+            "mmaudit_qualified_pricing_snapshot_sha256": self.pricing_snapshot_sha256,
+        }
+
+    def routing_evidence(self) -> dict[str, Any]:
+        """Return the sanitized binding joined into durable usage evidence."""
+
+        return {
+            "qualified_exact_model_id": self.exact_model_id,
+            "qualified_canonical_model_slug": self.canonical_model_slug,
+            "qualified_root_lineage": self.root_lineage,
+            "qualified_provider_endpoint": self.approved_provider_endpoint,
+            "qualified_provider_name": self.approved_provider_name,
+            "qualified_endpoint_snapshot_sha256": self.endpoint_snapshot_sha256,
+            "qualified_model_metadata_snapshot_sha256": self.model_metadata_snapshot_sha256,
+            "qualified_pricing_snapshot_sha256": self.pricing_snapshot_sha256,
+            "qualified_roles": list(self.approved_roles),
+            "qualification_verified_at": self.verified_at.isoformat(),
+            "qualification_expires_at": self.expires_at.isoformat(),
+            "qualification_artifact_sha256": self.qualification_artifact_sha256,
+            "qualification_verification_sha256": self.qualification_verification_sha256,
+            "production_selection_sha256": self.production_selection_sha256,
+            "selection_verification_sha256": self.selection_verification_sha256,
+            "qualification_result_sha256": self.qualification_result_sha256,
+        }
 
 
 @dataclass(frozen=True)
@@ -247,6 +408,7 @@ class _RegisteredEndpointPolicy:
 class _RegisteredModelIdentity:
     exact_model_id: str
     canonical_slug: str
+    model_metadata_snapshot_sha256: str
     catalog_identity_binding_sha256: str
     catalog_snapshot_sha256: str
     discovery_provenance_sha256: str
@@ -295,6 +457,10 @@ class OpenRouterPrivacyError(OpenRouterError):
 
 class OpenRouterModelError(OpenRouterError):
     pass
+
+
+class OpenRouterQualificationError(OpenRouterModelError):
+    """Raised when certification lacks current exact qualification routing evidence."""
 
 
 class OpenRouterProviderPolicyError(OpenRouterModelError):
@@ -366,6 +532,7 @@ class OpenRouterClient:
         random_seed: int = 0,
         provider_policy: OpenRouterProviderPolicy | None = None,
         reasoning: OpenRouterReasoning | None = None,
+        qualification_routing: tuple[OpenRouterQualificationRoutingEvidence, ...] = (),
     ) -> None:
         if (
             not api_key
@@ -385,6 +552,14 @@ class OpenRouterClient:
         self.reasoning = reasoning
         self._endpoint_pricing: dict[str, _RegisteredEndpointPolicy] = {}
         self._model_identities: dict[str, _RegisteredModelIdentity] = {}
+        qualification_model_ids = tuple(binding.exact_model_id for binding in qualification_routing)
+        if qualification_model_ids != tuple(sorted(set(qualification_model_ids))):
+            raise OpenRouterQualificationError(
+                "qualification routing bindings must be unique and sorted by exact model"
+            )
+        self._qualification_routing = {
+            binding.exact_model_id: binding for binding in qualification_routing
+        }
         self._metadata_observations: dict[str, str] = {}
         self._authentication_validated = False
         if self.provider_policy.certification and not self.privacy.require_zdr:
@@ -827,6 +1002,7 @@ class OpenRouterClient:
         identity = _RegisteredModelIdentity(
             exact_model_id=evidence.exact_model_id,
             canonical_slug=evidence.canonical_slug,
+            model_metadata_snapshot_sha256=evidence.model_metadata_snapshot_sha256,
             catalog_identity_binding_sha256=evidence.catalog_identity_binding_sha256,
             catalog_snapshot_sha256=evidence.provenance.catalog_snapshot_sha256,
             discovery_provenance_sha256=evidence.provenance.provenance_sha256,
@@ -850,14 +1026,24 @@ class OpenRouterClient:
         if not isinstance(evidence, OpenRouterEndpointSnapshotEvidence):
             raise OpenRouterCostControlError("endpoint pricing evidence has an invalid type")
         _require_exact_model_id(evidence.exact_model_id)
-        configured = self.provider_policy.configured_endpoints
+        qualification_binding = self._qualification_routing.get(evidence.exact_model_id)
+        configured = (
+            (qualification_binding.approved_provider_endpoint,)
+            if self.provider_policy.certification and qualification_binding is not None
+            else self.provider_policy.configured_endpoints
+        )
         if not configured:
             raise OpenRouterCostControlError(
                 "endpoint pricing requires an explicit provider endpoint policy"
             )
         if (
             evidence.configured_provider_endpoints != configured
-            or evidence.provider_policy_mode != ("only" if self.provider_policy.only else "order")
+            or evidence.provider_policy_mode
+            != (
+                "only"
+                if qualification_binding is not None or self.provider_policy.only
+                else "order"
+            )
         ):
             raise OpenRouterProviderPolicyError(
                 "endpoint pricing does not match the exact configured provider policy"
@@ -1075,8 +1261,10 @@ class OpenRouterClient:
         response_model: type[BaseModel],
         schema_name: str,
         request_metadata: Mapping[str, str] | None = None,
+        provider_policy: OpenRouterProviderPolicy | None = None,
     ) -> dict[str, Any]:
         _require_exact_model_id(model)
+        effective_provider_policy = provider_policy or self.provider_policy
         body: dict[str, Any] = {
             "model": model,
             "messages": [
@@ -1086,7 +1274,7 @@ class OpenRouterClient:
             "temperature": 0,
             "max_tokens": self.execution.max_output_tokens_per_request,
             "stream": False,
-            "provider": self.provider_policy.as_request_payload(
+            "provider": effective_provider_policy.as_request_payload(
                 require_zdr=self.privacy.require_zdr
             ),
             "response_format": {
@@ -1183,6 +1371,39 @@ class OpenRouterClient:
             raise OpenRouterModelError(
                 "certification requires exactly one explicitly qualified model"
             )
+        qualification_bindings: dict[str, OpenRouterQualificationRoutingEvidence | None] = {}
+        checked_at = datetime.now(UTC)
+        for model in models:
+            binding = self._qualification_routing.get(model)
+            if (
+                self.provider_policy.certification
+                and role not in _PREQUALIFICATION_PROVIDER_ROLES
+                and binding is None
+            ):
+                raise OpenRouterQualificationError(
+                    "certification requires current qualification routing evidence"
+                )
+            if (
+                self.provider_policy.certification
+                and binding is None
+                and len(self.provider_policy.configured_endpoints) != 1
+            ):
+                raise OpenRouterQualificationError(
+                    "unqualified certification roles require one exact provider endpoint"
+                )
+            if binding is not None:
+                binding.require_current(
+                    role=role,
+                    model=model,
+                    provider_endpoints=self.provider_policy.configured_endpoints,
+                    now=checked_at,
+                    endpoint_policy=self._endpoint_pricing.get(model),
+                    model_identity=self._model_identities.get(model),
+                    require_runtime_snapshots=(
+                        self.execution_evidence is ExecutionEvidenceKind.REAL
+                    ),
+                )
+            qualification_bindings[model] = binding
         last_error: OpenRouterError | None = None
         for index, model in enumerate(models):
             try:
@@ -1194,6 +1415,7 @@ class OpenRouterClient:
                     response_model=response_model,
                     schema_name=schema_name,
                     fallback_used=index > 0,
+                    qualification_binding=qualification_bindings[model],
                 )
             except (
                 OpenRouterTransientError,
@@ -1218,20 +1440,28 @@ class OpenRouterClient:
         response_model: type[ResponseT],
         schema_name: str,
         fallback_used: bool,
+        qualification_binding: OpenRouterQualificationRoutingEvidence | None,
     ) -> StructuredCompletion[ResponseT]:
         request_id = str(uuid.uuid4())
+        request_provider_policy = (
+            qualification_binding.request_provider_policy()
+            if qualification_binding is not None and self.provider_policy.certification
+            else self.provider_policy
+        )
         prompt_hash = _canonical_sha256(
             [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ]
         )
+        user_prompt_hash = hashlib.sha256(user_prompt.encode()).hexdigest()
         schema = strict_json_schema(response_model)
         schema_hash = _canonical_sha256(schema)
         request_metadata = {
             "mmaudit_request_id": request_id,
             "mmaudit_role": role,
             "mmaudit_prompt_sha256": prompt_hash,
+            "mmaudit_user_prompt_sha256": user_prompt_hash,
             "mmaudit_schema_sha256": schema_hash,
         }
         endpoint_policy = self._endpoint_pricing.get(model)
@@ -1240,6 +1470,8 @@ class OpenRouterClient:
             request_metadata["mmaudit_endpoint_pricing_sha256"] = (
                 endpoint_policy.policy_pricing_sha256
             )
+        if qualification_binding is not None:
+            request_metadata.update(qualification_binding.request_metadata())
         body = self.build_request(
             model=model,
             system_prompt=system_prompt,
@@ -1247,6 +1479,7 @@ class OpenRouterClient:
             response_model=response_model,
             schema_name=schema_name,
             request_metadata=request_metadata,
+            provider_policy=request_provider_policy,
         )
         self._ensure_request_size(body)
         request_body_hash = _canonical_sha256(body)
@@ -1396,7 +1629,7 @@ class OpenRouterClient:
                 payload,
                 response.headers,
                 requested_model=model,
-                provider_policy=self.provider_policy,
+                provider_policy=request_provider_policy,
                 endpoint_policy=endpoint_policy,
                 model_identity=self._model_identities.get(model),
             )
@@ -1426,6 +1659,8 @@ class OpenRouterClient:
                 latency_ms=latency_ms,
                 validation_status="valid",
                 repair_used=False,
+                qualification_binding=qualification_binding,
+                provider_policy=request_provider_policy,
             )
             usage_record = UsageRecord(
                 request_id=request_id,
@@ -1444,12 +1679,13 @@ class OpenRouterClient:
                 accounted_cost_usd=accounted_cost_usd,
                 routing=routing,
                 prompt_sha256=prompt_hash,
+                user_prompt_sha256=user_prompt_hash,
                 response_sha256=response_hash,
                 validated_response_sha256=validated_response_hash,
                 request_body_sha256=request_body_hash,
                 schema_sha256=schema_hash,
                 openrouter_generation_id=envelope.generation_id,
-                configured_provider_endpoints=list(self.provider_policy.configured_endpoints),
+                configured_provider_endpoints=list(request_provider_policy.configured_endpoints),
                 actual_provider_endpoint=envelope.selected_provider,
                 started_at=started_at,
                 ended_at=ended_at,
@@ -1523,8 +1759,11 @@ class OpenRouterClient:
                             ended_at=ended_at,
                             latency_ms=latency_ms,
                             error=terminal_error,
+                            qualification_binding=qualification_binding,
+                            provider_policy=request_provider_policy,
                         ),
                         prompt_sha256=prompt_hash,
+                        user_prompt_sha256=user_prompt_hash,
                         response_sha256=response_hash,
                         request_body_sha256=request_body_hash,
                         schema_sha256=schema_hash,
@@ -1532,7 +1771,7 @@ class OpenRouterClient:
                             raw_payload, response_headers
                         ),
                         configured_provider_endpoints=list(
-                            self.provider_policy.configured_endpoints
+                            request_provider_policy.configured_endpoints
                         ),
                         actual_provider_endpoint=actual_provider,
                         started_at=started_at,
@@ -1635,6 +1874,8 @@ class OpenRouterClient:
         latency_ms: float,
         validation_status: str,
         repair_used: bool,
+        qualification_binding: OpenRouterQualificationRoutingEvidence | None,
+        provider_policy: OpenRouterProviderPolicy,
         repair_request: bool = False,
     ) -> dict[str, Any]:
         usage = envelope.usage
@@ -1644,7 +1885,14 @@ class OpenRouterClient:
             if endpoint_policy is not None
             else None
         )
-        return {
+        if (
+            qualification_binding is not None
+            and envelope.selected_provider_name != qualification_binding.approved_provider_name
+        ):
+            raise OpenRouterQualificationError(
+                "provider response differs from the qualification provider binding"
+            )
+        evidence = {
             "generation_id": envelope.generation_id,
             "provider": envelope.provider,
             "selected_model": envelope.selected_model,
@@ -1667,7 +1915,7 @@ class OpenRouterClient:
             "cached_tokens": _cached_tokens(usage),
             "schema_sha256": schema_hash,
             "provider_policy_sha256": _canonical_sha256(
-                self.provider_policy.as_request_payload(require_zdr=self.privacy.require_zdr)
+                provider_policy.as_request_payload(require_zdr=self.privacy.require_zdr)
             ),
             "endpoint_snapshot_sha256": (
                 endpoint_policy.snapshot_sha256 if endpoint_policy is not None else None
@@ -1677,6 +1925,11 @@ class OpenRouterClient:
             ),
             "catalog_identity_binding_sha256": (
                 self._model_identities[envelope.returned_model].catalog_identity_binding_sha256
+                if envelope.returned_model in self._model_identities
+                else None
+            ),
+            "model_metadata_snapshot_sha256": (
+                self._model_identities[envelope.returned_model].model_metadata_snapshot_sha256
                 if envelope.returned_model in self._model_identities
                 else None
             ),
@@ -1695,10 +1948,10 @@ class OpenRouterClient:
                 if envelope.returned_model in self._model_identities
                 else None
             ),
-            "configured_provider_only": list(self.provider_policy.only),
-            "configured_provider_order": list(self.provider_policy.order),
-            "provider_fallbacks_allowed": self.provider_policy.allow_fallbacks,
-            "certification_request": self.provider_policy.certification,
+            "configured_provider_only": list(provider_policy.only),
+            "configured_provider_order": list(provider_policy.order),
+            "provider_fallbacks_allowed": provider_policy.allow_fallbacks,
+            "certification_request": provider_policy.certification,
             "zdr_requested": self.privacy.require_zdr,
             "data_collection": "deny",
             "request_started_at": started_at.isoformat(),
@@ -1708,6 +1961,9 @@ class OpenRouterClient:
             "repair_used": repair_used,
             "repair_request": repair_request,
         }
+        if qualification_binding is not None:
+            evidence.update(qualification_binding.routing_evidence())
+        return evidence
 
     def _failure_routing_evidence(
         self,
@@ -1719,10 +1975,12 @@ class OpenRouterClient:
         ended_at: datetime,
         latency_ms: float,
         error: Exception,
+        qualification_binding: OpenRouterQualificationRoutingEvidence | None,
+        provider_policy: OpenRouterProviderPolicy,
     ) -> dict[str, Any]:
         router_metadata = payload.get("openrouter_metadata") if isinstance(payload, dict) else None
         finish_reason = _optional_finish_reason(payload)
-        return {
+        evidence = {
             "generation_id": (_optional_string(payload.get("id")) if payload is not None else None),
             "generation_header_id": _header_value(response_headers, "x-generation-id"),
             "provider": (
@@ -1734,12 +1992,12 @@ class OpenRouterClient:
             "finish_reason": finish_reason,
             "schema_sha256": schema_hash,
             "provider_policy_sha256": _canonical_sha256(
-                self.provider_policy.as_request_payload(require_zdr=self.privacy.require_zdr)
+                provider_policy.as_request_payload(require_zdr=self.privacy.require_zdr)
             ),
-            "configured_provider_only": list(self.provider_policy.only),
-            "configured_provider_order": list(self.provider_policy.order),
-            "provider_fallbacks_allowed": self.provider_policy.allow_fallbacks,
-            "certification_request": self.provider_policy.certification,
+            "configured_provider_only": list(provider_policy.only),
+            "configured_provider_order": list(provider_policy.order),
+            "provider_fallbacks_allowed": provider_policy.allow_fallbacks,
+            "certification_request": provider_policy.certification,
             "zdr_requested": self.privacy.require_zdr,
             "data_collection": "deny",
             "request_started_at": started_at.isoformat(),
@@ -1748,6 +2006,9 @@ class OpenRouterClient:
             "validation_status": "rejected",
             "provider_error_classification": _provider_error_classification(error),
         }
+        if qualification_binding is not None:
+            evidence.update(qualification_binding.routing_evidence())
+        return evidence
 
     async def _backoff(self, attempt: int, retry_after: str | None) -> None:
         delay: float
@@ -1947,6 +2208,16 @@ def _require_exact_model_id(model: str) -> None:
         raise OpenRouterModelError(
             "model must be an exact author/model slug without auto, random, or latest routing"
         )
+
+
+def _qualification_role(role: str) -> str:
+    if role.startswith("specialist:"):
+        return role.split(":", 2)[1]
+    if role.startswith("candidate_falsifier:"):
+        return "falsifier"
+    if role.startswith("whole_protocol_review:"):
+        return "whole_protocol_review"
+    return role
 
 
 def _is_safe_metadata_pair(key: str, value: str) -> bool:

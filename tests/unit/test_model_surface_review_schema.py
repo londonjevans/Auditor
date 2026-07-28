@@ -12,6 +12,8 @@ from mmaudit.models.schemas import (
     ModelReviewSurfaceKind,
     ModelSurfaceReviewArtifact,
     ModelSurfaceReviewCitation,
+    ModelSurfaceReviewEvidenceObservation,
+    ModelSurfaceReviewReachability,
     ModelSurfaceReviewRecord,
     ModelSurfaceReviewRequest,
     ModelSurfaceReviewStatus,
@@ -28,6 +30,16 @@ def _record(
     role: str = "specialist:accounting_invariant",
     status: ModelSurfaceReviewStatus = ModelSurfaceReviewStatus.REVIEWED_NO_ISSUE,
 ) -> ModelSurfaceReviewRecord:
+    citation = ModelSurfaceReviewCitation(
+        location=Location(
+            path="src/SyntheticVault.sol",
+            start_line=10,
+            end_line=14,
+            symbol="deposit",
+            content_hash="a" * 64,
+        ),
+        symbol="deposit",
+    )
     return ModelSurfaceReviewRecord(
         surface_id=surface_id,
         contract="SyntheticVault",
@@ -35,17 +47,21 @@ def _record(
         review_role=role,
         status=status,
         rationale="Observed accounting is reconciled against the supplied balance.",
-        citation=ModelSurfaceReviewCitation(
-            location=Location(
-                path="src/SyntheticVault.sol",
-                start_line=10,
-                end_line=14,
-                symbol="deposit",
-                content_hash="a" * 64,
-            ),
-            symbol="deposit",
-        ),
+        citation=citation,
         invariant_considered="Recorded assets cannot exceed observed token receipts.",
+        evidence_observations=(
+            ModelSurfaceReviewEvidenceObservation(
+                citation=citation,
+                observed_behavior="The deposit path records the observed token receipt.",
+                security_relevance="The recorded amount is bounded by the observed balance change.",
+            ),
+        ),
+        reachability=ModelSurfaceReviewReachability(
+            entry_point=citation,
+            path=(citation,),
+            actor_or_caller="external depositor",
+            preconditions=("the token transfer returns successfully",),
+        ),
         assumptions=("token balance observation is authoritative",),
         confidence=0.91,
     )
@@ -110,6 +126,7 @@ def _artifact_payload(
                 resolved_requests
             )
         ),
+        "rendered_context_sha256": "0" * 64,
         "prompt_sha256": "1" * 64,
         "response_sha256": "2" * 64,
         "validated_response_sha256": "3" * 64,
@@ -239,6 +256,33 @@ def test_surface_review_record_requires_explicit_assumptions_field() -> None:
     del payload["assumptions"]
 
     with pytest.raises(ValidationError, match="assumptions"):
+        ModelSurfaceReviewRecord.model_validate(payload)
+
+
+def test_creditable_surface_review_rejects_generic_boilerplate_without_evidence() -> None:
+    payload = _record(_surface_id("generic-boilerplate")).model_dump(mode="json")
+    payload["rationale"] = "Reviewed."
+    payload["evidence_observations"] = []
+    payload["reachability"] = None
+
+    with pytest.raises(
+        ValidationError,
+        match="requires explicit evidence and reachability",
+    ):
+        ModelSurfaceReviewRecord.model_validate(payload)
+
+
+def test_creditable_surface_review_requires_evidence_bound_to_cited_surface() -> None:
+    payload = _record(_surface_id("evidence-binding")).model_dump(mode="json")
+    payload["evidence_observations"][0]["citation"] = {
+        "location": None,
+        "symbol": "unrelatedSurface",
+    }
+
+    with pytest.raises(
+        ValidationError,
+        match="observations must cite the reviewed surface",
+    ):
         ModelSurfaceReviewRecord.model_validate(payload)
 
 

@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 
 from mmaudit.cli import app
 from mmaudit.constants import ExitCode
+from mmaudit.models.registry import ModelRegistry
 from mmaudit.models.schemas import (
     AuditReport,
     RepositoryFile,
@@ -32,6 +33,7 @@ from mmaudit.orchestration.verification import (
     RunVerificationStatus,
     verify_run_evidence,
 )
+from tests.unit.test_model_registry import _verified_production_config_and_capability
 
 runner = CliRunner()
 
@@ -235,6 +237,97 @@ def test_manifest_self_hash_and_artifact_hashes_reject_tampering(
     )
     with pytest.raises(ValueError, match="artifact hash mismatch"):
         validate_manifest_artifacts(manifest, run_dir)
+
+
+def test_manifest_semantically_binds_runtime_model_qualification(
+    tmp_path: Path,
+) -> None:
+    config, qualification, observed_at = _verified_production_config_and_capability()
+    validation = ModelRegistry.validate_production_qualification(
+        config,
+        qualification,
+        required=True,
+        now=observed_at,
+    )
+    assert validation.valid
+    run_dir = tmp_path / "qualified-run"
+    _write_required_artifacts(run_dir)
+    qualification_path = run_dir / "model-qualification-runtime.json"
+    qualification_path.write_text(
+        json.dumps(validation.as_dict(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    manifest = build_run_evidence_manifest(
+        run_dir=run_dir,
+        report=_report(config),
+        config=config,
+    )
+
+    model_bindings = {binding.identifier: binding for binding in manifest.bindings.models}
+    assert model_bindings["qualification/artifact"].sha256 == qualification.artifact_sha256
+    assert (
+        model_bindings["qualification/production-selection"].sha256
+        == qualification.production_selection_sha256
+    )
+    assert (
+        model_bindings["qualification/production-effective-config"].sha256
+        == qualification.production_effective_config_sha256
+    )
+    assert (
+        model_bindings["qualification/release-observation"].sha256
+        == qualification.release_observation_sha256
+    )
+    per_model_kinds = {
+        "result": "qualification_result_sha256",
+        "benchmark-report": "benchmark_report_sha256",
+        "benchmark-verification": "benchmark_verification_sha256",
+        "fresh-benchmark-evidence": "fresh_benchmark_evidence_sha256",
+        "endpoint-snapshot": "endpoint_snapshot_sha256",
+        "model-metadata-snapshot": "model_metadata_snapshot_sha256",
+        "pricing-snapshot": "pricing_snapshot_sha256",
+    }
+    for kind, attribute in per_model_kinds.items():
+        qualified_bindings = [
+            binding
+            for identifier, binding in model_bindings.items()
+            if identifier.startswith(f"qualification/{kind}/")
+        ]
+        assert len(qualified_bindings) == len(qualification.models)
+        assert {binding.sha256 for binding in qualified_bindings} == {
+            getattr(model, attribute) for model in qualification.models
+        }
+        assert all(
+            int(binding.details["benchmark_case_count"]) > 0 for binding in qualified_bindings
+        )
+        assert all(binding.details["evaluated_at"] for binding in qualified_bindings)
+        assert all(binding.details["expires_at"] for binding in qualified_bindings)
+
+    tampered = validation.as_dict()
+    tampered["qualification_artifact_sha256"] = "f" * 64
+    qualification_path.write_text(
+        json.dumps(tampered, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationError, match="self-hash"):
+        build_run_evidence_manifest(
+            run_dir=run_dir,
+            report=_report(config),
+            config=config,
+        )
+
+    tampered = validation.as_dict()
+    tampered["model_bindings"][0]["benchmark_report_sha256"] = "e" * 64
+    qualification_path.write_text(
+        json.dumps(tampered, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationError, match="self-hash"):
+        build_run_evidence_manifest(
+            run_dir=run_dir,
+            report=_report(config),
+            config=config,
+        )
 
 
 def test_manifest_rejects_linked_artifacts(

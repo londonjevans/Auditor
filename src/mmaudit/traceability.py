@@ -253,23 +253,30 @@ def build_traceability_matrix(commit: str | None) -> MaximumAssuranceTraceabilit
             ImplementationStatus.PARTIALLY_IMPLEMENTED,
             verified,
             implementation_paths=[
+                "src/mmaudit/models/openrouter.py",
+                "src/mmaudit/models/qualification.py",
                 "src/mmaudit/models/registry.py",
                 "src/mmaudit/agents/specialists.py",
+                "src/mmaudit/orchestration/assurance.py",
                 "src/mmaudit/orchestration/model_coverage.py",
             ],
             unit_tests=[
                 "tests/unit/test_openrouter.py",
+                "tests/unit/test_model_qualification.py",
+                "tests/unit/test_model_registry.py",
                 "tests/unit/test_assurance.py",
                 "tests/unit/test_model_coverage.py",
             ],
             runtime_artifacts=[
                 "model-validation.json",
+                "model-qualification-runtime.json",
                 "model-review-coverage.json",
                 "final-findings.json",
             ],
             downgrade_reason=(
-                "Specialist routing exists, but a hidden model benchmark, eight Tier A model "
-                "IDs, and six independent lineages are not proven."
+                "Qualification and response-backed specialist routing fail closed, but no frozen "
+                "real production benchmark currently proves and executes every selected Tier A "
+                "model and required independent lineage."
             ),
         ),
         _row(

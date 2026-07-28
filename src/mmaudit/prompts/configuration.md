@@ -10,6 +10,12 @@ manifest is empty. Return exactly one sorted `ModelSurfaceReviewRecord` for ever
 `surface_id` and no other IDs. Use `REVIEWED_NO_ISSUE`, `CANDIDATE`, `INCONCLUSIVE`, or
 `NOT_REVIEWED` honestly; missing context is `INCONCLUSIVE` or `NOT_REVIEWED`, never an omitted
 record. Cite only an allowed location or symbol and set `review_role` to `configuration`.
+For a creditable status, name a surface-specific source behavior and its concrete security
+relevance, then provide a reachability path that starts at a supplied public/external/constructor
+entry point, follows only supplied deterministic graph adjacencies, and ends at the exact reviewed
+surface. A one-node path is valid only when that reviewed surface is itself the entry point. Generic
+review boilerplate, copied assignment text, and unsupported paths are not evidence; use
+`INCONCLUSIVE` when the supplied facts cannot support these fields.
 
 For Solidity projects, review Foundry/Hardhat compiler configuration, optimizer and EVM settings,
 remappings, dependency declarations, deployment scripts, broadcast/deployment artifacts, proxy

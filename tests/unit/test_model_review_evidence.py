@@ -15,17 +15,30 @@ from mmaudit.models.schemas import (
     Location,
     ModelRequestValidationStatus,
     ModelReviewSurfaceKind,
+    ModelSurfaceReviewArtifact,
     ModelSurfaceReviewCitation,
+    ModelSurfaceReviewEvidenceObservation,
+    ModelSurfaceReviewReachability,
     ModelSurfaceReviewRecord,
     ModelSurfaceReviewRequest,
     ModelSurfaceReviewStatus,
     RepositoryMap,
+    SolidityEntity,
+    SolidityEntityKind,
+    SolidityGraphEdge,
+    SolidityGraphKind,
+    SolidityGraphSet,
+    SolidityProvenance,
+    SoliditySymbolIndex,
     UsageRecord,
 )
+from mmaudit.orchestration.context import render_context
 from mmaudit.orchestration.model_review_evidence import (
     ModelReviewEvidenceError,
-    seal_model_surface_review_artifact,
     validate_model_surface_review_record,
+)
+from mmaudit.orchestration.model_review_evidence import (
+    seal_model_surface_review_artifact as _seal_model_surface_review_artifact,
 )
 
 _ROLE = "specialist:accounting_invariant"
@@ -37,6 +50,26 @@ _SOURCE = (
     "}\n"
 )
 _INVARIANT = "Recorded assets cannot exceed observed token receipts."
+
+
+def seal_model_surface_review_artifact(
+    context: ContextPackage,
+    completion: StructuredCompletion[CandidateReviewBatch],
+) -> ModelSurfaceReviewArtifact | None:
+    rendered_user_context = render_context(context)
+    bound_completion = StructuredCompletion(
+        value=completion.value,
+        usage_record=completion.usage_record.model_copy(
+            update={
+                "user_prompt_sha256": hashlib.sha256(rendered_user_context.encode()).hexdigest()
+            }
+        ),
+    )
+    return _seal_model_surface_review_artifact(
+        context,
+        bound_completion,
+        rendered_user_context=rendered_user_context,
+    )
 
 
 def _canonical_sha256(value: object) -> str:
@@ -80,11 +113,44 @@ def _request(seed: str = "deposit") -> ModelSurfaceReviewRequest:
     )
 
 
+def _state_location() -> Location:
+    source_line = _SOURCE.splitlines(keepends=True)[1]
+    return Location(
+        path=_PATH,
+        start_line=2,
+        end_line=2,
+        symbol="totalAssets",
+        content_hash=hashlib.sha256(source_line.encode()).hexdigest(),
+    )
+
+
+def _state_request() -> ModelSurfaceReviewRequest:
+    subject_id = "state:SyntheticVault:totalAssets"
+    return ModelSurfaceReviewRequest(
+        surface_id=ModelSurfaceReviewRequest.calculate_surface_id(
+            ModelReviewSurfaceKind.STATE,
+            subject_id,
+        ),
+        kind=ModelReviewSurfaceKind.STATE,
+        subject_id=subject_id,
+        contract="SyntheticVault",
+        function_or_state_surface="totalAssets",
+        critical=True,
+        allowed_locations=(_state_location(),),
+        allowed_symbols=("totalAssets",),
+        invariant_considered=_INVARIANT,
+    )
+
+
 def _record(
     request: ModelSurfaceReviewRequest,
     *,
     role: str = _ROLE,
 ) -> ModelSurfaceReviewRecord:
+    citation = ModelSurfaceReviewCitation(
+        location=request.allowed_locations[0],
+        symbol=request.allowed_symbols[0],
+    )
     return ModelSurfaceReviewRecord(
         surface_id=request.surface_id,
         contract=request.contract,
@@ -92,13 +158,134 @@ def _record(
         review_role=role,
         status=ModelSurfaceReviewStatus.REVIEWED_NO_ISSUE,
         rationale="The supplied accounting path preserves the stated invariant.",
-        citation=ModelSurfaceReviewCitation(
-            location=request.allowed_locations[0],
-            symbol=request.allowed_symbols[0],
-        ),
+        citation=citation,
         invariant_considered=request.invariant_considered,
+        evidence_observations=(
+            ModelSurfaceReviewEvidenceObservation(
+                citation=citation,
+                observed_behavior="The deposit transition records the supplied receipt amount.",
+                security_relevance=(
+                    "deposit keeps observed assets bounded by the declared asset invariant."
+                ),
+            ),
+        ),
+        reachability=ModelSurfaceReviewReachability(
+            entry_point=citation,
+            path=(citation,),
+            actor_or_caller="external depositor",
+            preconditions=("the deposit call reaches the cited transition",),
+        ),
         assumptions=("observed token receipts are authoritative",),
         confidence=0.91,
+    )
+
+
+def _state_record(request: ModelSurfaceReviewRequest) -> ModelSurfaceReviewRecord:
+    state_citation = ModelSurfaceReviewCitation(
+        location=request.allowed_locations[0],
+        symbol="totalAssets",
+    )
+    entry_citation = ModelSurfaceReviewCitation(
+        location=_location(),
+        symbol="deposit(uint256)",
+    )
+    return ModelSurfaceReviewRecord(
+        surface_id=request.surface_id,
+        contract=request.contract,
+        function_or_state_surface=request.function_or_state_surface,
+        review_role=_ROLE,
+        status=ModelSurfaceReviewStatus.REVIEWED_NO_ISSUE,
+        rationale="The external deposit path writes the accounting state.",
+        citation=state_citation,
+        invariant_considered=request.invariant_considered,
+        evidence_observations=(
+            ModelSurfaceReviewEvidenceObservation(
+                citation=state_citation,
+                observed_behavior="deposit writes totalAssets after observing the receipt.",
+                security_relevance="The totalAssets write preserves the observed asset invariant.",
+            ),
+        ),
+        reachability=ModelSurfaceReviewReachability(
+            entry_point=entry_citation,
+            path=(entry_citation, state_citation),
+            actor_or_caller="external depositor",
+            preconditions=("deposit reaches its accounting write",),
+        ),
+        assumptions=("the compiler graph represents the local state write",),
+        confidence=0.92,
+    )
+
+
+def _state_context(
+    request: ModelSurfaceReviewRequest,
+    *,
+    include_edge: bool = True,
+) -> ContextPackage:
+    entry = _context((request,)).solidity_index
+    assert entry is not None
+    state_entity = SolidityEntity(
+        id=request.subject_id,
+        kind=SolidityEntityKind.STATE_VARIABLE,
+        name="totalAssets",
+        contract_name="SyntheticVault",
+        path=_PATH,
+        start_line=2,
+        end_line=2,
+        byte_start=0,
+        byte_end=len(_SOURCE.encode()),
+        source_hash=_state_location().content_hash or "0" * 64,
+        provenance=SolidityProvenance.COMPILER,
+        confidence=1,
+        transformation="synthetic_model_review_evidence",
+    )
+    index = entry.model_copy(update={"entities": [*entry.entities, state_entity]})
+    edges = (
+        [
+            SolidityGraphEdge(
+                graph=SolidityGraphKind.STATE_WRITE,
+                source_id="function:SyntheticVault:deposit",
+                target_id=request.subject_id,
+                label="writes totalAssets",
+                provenance=SolidityProvenance.COMPILER,
+                path=_PATH,
+                start_line=3,
+                end_line=3,
+                source_hash=_location().content_hash or "0" * 64,
+                confidence=1,
+                transformation="synthetic_model_review_evidence",
+            )
+        ]
+        if include_edge
+        else []
+    )
+    return _context(
+        (request,),
+        index=index,
+        graphs=SolidityGraphSet(edges=edges),
+    )
+
+
+def _record_with_citation(
+    record: ModelSurfaceReviewRecord,
+    citation: ModelSurfaceReviewCitation,
+) -> ModelSurfaceReviewRecord:
+    assert record.reachability is not None
+    observations = tuple(
+        observation.model_copy(update={"citation": citation})
+        for observation in record.evidence_observations
+    )
+    reachability = record.reachability.model_copy(
+        update={
+            "entry_point": citation,
+            "path": (citation,),
+        }
+    )
+    return record.model_copy(
+        update={
+            "citation": citation,
+            "evidence_observations": observations,
+            "reachability": reachability,
+        }
     )
 
 
@@ -125,7 +312,32 @@ def _context(
     requests: tuple[ModelSurfaceReviewRequest, ...],
     *,
     role: str = _ROLE,
+    index: SoliditySymbolIndex | None = None,
+    graphs: SolidityGraphSet | None = None,
 ) -> ContextPackage:
+    resolved_index = index or SoliditySymbolIndex(
+        projects=[],
+        entities=[
+            SolidityEntity(
+                id="function:SyntheticVault:deposit",
+                kind=SolidityEntityKind.FUNCTION,
+                name="deposit",
+                contract_name="SyntheticVault",
+                path=_PATH,
+                start_line=3,
+                end_line=3,
+                byte_start=0,
+                byte_end=len(_SOURCE.encode()),
+                source_hash=_location().content_hash or "0" * 64,
+                provenance=SolidityProvenance.COMPILER,
+                confidence=1,
+                transformation="synthetic_model_review_evidence",
+                visibility="external",
+                signature="deposit(uint256)",
+            )
+        ],
+        ast_sources=[_PATH],
+    )
     return ContextPackage(
         role=role,
         byte_budget=100_000,
@@ -142,6 +354,8 @@ def _context(
             )
         ],
         requested_model_surfaces=list(requests),
+        solidity_index=resolved_index,
+        solidity_graphs=graphs or SolidityGraphSet(edges=[]),
     )
 
 
@@ -227,26 +441,250 @@ def test_seal_surface_review_artifact_binds_exact_request_response_and_source() 
     assert first.request_id == "request-surface-review"
     assert first.requested_surface_ids == (request.surface_id,)
     assert first.records == (record,)
+    assert (
+        first.rendered_context_sha256
+        == hashlib.sha256(render_context(context).encode()).hexdigest()
+    )
     assert first.require_exact_requested_surface_manifest((request,)) == first
 
 
-def test_seal_accepts_an_exact_allowed_symbol_without_a_location() -> None:
+def test_seal_rejects_a_post_hoc_context_substitution() -> None:
     request = _request()
-    record = _record(request).model_copy(
+    record = _record(request)
+    completion = _completion(CandidateReviewBatch(findings=[], surface_reviews=(record,)))
+    original_context = _context((request,))
+    frozen_rendering = render_context(original_context)
+    bound_completion = StructuredCompletion(
+        value=completion.value,
+        usage_record=completion.usage_record.model_copy(
+            update={"user_prompt_sha256": hashlib.sha256(frozen_rendering.encode()).hexdigest()}
+        ),
+    )
+    substituted_context = original_context.model_copy(
+        update={"omissions": ["post-hoc context substitution"]}
+    )
+
+    with pytest.raises(ModelReviewEvidenceError, match="differs from the rendered"):
+        _seal_model_surface_review_artifact(
+            substituted_context,
+            bound_completion,
+            rendered_user_context=frozen_rendering,
+        )
+
+
+def test_seal_credits_a_state_surface_only_with_a_known_adjacent_entry_path() -> None:
+    request = _state_request()
+    record = _state_record(request)
+    batch = CandidateReviewBatch(findings=[], surface_reviews=(record,))
+
+    artifact = seal_model_surface_review_artifact(
+        _state_context(request),
+        _completion(batch),
+    )
+
+    assert artifact is not None
+    assert artifact.records == (record,)
+
+
+def test_seal_rejects_a_state_surface_self_loop_or_non_adjacent_path() -> None:
+    request = _state_request()
+    valid = _state_record(request)
+    state_citation = valid.citation
+    assert valid.reachability is not None
+    self_loop = valid.model_copy(
         update={
-            "citation": ModelSurfaceReviewCitation(
-                location=None,
-                symbol="deposit(uint256)",
+            "reachability": valid.reachability.model_copy(
+                update={
+                    "entry_point": state_citation,
+                    "path": (state_citation,),
+                }
             )
         }
     )
+    with pytest.raises(ModelReviewEvidenceError, match="exact known"):
+        seal_model_surface_review_artifact(
+            _state_context(request),
+            _completion(CandidateReviewBatch(findings=[], surface_reviews=(self_loop,))),
+        )
+
+    with pytest.raises(ModelReviewEvidenceError, match="not adjacent"):
+        seal_model_surface_review_artifact(
+            _state_context(request, include_edge=False),
+            _completion(CandidateReviewBatch(findings=[], surface_reviews=(valid,))),
+        )
+
+
+def test_seal_rejects_generic_or_request_copied_observation_text() -> None:
+    request = _request()
+    valid = _record(request)
+    generic_observation = valid.evidence_observations[0].model_copy(
+        update={
+            "observed_behavior": (
+                "The synthetic source surface was inspected for its state effects."
+            ),
+            "security_relevance": (
+                "Those effects determine whether the supplied invariant is preserved."
+            ),
+        }
+    )
+    generic = valid.model_copy(update={"evidence_observations": (generic_observation,)})
+    with pytest.raises(ModelReviewEvidenceError, match="generic boilerplate"):
+        seal_model_surface_review_artifact(
+            _context((request,)),
+            _completion(CandidateReviewBatch(findings=[], surface_reviews=(generic,))),
+        )
+
+    copied_observation = valid.evidence_observations[0].model_copy(
+        update={
+            "observed_behavior": request.invariant_considered,
+            "security_relevance": request.invariant_considered,
+        }
+    )
+    copied = valid.model_copy(update={"evidence_observations": (copied_observation,)})
+    with pytest.raises(ModelReviewEvidenceError, match="copied request text"):
+        seal_model_surface_review_artifact(
+            _context((request,)),
+            _completion(CandidateReviewBatch(findings=[], surface_reviews=(copied,))),
+        )
+
+
+def test_seal_rejects_a_location_and_symbol_that_resolve_to_different_surfaces() -> None:
+    base = _request()
+    location = base.allowed_locations[0].model_copy(update={"symbol": None})
+    request = base.model_copy(
+        update={
+            "allowed_locations": (location,),
+            "allowed_symbols": ("deposit(uint256)", "totalAssets"),
+        }
+    )
+    mismatched = _record_with_citation(
+        _record(base),
+        ModelSurfaceReviewCitation(
+            location=location,
+            symbol="totalAssets",
+        ),
+    ).model_copy(
+        update={
+            "surface_id": request.surface_id,
+            "contract": request.contract,
+            "function_or_state_surface": request.function_or_state_surface,
+            "invariant_considered": request.invariant_considered,
+        }
+    )
+    state_context = _state_context(_state_request())
+    assert state_context.solidity_index is not None
+
+    with pytest.raises(ModelReviewEvidenceError, match="exact known"):
+        seal_model_surface_review_artifact(
+            _context((request,), index=state_context.solidity_index),
+            _completion(CandidateReviewBatch(findings=[], surface_reviews=(mismatched,))),
+        )
+
+
+def test_seal_rejects_an_unresolved_non_inventory_surface_subject() -> None:
+    base = _request()
+    forged_subject = "function:SyntheticVault:not-indexed"
+    request = base.model_copy(
+        update={
+            "subject_id": forged_subject,
+            "surface_id": ModelSurfaceReviewRequest.calculate_surface_id(
+                base.kind,
+                forged_subject,
+            ),
+        }
+    )
+    record = _record(base).model_copy(update={"surface_id": request.surface_id})
+
+    with pytest.raises(ModelReviewEvidenceError, match="exact deterministic surface"):
+        seal_model_surface_review_artifact(
+            _context((request,)),
+            _completion(CandidateReviewBatch(findings=[], surface_reviews=(record,))),
+        )
+
+
+def test_seal_accepts_an_exact_allowed_symbol_with_source_bytes() -> None:
+    request = _request()
+    record = _record_with_citation(
+        _record(request),
+        ModelSurfaceReviewCitation(
+            location=None,
+            symbol="deposit(uint256)",
+        ),
+    )
     batch = CandidateReviewBatch(findings=[], surface_reviews=(record,))
-    context = _context((request,)).model_copy(update={"excerpts": []})
+    context = _context((request,))
 
     artifact = seal_model_surface_review_artifact(context, _completion(batch))
 
     assert artifact is not None
     assert artifact.records[0].citation.location is None
+
+
+def test_seal_rejects_a_symbol_only_review_without_source_bytes() -> None:
+    request = _request()
+    record = _record_with_citation(
+        _record(request),
+        ModelSurfaceReviewCitation(location=None, symbol="deposit(uint256)"),
+    )
+    context = _context((request,)).model_copy(update={"excerpts": []})
+
+    with pytest.raises(ModelReviewEvidenceError, match="source evidence was omitted"):
+        seal_model_surface_review_artifact(
+            context,
+            _completion(CandidateReviewBatch(findings=[], surface_reviews=(record,))),
+        )
+
+
+def test_seal_rejects_a_known_location_without_source_bytes() -> None:
+    request = _request()
+    context = _context((request,)).model_copy(update={"excerpts": []})
+
+    with pytest.raises(ModelReviewEvidenceError, match="source evidence was omitted"):
+        seal_model_surface_review_artifact(
+            context,
+            _completion(CandidateReviewBatch(findings=[], surface_reviews=(_record(request),))),
+        )
+
+
+def test_seal_rejects_credit_when_preferred_source_was_omitted_by_budget() -> None:
+    request = _request()
+    context = _context((request,)).model_copy(
+        update={
+            "excerpts": [],
+            "omissions": [f"{_PATH}: preferred source omitted by context budget"],
+        }
+    )
+
+    with pytest.raises(ModelReviewEvidenceError, match="source evidence was omitted"):
+        seal_model_surface_review_artifact(
+            context,
+            _completion(CandidateReviewBatch(findings=[], surface_reviews=(_record(request),))),
+        )
+
+
+def test_seal_allows_inconclusive_when_source_was_omitted_by_budget() -> None:
+    request = _request()
+    record = _record(request).model_copy(
+        update={
+            "status": ModelSurfaceReviewStatus.INCONCLUSIVE,
+            "evidence_observations": (),
+            "reachability": None,
+        }
+    )
+    context = _context((request,)).model_copy(
+        update={
+            "excerpts": [],
+            "omissions": [f"{_PATH}: preferred source omitted by context budget"],
+        }
+    )
+
+    artifact = seal_model_surface_review_artifact(
+        context,
+        _completion(CandidateReviewBatch(findings=[], surface_reviews=(record,))),
+    )
+
+    assert artifact is not None
+    assert artifact.records[0].status is ModelSurfaceReviewStatus.INCONCLUSIVE
 
 
 def test_empty_surface_request_returns_none_only_for_an_empty_surface_response() -> None:
@@ -310,13 +748,12 @@ def test_seal_rejects_wrong_location_descriptor(
 ) -> None:
     request = _request()
     location = request.allowed_locations[0].model_copy(update=location_update)
-    record = _record(request).model_copy(
-        update={
-            "citation": ModelSurfaceReviewCitation.model_construct(
-                location=location,
-                symbol=None,
-            )
-        }
+    record = _record_with_citation(
+        _record(request),
+        ModelSurfaceReviewCitation.model_construct(
+            location=location,
+            symbol=None,
+        ),
     )
     batch = CandidateReviewBatch(findings=[], surface_reviews=(record,))
 
@@ -326,13 +763,12 @@ def test_seal_rejects_wrong_location_descriptor(
 
 def test_seal_rejects_an_unrequested_symbol() -> None:
     request = _request()
-    record = _record(request).model_copy(
-        update={
-            "citation": ModelSurfaceReviewCitation(
-                location=None,
-                symbol="withdraw(uint256)",
-            )
-        }
+    record = _record_with_citation(
+        _record(request),
+        ModelSurfaceReviewCitation(
+            location=None,
+            symbol="withdraw(uint256)",
+        ),
     )
     batch = CandidateReviewBatch(findings=[], surface_reviews=(record,))
 
@@ -350,7 +786,7 @@ def test_seal_rejects_location_not_proven_by_the_supplied_source_context() -> No
     )
     context = context.model_copy(update={"excerpts": [poisoned_excerpt]})
 
-    with pytest.raises(ModelReviewEvidenceError, match="not proven by context"):
+    with pytest.raises(ModelReviewEvidenceError, match="not proven by supplied context bytes"):
         seal_model_surface_review_artifact(context, _completion(batch))
 
 

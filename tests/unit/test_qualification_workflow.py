@@ -53,6 +53,7 @@ from mmaudit.models.schemas import ExecutionEvidenceKind, UsageRecord
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.reporting.json_report import stable_json
+from tests.qualification_support import synthetic_release_observation
 from tests.unit import test_model_benchmark as benchmark_fixtures
 from tests.unit import test_model_qualification as qualification_fixtures
 
@@ -205,7 +206,12 @@ def _as_real_report(
     return ModelBenchmarkReport.model_validate(payload)
 
 
-def _release_bindings(report: ModelBenchmarkReport):
+def _release_bindings(
+    report: ModelBenchmarkReport,
+    *,
+    benchmark_corpus_version: str = "2.0",
+    benchmark_ground_truth_version: str = "2.0",
+):
     records = [
         case.usage_record for case in report.results[0].cases if case.usage_record is not None
     ]
@@ -222,8 +228,8 @@ def _release_bindings(report: ModelBenchmarkReport):
         response_schema_sha256=response_schema_sha256,
         toolchain_sha256="4" * 64,
         isolation_sha256="5" * 64,
-        benchmark_corpus_version="2.0",
-        benchmark_ground_truth_version="2.0",
+        benchmark_corpus_version=benchmark_corpus_version,
+        benchmark_ground_truth_version=benchmark_ground_truth_version,
     )
 
 
@@ -333,12 +339,16 @@ def _run(
     *,
     report: ModelBenchmarkReport,
     lineage_status: LineageReviewStatus = LineageReviewStatus.APPROVED,
+    observed_at: datetime = NOW + timedelta(hours=1),
+    evaluated_at: datetime | None = None,
+    qualification_expires_at: datetime = NOW + timedelta(days=6),
 ) -> QualificationWorkflowBundle:
     manifest, evidence, registry = _candidate_inputs(lineage_status=lineage_status)
     portfolio, campaign_verification = _portfolio_evidence(
         registry=registry,
         report=report,
     )
+    release_bindings = _release_bindings(report)
     return run_qualification_workflow(
         candidate_registry=registry,
         discovery_run_manifest=manifest,
@@ -347,11 +357,15 @@ def _run(
         benchmark_suite=load_model_benchmark_corpus(CORPUS_PATH),
         benchmark_portfolio=portfolio,
         benchmark_reports=(report,),
-        release_bindings=_release_bindings(report),
+        release_bindings=release_bindings,
         trusted_campaign_verification=campaign_verification,
         trusted_generation_verification=None,
-        evaluated_at=NOW + timedelta(hours=1),
-        qualification_expires_at=NOW + timedelta(days=20),
+        trusted_release_observation=synthetic_release_observation(
+            release_bindings,
+            observed_at=observed_at,
+        ),
+        evaluated_at=observed_at if evaluated_at is None else evaluated_at,
+        qualification_expires_at=qualification_expires_at,
     )
 
 
@@ -400,6 +414,64 @@ async def test_deterministic_semantic_scoring_without_real_capability_is_inconcl
         is CandidateBenchmarkStatus.INCONCLUSIVE
     )
     assert bundle.trusted_benchmark_evidence == ()
+
+
+@pytest.mark.asyncio
+async def test_qualification_time_and_expiry_are_anchored_to_campaign_completion() -> None:
+    _, _, registry = _candidate_inputs()
+    report = _as_real_report(
+        await _mock_report(),
+        candidate=registry.candidates[0],
+    )
+
+    first = _run(report=report)
+    second = _run(
+        report=report,
+        observed_at=NOW + timedelta(hours=2),
+    )
+
+    final_record = report.results[0].cases[-1].usage_record
+    assert final_record is not None
+    assert final_record.ended_at is not None
+    expected_completion = final_record.ended_at + timedelta(seconds=1)
+    expected_completion = expected_completion.replace(microsecond=0)
+    assert first.evaluated_at == expected_completion
+    assert first.qualification_artifact.created_at == expected_completion
+    assert first.qualification_artifact.results[0].evaluated_at == expected_completion
+    assert (
+        first.qualification_artifact.results[0].quality_measurement_sha256
+        == second.qualification_artifact.results[0].quality_measurement_sha256
+    )
+    assert (
+        first.qualification_artifact.results[0].result_sha256
+        == second.qualification_artifact.results[0].result_sha256
+    )
+
+
+@pytest.mark.asyncio
+async def test_stale_campaign_cannot_be_reissued_with_refreshed_times() -> None:
+    _, _, registry = _candidate_inputs()
+    report = _as_real_report(
+        await _mock_report(),
+        candidate=registry.candidates[0],
+    )
+
+    with pytest.raises(ValueError, match="exceeds the policy age"):
+        _run(
+            report=report,
+            observed_at=NOW + timedelta(days=8),
+            qualification_expires_at=NOW + timedelta(days=8, hours=1),
+        )
+    with pytest.raises(ValueError, match="policy-bound benchmark window"):
+        _run(
+            report=report,
+            qualification_expires_at=NOW + timedelta(days=8),
+        )
+    with pytest.raises(ValueError, match="trusted release observation"):
+        _run(
+            report=report,
+            evaluated_at=NOW + timedelta(hours=2),
+        )
 
 
 @pytest.mark.asyncio
@@ -465,6 +537,7 @@ async def test_qualification_rejects_caller_forged_campaign_capability() -> None
         candidate=registry.candidates[0],
     )
     portfolio, _trusted = _portfolio_evidence(registry=registry, report=report)
+    release_bindings = _release_bindings(report)
 
     class CallerForgedCapability:
         def require_for(self, **_kwargs: object) -> None:
@@ -479,11 +552,60 @@ async def test_qualification_rejects_caller_forged_campaign_capability() -> None
             benchmark_suite=load_model_benchmark_corpus(CORPUS_PATH),
             benchmark_portfolio=portfolio,
             benchmark_reports=(report,),
-            release_bindings=_release_bindings(report),
+            release_bindings=release_bindings,
             trusted_campaign_verification=CallerForgedCapability(),  # type: ignore[arg-type]
             trusted_generation_verification=None,
+            trusted_release_observation=synthetic_release_observation(
+                release_bindings,
+                observed_at=NOW + timedelta(hours=1),
+            ),
             evaluated_at=NOW + timedelta(hours=1),
-            qualification_expires_at=NOW + timedelta(days=20),
+            qualification_expires_at=NOW + timedelta(days=6),
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("binding_name", "binding_value"),
+    (
+        ("benchmark_corpus_version", "wrong-corpus-version"),
+        ("benchmark_ground_truth_version", "wrong-ground-truth-version"),
+    ),
+)
+async def test_qualification_rejects_release_version_not_observed_in_loaded_suite(
+    binding_name: str,
+    binding_value: str,
+) -> None:
+    manifest, evidence, registry = _candidate_inputs()
+    report = _as_real_report(
+        await _mock_report(),
+        candidate=registry.candidates[0],
+    )
+    portfolio, campaign_verification = _portfolio_evidence(
+        registry=registry,
+        report=report,
+    )
+    release_arguments = {binding_name: binding_value}
+    release_bindings = _release_bindings(report, **release_arguments)
+
+    with pytest.raises(ValueError, match="benchmark versions differ from the loaded suite"):
+        run_qualification_workflow(
+            candidate_registry=registry,
+            discovery_run_manifest=manifest,
+            discovery_evidence=evidence,
+            policy=_policy(),
+            benchmark_suite=load_model_benchmark_corpus(CORPUS_PATH),
+            benchmark_portfolio=portfolio,
+            benchmark_reports=(report,),
+            release_bindings=release_bindings,
+            trusted_campaign_verification=campaign_verification,
+            trusted_generation_verification=None,
+            trusted_release_observation=synthetic_release_observation(
+                release_bindings,
+                observed_at=NOW + timedelta(hours=1),
+            ),
+            evaluated_at=NOW + timedelta(hours=1),
+            qualification_expires_at=NOW + timedelta(days=6),
         )
 
 
@@ -515,8 +637,12 @@ async def test_missing_duplicate_or_wrong_model_report_set_fails_closed() -> Non
         "release_bindings": bindings,
         "trusted_campaign_verification": campaign_verification,
         "trusted_generation_verification": None,
+        "trusted_release_observation": synthetic_release_observation(
+            bindings,
+            observed_at=NOW + timedelta(hours=1),
+        ),
         "evaluated_at": NOW + timedelta(hours=1),
-        "qualification_expires_at": NOW + timedelta(days=20),
+        "qualification_expires_at": NOW + timedelta(days=6),
     }
 
     with pytest.raises(ValueError, match="non-empty"):
@@ -629,7 +755,7 @@ async def test_arbitrary_real_evidence_callback_is_not_a_qualification_api() -> 
         "release_bindings": _release_bindings(report),
         "real_evidence_resolver": lambda **_: True,
         "evaluated_at": NOW + timedelta(hours=1),
-        "qualification_expires_at": NOW + timedelta(days=20),
+        "qualification_expires_at": NOW + timedelta(days=6),
     }
 
     with pytest.raises(TypeError, match="unexpected keyword"):

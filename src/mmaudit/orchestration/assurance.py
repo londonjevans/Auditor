@@ -10,6 +10,8 @@ import re
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Never, SupportsIndex
 
 from mmaudit.agents.specialists import canonical_specialist_role
 from mmaudit.benchmark.certificate import (
@@ -19,6 +21,10 @@ from mmaudit.benchmark.certificate import (
 )
 from mmaudit.config import AuditConfig, model_family, model_lineage_index
 from mmaudit.constants import ALL_SPECIALIST_ROLES, SPECIALIST_INVESTIGATOR_ROLES
+from mmaudit.models.qualification import (
+    VerifiedProductionQualification,
+    VerifiedTierAModelQualification,
+)
 from mmaudit.models.schemas import (
     AnalysisState,
     AuditProfile,
@@ -55,7 +61,10 @@ from mmaudit.models.schemas import (
     SoliditySymbolIndex,
     UsageRecord,
 )
-from mmaudit.models.usage import is_creditable_usage_record
+from mmaudit.models.usage import (
+    candidate_falsifier_role_prefix,
+    is_creditable_usage_record,
+)
 from mmaudit.orchestration.replay import (
     OfflineReplay,
     OfflineReplayStatus,
@@ -99,6 +108,77 @@ CERTIFIED_FORMAL_PROOF_ENGINES: frozenset[str] = frozenset(
     {"certora", "kontrol", "solc-smtchecker"}
 )
 CERTIFIED_ISOLATION_BACKENDS: frozenset[str] = frozenset({"bubblewrap", "sandbox-exec"})
+CERTIFIED_ENSEMBLE_MIN_EXACT_MODELS = 8
+CERTIFIED_ENSEMBLE_MIN_ROOT_LINEAGES = 6
+CERTIFIED_ENSEMBLE_MIN_SPECIALIST_RESPONSIBILITIES = 24
+CERTIFIED_ENSEMBLE_MIN_WHOLE_PROTOCOL_LINEAGES = 4
+CERTIFIED_ENSEMBLE_MIN_CRITICAL_SURFACE_LINEAGES = 3
+CERTIFIED_ENSEMBLE_MIN_FALSIFIER_LINEAGES = 2
+
+_PROVIDER_SESSION_PROVENANCE_ISSUER = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class ProviderSessionProvenance:
+    """Bound one audit's model usage to its provider-client execution class."""
+
+    _issuer: object
+    execution_evidence: ExecutionEvidenceKind
+    pipeline_owned: bool
+    trusted_concrete_client: bool
+    usage_evidence_consistent: bool
+
+    def __new__(cls, issuer: object | None = None) -> ProviderSessionProvenance:
+        if issuer is not _PROVIDER_SESSION_PROVENANCE_ISSUER:
+            raise TypeError(
+                "provider session provenance can only be issued by the pipeline boundary"
+            )
+        return object.__new__(cls)
+
+    def __init__(self, issuer: object | None = None) -> None:
+        del issuer
+
+    @property
+    def permits_real_model_credit(self) -> bool:
+        """Return whether this session may contribute REAL model evidence."""
+
+        return (
+            self._issuer is _PROVIDER_SESSION_PROVENANCE_ISSUER
+            and self.execution_evidence is ExecutionEvidenceKind.REAL
+            and self.pipeline_owned
+            and self.trusted_concrete_client
+            and self.usage_evidence_consistent
+        )
+
+    def __reduce__(self) -> Never:
+        raise TypeError("provider session provenance cannot be serialized")
+
+    def __reduce_ex__(self, _protocol: SupportsIndex) -> Never:
+        raise TypeError("provider session provenance cannot be serialized")
+
+
+def _issue_provider_session_provenance(
+    *,
+    execution_evidence: ExecutionEvidenceKind,
+    pipeline_owned: bool,
+    trusted_concrete_client: bool,
+    usage_evidence_consistent: bool,
+) -> ProviderSessionProvenance:
+    """Issue one in-memory capability from facts derived at the pipeline boundary."""
+
+    if type(execution_evidence) is not ExecutionEvidenceKind:
+        raise TypeError("provider session execution evidence has an invalid type")
+    capability = ProviderSessionProvenance(_PROVIDER_SESSION_PROVENANCE_ISSUER)
+    object.__setattr__(capability, "_issuer", _PROVIDER_SESSION_PROVENANCE_ISSUER)
+    object.__setattr__(capability, "execution_evidence", execution_evidence)
+    object.__setattr__(capability, "pipeline_owned", pipeline_owned)
+    object.__setattr__(capability, "trusted_concrete_client", trusted_concrete_client)
+    object.__setattr__(
+        capability,
+        "usage_evidence_consistent",
+        usage_evidence_consistent,
+    )
+    return capability
 
 
 @dataclass(frozen=True)
@@ -128,12 +208,14 @@ class AssuranceRuntime:
     auxiliary_roles_completed: set[str] = field(default_factory=set)
     verifier_completed: bool = False
     falsifier_completed: bool = False
-    candidate_falsifier_lineages: set[str] = field(default_factory=set)
+    candidate_falsifier_request_ids: dict[str, set[str]] = field(default_factory=dict)
     judge_completed: bool = False
     coverage: SolidityCoverage | None = None
     model_review_coverage: ModelReviewCoverage | None = None
     model_surface_review_artifacts: list[ModelSurfaceReviewArtifact] = field(default_factory=list)
     model_usage: list[UsageRecord] = field(default_factory=list)
+    provider_session: ProviderSessionProvenance | None = None
+    production_qualification: VerifiedProductionQualification | None = None
     scope_assessment: AuditScopeAssessment | None = None
     benchmark_verification: BenchmarkCertificateVerification | None = None
     benchmark_repository_git_commit: str | None = None
@@ -615,15 +697,37 @@ class MaximumAssuranceContract:
             expected_applicable_kinds=expected_replay_kinds,
             expected_components=expected_replay_components,
         )
+        production_qualification = _current_production_qualification(
+            runtime.production_qualification
+        )
+        real_provider_session = _real_provider_session_is_qualifying(runtime.provider_session)
         real_model_records = [
-            record for record in runtime.model_usage if _is_real_model_usage(record, self.config)
+            record
+            for record in runtime.model_usage
+            if _is_real_model_usage(
+                record,
+                self.config,
+                production_qualification,
+                runtime.provider_session,
+            )
         ]
         real_model_roles = {record.role for record in real_model_records}
+        qualified_selection_model_ids = (
+            {model.exact_model_id for model in production_qualification.models}
+            if production_qualification is not None
+            else set()
+        )
+        executed_qualified_model_ids = {record.requested_model for record in real_model_records}
+        qualified_selection_execution_complete = bool(qualified_selection_model_ids) and (
+            executed_qualified_model_ids == qualified_selection_model_ids
+        )
         model_coverage_backed_by_real_usage = _model_coverage_is_backed_by_real_usage(
             runtime.model_review_coverage,
             runtime.model_usage,
             runtime.model_surface_review_artifacts,
             self.config,
+            production_qualification,
+            runtime.provider_session,
         )
         if runtime.model_review_coverage is None:
             model_coverage_detail = "per-surface model review coverage was not produced"
@@ -632,6 +736,11 @@ class MaximumAssuranceContract:
                 "model surface credits are not backed by matching "
                 "certification-grade real-provider usage"
             )
+        elif runtime.model_review_coverage.critical.denominator == 0:
+            model_coverage_detail = (
+                "critical-surface denominator is zero; maximum assurance requires "
+                "a non-empty critical-surface inventory"
+            )
         else:
             model_coverage_detail = (
                 f"{runtime.model_review_coverage.critical.numerator}/"
@@ -639,18 +748,96 @@ class MaximumAssuranceContract:
                 "surface(s) received independent certification-grade "
                 "registered-lineage review"
             )
-        real_falsifier_lineages = _real_model_usage_lineages(
-            [record for record in real_model_records if _is_falsifier_usage_role(record.role)],
-            self.config,
+        qualified_candidate_falsifier_lineages = {
+            candidate_id: _real_model_usage_lineages(
+                [
+                    record
+                    for record in real_model_records
+                    if record.role.startswith(candidate_falsifier_role_prefix(candidate_id) + ":")
+                    and record.request_id
+                    in runtime.candidate_falsifier_request_ids.get(candidate_id, set())
+                ],
+                production_qualification,
+            )
+            for candidate_id in sorted(runtime.eligible_high_critical_ids)
+        }
+        falsifier_lineage_minimum = min(
+            (len(lineages) for lineages in qualified_candidate_falsifier_lineages.values()),
+            default=0,
         )
-        qualified_falsifier_lineages = (
-            runtime.candidate_falsifier_lineages & real_falsifier_lineages
+        candidate_falsifier_complete = bool(runtime.eligible_high_critical_ids) and all(
+            len(lineages) >= CERTIFIED_ENSEMBLE_MIN_FALSIFIER_LINEAGES
+            for lineages in qualified_candidate_falsifier_lineages.values()
         )
         real_specialist_roles = {
             role
             for request_role in real_model_roles
             if (role := canonical_specialist_role(request_role)) is not None
         }
+        executed_root_lineages = _real_model_usage_lineages(
+            real_model_records,
+            production_qualification,
+        )
+        whole_protocol_root_lineages = _real_model_usage_lineages(
+            [
+                record
+                for record in real_model_records
+                if record.role == "whole_protocol_review"
+                or record.role.startswith("whole_protocol_review:")
+            ],
+            production_qualification,
+        )
+        critical_surface_lineages = (
+            {
+                surface.surface_id: set(surface.root_lineages)
+                for surface in runtime.model_review_coverage.surfaces
+                if surface.critical
+            }
+            if model_coverage_backed_by_real_usage and runtime.model_review_coverage is not None
+            else {}
+        )
+        critical_surface_lineage_minimum = min(
+            (len(lineages) for lineages in critical_surface_lineages.values()),
+            default=0,
+        )
+        critical_surface_ensemble_complete = bool(critical_surface_lineages) and all(
+            len(lineages) >= CERTIFIED_ENSEMBLE_MIN_CRITICAL_SURFACE_LINEAGES
+            for lineages in critical_surface_lineages.values()
+        )
+        certified_ensemble_complete = (
+            len(executed_qualified_model_ids) >= CERTIFIED_ENSEMBLE_MIN_EXACT_MODELS
+            and qualified_selection_execution_complete
+            and len(executed_root_lineages) >= CERTIFIED_ENSEMBLE_MIN_ROOT_LINEAGES
+            and len(real_specialist_roles) >= CERTIFIED_ENSEMBLE_MIN_SPECIALIST_RESPONSIBILITIES
+            and len(whole_protocol_root_lineages) >= CERTIFIED_ENSEMBLE_MIN_WHOLE_PROTOCOL_LINEAGES
+            and critical_surface_ensemble_complete
+            and (candidate_falsifier_complete or not runtime.eligible_high_critical_ids)
+        )
+        certified_falsifier_detail = (
+            "N/A (no high/critical candidates)"
+            if not runtime.eligible_high_critical_ids
+            else (
+                f"minimum={falsifier_lineage_minimum}/"
+                f"{CERTIFIED_ENSEMBLE_MIN_FALSIFIER_LINEAGES} across "
+                f"{len(runtime.eligible_high_critical_ids)} candidate(s)"
+            )
+        )
+        certified_ensemble_detail = (
+            f"exact models={len(executed_qualified_model_ids)}/"
+            f"{CERTIFIED_ENSEMBLE_MIN_EXACT_MODELS}; "
+            f"selected executed={len(executed_qualified_model_ids)}/"
+            f"{len(qualified_selection_model_ids)}; "
+            f"root lineages={len(executed_root_lineages)}/"
+            f"{CERTIFIED_ENSEMBLE_MIN_ROOT_LINEAGES}; "
+            f"specialist responsibilities={len(real_specialist_roles)}/"
+            f"{CERTIFIED_ENSEMBLE_MIN_SPECIALIST_RESPONSIBILITIES}; "
+            f"whole-protocol lineages={len(whole_protocol_root_lineages)}/"
+            f"{CERTIFIED_ENSEMBLE_MIN_WHOLE_PROTOCOL_LINEAGES}; "
+            f"critical surfaces={len(critical_surface_lineages)} with minimum "
+            f"lineages={critical_surface_lineage_minimum}/"
+            f"{CERTIFIED_ENSEMBLE_MIN_CRITICAL_SURFACE_LINEAGES}; "
+            f"candidate falsifier lineages={certified_falsifier_detail}"
+        )
         benchmark_required = (
             self.requested
             or self.config.maximum_assurance.benchmark_gate
@@ -836,6 +1023,7 @@ class MaximumAssuranceContract:
                 bool(real_model_records)
                 and runtime.model_review_coverage is not None
                 and runtime.model_review_coverage.applicable
+                and runtime.model_review_coverage.critical.denominator > 0
                 and runtime.model_review_coverage.critical_gate_passed
                 and model_coverage_backed_by_real_usage,
                 model_coverage_detail,
@@ -844,10 +1032,27 @@ class MaximumAssuranceContract:
                     if real_model_records
                     and runtime.model_review_coverage is not None
                     and runtime.model_review_coverage.applicable
+                    and runtime.model_review_coverage.critical.denominator > 0
                     and model_coverage_backed_by_real_usage
                     else AnalysisState.NOT_ANALYZED
                 ),
                 artifacts=_present(runtime.artifacts, "model-review-coverage.json"),
+            ),
+            _requirement(
+                "certified_model_ensemble",
+                certified_ensemble_complete,
+                certified_ensemble_detail,
+                state=(
+                    AnalysisState.MODEL_ONLY if real_model_records else AnalysisState.NOT_ANALYZED
+                ),
+                artifacts=sorted(
+                    _present(runtime.artifacts, "specialist-execution.json")
+                    + _present(runtime.artifacts, "model-review-coverage.json")
+                    + _present(
+                        runtime.artifacts,
+                        "model-qualification-runtime.json",
+                    )
+                ),
             ),
             _requirement(
                 "invariant_discovery",
@@ -1001,18 +1206,20 @@ class MaximumAssuranceContract:
             ),
             _requirement(
                 "independent_falsifier",
-                (runtime.falsifier_completed and len(qualified_falsifier_lineages) >= 2)
+                (runtime.falsifier_completed and candidate_falsifier_complete)
                 or not runtime.eligible_high_critical_ids,
                 (
-                    "two independent candidate-falsifier lineages completed"
-                    if (runtime.falsifier_completed and len(qualified_falsifier_lineages) >= 2)
+                    "two independent candidate-falsifier lineages completed for every "
+                    "eligible high/critical candidate"
+                    if (runtime.falsifier_completed and candidate_falsifier_complete)
                     else (
                         "no eligible high/critical candidate required falsification"
                         if not runtime.eligible_high_critical_ids
                         else (
-                            f"{len(qualified_falsifier_lineages)} independent "
-                            "candidate-falsifier lineage(s) are backed by "
-                            "certification-grade real-provider usage; 2 required"
+                            f"minimum {falsifier_lineage_minimum} independent "
+                            "candidate-falsifier lineage(s) per candidate are backed by "
+                            "certification-grade real-provider usage; 2 required "
+                            f"for each of {len(runtime.eligible_high_critical_ids)} candidate(s)"
                         )
                     )
                 ),
@@ -1134,6 +1341,76 @@ class MaximumAssuranceContract:
                     )
                 ),
                 artifacts=_present(runtime.artifacts, "offline-replay.json"),
+            ),
+            _requirement(
+                "production_model_qualification",
+                production_qualification is not None,
+                (
+                    f"{len(production_qualification.models)} exact Tier A model(s) across "
+                    f"{len({model.root_lineage for model in production_qualification.models})} "
+                    "independently reviewed root lineage(s) are bound to current real "
+                    "benchmark and all-eligible selection evidence"
+                    if production_qualification is not None
+                    else (
+                        "no current verified production qualification capability was supplied; "
+                        "configured quality hash text is not runtime evidence"
+                    )
+                ),
+                state=(
+                    AnalysisState.DETERMINISTIC
+                    if production_qualification is not None
+                    else AnalysisState.NOT_ANALYZED
+                ),
+                artifacts=_present(
+                    runtime.artifacts,
+                    "model-qualification-runtime.json",
+                ),
+            ),
+            _requirement(
+                "real_provider_session_provenance",
+                real_provider_session,
+                (
+                    "model usage is bound to the pipeline-owned concrete REAL provider session"
+                    if real_provider_session
+                    else (
+                        "no pipeline-owned concrete REAL provider session with "
+                        "execution-consistent usage was supplied"
+                    )
+                ),
+                state=(
+                    AnalysisState.DETERMINISTIC
+                    if real_provider_session
+                    else (
+                        AnalysisState.ATTEMPTED_FAILED
+                        if runtime.model_usage
+                        else AnalysisState.NOT_ANALYZED
+                    )
+                ),
+                artifacts=_present(runtime.artifacts, "specialist-execution.json"),
+            ),
+            _requirement(
+                "qualified_model_selection_execution",
+                qualified_selection_execution_complete,
+                (
+                    f"{len(executed_qualified_model_ids)}/"
+                    f"{len(qualified_selection_model_ids)} exact all-eligible Tier A model(s) "
+                    "have successful certification-grade real-provider usage"
+                    if qualified_selection_model_ids
+                    else "no current all-eligible Tier A production selection was available"
+                ),
+                state=(
+                    AnalysisState.MODEL_ONLY
+                    if qualified_selection_execution_complete
+                    else (
+                        AnalysisState.ATTEMPTED_FAILED
+                        if real_model_records
+                        else AnalysisState.NOT_ANALYZED
+                    )
+                ),
+                artifacts=_present(
+                    runtime.artifacts,
+                    "model-qualification-runtime.json",
+                ),
             ),
             _requirement(
                 "real_model_execution",
@@ -1762,19 +2039,74 @@ def _expected_replay_components(
     return expected
 
 
-def _is_real_model_usage(record: UsageRecord, config: AuditConfig) -> bool:
-    role = canonical_specialist_role(record.role) or (
-        "falsifier" if record.role.startswith("candidate_falsifier:") else record.role
-    )
+def _current_production_qualification(
+    qualification: VerifiedProductionQualification | None,
+) -> VerifiedProductionQualification | None:
+    if type(qualification) is not VerifiedProductionQualification:
+        return None
     try:
-        configured_role = config.models.role(role)
-    except (KeyError, TypeError):
+        return qualification.require_current(
+            now=datetime.now(UTC).replace(microsecond=0),
+        )
+    except ValueError:
+        return None
+
+
+def _real_provider_session_is_qualifying(
+    provider_session: ProviderSessionProvenance | None,
+) -> bool:
+    if type(provider_session) is not ProviderSessionProvenance:
         return False
-    configured_models = {configured_role.primary, *configured_role.fallbacks}
-    if record.role.startswith("specialist:falsifier:cross_exam_"):
+    try:
+        return provider_session.permits_real_model_credit
+    except AttributeError:
+        return False
+
+
+def _is_real_model_usage(
+    record: UsageRecord,
+    config: AuditConfig,
+    qualification: VerifiedProductionQualification | None,
+    provider_session: ProviderSessionProvenance | None,
+) -> bool:
+    if qualification is None or not _real_provider_session_is_qualifying(provider_session):
+        return False
+    whole_protocol_review = record.role == "whole_protocol_review" or record.role.startswith(
+        "whole_protocol_review:"
+    )
+    role = (
+        "whole_protocol_review"
+        if whole_protocol_review
+        else (
+            canonical_specialist_role(record.role)
+            or ("falsifier" if record.role.startswith("candidate_falsifier:") else record.role)
+        )
+    )
+    if whole_protocol_review:
+        configured_models = {model.exact_model_id for model in qualification.models}
+    else:
+        try:
+            configured_role = config.models.role(role)
+        except (KeyError, TypeError):
+            return False
+        configured_models = {configured_role.primary, *configured_role.fallbacks}
+    if record.role.startswith(
+        (
+            "candidate_falsifier:",
+            "specialist:falsifier:cross_exam_",
+        )
+    ):
         for supporting_role in ("verifier", "judge"):
             role_config = config.models.role(supporting_role)
             configured_models.update({role_config.primary, *role_config.fallbacks})
+    try:
+        qualified_model = qualification.model_for(
+            record.requested_model,
+            now=datetime.now(UTC).replace(microsecond=0),
+        )
+    except ValueError:
+        return False
+    routing = record.routing
     return (
         is_creditable_usage_record(
             record,
@@ -1782,28 +2114,73 @@ def _is_real_model_usage(record: UsageRecord, config: AuditConfig) -> bool:
             require_certification=True,
         )
         and record.requested_model in configured_models
+        and record.returned_model == qualified_model.exact_model_id
+        and record.actual_model
+        in {
+            qualified_model.exact_model_id,
+            qualified_model.canonical_model_slug,
+        }
+        and record.actual_provider_endpoint == qualified_model.approved_provider_endpoint
+        and routing.get("selected_model") == record.actual_model
+        and routing.get("canonical_model") == qualified_model.canonical_model_slug
+        and routing.get("selected_provider_endpoint") == qualified_model.approved_provider_endpoint
+        and routing.get("selected_provider_name") == qualified_model.approved_provider_name
+        and routing.get("endpoint_snapshot_sha256") == qualified_model.endpoint_snapshot_sha256
+        and routing.get("endpoint_pricing_sha256") == qualified_model.pricing_snapshot_sha256
+        and routing.get("model_metadata_snapshot_sha256")
+        == qualified_model.model_metadata_snapshot_sha256
+        and _qualified_usage_role(role, qualified_model)
+        and routing.get("qualified_exact_model_id") == qualified_model.exact_model_id
+        and routing.get("qualified_canonical_model_slug") == qualified_model.canonical_model_slug
+        and routing.get("qualified_root_lineage") == qualified_model.root_lineage
+        and routing.get("qualified_provider_endpoint") == qualified_model.approved_provider_endpoint
+        and routing.get("qualified_provider_name") == qualified_model.approved_provider_name
+        and routing.get("qualified_endpoint_snapshot_sha256")
+        == qualified_model.endpoint_snapshot_sha256
+        and routing.get("qualified_model_metadata_snapshot_sha256")
+        == qualified_model.model_metadata_snapshot_sha256
+        and routing.get("qualified_pricing_snapshot_sha256")
+        == qualified_model.pricing_snapshot_sha256
+        and routing.get("qualified_roles") == list(qualified_model.approved_roles)
+        and routing.get("qualification_verified_at") == qualification.verified_at.isoformat()
+        and routing.get("qualification_expires_at") == qualified_model.expires_at.isoformat()
+        and routing.get("qualification_artifact_sha256") == qualification.artifact_sha256
+        and routing.get("qualification_verification_sha256")
+        == qualification.qualification_verification_sha256
+        and routing.get("production_selection_sha256") == qualification.production_selection_sha256
+        and routing.get("selection_verification_sha256")
+        == qualification.selection_verification_sha256
+        and routing.get("qualification_result_sha256")
+        == qualified_model.qualification_result_sha256
     )
 
 
-def _is_falsifier_usage_role(role: str) -> bool:
-    return (
-        role == "falsifier"
-        or role.startswith("candidate_falsifier:")
-        or role == "specialist:falsifier"
-        or role.startswith("specialist:falsifier:")
-    )
+def _qualified_usage_role(
+    role: str,
+    model: VerifiedTierAModelQualification,
+) -> bool:
+    return role in model.approved_roles
 
 
 def _real_model_usage_lineages(
     records: Iterable[UsageRecord],
-    config: AuditConfig,
+    qualification: VerifiedProductionQualification | None,
 ) -> set[str]:
-    lineage_by_model = model_lineage_index(config)
-    return {
-        lineage.root_lineage
-        for record in records
-        if (lineage := lineage_by_model.get(record.requested_model.lower())) is not None
-    }
+    if qualification is None:
+        return set()
+    lineages: set[str] = set()
+    now = datetime.now(UTC).replace(microsecond=0)
+    for record in records:
+        try:
+            lineages.add(
+                qualification.model_for(
+                    record.requested_model,
+                    now=now,
+                ).root_lineage
+            )
+        except ValueError:
+            continue
+    return lineages
 
 
 def _model_coverage_is_backed_by_real_usage(
@@ -1811,6 +2188,8 @@ def _model_coverage_is_backed_by_real_usage(
     records: list[UsageRecord],
     artifacts: list[ModelSurfaceReviewArtifact],
     config: AuditConfig,
+    qualification: VerifiedProductionQualification | None,
+    provider_session: ProviderSessionProvenance | None,
 ) -> bool:
     if coverage is None:
         return False
@@ -1848,7 +2227,12 @@ def _model_coverage_is_backed_by_real_usage(
             if len(matching_usage) != 1:
                 return False
             usage = matching_usage[0]
-            if not _is_real_model_usage(usage, config):
+            if not _is_real_model_usage(
+                usage,
+                config,
+                qualification,
+                provider_session,
+            ):
                 return False
 
             matching_artifacts = artifacts_by_request.get(reference.request_id, [])
@@ -1872,8 +2256,19 @@ def _model_coverage_is_backed_by_real_usage(
             if len(matching_records) != 1:
                 return False
             review_record = matching_records[0]
+            try:
+                qualified_model = (
+                    qualification.model_for(
+                        usage.requested_model,
+                        now=datetime.now(UTC).replace(microsecond=0),
+                    )
+                    if qualification is not None
+                    else None
+                )
+            except ValueError:
+                return False
             lineage = lineage_by_model.get(usage.requested_model.lower())
-            if lineage is None:
+            if lineage is None or qualified_model is None:
                 return False
             if lineage.root_lineage not in config.privacy.approved_model_lineages:
                 return False
@@ -1890,7 +2285,8 @@ def _model_coverage_is_backed_by_real_usage(
                 or reference.review_role != review_record.review_role
                 or reference.requested_model != usage.requested_model
                 or reference.model != usage.actual_model
-                or reference.root_lineage != lineage.root_lineage
+                or reference.root_lineage != qualified_model.root_lineage
+                or lineage.root_lineage != qualified_model.root_lineage
                 or sealed_artifact.request_id != usage.request_id
                 or reference.surface_id not in sealed_artifact.requested_surface_ids
                 or sealed_artifact.prompt_sha256 != usage.prompt_sha256

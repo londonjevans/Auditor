@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -14,6 +14,7 @@ from mmaudit.models.candidate_benchmark import CandidateBenchmarkRunState
 from mmaudit.models.qualification import LineageReviewStatus
 from mmaudit.models.qualification_workflow import QualificationWorkflowBundle
 from mmaudit.models.schemas import ExecutionEvidenceKind
+from tests.qualification_support import synthetic_release_observation
 from tests.unit import test_qualification_workflow as workflow_fixtures
 
 runner = CliRunner()
@@ -105,6 +106,19 @@ def _patch_external_inputs(
         "_verify_qualification_campaign",
         lambda **_kwargs: fixture["campaign_verification"],
     )
+    monkeypatch.setattr(
+        cli_module,
+        "_require_qualification_release_pins",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_observe_qualification_release",
+        lambda **_kwargs: synthetic_release_observation(
+            fixture["bindings"],
+            observed_at=workflow_fixtures.NOW + timedelta(hours=1),
+        ),
+    )
 
 
 def _qualify_args() -> list[str]:
@@ -131,6 +145,8 @@ def _qualify_args() -> list[str]:
         "cost-ledger.json",
         "--release-bindings",
         "release.json",
+        "--release-source-root",
+        "release-root",
         "--qualification-expires-at",
         "2026-08-16T12:00:00Z",
         "--output",
@@ -167,6 +183,8 @@ def _verify_args() -> list[str]:
         "cost-ledger.json",
         "--release-bindings",
         "release.json",
+        "--release-source-root",
+        "release-root",
         "--secrets-env-file",
         "secrets.env",
         "--no-color",
@@ -193,9 +211,27 @@ def test_models_qualify_uses_atomic_portfolio_and_mocked_refetch_boundary(
     fixture = _workflow_fixture()
     _patch_external_inputs(monkeypatch, fixture)
     captured: dict[str, object] = {}
-    trusted_capability = _patch_refetch(monkeypatch, captured)
+    events: list[str] = []
+    trusted_capability = object()
+
+    async def refetch(**kwargs: object) -> object:
+        events.append("refetch")
+        captured["refetch"] = kwargs
+        return trusted_capability
+
+    monkeypatch.setattr(cli_module, "_refetch_qualification_generations", refetch)
+
+    def observe(**_kwargs: object) -> object:
+        events.append("observe")
+        return synthetic_release_observation(
+            fixture["bindings"],
+            observed_at=workflow_fixtures.NOW + timedelta(hours=1),
+        )
+
+    monkeypatch.setattr(cli_module, "_observe_qualification_release", observe)
 
     def run_workflow(**kwargs: object) -> QualificationWorkflowBundle:
+        events.append("workflow")
         assert kwargs["benchmark_portfolio"] == fixture["portfolio"]
         assert kwargs["benchmark_reports"] == (fixture["report"],)
         assert kwargs["trusted_campaign_verification"] is fixture["campaign_verification"]
@@ -218,6 +254,7 @@ def test_models_qualify_uses_atomic_portfolio_and_mocked_refetch_boundary(
     refetch = captured["refetch"]
     assert isinstance(refetch, dict)
     assert refetch["secrets_env_file"].name == "secrets.env"
+    assert events == ["refetch", "observe", "workflow"]
     assert "production_selection_ready=true" in result.output
     assert "source_excerpt" not in result.output
 
@@ -329,12 +366,14 @@ def test_models_verify_qualification_rejects_stale_bundle(
         lambda **_kwargs: fixture["bundle"].qualification_verification,
     )
 
-    class _FutureDateTime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return cls(2027, 1, 1, tzinfo=tz or UTC)
-
-    monkeypatch.setattr(cli_module, "datetime", _FutureDateTime)
+    monkeypatch.setattr(
+        cli_module,
+        "_observe_qualification_release",
+        lambda **_kwargs: synthetic_release_observation(
+            fixture["bindings"],
+            observed_at=datetime(2027, 1, 1, tzinfo=UTC),
+        ),
+    )
 
     result = runner.invoke(cli_module.app, _verify_args())
 

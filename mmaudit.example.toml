@@ -143,6 +143,15 @@ require_formal_or_reproduction_for_confirmed_critical = true
 benchmark_gate = false
 ci_mode = false
 
+[maximum_assurance.qualification]
+# Release-owned immutable inputs for production model qualification. A target
+# repository cannot replace these with a weaker self-hashed policy or corpus.
+policy_sha256 = "f36e89643bb9c74c607222ac6690a5a2dc3d2ac98f0e36b941d3d1cccc293c83"
+corpus_version = "2.0"
+corpus_sha256 = "524f4c37c41d8178c6e159a5d7d67bf0b3fe33c83015c8a8401006f6fbd1ce3b"
+ground_truth_version = "2.0"
+ground_truth_sha256 = "09c86d16caa05c9602fa8082a46b2dc438f92cc0b668fe7ce7d001e4a9358c92"
+
 [invariants]
 enabled = true
 required = false

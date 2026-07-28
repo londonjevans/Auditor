@@ -385,6 +385,68 @@ class QualityGateConfig(ConfigModel):
     min_dependency_resolution_fraction: float = Field(default=1.0, ge=0, le=1)
 
 
+MAXIMUM_ASSURANCE_QUALIFICATION_POLICY_SHA256 = (
+    "f36e89643bb9c74c607222ac6690a5a2dc3d2ac98f0e36b941d3d1cccc293c83"
+)
+MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_VERSION = "2.0"
+MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_SHA256 = (
+    "524f4c37c41d8178c6e159a5d7d67bf0b3fe33c83015c8a8401006f6fbd1ce3b"
+)
+MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_VERSION = "2.0"
+MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_SHA256 = (
+    "09c86d16caa05c9602fa8082a46b2dc438f92cc0b668fe7ce7d001e4a9358c92"
+)
+
+
+class MaximumAssuranceQualificationPins(ConfigModel):
+    """Release-owned model-quality inputs that target configuration cannot replace."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    policy_sha256: str = Field(
+        default=MAXIMUM_ASSURANCE_QUALIFICATION_POLICY_SHA256,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    corpus_version: str = Field(
+        default=MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_VERSION,
+        min_length=1,
+        max_length=100,
+    )
+    corpus_sha256: str = Field(
+        default=MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_SHA256,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    ground_truth_version: str = Field(
+        default=MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_VERSION,
+        min_length=1,
+        max_length=100,
+    )
+    ground_truth_sha256: str = Field(
+        default=MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_SHA256,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def pins_match_this_release(self) -> MaximumAssuranceQualificationPins:
+        observed = (
+            self.policy_sha256,
+            self.corpus_version,
+            self.corpus_sha256,
+            self.ground_truth_version,
+            self.ground_truth_sha256,
+        )
+        expected = (
+            MAXIMUM_ASSURANCE_QUALIFICATION_POLICY_SHA256,
+            MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_VERSION,
+            MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_SHA256,
+            MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_VERSION,
+            MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_SHA256,
+        )
+        if observed != expected:
+            raise ValueError("maximum-assurance qualification pins differ from this release")
+        return self
+
+
 class MaximumAssuranceConfig(ConfigModel):
     """Non-negotiable contract controls for maximum-assurance runs."""
 
@@ -396,6 +458,9 @@ class MaximumAssuranceConfig(ConfigModel):
     require_formal_or_reproduction_for_confirmed_critical: bool = True
     benchmark_gate: bool = False
     ci_mode: bool = False
+    qualification: MaximumAssuranceQualificationPins = Field(
+        default_factory=MaximumAssuranceQualificationPins
+    )
 
 
 class InvariantConfig(ConfigModel):
@@ -759,13 +824,10 @@ class ModelsConfig(ConfigModel):
 
     @field_validator("registry")
     @classmethod
-    def registry_has_unique_lineages_and_model_ids(
+    def registry_has_globally_unique_model_ids(
         cls,
         value: tuple[ModelLineageConfig, ...],
     ) -> tuple[ModelLineageConfig, ...]:
-        roots = [entry.root_lineage for entry in value]
-        if len(roots) != len(set(roots)):
-            raise ValueError("model registry root lineages must be unique")
         model_ids = [model_id.lower() for entry in value for model_id in entry.model_ids()]
         if len(model_ids) != len(set(model_ids)):
             raise ValueError("model registry IDs and aliases must be globally unique")
@@ -1015,6 +1077,39 @@ class AuditConfig(ConfigModel):
         payload = self.models.model_dump(mode="json")
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()
+
+
+def require_maximum_assurance_qualification_pins(
+    config: AuditConfig,
+    *,
+    policy_sha256: str,
+    corpus_version: str,
+    corpus_sha256: str,
+    ground_truth_version: str,
+    ground_truth_sha256: str,
+) -> None:
+    """Reject quality evidence that differs from this release's immutable pins."""
+
+    pins = config.maximum_assurance.qualification
+    observed = (
+        policy_sha256,
+        corpus_version,
+        corpus_sha256,
+        ground_truth_version,
+        ground_truth_sha256,
+    )
+    expected = (
+        pins.policy_sha256,
+        pins.corpus_version,
+        pins.corpus_sha256,
+        pins.ground_truth_version,
+        pins.ground_truth_sha256,
+    )
+    if observed != expected:
+        raise ConfigError(
+            "qualification policy, corpus, or ground truth differs from "
+            "the maximum-assurance release pins"
+        )
 
 
 _PLACEHOLDER = re.compile(r"(provider|model[_-]?id|replace|example|your[_-])", re.IGNORECASE)

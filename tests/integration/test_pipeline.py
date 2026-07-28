@@ -32,6 +32,7 @@ from mmaudit.models.schemas import (
     DependencyPreparationStatus,
     DependencySbom,
     EconomicSimulationKind,
+    ExecutionEvidenceKind,
     FindingStatus,
     FormalToolRun,
     FormalToolStatus,
@@ -41,6 +42,7 @@ from mmaudit.models.schemas import (
     LocalInvariantDeployment,
     LocalInvariantDeploymentArgument,
     Location,
+    MaximumAssuranceStatus,
     ModelReviewCoverage,
     ModelReviewSurfaceKind,
     ModelSurfaceReviewArtifact,
@@ -59,6 +61,7 @@ from mmaudit.models.schemas import (
     SolidityCompilationResult,
     SolidityProjectMetadata,
     TransactionOrderingCapability,
+    UsageRecord,
 )
 from mmaudit.models.usage import UsageLedger
 from mmaudit.operator_secrets import load_operator_secrets
@@ -82,6 +85,7 @@ from mmaudit.traceability import (
 )
 from tests.conftest import FIXTURES, model_registry_entry
 from tests.fake_openrouter import FakeOpenRouter
+from tests.qualification_support import synthetic_production_qualification
 
 
 class StaticScannerRunner:
@@ -155,6 +159,17 @@ class StaticScannerRunner:
         return []
 
 
+class EvidenceMismatchingUsageLedger(UsageLedger):
+    """Test-only ledger that attempts to relabel MOCK provider usage as REAL."""
+
+    def add(self, record: UsageRecord) -> None:
+        super().add(
+            record.model_copy(
+                update={"execution_evidence": ExecutionEvidenceKind.REAL},
+            )
+        )
+
+
 @pytest.mark.asyncio
 async def test_provider_pipeline_requires_existing_cumulative_ledger_before_output(
     config_factory,
@@ -177,7 +192,42 @@ async def test_provider_pipeline_requires_existing_cumulative_ledger_before_outp
 
 
 @pytest.mark.asyncio
-async def test_real_injected_client_cannot_supply_unselected_budget_state(
+async def test_maximum_assurance_missing_qualification_fails_before_model_transport(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = config_factory(
+        profile=AuditProfile.MAXIMUM_ASSURANCE,
+        privacy={"fail_on_detected_secret": False},
+        maximum_assurance={"allow_downgrade": True},
+    ).effective()
+    fake = FakeOpenRouter()
+
+    result = await _run(config, vulnerable_repo, tmp_path, fake)
+
+    assert fake.requests == []
+    payload = json.loads(
+        (result.run_dir / "model-qualification-runtime.json").read_text(encoding="utf-8")
+    )
+    assert payload["required"]
+    assert not payload["valid"]
+    assert payload["qualified_model_ids"] == []
+    assert any(
+        "configured quality hashes are not authorization" in error for error in payload["errors"]
+    )
+    assert result.report.maximum_assurance is not None
+    gate = next(
+        requirement
+        for requirement in result.report.maximum_assurance.requirements
+        if requirement.engine == "production_model_qualification"
+    )
+    assert not gate.passed
+    assert result.report.maximum_assurance.status.value != "COMPLETE"
+
+
+@pytest.mark.asyncio
+async def test_real_injected_client_cannot_establish_provider_session(
     config_factory,
     vulnerable_repo: Path,
     tmp_path: Path,
@@ -212,7 +262,10 @@ async def test_real_injected_client_cannot_supply_unselected_budget_state(
         scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
     )
     try:
-        with pytest.raises(ValueError, match="selected cumulative cost ledger"):
+        with pytest.raises(
+            ValueError,
+            match="injected provider clients cannot establish REAL execution provenance",
+        ):
             await pipeline.run(allow_code_egress=True)
     finally:
         await client.close()
@@ -221,7 +274,7 @@ async def test_real_injected_client_cannot_supply_unselected_budget_state(
 
 
 @pytest.mark.asyncio
-async def test_real_injected_client_must_match_effective_provider_controls(
+async def test_real_injected_client_is_rejected_even_with_selected_ledger(
     config_factory,
     vulnerable_repo: Path,
     tmp_path: Path,
@@ -257,12 +310,48 @@ async def test_real_injected_client_must_match_effective_provider_controls(
         scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
     )
     try:
-        with pytest.raises(ValueError, match="effective audit controls"):
+        with pytest.raises(
+            ValueError,
+            match="injected provider clients cannot establish REAL execution provenance",
+        ):
             await pipeline.run(allow_code_egress=True)
     finally:
         await client.close()
 
     assert not (output / "runs").exists()
+
+
+@pytest.mark.asyncio
+async def test_mock_provider_session_rejects_usage_relabelled_as_real(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = config_factory()
+    fake = FakeOpenRouter()
+    usage = EvidenceMismatchingUsageLedger()
+    client, http_client = _provider(config, fake, usage=usage)
+    pipeline = AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=tmp_path / "provider-output",
+        client=client,
+        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+    )
+    try:
+        result = await pipeline.run(allow_code_egress=True)
+    finally:
+        await http_client.aclose()
+
+    assert result.exit_code is ExitCode.MODEL_FAILURE
+    assert any(
+        "provider usage execution evidence differs from the established session" in reason
+        for reason in result.report.incomplete_reasons
+    )
+    assert result.report.model_review_coverage is not None
+    assert result.report.model_review_coverage.overall.numerator == 0
+    assert result.report.maximum_assurance is not None
+    assert result.report.maximum_assurance.status is MaximumAssuranceStatus.NOT_REQUESTED
 
 
 def _current_benchmark_verification() -> BenchmarkCertificateVerification:
@@ -296,12 +385,13 @@ def _provider(
     fake: FakeOpenRouter,
     *,
     api_key: str = "synthetic-test-key",
+    usage: UsageLedger | None = None,
 ) -> tuple[OpenRouterClient, httpx.AsyncClient]:
     http_client = httpx.AsyncClient(
         transport=httpx.MockTransport(fake.handler),
         base_url="https://fake.openrouter.test",
     )
-    usage = UsageLedger()
+    usage = usage or UsageLedger()
     budget = BudgetManager(
         total_usd=config.execution.budget_usd,
         max_output_tokens=config.execution.max_output_tokens_per_request,
@@ -335,6 +425,7 @@ async def _run(
     invariant_runner: Any | None = None,
     formal_runner: Any | None = None,
     allow_fork_probing: bool = False,
+    production_qualification=None,
 ):
     client, http_client = _provider(config, fake)
     pipeline = AuditPipeline(
@@ -346,6 +437,7 @@ async def _run(
         reproduction_runner=reproduction_runner,
         invariant_runner=invariant_runner,
         formal_runner=formal_runner,
+        production_qualification=production_qualification,
     )
     try:
         result = await pipeline.run(
@@ -972,6 +1064,11 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
         invariant_runner=SyntheticInvariantRunner(),
         formal_runner=SyntheticFormalRunner(),
         allow_fork_probing=True,
+        production_qualification=synthetic_production_qualification(
+            config,
+            datetime.now(UTC).replace(microsecond=0),
+            provider_endpoint="synthetic-provider",
+        ),
     )
 
     after = {
@@ -1025,6 +1122,7 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
         "cross-examination.json",
         "specialist-execution.json",
         "model-review-coverage.json",
+        "model-qualification-runtime.json",
         "solidity-coverage.json",
         "final-findings.json",
         "audit-report.md",
@@ -1144,6 +1242,23 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
     assert (
         len({decision.root_lineage for decision in result.report.cross_examination_decisions}) == 2
     )
+    cross_examination_candidate_ids = {
+        decision.candidate_id for decision in result.report.cross_examination_decisions
+    }
+    for candidate_id in cross_examination_candidate_ids:
+        candidate_decisions = [
+            decision
+            for decision in result.report.cross_examination_decisions
+            if decision.candidate_id == candidate_id
+        ]
+        assert len(candidate_decisions) == 2
+        assert len({decision.root_lineage for decision in candidate_decisions}) == 2
+        assert len({decision.request_id for decision in candidate_decisions}) == 2
+    assert {decision.request_id for decision in result.report.cross_examination_decisions} <= {
+        record.request_id
+        for record in result.report.usage
+        if record.role.startswith("candidate_falsifier:")
+    }
     cross_examination_requests = [
         request
         for request in fake.requests
@@ -1151,7 +1266,7 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
             "mmaudit_candidate_cross_examination_"
         )
     ]
-    assert len(cross_examination_requests) == 2
+    assert len(cross_examination_requests) == 2 * len(cross_examination_candidate_ids)
     for request in cross_examination_requests:
         user_prompt = request["messages"][1]["content"]
         anonymized = json.loads(
@@ -1160,6 +1275,7 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
                 1,
             )[0]
         )
+        assert len(anonymized) == 1
         assert anonymized
         assert all(
             {

@@ -5,10 +5,16 @@ from pathlib import Path
 import pytest
 
 from mmaudit.config import (
+    MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_SHA256,
+    MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_VERSION,
+    MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_SHA256,
+    MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_VERSION,
+    MAXIMUM_ASSURANCE_QUALIFICATION_POLICY_SHA256,
     ConfigError,
     ReproductionConfig,
     load_config,
     model_family,
+    require_maximum_assurance_qualification_pins,
     validate_model_independence,
 )
 from mmaudit.models.schemas import AuditProfile, AuditScope
@@ -248,6 +254,42 @@ def test_maximum_assurance_profile_forces_exact_engine_portfolio(config_factory)
     assert config.models.provider_policy.allow_fallbacks is False
     assert {"echidna", "medusa", "halmos"} <= set(config.formal.required_tools)
     assert "foundry-invariant" not in config.formal.required_tools
+
+
+def test_maximum_assurance_qualification_inputs_are_release_pinned(config_factory) -> None:
+    config = config_factory(profile=AuditProfile.MAXIMUM_ASSURANCE).effective()
+    pins = config.maximum_assurance.qualification
+
+    assert pins.policy_sha256 == MAXIMUM_ASSURANCE_QUALIFICATION_POLICY_SHA256
+    assert pins.corpus_version == MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_VERSION
+    assert pins.corpus_sha256 == MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_SHA256
+    assert pins.ground_truth_version == MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_VERSION
+    assert pins.ground_truth_sha256 == MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_SHA256
+    require_maximum_assurance_qualification_pins(
+        config,
+        policy_sha256=pins.policy_sha256,
+        corpus_version=pins.corpus_version,
+        corpus_sha256=pins.corpus_sha256,
+        ground_truth_version=pins.ground_truth_version,
+        ground_truth_sha256=pins.ground_truth_sha256,
+    )
+    with pytest.raises(ConfigError, match="release pins"):
+        require_maximum_assurance_qualification_pins(
+            config,
+            policy_sha256="0" * 64,
+            corpus_version=pins.corpus_version,
+            corpus_sha256=pins.corpus_sha256,
+            ground_truth_version=pins.ground_truth_version,
+            ground_truth_sha256=pins.ground_truth_sha256,
+        )
+    with pytest.raises(ValueError, match="differ from this release"):
+        config_factory(
+            maximum_assurance={
+                "qualification": {
+                    "policy_sha256": "0" * 64,
+                }
+            }
+        )
 
 
 def test_openrouter_provider_policy_is_exact_and_unambiguous(config_factory) -> None:

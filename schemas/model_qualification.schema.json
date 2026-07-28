@@ -158,6 +158,11 @@
           "title": "Scored By",
           "type": "string"
         },
+        "quality_measurement_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Quality Measurement Sha256",
+          "type": "string"
+        },
         "result_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Result Sha256",
@@ -176,6 +181,7 @@
         "disposition",
         "overall_score",
         "evaluated_at",
+        "quality_measurement_sha256",
         "result_sha256"
       ],
       "title": "ModelQualificationResult",

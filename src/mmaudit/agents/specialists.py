@@ -524,6 +524,8 @@ class SpecialistFindingAgent:
     async def run(self, context: ContextPackage) -> FindingReviewResult:
         configured = self.config.models.role(self.role)
         request_role = f"specialist:{self.role}"
+        request_context = context.model_copy(deep=True)
+        rendered_user_context = render_context(request_context)
         completion = await self.client.complete_with_evidence(
             role=request_role,
             models=[configured.primary, *configured.fallbacks],
@@ -536,7 +538,7 @@ class SpecialistFindingAgent:
                     "</ROLE_CONTRACT_JSON>",
                 )
             ),
-            user_prompt=render_context(context),
+            user_prompt=rendered_user_context,
             response_model=CandidateReviewBatch,
             schema_name=self.definition.effective_schema_name(),
         )
@@ -544,8 +546,9 @@ class SpecialistFindingAgent:
         usage = completion.usage_record
         try:
             surface_review_artifact = seal_model_surface_review_artifact(
-                context=context,
+                context=request_context,
                 completion=completion,
+                rendered_user_context=rendered_user_context,
             )
         except ModelReviewEvidenceError:
             raise OpenRouterSchemaError(
@@ -554,7 +557,7 @@ class SpecialistFindingAgent:
         requested = usage.requested_model
         returned = usage.returned_model
         family = model_family(requested)
-        scanner_fingerprints = {finding.fingerprint for finding in context.scanner_findings}
+        scanner_fingerprints = {finding.fingerprint for finding in request_context.scanner_findings}
         stamped = []
         for finding in result.findings:
             stable = hashlib.sha256(
@@ -602,6 +605,7 @@ class SpecialistFindingAgent:
         return FindingReviewResult(
             findings=tuple(stamped),
             surface_review_artifact=surface_review_artifact,
+            surface_review_context=request_context,
         )
 
 
