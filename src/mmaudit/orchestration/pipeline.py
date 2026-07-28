@@ -40,7 +40,14 @@ from mmaudit.benchmark.certificate import (
     CertificateVerificationOrigin,
     CertificateVerificationStatus,
 )
-from mmaudit.config import AuditConfig, configured_model_ids, validate_model_independence
+from mmaudit.config import (
+    AuditConfig,
+    AuditConfigOverrides,
+    AuditRunOptions,
+    canonical_audit_config_json,
+    configured_model_ids,
+    validate_model_independence,
+)
 from mmaudit.constants import (
     REPORT_SCHEMA_VERSION,
     SEVERITY_ORDER,
@@ -252,6 +259,9 @@ class AuditPipeline:
         *,
         repo: Path,
         output: Path,
+        file_config: AuditConfig | None = None,
+        environment_overrides: AuditConfigOverrides | None = None,
+        cli_overrides: AuditConfigOverrides | None = None,
         scanner_runner: ScannerRunner | None = None,
         client: OpenRouterClient | None = None,
         cost_ledger: AtomicCostLedger | None = None,
@@ -263,6 +273,14 @@ class AuditPipeline:
         production_qualification: VerifiedProductionQualification | None = None,
     ) -> None:
         self.config = config.effective()
+        self.file_config = file_config or self.config
+        self.environment_overrides = environment_overrides or AuditConfigOverrides()
+        self.cli_overrides = cli_overrides or AuditConfigOverrides()
+        reconstructed = self.cli_overrides.apply(self.environment_overrides.apply(self.file_config))
+        if canonical_audit_config_json(reconstructed) != canonical_audit_config_json(self.config):
+            raise ValueError(
+                "pipeline configuration does not match its recorded override provenance"
+            )
         self.repo_input = safe_repository_root(repo)
         self.output = resolve_safe_output_root(output)
         self.client = client
@@ -315,6 +333,7 @@ class AuditPipeline:
         skip_codeql: bool = False,
         changed_since: str | None = None,
         severity_threshold: Severity = Severity.INFORMATIONAL,
+        fail_on: Severity | None = None,
         refresh_models: bool = False,
         allow_fork_probing: bool = False,
         require_maximum_assurance: bool | None = None,
@@ -331,6 +350,7 @@ class AuditPipeline:
                 skip_codeql=skip_codeql,
                 changed_since=changed_since,
                 severity_threshold=severity_threshold,
+                fail_on=fail_on,
                 refresh_models=refresh_models,
                 allow_fork_probing=allow_fork_probing,
                 require_maximum_assurance=require_maximum_assurance,
@@ -354,6 +374,7 @@ class AuditPipeline:
         skip_codeql: bool = False,
         changed_since: str | None = None,
         severity_threshold: Severity = Severity.INFORMATIONAL,
+        fail_on: Severity | None = None,
         refresh_models: bool = False,
         allow_fork_probing: bool = False,
         require_maximum_assurance: bool | None = None,
@@ -361,6 +382,19 @@ class AuditPipeline:
         benchmark_verification: BenchmarkCertificateVerification | None = None,
         benchmark_repository_git_commit: str | None = None,
     ) -> PipelineResult:
+        run_options = AuditRunOptions(
+            scanner_only=scanner_only,
+            allow_code_egress=allow_code_egress,
+            skip_codeql=skip_codeql,
+            changed_since=changed_since,
+            severity_threshold=severity_threshold,
+            fail_on=fail_on,
+            refresh_models=refresh_models,
+            allow_fork_probing=allow_fork_probing,
+            require_maximum_assurance=require_maximum_assurance,
+            allow_maximum_assurance_downgrade=allow_maximum_assurance_downgrade,
+            benchmark_repository_git_commit=benchmark_repository_git_commit,
+        )
         if not scanner_only and self.client is None and self.cost_ledger is None:
             raise ValueError("provider audits require an explicit existing cumulative cost ledger")
         if (
@@ -2102,6 +2136,7 @@ class AuditPipeline:
             time_to_first_candidate_seconds=time_to_first_candidate_seconds,
             completed=terminal_code is ExitCode.SUCCESS,
             incomplete=incomplete,
+            run_options=run_options,
             repository_map=repository_map,
             scanner_runs=scanner_runs,
             usage=usage,
@@ -2164,6 +2199,7 @@ class AuditPipeline:
             reproductions=reproductions,
             reproduction_resolutions=reproduction_resolutions,
             falsifications=falsifications,
+            run_options=run_options,
         )
         self.logger.removeHandler(log_handler)
         log_handler.close()
@@ -2442,6 +2478,7 @@ class AuditPipeline:
         time_to_first_candidate_seconds: float | None,
         completed: bool,
         incomplete: list[str],
+        run_options: AuditRunOptions,
         repository_map: Any,
         scanner_runs: list[ScannerRun],
         usage: UsageLedger,
@@ -2526,6 +2563,13 @@ class AuditPipeline:
                 "python": platform.python_version(),
                 "platform": platform.system(),
                 "scanner_only": scanner_only,
+                "run_options": run_options.model_dump(mode="json"),
+                "configuration_provenance": {
+                    "file_config_sha256": self.file_config.stable_hash(),
+                    "environment_overrides_sha256": self.environment_overrides.stable_hash(),
+                    "cli_overrides_sha256": self.cli_overrides.stable_hash(),
+                    "run_options_sha256": run_options.stable_hash(),
+                },
                 "scope": scope_assessment.model_dump(mode="json"),
                 "prior_audit": {
                     "configured": prior_audit_comparison.configured,
@@ -2711,6 +2755,7 @@ class AuditPipeline:
         reproductions: list[ReproductionResult],
         reproduction_resolutions: list[CandidateReproductionResolution],
         falsifications: FalsificationBatch,
+        run_options: AuditRunOptions,
     ) -> None:
         write_json(
             run_dir / "metadata.json",
@@ -2869,6 +2914,10 @@ class AuditPipeline:
             run_dir=run_dir,
             report=report,
             config=self.config,
+            file_config=self.file_config,
+            environment_overrides=self.environment_overrides,
+            cli_overrides=self.cli_overrides,
+            run_options=run_options,
         )
         write_run_evidence_manifest(
             run_dir / "run-evidence-manifest.json",

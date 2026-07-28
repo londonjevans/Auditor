@@ -377,15 +377,20 @@ def build_traceability_matrix(commit: str | None) -> MaximumAssuranceTraceabilit
         ),
         _row(
             "MA-EVIDENCE-MANIFEST",
-            "Every run emits a deterministic hash-linked manifest of inputs and artifacts.",
+            "Every run emits a deterministic hash-linked manifest of its effective "
+            "configuration, safe override provenance, inputs, and artifacts.",
             ImplementationStatus.IMPLEMENTED,
             verified,
             implementation_paths=[
                 "schemas/run_evidence_manifest.schema.json",
+                "src/mmaudit/config.py",
                 "src/mmaudit/orchestration/manifest.py",
                 "src/mmaudit/orchestration/pipeline.py",
             ],
-            unit_tests=["tests/unit/test_manifest.py"],
+            unit_tests=[
+                "tests/unit/test_config.py",
+                "tests/unit/test_manifest.py",
+            ],
             real_integration_tests=["tests/integration/test_pipeline.py"],
             runtime_artifacts=["run-evidence-manifest.json"],
         ),
@@ -397,11 +402,14 @@ def build_traceability_matrix(commit: str | None) -> MaximumAssuranceTraceabilit
             implementation_paths=[
                 "schemas/offline_replay.schema.json",
                 "schemas/run_verification.schema.json",
+                "src/mmaudit/cli.py",
+                "src/mmaudit/orchestration/certification.py",
                 "src/mmaudit/orchestration/manifest.py",
                 "src/mmaudit/orchestration/replay.py",
                 "src/mmaudit/orchestration/verification.py",
             ],
             unit_tests=[
+                "tests/unit/test_certification.py",
                 "tests/unit/test_manifest.py",
                 "tests/unit/test_replay.py",
             ],

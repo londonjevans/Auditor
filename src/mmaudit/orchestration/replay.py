@@ -27,7 +27,12 @@ from mmaudit.models.schemas import (
     SolidityProjectMetadata,
     StrictModel,
 )
-from mmaudit.orchestration.manifest import canonical_sha256
+from mmaudit.orchestration.manifest import (
+    RunEvidenceManifest,
+    canonical_sha256,
+    load_run_evidence_manifest,
+    resolve_run_evidence_config,
+)
 from mmaudit.orchestration.verification import (
     RunVerificationStatus,
     verify_run_evidence,
@@ -306,22 +311,21 @@ class OfflineReplayOrchestrator:
 
     def __init__(
         self,
-        config: AuditConfig,
+        config: AuditConfig | None = None,
         *,
+        file_config: AuditConfig | None = None,
         scanner_runner: ScannerReplayRunner | None = None,
         invariant_runner: InvariantReplayRunner | None = None,
         reproduction_runner: ReproductionReplayRunner | None = None,
     ) -> None:
         self.config = config
-        self.scanner_runner = scanner_runner or ScannerRunner(config)
-        self.invariant_runner = invariant_runner or FoundryInvariantRunner(
-            config.reproduction,
-            config.smart_contracts,
-        )
-        self.reproduction_runner = reproduction_runner or ForkReproductionRunner(
-            config.reproduction,
-            config.smart_contracts,
-        )
+        self.file_config = file_config
+        self._injected_scanner_runner = scanner_runner
+        self._injected_invariant_runner = invariant_runner
+        self._injected_reproduction_runner = reproduction_runner
+        self.scanner_runner: ScannerReplayRunner | None = scanner_runner
+        self.invariant_runner: InvariantReplayRunner | None = invariant_runner
+        self.reproduction_runner: ReproductionReplayRunner | None = reproduction_runner
 
     async def replay(
         self,
@@ -333,11 +337,24 @@ class OfflineReplayOrchestrator:
     ) -> OfflineReplay:
         """Verify then replay sealed evidence without constructing a model provider."""
 
+        manifest = load_run_evidence_manifest(manifest_path)
+        effective_config, verification_file_config = self._resolve_effective_config(manifest)
+        self.config = effective_config
+        self.scanner_runner = self._injected_scanner_runner or ScannerRunner(effective_config)
+        self.invariant_runner = self._injected_invariant_runner or FoundryInvariantRunner(
+            effective_config.reproduction,
+            effective_config.smart_contracts,
+        )
+        self.reproduction_runner = self._injected_reproduction_runner or ForkReproductionRunner(
+            effective_config.reproduction,
+            effective_config.smart_contracts,
+        )
         verification = verify_run_evidence(
             manifest_path=manifest_path,
             run_dir=run_dir,
             repository_root=repository_root,
-            config=self.config,
+            config=effective_config,
+            file_config=verification_file_config,
         )
         if verification.status is not RunVerificationStatus.CURRENT:
             raise ValueError("offline replay refused stale run evidence")
@@ -414,6 +431,35 @@ class OfflineReplayOrchestrator:
             }
         )
 
+    def _resolve_effective_config(
+        self,
+        manifest: RunEvidenceManifest,
+    ) -> tuple[AuditConfig, AuditConfig | None]:
+        if manifest.run_configuration is None:
+            legacy = self.config or self.file_config
+            if legacy is None:
+                raise ValueError("legacy run manifest requires an explicit configuration")
+            return legacy.effective(), None
+        if self.file_config is not None:
+            return (
+                resolve_run_evidence_config(
+                    manifest,
+                    file_config=self.file_config,
+                ),
+                self.file_config,
+            )
+        if self.config is not None:
+            if self.config.stable_hash() == manifest.run_configuration.effective_config_sha256:
+                return self.config.effective(), None
+            return (
+                resolve_run_evidence_config(
+                    manifest,
+                    file_config=self.config,
+                ),
+                self.config,
+            )
+        return resolve_run_evidence_config(manifest), None
+
     async def _replay_scanners(
         self,
         *,
@@ -421,6 +467,7 @@ class OfflineReplayOrchestrator:
         private_dir: Path,
         expected: list[ScannerRun],
     ) -> list[OfflineReplayComponent]:
+        assert self.scanner_runner is not None
         expected_by_name = {item.scanner: item for item in expected}
         try:
             observed = await self.scanner_runner.run_all(
@@ -500,6 +547,7 @@ class OfflineReplayOrchestrator:
         harnesses: list[FoundryInvariantHarnessSpec],
         expected_results: list[InvariantExecutionResult],
     ) -> list[OfflineReplayComponent]:
+        assert self.invariant_runner is not None
         invariants = {
             invariant.id: invariant for invariant in (suite.invariants if suite is not None else [])
         }
@@ -592,6 +640,7 @@ class OfflineReplayOrchestrator:
         specifications: list[GeneratedFoundryTestSpec],
         expected_results: list[ReproductionResult],
     ) -> list[OfflineReplayComponent]:
+        assert self.reproduction_runner is not None
         candidates_by_id = {item.candidate_id: item for item in candidates}
         expected = {(item.candidate_id, item.test_name): item for item in expected_results}
         components: list[OfflineReplayComponent] = []

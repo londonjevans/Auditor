@@ -59,9 +59,12 @@ from mmaudit.benchmark.models import (
 from mmaudit.benchmark.mutations import load_mutation_scorecard
 from mmaudit.config import (
     AuditConfig,
+    AuditConfigOverrides,
     ConfigError,
+    audit_config_overrides,
     configured_model_ids,
     load_config,
+    load_config_with_provenance,
     require_maximum_assurance_qualification_pins,
     validate_model_independence,
 )
@@ -136,7 +139,11 @@ from mmaudit.orchestration.certification import (
     write_maximum_assurance_certification,
 )
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger, CostLedgerError
-from mmaudit.orchestration.manifest import canonical_sha256
+from mmaudit.orchestration.manifest import (
+    RunEvidenceManifest,
+    canonical_sha256,
+    load_run_evidence_manifest,
+)
 from mmaudit.orchestration.pipeline import AuditPipeline, resolve_safe_output_root
 from mmaudit.orchestration.replay import (
     OfflineReplayOrchestrator,
@@ -306,8 +313,7 @@ def doctor_command(
     local_console = Console(no_color=no_color)
     try:
         config = load_config(config_path)
-        config = _apply_overrides(
-            config,
+        config = _audit_config_overrides(
             budget_usd=None,
             max_files=None,
             max_file_bytes=None,
@@ -316,7 +322,7 @@ def doctor_command(
             require_zdr=False,
             profile=profile,
             fork_rpc_url_env=fork_rpc_url_env,
-        )
+        ).apply(config)
     except ConfigError as exc:
         local_console.print(f"[red]Configuration invalid:[/red] {exc}")
         raise typer.Exit(ExitCode.CONFIGURATION) from exc
@@ -2209,7 +2215,13 @@ def verify_run_command(
         Path,
         typer.Option("--repo", help="Local source repository bound by the run."),
     ] = Path("."),
-    config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
+    config_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--config",
+            help="Optional current base config; recorded safe overrides are replayed.",
+        ),
+    ] = None,
     output: Annotated[
         Path,
         typer.Option("--output", help="Destination for normalized verification evidence."),
@@ -2220,11 +2232,17 @@ def verify_run_command(
 
     local_console = Console(no_color=no_color)
     try:
+        sealed_manifest = load_run_evidence_manifest(manifest)
+        legacy_config, current_file_config = _verification_config_inputs(
+            sealed_manifest=sealed_manifest,
+            config_path=config_path,
+        )
         verification = verify_run_evidence(
             manifest_path=manifest,
             run_dir=run_dir,
             repository_root=repository,
-            config=load_config(config_path),
+            config=legacy_config,
+            file_config=current_file_config,
         )
         write_run_verification(output, verification)
     except (OSError, ValueError) as exc:
@@ -2252,7 +2270,13 @@ def replay_command(
         Path,
         typer.Option("--repo", help="Local source repository bound by the run."),
     ] = Path("."),
-    config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
+    config_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--config",
+            help="Optional current base config; recorded safe overrides are replayed.",
+        ),
+    ] = None,
     output: Annotated[
         Path,
         typer.Option("--output", help="Destination for normalized offline replay evidence."),
@@ -2267,8 +2291,16 @@ def replay_command(
 
     local_console = Console(no_color=no_color)
     try:
+        sealed_manifest = load_run_evidence_manifest(manifest)
+        legacy_config, current_file_config = _verification_config_inputs(
+            sealed_manifest=sealed_manifest,
+            config_path=config_path,
+        )
         replay = asyncio.run(
-            OfflineReplayOrchestrator(load_config(config_path)).replay(
+            OfflineReplayOrchestrator(
+                legacy_config,
+                file_config=current_file_config,
+            ).replay(
                 manifest_path=manifest,
                 run_dir=run_dir,
                 repository_root=repository,
@@ -2305,7 +2337,13 @@ def certify_run_command(
         Path,
         typer.Option("--repo", help="Local source repository bound by the run."),
     ] = Path("."),
-    config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
+    config_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--config",
+            help="Optional current base config; recorded safe overrides are replayed.",
+        ),
+    ] = None,
     output: Annotated[
         Path,
         typer.Option("--output", help="Destination for post-run certification evidence."),
@@ -2316,12 +2354,18 @@ def certify_run_command(
 
     local_console = Console(no_color=no_color)
     try:
+        sealed_manifest = load_run_evidence_manifest(manifest)
+        legacy_config, current_file_config = _verification_config_inputs(
+            sealed_manifest=sealed_manifest,
+            config_path=config_path,
+        )
         certification = certify_maximum_assurance_run(
             manifest_path=manifest,
             run_dir=run_dir,
             repository_root=repository,
             replay_path=replay,
-            config=load_config(config_path),
+            config=legacy_config,
+            file_config=current_file_config,
         )
         write_maximum_assurance_certification(output, certification)
     except (OSError, ValueError) as exc:
@@ -2334,6 +2378,20 @@ def certify_run_command(
     local_console.print(f"Result: {output.resolve()}")
     if certification.assessment.status is not MaximumAssuranceStatus.COMPLETE:
         raise typer.Exit(ExitCode.INCOMPLETE)
+
+
+def _verification_config_inputs(
+    *,
+    sealed_manifest: RunEvidenceManifest,
+    config_path: Path | None,
+) -> tuple[AuditConfig | None, AuditConfig | None]:
+    """Load only the configuration input appropriate for the manifest generation."""
+
+    if config_path is None:
+        return None, None
+    if sealed_manifest.run_configuration is None:
+        return load_config(config_path), None
+    return None, load_config_with_provenance(config_path, environ={}).file_config
 
 
 @snapshot_app.command("import")
@@ -2438,10 +2496,11 @@ def _execute_audit(
     operator_secrets = OperatorSecrets()
     pipeline: AuditPipeline | None = None
     try:
-        config = load_config(config_path)
-        config = _apply_overrides(
-            config,
+        loaded_config = load_config_with_provenance(config_path)
+        resolved_cost_ledger = cost_ledger.resolve() if cost_ledger is not None else None
+        cli_overrides = _audit_config_overrides(
             budget_usd=budget_usd,
+            cost_ledger=resolved_cost_ledger,
             max_files=max_files,
             max_file_bytes=max_file_bytes,
             max_context_bytes=max_context_bytes,
@@ -2467,6 +2526,7 @@ def _execute_audit(
             project_root=project_root,
             fork_rpc_url_env=fork_rpc_url_env,
         )
+        config = cli_overrides.apply(loaded_config.effective_config)
         qualification_inputs_supplied = _validate_audit_production_qualification_inputs(
             scanner_only=scanner_only,
             bundle_path=model_qualification_bundle,
@@ -2479,7 +2539,7 @@ def _execute_audit(
         production_qualification: VerifiedProductionQualification | None = None
         campaign_ledger: AtomicCostLedger | None = None
         if not scanner_only:
-            ledger_path = _selected_cost_ledger_path(config, cost_ledger)
+            ledger_path = _selected_cost_ledger_path(config, resolved_cost_ledger)
             if ledger_path is None:
                 raise ConfigError(
                     "provider audit requires an existing --cost-ledger initialized "
@@ -2557,6 +2617,9 @@ def _execute_audit(
             config,
             repo=repo_path,
             output=output_path,
+            file_config=loaded_config.file_config,
+            environment_overrides=loaded_config.environment_overrides,
+            cli_overrides=cli_overrides,
             cost_ledger=campaign_ledger,
             api_key=operator_secrets.openrouter_api_key,
             logger=logger,
@@ -2569,6 +2632,7 @@ def _execute_audit(
                 skip_codeql=skip_codeql,
                 changed_since=changed_since,
                 severity_threshold=severity_threshold,
+                fail_on=fail_on,
                 allow_fork_probing=allow_fork_probing,
                 require_maximum_assurance=None,
                 allow_maximum_assurance_downgrade=None,
@@ -2601,10 +2665,10 @@ SecretlessErrors = (
 )
 
 
-def _apply_overrides(
-    config: AuditConfig,
+def _audit_config_overrides(
     *,
     budget_usd: float | None,
+    cost_ledger: Path | None = None,
     max_files: int | None,
     max_file_bytes: int | None,
     max_context_bytes: int | None,
@@ -2627,99 +2691,48 @@ def _apply_overrides(
     framework: Literal["auto", "foundry", "hardhat", "mixed", "plain"] | None = None,
     project_root: str | None = None,
     fork_rpc_url_env: str | None = None,
-) -> AuditConfig:
-    execution_updates = {
-        key: value
-        for key, value in {
-            "budget_usd": budget_usd,
-            "concurrency": concurrency,
-        }.items()
-        if value is not None
-    }
-    repository_updates = {
-        key: value
-        for key, value in {
-            "max_files": max_files,
-            "max_file_bytes": max_file_bytes,
-            "max_total_context_bytes": max_context_bytes,
-        }.items()
-        if value is not None
-    }
-    privacy_updates = {"require_zdr": True} if require_zdr else {}
-    top_level_updates = {"profile": profile} if profile is not None else {}
-    scope_updates = {
-        key: value
-        for key, value in {
-            "mode": scope,
-            "require_complete": require_complete_scope,
-        }.items()
-        if value is not None
-    }
+) -> AuditConfigOverrides:
     if require_maximum_assurance and allow_maximum_assurance_downgrade:
         raise ConfigError(
             "--require-maximum-assurance and --allow-maximum-assurance-downgrade "
             "cannot be used together"
         )
-    assurance_mode_updates: dict[str, bool] = {}
+    values: dict[str, bool | int | float | str | None] = {
+        "execution.budget_usd": budget_usd,
+        "execution.cost_ledger_path": (
+            str(cost_ledger.resolve()) if cost_ledger is not None else None
+        ),
+        "execution.concurrency": concurrency,
+        "repository.max_files": max_files,
+        "repository.max_file_bytes": max_file_bytes,
+        "repository.max_total_context_bytes": max_context_bytes,
+        "privacy.require_zdr": True if require_zdr else None,
+        "profile": profile.value if profile is not None else None,
+        "scope.mode": scope.value if scope is not None else None,
+        "scope.require_complete": require_complete_scope,
+        "maximum_assurance.minimum_model_families": min_model_families,
+        "maximum_assurance.minimum_specialist_agents": min_specialist_agents,
+        "maximum_assurance.require_reproduction_for_critical": (require_reproduction_for_critical),
+        "maximum_assurance.require_formal_or_reproduction_for_confirmed_critical": (
+            require_formal_or_reproduction_for_confirmed_critical
+        ),
+        "maximum_assurance.benchmark_gate": True if benchmark_gate else None,
+        "models.minimum_distinct_families": min_model_families,
+        "smart_contracts.enabled": solidity,
+        "smart_contracts.compile": compile_solidity,
+        "smart_contracts.allow_network": True if allow_network else None,
+        "smart_contracts.framework": framework,
+        "smart_contracts.project_root": project_root,
+        "smart_contracts.fork_rpc_url_env": fork_rpc_url_env,
+        "scanners.slither.enabled": True if run_slither else None,
+    }
     if require_maximum_assurance:
-        assurance_mode_updates = {
-            "require": True,
-            "allow_downgrade": False,
-        }
+        values["maximum_assurance.require"] = True
+        values["maximum_assurance.allow_downgrade"] = False
     elif allow_maximum_assurance_downgrade:
-        assurance_mode_updates = {
-            "require": False,
-            "allow_downgrade": True,
-        }
-    maximum_assurance_updates = {
-        **assurance_mode_updates,
-        **{
-            key: value
-            for key, value in {
-                "minimum_model_families": min_model_families,
-                "minimum_specialist_agents": min_specialist_agents,
-                "require_reproduction_for_critical": require_reproduction_for_critical,
-                "require_formal_or_reproduction_for_confirmed_critical": (
-                    require_formal_or_reproduction_for_confirmed_critical
-                ),
-                "benchmark_gate": True if benchmark_gate else None,
-            }.items()
-            if value is not None
-        },
-    }
-    model_updates = (
-        {"minimum_distinct_families": min_model_families} if min_model_families is not None else {}
-    )
-    smart_contract_updates = {
-        key: value
-        for key, value in {
-            "enabled": solidity,
-            "compile": compile_solidity,
-            "allow_network": True if allow_network else None,
-            "framework": framework,
-            "project_root": project_root,
-            "fork_rpc_url_env": fork_rpc_url_env,
-        }.items()
-        if value is not None
-    }
-    scanner_updates = {}
-    if run_slither:
-        scanner_updates["slither"] = config.scanners.slither.model_copy(update={"enabled": True})
-    return config.model_copy(
-        update={
-            **top_level_updates,
-            "scope": config.scope.model_copy(update=scope_updates),
-            "execution": config.execution.model_copy(update=execution_updates),
-            "repository": config.repository.model_copy(update=repository_updates),
-            "privacy": config.privacy.model_copy(update=privacy_updates),
-            "maximum_assurance": config.maximum_assurance.model_copy(
-                update=maximum_assurance_updates
-            ),
-            "models": config.models.model_copy(update=model_updates),
-            "smart_contracts": config.smart_contracts.model_copy(update=smart_contract_updates),
-            "scanners": config.scanners.model_copy(update=scanner_updates),
-        }
-    ).effective()
+        values["maximum_assurance.require"] = False
+        values["maximum_assurance.allow_downgrade"] = True
+    return audit_config_overrides(values)
 
 
 def _repo_path(config: AuditConfig, config_path: Path, override: Path | None) -> Path:

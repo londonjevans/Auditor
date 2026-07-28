@@ -484,9 +484,17 @@ Each invocation creates:
 ```
 
 `run-evidence-manifest.json` is self-hashed and binds the normalized source inventory,
-configuration, prompts, model and executable identities, compiler and isolation evidence, campaign
-seeds, property corpus, generated harnesses, reproductions, coverage, and every other regular run
-artifact. It excludes itself from the artifact list so its canonical digest is stable.
+complete effective configuration, allowlisted environment and CLI override layers, non-secret run
+options, prompts, model and executable identities, compiler and isolation evidence, campaign seeds,
+property corpus, generated harnesses, reproductions, coverage, and every other regular run artifact.
+Manifest schema `1.1` can reconstruct a profile-overridden run without relying on ambient
+environment state or operator recollection; supplying `--config` additionally checks the current
+base configuration for drift. The manifest excludes itself from the artifact list so its canonical
+digest is stable. Legacy schema `1.0` manifests remain readable but require an explicit
+configuration for verification, replay, and certification.
+The self-hash provides deterministic integrity and reconciliation, not an external
+signature; retain a trusted manifest digest or release attestation when provenance
+must survive a fully rewritten artifact set.
 
 Final artifacts are copied to `.mmaudit/latest/`. Use:
 

@@ -55,6 +55,22 @@ def test_model_ensemble_traceability_names_qualification_runtime_evidence() -> N
     assert requirement.implementation_status is ImplementationStatus.PARTIALLY_IMPLEMENTED
 
 
+def test_manifest_traceability_names_effective_configuration_and_replay_evidence() -> None:
+    matrix = build_traceability_matrix("test-commit")
+    evidence = next(
+        item for item in matrix.requirements if item.requirement_id == "MA-EVIDENCE-MANIFEST"
+    )
+    replay = next(
+        item for item in matrix.requirements if item.requirement_id == "MA-REPLAY-MANIFEST"
+    )
+
+    assert "src/mmaudit/config.py" in evidence.implementation_paths
+    assert "tests/unit/test_config.py" in evidence.unit_tests
+    assert "src/mmaudit/cli.py" in replay.implementation_paths
+    assert "src/mmaudit/orchestration/certification.py" in replay.implementation_paths
+    assert "tests/unit/test_certification.py" in replay.unit_tests
+
+
 @pytest.mark.parametrize(
     ("missing_kind", "expected"),
     [

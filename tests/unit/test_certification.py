@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from pydantic import ValidationError
@@ -26,7 +28,11 @@ from mmaudit.orchestration.certification import (
     certify_maximum_assurance_run,
     write_maximum_assurance_certification,
 )
-from mmaudit.orchestration.manifest import canonical_sha256
+from mmaudit.orchestration.manifest import (
+    ManifestFileBinding,
+    RunEvidenceManifest,
+    canonical_sha256,
+)
 from mmaudit.orchestration.replay import (
     OfflineReplay,
     OfflineReplayComponent,
@@ -181,6 +187,7 @@ def _certify(
     *,
     assessment: MaximumAssuranceAssessment | None = None,
     replay: OfflineReplay | None = None,
+    verification_manifest_sha256: str = _MANIFEST_SHA256,
 ) -> MaximumAssuranceCertification:
     manifest = SimpleNamespace(
         run_id=_RUN_ID,
@@ -189,6 +196,7 @@ def _certify(
     verification = SimpleNamespace(
         status=RunVerificationStatus.CURRENT,
         run_id=_RUN_ID,
+        manifest_sha256=verification_manifest_sha256,
         verification_sha256=_VERIFICATION_SHA256,
     )
     monkeypatch.setattr(
@@ -204,7 +212,7 @@ def _certify(
     monkeypatch.setattr(
         certification_module,
         "_load_report",
-        lambda _path: _report(assessment or _base_assessment()),
+        lambda _path, _manifest: _report(assessment or _base_assessment()),
     )
     monkeypatch.setattr(
         certification_module,
@@ -230,6 +238,105 @@ def _certify(
     )
 
 
+def test_v11_certification_reconstructs_embedded_effective_config(
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: ConfigFactory,
+) -> None:
+    config = config_factory()
+    manifest = SimpleNamespace(
+        run_id=_RUN_ID,
+        manifest_sha256=_MANIFEST_SHA256,
+        run_configuration=SimpleNamespace(
+            effective_config_sha256=config.stable_hash(),
+        ),
+    )
+    verification = SimpleNamespace(
+        status=RunVerificationStatus.CURRENT,
+        run_id=_RUN_ID,
+        manifest_sha256=_MANIFEST_SHA256,
+        verification_sha256=_VERIFICATION_SHA256,
+    )
+    observed_verification: dict[str, object] = {}
+
+    def resolve_config(
+        observed_manifest: object,
+        *,
+        file_config: AuditConfig | None = None,
+    ) -> AuditConfig:
+        assert observed_manifest is manifest
+        assert file_config is None
+        return config
+
+    def verify(**kwargs: object) -> object:
+        observed_verification.update(kwargs)
+        return verification
+
+    monkeypatch.setattr(
+        certification_module,
+        "load_run_evidence_manifest",
+        lambda _path: manifest,
+    )
+    monkeypatch.setattr(
+        certification_module,
+        "resolve_run_evidence_config",
+        resolve_config,
+    )
+    monkeypatch.setattr(certification_module, "verify_run_evidence", verify)
+    monkeypatch.setattr(
+        certification_module,
+        "_load_report",
+        lambda _path, _manifest: _report(_base_assessment()),
+    )
+    monkeypatch.setattr(
+        certification_module,
+        "load_offline_replay",
+        lambda _path: _replay(),
+    )
+    monkeypatch.setattr(
+        certification_module,
+        "expected_replay_kinds_for_run",
+        lambda _path: {ReplayComponentKind.SCANNER},
+    )
+    monkeypatch.setattr(
+        certification_module,
+        "expected_replay_components_for_run",
+        lambda _path: {(ReplayComponentKind.SCANNER, "slither")},
+    )
+
+    certification = certify_maximum_assurance_run(
+        manifest_path=Path("run-evidence-manifest.json"),
+        run_dir=Path("run"),
+        repository_root=Path("repository"),
+        replay_path=Path("offline-replay.json"),
+    )
+
+    assert certification.assessment.status is MaximumAssuranceStatus.COMPLETE
+    assert observed_verification["config"] == config
+    assert observed_verification["file_config"] is None
+
+
+def test_v10_certification_requires_explicit_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        certification_module,
+        "load_run_evidence_manifest",
+        lambda _path: SimpleNamespace(
+            run_id=_RUN_ID,
+            manifest_sha256=_MANIFEST_SHA256,
+            run_configuration=None,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="legacy run manifest requires"):
+        certify_maximum_assurance_run(
+            manifest_path=Path("run-evidence-manifest.json"),
+            run_dir=Path("run"),
+            repository_root=Path("repository"),
+            replay_path=Path("offline-replay.json"),
+        )
+
+
 def test_certification_is_self_hashed_and_rejects_tampering(
     monkeypatch: pytest.MonkeyPatch,
     config_factory: ConfigFactory,
@@ -243,6 +350,45 @@ def test_certification_is_self_hashed_and_rejects_tampering(
     tampered["manifest_sha256"] = "f" * 64
     with pytest.raises(ValidationError, match="certification hash is inconsistent"):
         MaximumAssuranceCertification.model_validate(tampered)
+
+
+def test_certification_rejects_manifest_changed_during_verification(
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: ConfigFactory,
+) -> None:
+    with pytest.raises(ValueError, match="changed run manifest"):
+        _certify(
+            monkeypatch,
+            config_factory,
+            verification_manifest_sha256="f" * 64,
+        )
+
+
+def test_certification_reloads_only_manifest_bound_report_bytes(tmp_path: Path) -> None:
+    report = _report(_base_assessment())
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    report_path = run_dir / "final-findings.json"
+    report_bytes = report.model_dump_json().encode("utf-8")
+    report_path.write_bytes(report_bytes)
+    manifest = cast(
+        RunEvidenceManifest,
+        SimpleNamespace(
+            artifacts=[
+                ManifestFileBinding(
+                    path="final-findings.json",
+                    sha256=hashlib.sha256(report_bytes).hexdigest(),
+                    size=len(report_bytes),
+                )
+            ]
+        ),
+    )
+
+    assert certification_module._load_report(run_dir, manifest) == report
+
+    report_path.write_bytes(report_bytes + b"\n")
+    with pytest.raises(ValueError, match="not manifest-bound"):
+        certification_module._load_report(run_dir, manifest)
 
 
 def test_certification_promotes_only_replay_blocked_assessment(

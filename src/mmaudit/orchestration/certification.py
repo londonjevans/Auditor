@@ -18,18 +18,26 @@ from mmaudit.models.schemas import (
     StrictModel,
 )
 from mmaudit.orchestration.assurance import offline_replay_is_qualifying
-from mmaudit.orchestration.manifest import canonical_sha256, load_run_evidence_manifest
+from mmaudit.orchestration.manifest import (
+    RunEvidenceManifest,
+    canonical_sha256,
+    load_run_evidence_manifest,
+    resolve_run_evidence_config,
+)
 from mmaudit.orchestration.replay import (
     OfflineReplay,
     expected_replay_components_for_run,
     expected_replay_kinds_for_run,
     load_offline_replay,
 )
-from mmaudit.orchestration.verification import RunVerificationStatus, verify_run_evidence
+from mmaudit.orchestration.verification import (
+    RunVerificationStatus,
+    load_manifest_bound_report,
+    verify_run_evidence,
+)
 from mmaudit.reporting.json_report import stable_json
 from mmaudit.repository.secrets import is_sensitive_workspace_name
 
-_MAX_REPORT_BYTES = 100_000_000
 _MAX_CERTIFICATION_BYTES = 100_000_000
 _POST_RUN_CLAUSES = frozenset(
     {
@@ -75,20 +83,48 @@ def certify_maximum_assurance_run(
     run_dir: Path,
     repository_root: Path,
     replay_path: Path,
-    config: AuditConfig,
+    config: AuditConfig | None = None,
+    file_config: AuditConfig | None = None,
 ) -> MaximumAssuranceCertification:
     """Re-verify a sealed run, bind replay evidence, and recompute only replay clauses."""
 
     manifest = load_run_evidence_manifest(manifest_path)
+    run_configuration = getattr(manifest, "run_configuration", None)
+    verification_file_config: AuditConfig | None = None
+    if run_configuration is None:
+        effective_config = config or file_config
+        if effective_config is None:
+            raise ValueError("legacy run manifest requires an explicit configuration")
+        effective_config = effective_config.effective()
+    elif file_config is not None:
+        verification_file_config = file_config
+        effective_config = resolve_run_evidence_config(
+            manifest,
+            file_config=file_config,
+        )
+    elif config is not None:
+        if config.stable_hash() == run_configuration.effective_config_sha256:
+            effective_config = config.effective()
+        else:
+            verification_file_config = config
+            effective_config = resolve_run_evidence_config(
+                manifest,
+                file_config=config,
+            )
+    else:
+        effective_config = resolve_run_evidence_config(manifest)
     verification = verify_run_evidence(
         manifest_path=manifest_path,
         run_dir=run_dir,
         repository_root=repository_root,
-        config=config,
+        config=effective_config,
+        file_config=verification_file_config,
     )
     if verification.status is not RunVerificationStatus.CURRENT:
         raise ValueError("maximum-assurance certification refused stale run evidence")
-    report = _load_report(run_dir)
+    if verification.manifest_sha256 != manifest.manifest_sha256:
+        raise ValueError("maximum-assurance certification observed a changed run manifest")
+    report = _load_report(run_dir, manifest)
     replay = load_offline_replay(replay_path)
     if report.audit_profile is not AuditProfile.MAXIMUM_ASSURANCE:
         raise ValueError("post-run certification requires the maximum-assurance profile")
@@ -218,14 +254,8 @@ def _certified_requirement(
     )
 
 
-def _load_report(run_dir: Path) -> AuditReport:
-    root = run_dir.resolve(strict=True)
-    if not root.is_dir():
-        raise ValueError("maximum-assurance certification run root must be a directory")
-    path = root / "final-findings.json"
-    if path.is_symlink() or path.is_junction() or not path.is_file():
-        raise ValueError("maximum-assurance certification report is missing or linked")
-    metadata = path.stat()
-    if metadata.st_nlink != 1 or metadata.st_size > _MAX_REPORT_BYTES:
-        raise ValueError("maximum-assurance certification report must be bounded and unshared")
-    return AuditReport.model_validate_json(path.read_text(encoding="utf-8"))
+def _load_report(run_dir: Path, manifest: RunEvidenceManifest) -> AuditReport:
+    try:
+        return load_manifest_bound_report(run_dir=run_dir, manifest=manifest)
+    except ValueError as exc:
+        raise ValueError("maximum-assurance certification report is not manifest-bound") from exc

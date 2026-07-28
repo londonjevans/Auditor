@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import math
+import os
+import stat
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_validator
 
-from mmaudit.config import AuditConfig
+from mmaudit.config import (
+    AuditConfig,
+    AuditConfigOverrides,
+    AuditRunOptions,
+    parse_canonical_audit_config,
+)
 from mmaudit.constants import VERSION
 from mmaudit.models.schemas import AuditReport, StrictModel
 from mmaudit.orchestration.manifest import (
@@ -20,6 +29,7 @@ from mmaudit.orchestration.manifest import (
     canonical_sha256,
     collect_run_artifacts,
     load_run_evidence_manifest,
+    resolve_run_evidence_config,
 )
 from mmaudit.reporting.json_report import stable_json
 from mmaudit.repository.ignore import normalize_relative_path
@@ -146,11 +156,22 @@ def verify_run_evidence(
     manifest_path: Path,
     run_dir: Path,
     repository_root: Path,
-    config: AuditConfig,
+    config: AuditConfig | None = None,
+    file_config: AuditConfig | None = None,
 ) -> RunVerification:
     """Reconcile local files and projections without running repository code."""
 
     manifest = load_run_evidence_manifest(manifest_path)
+    resolved_config = config
+    if manifest.run_configuration is not None and file_config is not None:
+        resolved_config = resolve_run_evidence_config(
+            manifest,
+            file_config=file_config,
+        )
+    elif resolved_config is None and manifest.run_configuration is not None:
+        resolved_config = resolve_run_evidence_config(manifest)
+    elif resolved_config is None and file_config is not None:
+        resolved_config = file_config.effective()
     root = _safe_directory(run_dir, "run")
     source_root = _safe_directory(repository_root, "repository")
     mismatches: list[RunVerificationMismatch] = []
@@ -165,22 +186,133 @@ def verify_run_evidence(
         )
     )
 
-    report = _load_report(root)
-    if report is None:
+    report_binding = next(
+        (binding for binding in manifest.artifacts if binding.path == "final-findings.json"),
+        None,
+    )
+    try:
+        report = load_manifest_bound_report(run_dir=root, manifest=manifest)
+    except ValueError:
+        report = None
+    metadata_binding = next(
+        (binding for binding in manifest.artifacts if binding.path == "metadata.json"),
+        None,
+    )
+    emitted_metadata, metadata_present = _load_metadata_artifact(root, metadata_binding)
+    if manifest.schema_version == "1.1" and not metadata_present:
         mismatches.append(
             RunVerificationMismatch(
                 category=RunVerificationCategory.MANIFEST,
-                identifier="bindings/recalculation",
+                identifier="metadata/missing",
+                kind=(
+                    RunVerificationMismatchKind.MISSING
+                    if metadata_binding is not None
+                    else RunVerificationMismatchKind.UNVERIFIABLE
+                ),
+                expected_sha256=(metadata_binding.sha256 if metadata_binding is not None else None),
+            )
+        )
+    elif manifest.schema_version == "1.1" and metadata_binding is None:
+        mismatches.append(
+            RunVerificationMismatch(
+                category=RunVerificationCategory.MANIFEST,
+                identifier="metadata/binding",
+                kind=RunVerificationMismatchKind.UNVERIFIABLE,
+            )
+        )
+    if metadata_present and emitted_metadata is None:
+        mismatches.append(
+            RunVerificationMismatch(
+                category=RunVerificationCategory.MANIFEST,
+                identifier="metadata/validation",
+                kind=RunVerificationMismatchKind.UNVERIFIABLE,
+                expected_sha256=(metadata_binding.sha256 if metadata_binding is not None else None),
+            )
+        )
+    if report is not None and emitted_metadata is not None:
+        mismatches.extend(
+            _metadata_artifact_mismatches(
+                manifest=manifest,
+                report=report,
+                metadata=emitted_metadata,
+            )
+        )
+    if report is None or resolved_config is None:
+        mismatches.append(
+            RunVerificationMismatch(
+                category=RunVerificationCategory.MANIFEST,
+                identifier=(
+                    "configuration/reconstruction"
+                    if resolved_config is None
+                    else "bindings/recalculation"
+                ),
                 kind=RunVerificationMismatchKind.UNVERIFIABLE,
                 expected_sha256=manifest.manifest_sha256,
             )
         )
+        if report is None and report_binding is not None:
+            mismatches.append(
+                RunVerificationMismatch(
+                    category=RunVerificationCategory.MANIFEST,
+                    identifier="report/validation",
+                    kind=RunVerificationMismatchKind.UNVERIFIABLE,
+                    expected_sha256=report_binding.sha256,
+                )
+            )
     else:
+        mismatches.extend(
+            _report_configuration_mismatches(
+                manifest=manifest,
+                report=report,
+                resolved_config=resolved_config,
+            )
+        )
+        observed_file_config = resolved_config
+        observed_environment_overrides = AuditConfigOverrides()
+        observed_cli_overrides = AuditConfigOverrides()
+        observed_run_options = AuditRunOptions()
+        if manifest.run_configuration is not None:
+            observed_run_options = manifest.run_configuration.run_options
+            if file_config is not None:
+                observed_file_config = file_config
+                observed_environment_overrides = manifest.run_configuration.environment_overrides
+                observed_cli_overrides = manifest.run_configuration.cli_overrides
+            elif (
+                resolved_config.stable_hash() == manifest.run_configuration.effective_config_sha256
+            ):
+                observed_file_config = parse_canonical_audit_config(
+                    manifest.run_configuration.file_configuration_json
+                )
+                observed_environment_overrides = manifest.run_configuration.environment_overrides
+                observed_cli_overrides = manifest.run_configuration.cli_overrides
+        build_arguments: dict[str, Any] = {
+            "file_config": observed_file_config,
+            "environment_overrides": observed_environment_overrides,
+            "cli_overrides": observed_cli_overrides,
+            "run_options": observed_run_options,
+        }
         try:
+            projection_metadata = dict(report.metadata)
+            projection_metadata["run_options"] = observed_run_options.model_dump(mode="json")
+            projection_metadata["configuration_provenance"] = {
+                "file_config_sha256": observed_file_config.stable_hash(),
+                "environment_overrides_sha256": (observed_environment_overrides.stable_hash()),
+                "cli_overrides_sha256": observed_cli_overrides.stable_hash(),
+                "run_options_sha256": observed_run_options.stable_hash(),
+            }
+            projection_report = report.model_copy(
+                update={
+                    "configuration_hash": resolved_config.stable_hash(),
+                    "model_configuration_hash": resolved_config.model_hash(),
+                    "audit_profile": resolved_config.profile,
+                    "metadata": projection_metadata,
+                }
+            )
             observed_manifest = build_run_evidence_manifest(
                 run_dir=root,
-                report=report,
-                config=config,
+                report=projection_report,
+                config=resolved_config,
+                **build_arguments,
             )
         except (OSError, ValueError):
             mismatches.append(
@@ -193,6 +325,7 @@ def verify_run_evidence(
             )
         else:
             mismatches.extend(_identity_mismatches(manifest, observed_manifest))
+            mismatches.extend(_run_configuration_mismatches(manifest, observed_manifest))
             mismatches.extend(_binding_mismatches(manifest, observed_manifest))
 
     ordered = sorted(
@@ -383,6 +516,221 @@ def _identity_mismatches(
     ]
 
 
+def _run_configuration_mismatches(
+    expected: RunEvidenceManifest,
+    observed: RunEvidenceManifest,
+) -> list[RunVerificationMismatch]:
+    if expected.run_configuration is None:
+        return []
+    expected_payload = expected.run_configuration.model_dump(mode="json")
+    observed_payload = (
+        observed.run_configuration.model_dump(mode="json")
+        if observed.run_configuration is not None
+        else None
+    )
+    if expected_payload == observed_payload:
+        return []
+    return [
+        RunVerificationMismatch(
+            category=RunVerificationCategory.CONFIGURATION,
+            identifier="run/configuration-provenance",
+            kind=RunVerificationMismatchKind.CHANGED,
+            expected_sha256=canonical_sha256(expected_payload),
+            observed_sha256=canonical_sha256(observed_payload),
+        )
+    ]
+
+
+def _report_configuration_mismatches(
+    *,
+    manifest: RunEvidenceManifest,
+    report: AuditReport,
+    resolved_config: AuditConfig,
+) -> list[RunVerificationMismatch]:
+    """Reject a report whose declared configuration differs from sealed provenance."""
+
+    run_configuration = manifest.run_configuration
+    expected_config_sha256 = (
+        run_configuration.effective_config_sha256
+        if run_configuration is not None
+        else resolved_config.stable_hash()
+    )
+    expected_model_sha256 = (
+        run_configuration.model_config_sha256
+        if run_configuration is not None
+        else resolved_config.model_hash()
+    )
+    expected_profile = (
+        run_configuration.requested_profile.value
+        if run_configuration is not None
+        else resolved_config.profile.value
+    )
+    mismatches: list[RunVerificationMismatch] = []
+    if report.configuration_hash != expected_config_sha256:
+        mismatches.append(
+            RunVerificationMismatch(
+                category=RunVerificationCategory.CONFIGURATION,
+                identifier="report/configuration-hash",
+                kind=RunVerificationMismatchKind.CHANGED,
+                expected_sha256=expected_config_sha256,
+                observed_sha256=report.configuration_hash,
+            )
+        )
+    if report.model_configuration_hash != expected_model_sha256:
+        mismatches.append(
+            RunVerificationMismatch(
+                category=RunVerificationCategory.CONFIGURATION,
+                identifier="report/model-configuration-hash",
+                kind=RunVerificationMismatchKind.CHANGED,
+                expected_sha256=expected_model_sha256,
+                observed_sha256=report.model_configuration_hash,
+            )
+        )
+    if report.audit_profile.value != expected_profile:
+        mismatches.append(
+            RunVerificationMismatch(
+                category=RunVerificationCategory.CONFIGURATION,
+                identifier="report/audit-profile",
+                kind=RunVerificationMismatchKind.CHANGED,
+                expected_sha256=canonical_sha256(expected_profile),
+                observed_sha256=canonical_sha256(report.audit_profile.value),
+            )
+        )
+    if run_configuration is not None:
+        expected_run_options = run_configuration.run_options.model_dump(mode="json")
+        observed_run_options = report.metadata.get("run_options")
+        if observed_run_options != expected_run_options:
+            mismatches.append(
+                RunVerificationMismatch(
+                    category=RunVerificationCategory.CONFIGURATION,
+                    identifier="report/run-options",
+                    kind=RunVerificationMismatchKind.CHANGED,
+                    expected_sha256=canonical_sha256(expected_run_options),
+                    observed_sha256=canonical_sha256(observed_run_options),
+                )
+            )
+        expected_provenance = {
+            "file_config_sha256": run_configuration.file_config_sha256,
+            "environment_overrides_sha256": (run_configuration.environment_overrides_sha256),
+            "cli_overrides_sha256": run_configuration.cli_overrides_sha256,
+            "run_options_sha256": run_configuration.run_options_sha256,
+        }
+        observed_provenance = report.metadata.get("configuration_provenance")
+        if observed_provenance != expected_provenance:
+            mismatches.append(
+                RunVerificationMismatch(
+                    category=RunVerificationCategory.CONFIGURATION,
+                    identifier="report/configuration-provenance",
+                    kind=RunVerificationMismatchKind.CHANGED,
+                    expected_sha256=canonical_sha256(expected_provenance),
+                    observed_sha256=canonical_sha256(observed_provenance),
+                )
+            )
+    return mismatches
+
+
+def _metadata_artifact_mismatches(
+    *,
+    manifest: RunEvidenceManifest,
+    report: AuditReport,
+    metadata: dict[str, Any],
+) -> list[RunVerificationMismatch]:
+    """Cross-check independently emitted run metadata against report and manifest state."""
+
+    run_configuration = manifest.run_configuration
+    expected_config_sha256 = (
+        run_configuration.effective_config_sha256
+        if run_configuration is not None
+        else report.configuration_hash
+    )
+    expected_model_sha256 = (
+        run_configuration.model_config_sha256
+        if run_configuration is not None
+        else report.model_configuration_hash
+    )
+    expected_run_options = (
+        run_configuration.run_options.model_dump(mode="json")
+        if run_configuration is not None
+        else report.metadata.get("run_options")
+    )
+    expected_provenance = (
+        {
+            "file_config_sha256": run_configuration.file_config_sha256,
+            "environment_overrides_sha256": (run_configuration.environment_overrides_sha256),
+            "cli_overrides_sha256": run_configuration.cli_overrides_sha256,
+            "run_options_sha256": run_configuration.run_options_sha256,
+        }
+        if run_configuration is not None
+        else report.metadata.get("configuration_provenance")
+    )
+    comparisons: tuple[
+        tuple[RunVerificationCategory, str, Any, Any],
+        ...,
+    ] = (
+        (
+            RunVerificationCategory.MANIFEST,
+            "metadata/run-id",
+            manifest.run_id,
+            metadata.get("run_id"),
+        ),
+        (
+            RunVerificationCategory.MANIFEST,
+            "metadata/completed",
+            report.completed,
+            metadata.get("completed"),
+        ),
+        (
+            RunVerificationCategory.MANIFEST,
+            "metadata/privacy",
+            report.privacy,
+            metadata.get("privacy"),
+        ),
+        (
+            RunVerificationCategory.CONFIGURATION,
+            "metadata/configuration-hash",
+            expected_config_sha256,
+            metadata.get("configuration_hash"),
+        ),
+        (
+            RunVerificationCategory.CONFIGURATION,
+            "metadata/model-configuration-hash",
+            expected_model_sha256,
+            metadata.get("model_configuration_hash"),
+        ),
+        (
+            RunVerificationCategory.CONFIGURATION,
+            "metadata/run-options",
+            expected_run_options,
+            metadata.get("metadata", {}).get("run_options")
+            if isinstance(metadata.get("metadata"), dict)
+            else None,
+        ),
+        (
+            RunVerificationCategory.CONFIGURATION,
+            "metadata/configuration-provenance",
+            expected_provenance,
+            metadata.get("metadata", {}).get("configuration_provenance")
+            if isinstance(metadata.get("metadata"), dict)
+            else None,
+        ),
+    )
+    mismatches: list[RunVerificationMismatch] = []
+    for category, identifier, expected, observed in comparisons:
+        expected_sha256 = canonical_sha256(expected)
+        observed_sha256 = canonical_sha256(observed)
+        if observed_sha256 != expected_sha256:
+            mismatches.append(
+                RunVerificationMismatch(
+                    category=category,
+                    identifier=identifier,
+                    kind=RunVerificationMismatchKind.CHANGED,
+                    expected_sha256=expected_sha256,
+                    observed_sha256=observed_sha256,
+                )
+            )
+    return mismatches
+
+
 def _binding_mismatches(
     expected: RunEvidenceManifest,
     observed: RunEvidenceManifest,
@@ -437,17 +785,139 @@ def _binding_mismatches(
     return mismatches
 
 
-def _load_report(run_dir: Path) -> AuditReport | None:
-    path = run_dir / "final-findings.json"
-    if path.is_symlink() or path.is_junction() or not path.is_file():
-        return None
-    metadata = path.stat()
-    if metadata.st_nlink != 1 or metadata.st_size > _MAX_REPORT_BYTES:
-        return None
+def load_manifest_bound_report(
+    *,
+    run_dir: Path,
+    manifest: RunEvidenceManifest,
+) -> AuditReport:
+    """Load exactly the report bytes sealed by a manifest artifact binding."""
+
+    binding = next(
+        (item for item in manifest.artifacts if item.path == "final-findings.json"),
+        None,
+    )
+    if binding is None:
+        raise ValueError("run manifest does not bind final-findings.json")
+    data, present = _read_bound_regular_file(
+        run_dir / "final-findings.json",
+        expected=binding,
+        max_bytes=_MAX_REPORT_BYTES,
+    )
+    if not present or data is None:
+        raise ValueError("run report is missing, unsafe, or differs from its manifest binding")
     try:
-        return AuditReport.model_validate_json(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+        return AuditReport.model_validate(_decode_json_object(data, label="run report"))
+    except ValueError as exc:
+        raise ValueError("run report is not valid bound audit evidence") from exc
+
+
+def _load_metadata_artifact(
+    run_dir: Path,
+    expected: ManifestFileBinding | None,
+) -> tuple[dict[str, Any] | None, bool]:
+    path = run_dir / "metadata.json"
+    data, present = _read_bound_regular_file(
+        path,
+        expected=expected,
+        max_bytes=_MAX_REPORT_BYTES,
+    )
+    if data is None:
+        return None, present
+    try:
+        value = _decode_json_object(data, label="metadata artifact")
+    except ValueError:
+        return None, True
+    return value, True
+
+
+def _read_bound_regular_file(
+    path: Path,
+    *,
+    expected: ManifestFileBinding | None,
+    max_bytes: int,
+) -> tuple[bytes | None, bool]:
+    """Read one non-link file once and reject path or byte changes around that read."""
+
+    try:
+        path_before = path.lstat()
+    except FileNotFoundError:
+        return None, False
+    except OSError:
+        return None, True
+    if not stat.S_ISREG(path_before.st_mode) or path_before.st_nlink != 1:
+        return None, True
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError:
+        return None, True
+    try:
+        with os.fdopen(descriptor, "rb") as handle:
+            opened = os.fstat(handle.fileno())
+            data = handle.read(max_bytes + 1)
+            finished = os.fstat(handle.fileno())
+    except OSError:
+        return None, True
+    try:
+        path_after = path.lstat()
+    except OSError:
+        return None, True
+    identities = {
+        _stat_identity(path_before),
+        _stat_identity(opened),
+        _stat_identity(finished),
+        _stat_identity(path_after),
+    }
+    if len(identities) != 1 or len(data) > max_bytes:
+        return None, True
+    observed_sha256 = hashlib.sha256(data).hexdigest()
+    if expected is not None and (len(data) != expected.size or observed_sha256 != expected.sha256):
+        return None, True
+    return data, True
+
+
+def _stat_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _decode_json_object(data: bytes, *, label: str) -> dict[str, Any]:
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"{label} contains duplicate keys")
+            result[key] = value
+        return result
+
+    def reject_nonfinite(value: str) -> None:
+        raise ValueError(f"{label} contains non-finite value: {value}")
+
+    def finite_float(value: str) -> float:
+        parsed = float(value)
+        if not math.isfinite(parsed):
+            raise ValueError(f"{label} contains an out-of-range number")
+        return parsed
+
+    try:
+        value = json.loads(
+            data.decode("utf-8"),
+            object_pairs_hook=unique_object,
+            parse_constant=reject_nonfinite,
+            parse_float=finite_float,
+        )
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
+        raise ValueError(f"{label} is not strict JSON") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must contain a JSON object")
+    return value
 
 
 def _safe_directory(path: Path, label: str) -> Path:

@@ -8,6 +8,7 @@ import os
 import re
 import tomllib
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -26,6 +27,7 @@ from mmaudit.models.schemas import (
     FoundryInvariantHarnessSpec,
     LocalInvariantDeployment,
     OracleInfluenceCapability,
+    Severity,
     TransactionOrderingCapability,
 )
 from mmaudit.operator_secrets import (
@@ -1069,14 +1071,244 @@ class AuditConfig(ConfigModel):
         )
 
     def stable_hash(self) -> str:
-        payload = self.model_dump(mode="json", by_alias=True)
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-        return hashlib.sha256(encoded).hexdigest()
+        return hashlib.sha256(canonical_audit_config_json(self).encode("utf-8")).hexdigest()
 
     def model_hash(self) -> str:
         payload = self.models.model_dump(mode="json")
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()
+
+
+_AUDIT_OVERRIDE_VALUE_TYPES: dict[str, tuple[type[object], ...]] = {
+    "execution.budget_usd": (float,),
+    "execution.concurrency": (int,),
+    "execution.cost_ledger_path": (str,),
+    "execution.max_request_bytes": (int,),
+    "maximum_assurance.allow_downgrade": (bool,),
+    "maximum_assurance.benchmark_gate": (bool,),
+    "maximum_assurance.minimum_model_families": (int,),
+    "maximum_assurance.minimum_specialist_agents": (int,),
+    "maximum_assurance.require": (bool,),
+    "maximum_assurance.require_formal_or_reproduction_for_confirmed_critical": (bool,),
+    "maximum_assurance.require_reproduction_for_critical": (bool,),
+    "models.minimum_distinct_families": (int,),
+    "prior_audit.fail_on_missed": (bool,),
+    "prior_audit.path": (str,),
+    "prior_audit.required": (bool,),
+    "privacy.allow_code_egress": (bool,),
+    "privacy.require_zdr": (bool,),
+    "profile": (str,),
+    "repository.max_discovery_bytes": (int,),
+    "repository.max_file_bytes": (int,),
+    "repository.max_files": (int,),
+    "repository.max_total_context_bytes": (int,),
+    "repository.max_walk_entries": (int,),
+    "reproduction.expected_chain_id": (int,),
+    "reproduction.pinned_block_number": (int,),
+    "reproduction.rootless_container_image": (str,),
+    "reproduction.rootless_container_runtime": (str,),
+    "scanners.slither.enabled": (bool,),
+    "scope.mode": (str,),
+    "scope.require_complete": (bool,),
+    "smart_contracts.allow_fork_probing": (bool,),
+    "smart_contracts.allow_network": (bool,),
+    "smart_contracts.compile": (bool,),
+    "smart_contracts.enabled": (bool,),
+    "smart_contracts.fork_rpc_url_env": (str,),
+    "smart_contracts.foundry_match_path": (str,),
+    "smart_contracts.framework": (str,),
+    "smart_contracts.project_root": (str,),
+}
+_AUDIT_OVERRIDE_PATHS = frozenset(_AUDIT_OVERRIDE_VALUE_TYPES)
+
+
+class AuditConfigOverride(ConfigModel):
+    """One allowlisted semantic configuration override without its source secret."""
+
+    path: str = Field(min_length=1, max_length=200)
+    value: bool | int | float | str
+
+    @field_validator("path")
+    @classmethod
+    def path_is_allowlisted(cls, value: str) -> str:
+        if value not in _AUDIT_OVERRIDE_PATHS:
+            raise ValueError("audit configuration override path is not allowlisted")
+        return value
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def value_is_a_json_scalar(cls, value: Any) -> Any:
+        if type(value) not in {bool, int, float, str}:
+            raise ValueError("audit configuration override value must be a JSON scalar")
+        return value
+
+    @model_validator(mode="after")
+    def value_matches_path_type(self) -> AuditConfigOverride:
+        expected = _AUDIT_OVERRIDE_VALUE_TYPES[self.path]
+        if type(self.value) not in expected:
+            raise ValueError("audit configuration override value has the wrong type for its path")
+        return self
+
+
+class AuditConfigOverrides(ConfigModel):
+    """Canonical, ordered, secret-free semantic overrides for one configuration layer."""
+
+    entries: tuple[AuditConfigOverride, ...] = ()
+
+    @field_validator("entries")
+    @classmethod
+    def entries_are_canonical(
+        cls,
+        value: tuple[AuditConfigOverride, ...],
+    ) -> tuple[AuditConfigOverride, ...]:
+        paths = tuple(entry.path for entry in value)
+        if paths != tuple(sorted(set(paths))):
+            raise ValueError("audit configuration overrides must be unique and sorted by path")
+        return value
+
+    def stable_hash(self) -> str:
+        payload = self.model_dump(mode="json")
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def apply(self, config: AuditConfig) -> AuditConfig:
+        return apply_audit_config_overrides(config, self)
+
+
+class AuditRunOptions(ConfigModel):
+    """Security-relevant per-run options not represented by AuditConfig."""
+
+    scanner_only: bool = False
+    allow_code_egress: bool = False
+    skip_codeql: bool = False
+    changed_since: str | None = Field(default=None, max_length=500)
+    severity_threshold: Severity = Severity.INFORMATIONAL
+    fail_on: Severity | None = None
+    refresh_models: bool = False
+    allow_fork_probing: bool = False
+    require_maximum_assurance: bool | None = None
+    allow_maximum_assurance_downgrade: bool | None = None
+    benchmark_repository_git_commit: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{40,64}$",
+    )
+
+    @field_validator(
+        "scanner_only",
+        "allow_code_egress",
+        "skip_codeql",
+        "refresh_models",
+        "allow_fork_probing",
+        "require_maximum_assurance",
+        "allow_maximum_assurance_downgrade",
+        mode="before",
+    )
+    @classmethod
+    def boolean_options_are_not_coerced(cls, value: Any) -> Any:
+        if value is not None and type(value) is not bool:
+            raise ValueError("run-option booleans must use JSON boolean values")
+        return value
+
+    @field_validator("changed_since")
+    @classmethod
+    def changed_since_is_printable(cls, value: str | None) -> str | None:
+        if value is not None and (
+            not value
+            or value != value.strip()
+            or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        ):
+            raise ValueError("changed-since must be a bounded printable revision")
+        return value
+
+    @model_validator(mode="after")
+    def assurance_options_do_not_conflict(self) -> AuditRunOptions:
+        if self.require_maximum_assurance and self.allow_maximum_assurance_downgrade:
+            raise ValueError("run options cannot require and downgrade maximum assurance")
+        return self
+
+    def stable_hash(self) -> str:
+        payload = self.model_dump(mode="json")
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class LoadedAuditConfig:
+    """Validated file configuration plus the exact allowlisted environment layer."""
+
+    file_config: AuditConfig
+    environment_overrides: AuditConfigOverrides
+    effective_config: AuditConfig
+
+
+def canonical_audit_config_json(config: AuditConfig) -> str:
+    """Serialize a complete AuditConfig using the exact stable-hash encoding."""
+
+    return json.dumps(
+        config.model_dump(mode="json", by_alias=True),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def parse_canonical_audit_config(value: str) -> AuditConfig:
+    """Parse one complete canonical AuditConfig and reject ambiguous JSON."""
+
+    if len(value.encode("utf-8")) > 2_000_000:
+        raise ValueError("serialized audit configuration exceeds the bounded size")
+
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in result:
+                raise ValueError("serialized audit configuration contains duplicate keys")
+            result[key] = item
+        return result
+
+    try:
+        payload = json.loads(value, object_pairs_hook=unique_object)
+        config = AuditConfig.model_validate(payload)
+    except (json.JSONDecodeError, ValidationError) as exc:
+        raise ValueError("serialized audit configuration is invalid") from exc
+    if canonical_audit_config_json(config) != value:
+        raise ValueError("serialized audit configuration is not canonical")
+    return config
+
+
+def apply_audit_config_overrides(
+    config: AuditConfig,
+    overrides: AuditConfigOverrides,
+) -> AuditConfig:
+    """Apply one canonical allowlisted layer and then enforce the selected profile."""
+
+    payload = config.model_dump(mode="python", by_alias=True)
+    for entry in overrides.entries:
+        _set_nested(payload, tuple(entry.path.split(".")), entry.value)
+    try:
+        return AuditConfig.model_validate(payload).effective()
+    except ValidationError as exc:
+        raise _config_error_from_validation(exc) from exc
+
+
+def audit_config_overrides(
+    values: Mapping[str, bool | int | float | str | None],
+) -> AuditConfigOverrides:
+    """Build a canonical override layer from semantic path/value pairs."""
+
+    entries = tuple(
+        AuditConfigOverride(path=path, value=value)
+        for path, value in sorted(values.items())
+        if value is not None
+    )
+    return AuditConfigOverrides(entries=entries)
+
+
+def _config_error_from_validation(exc: ValidationError) -> ConfigError:
+    errors = []
+    for error in exc.errors(include_url=False, include_context=False, include_input=False):
+        location = ".".join(str(part) for part in error.get("loc", ())) or "configuration"
+        errors.append(f"{location}: {error.get('msg', 'invalid value')}")
+    return ConfigError("invalid configuration: " + "; ".join(errors))
 
 
 def require_maximum_assurance_qualification_pins(
@@ -1283,49 +1515,40 @@ def _set_nested(data: dict[str, Any], path: tuple[str, ...], value: Any) -> None
     current[path[-1]] = value
 
 
-def _environment_overrides(data: dict[str, Any], environ: Mapping[str, str]) -> None:
-    mappings: dict[str, tuple[tuple[str, ...], type[Any]]] = {
-        "MMAUDIT_BUDGET_USD": (("execution", "budget_usd"), float),
-        COST_LEDGER_PATH_VARIABLE: (("execution", "cost_ledger_path"), str),
-        "MMAUDIT_CONCURRENCY": (("execution", "concurrency"), int),
-        "MMAUDIT_MAX_REQUEST_BYTES": (("execution", "max_request_bytes"), int),
-        "MMAUDIT_MAX_FILES": (("repository", "max_files"), int),
-        "MMAUDIT_MAX_WALK_ENTRIES": (("repository", "max_walk_entries"), int),
-        "MMAUDIT_MAX_FILE_BYTES": (("repository", "max_file_bytes"), int),
-        "MMAUDIT_MAX_DISCOVERY_BYTES": (
-            ("repository", "max_discovery_bytes"),
-            int,
-        ),
-        "MMAUDIT_MAX_CONTEXT_BYTES": (
-            ("repository", "max_total_context_bytes"),
-            int,
-        ),
-        "MMAUDIT_ALLOW_CODE_EGRESS": (("privacy", "allow_code_egress"), bool),
-        "MMAUDIT_REQUIRE_ZDR": (("privacy", "require_zdr"), bool),
-        "MMAUDIT_ALLOW_FORK_PROBING": (("smart_contracts", "allow_fork_probing"), bool),
-        "MMAUDIT_FORK_RPC_URL_ENV": (("smart_contracts", "fork_rpc_url_env"), str),
-        "MMAUDIT_FOUNDRY_MATCH_PATH": (("smart_contracts", "foundry_match_path"), str),
-        "MMAUDIT_SOLIDITY_COMPILE": (("smart_contracts", "compile"), bool),
-        "MMAUDIT_SOLIDITY_ALLOW_NETWORK": (("smart_contracts", "allow_network"), bool),
-        "MMAUDIT_SOLIDITY_PROJECT_ROOT": (("smart_contracts", "project_root"), str),
-        "MMAUDIT_PROFILE": (("profile",), str),
-        "MMAUDIT_SCOPE": (("scope", "mode"), str),
-        "MMAUDIT_REQUIRE_COMPLETE_SCOPE": (("scope", "require_complete"), bool),
-        "MMAUDIT_PRIOR_AUDIT_PATH": (("prior_audit", "path"), str),
-        "MMAUDIT_REQUIRE_PRIOR_AUDIT": (("prior_audit", "required"), bool),
-        "MMAUDIT_FAIL_ON_MISSED_PRIOR": (("prior_audit", "fail_on_missed"), bool),
-        "MMAUDIT_FORK_BLOCK_NUMBER": (("reproduction", "pinned_block_number"), int),
-        "MMAUDIT_FORK_CHAIN_ID": (("reproduction", "expected_chain_id"), int),
-        "MMAUDIT_ROOTLESS_CONTAINER_IMAGE": (
-            ("reproduction", "rootless_container_image"),
-            str,
-        ),
-        "MMAUDIT_ROOTLESS_CONTAINER_RUNTIME": (
-            ("reproduction", "rootless_container_runtime"),
-            str,
-        ),
-    }
-    for name, (path, kind) in mappings.items():
+_ENVIRONMENT_OVERRIDE_MAPPINGS: dict[str, tuple[str, type[Any]]] = {
+    "MMAUDIT_BUDGET_USD": ("execution.budget_usd", float),
+    COST_LEDGER_PATH_VARIABLE: ("execution.cost_ledger_path", str),
+    "MMAUDIT_CONCURRENCY": ("execution.concurrency", int),
+    "MMAUDIT_MAX_REQUEST_BYTES": ("execution.max_request_bytes", int),
+    "MMAUDIT_MAX_FILES": ("repository.max_files", int),
+    "MMAUDIT_MAX_WALK_ENTRIES": ("repository.max_walk_entries", int),
+    "MMAUDIT_MAX_FILE_BYTES": ("repository.max_file_bytes", int),
+    "MMAUDIT_MAX_DISCOVERY_BYTES": ("repository.max_discovery_bytes", int),
+    "MMAUDIT_MAX_CONTEXT_BYTES": ("repository.max_total_context_bytes", int),
+    "MMAUDIT_ALLOW_CODE_EGRESS": ("privacy.allow_code_egress", bool),
+    "MMAUDIT_REQUIRE_ZDR": ("privacy.require_zdr", bool),
+    "MMAUDIT_ALLOW_FORK_PROBING": ("smart_contracts.allow_fork_probing", bool),
+    "MMAUDIT_FORK_RPC_URL_ENV": ("smart_contracts.fork_rpc_url_env", str),
+    "MMAUDIT_FOUNDRY_MATCH_PATH": ("smart_contracts.foundry_match_path", str),
+    "MMAUDIT_SOLIDITY_COMPILE": ("smart_contracts.compile", bool),
+    "MMAUDIT_SOLIDITY_ALLOW_NETWORK": ("smart_contracts.allow_network", bool),
+    "MMAUDIT_SOLIDITY_PROJECT_ROOT": ("smart_contracts.project_root", str),
+    "MMAUDIT_PROFILE": ("profile", str),
+    "MMAUDIT_SCOPE": ("scope.mode", str),
+    "MMAUDIT_REQUIRE_COMPLETE_SCOPE": ("scope.require_complete", bool),
+    "MMAUDIT_PRIOR_AUDIT_PATH": ("prior_audit.path", str),
+    "MMAUDIT_REQUIRE_PRIOR_AUDIT": ("prior_audit.required", bool),
+    "MMAUDIT_FAIL_ON_MISSED_PRIOR": ("prior_audit.fail_on_missed", bool),
+    "MMAUDIT_FORK_BLOCK_NUMBER": ("reproduction.pinned_block_number", int),
+    "MMAUDIT_FORK_CHAIN_ID": ("reproduction.expected_chain_id", int),
+    "MMAUDIT_ROOTLESS_CONTAINER_IMAGE": ("reproduction.rootless_container_image", str),
+    "MMAUDIT_ROOTLESS_CONTAINER_RUNTIME": ("reproduction.rootless_container_runtime", str),
+}
+
+
+def _environment_overrides(environ: Mapping[str, str]) -> AuditConfigOverrides:
+    values: dict[str, bool | int | float | str | None] = {}
+    for name, (path, kind) in _ENVIRONMENT_OVERRIDE_MAPPINGS.items():
         if name not in environ:
             continue
         raw = environ[name]
@@ -1339,15 +1562,16 @@ def _environment_overrides(data: dict[str, Any], environ: Mapping[str, str]) -> 
                 parsed = kind(raw)
             except ValueError as exc:
                 raise ConfigError(f"invalid value for {name}") from exc
-        _set_nested(data, path, parsed)
+        values[path] = parsed
+    return audit_config_overrides(values)
 
 
-def load_config(
+def load_config_with_provenance(
     path: Path | None = None,
     *,
-    environ: dict[str, str] | None = None,
-) -> AuditConfig:
-    """Load TOML configuration and documented environment overrides."""
+    environ: Mapping[str, str] | None = None,
+) -> LoadedAuditConfig:
+    """Load file configuration and retain only allowlisted safe environment values."""
 
     config_path = (path or Path(DEFAULT_CONFIG_NAME)).resolve()
     if not config_path.is_file():
@@ -1357,12 +1581,24 @@ def load_config(
             raw: dict[str, Any] = tomllib.load(handle)
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise ConfigError(f"cannot read configuration: {exc}") from exc
-    _environment_overrides(raw, os.environ if environ is None else environ)
     try:
-        return AuditConfig.model_validate(raw).effective()
+        file_config = AuditConfig.model_validate(raw)
     except ValidationError as exc:
-        errors = []
-        for error in exc.errors(include_url=False, include_context=False, include_input=False):
-            location = ".".join(str(part) for part in error.get("loc", ())) or "configuration"
-            errors.append(f"{location}: {error.get('msg', 'invalid value')}")
-        raise ConfigError("invalid configuration: " + "; ".join(errors)) from exc
+        raise _config_error_from_validation(exc) from exc
+    environment_overrides = _environment_overrides(os.environ if environ is None else environ)
+    effective_config = environment_overrides.apply(file_config)
+    return LoadedAuditConfig(
+        file_config=file_config,
+        environment_overrides=environment_overrides,
+        effective_config=effective_config,
+    )
+
+
+def load_config(
+    path: Path | None = None,
+    *,
+    environ: dict[str, str] | None = None,
+) -> AuditConfig:
+    """Load TOML configuration and documented environment overrides."""
+
+    return load_config_with_provenance(path, environ=environ).effective_config

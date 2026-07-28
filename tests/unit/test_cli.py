@@ -40,8 +40,14 @@ from mmaudit.benchmark.mutations import (
     MutationTestOutcome,
     score_mutation_outcomes,
 )
-from mmaudit.cli import _load_audit_production_qualification, app
-from mmaudit.config import AuditConfig, ConfigError, configured_model_ids
+from mmaudit.cli import _audit_config_overrides, _load_audit_production_qualification, app
+from mmaudit.config import (
+    AuditConfig,
+    AuditConfigOverrides,
+    ConfigError,
+    LoadedAuditConfig,
+    configured_model_ids,
+)
 from mmaudit.constants import ALL_MODEL_ROLES, ExitCode
 from mmaudit.models.qualification_workflow import seal_qualification_release_bindings
 from mmaudit.models.schemas import AuditProfile
@@ -54,6 +60,22 @@ from tests.unit import test_model_qualification as qualification_fixtures
 ROOT = Path(__file__).parents[2]
 runner = CliRunner()
 CERTIFICATE_COMMIT = "a" * 40
+
+
+def _patch_loaded_audit_config(
+    monkeypatch: pytest.MonkeyPatch,
+    config: AuditConfig,
+) -> None:
+    loaded = LoadedAuditConfig(
+        file_config=config,
+        environment_overrides=AuditConfigOverrides(),
+        effective_config=config.effective(),
+    )
+    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+    monkeypatch.setattr(
+        "mmaudit.cli.load_config_with_provenance",
+        lambda _path, **_kwargs: loaded,
+    )
 
 
 def _derived_production_config() -> AuditConfig:
@@ -133,6 +155,30 @@ def test_run_help_lists_fork_aliases() -> None:
     assert "--model-qualification-ground-truth" in result.stdout
 
 
+def test_explicit_cost_ledger_is_recorded_as_canonical_cli_provenance(
+    tmp_path: Path,
+) -> None:
+    ledger_path = tmp_path / "campaign-ledger.json"
+
+    overrides = _audit_config_overrides(
+        budget_usd=None,
+        cost_ledger=ledger_path,
+        max_files=None,
+        max_file_bytes=None,
+        max_context_bytes=None,
+        concurrency=None,
+        require_zdr=False,
+    )
+
+    assert [entry.model_dump(mode="json") for entry in overrides.entries] == [
+        {
+            "path": "execution.cost_ledger_path",
+            "value": str(ledger_path.resolve()),
+        }
+    ]
+    assert "secret" not in overrides.model_dump_json().lower()
+
+
 def test_models_help_lists_release_observation_command() -> None:
     result = runner.invoke(app, ["models", "--help"], env={"COLUMNS": "300"})
 
@@ -145,7 +191,7 @@ def test_run_requires_complete_production_qualification_input_set(
     monkeypatch,
     config_factory,
 ) -> None:
-    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config_factory())
+    _patch_loaded_audit_config(monkeypatch, config_factory())
 
     result = runner.invoke(
         app,
@@ -171,7 +217,7 @@ def test_scanner_only_rejects_model_qualification_inputs(
     monkeypatch,
     config_factory,
 ) -> None:
-    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config_factory())
+    _patch_loaded_audit_config(monkeypatch, config_factory())
 
     result = runner.invoke(
         app,
@@ -661,7 +707,7 @@ def test_provider_run_missing_ledger_fails_before_secret_access(
     config_factory: Any,
 ) -> None:
     config = config_factory()
-    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+    _patch_loaded_audit_config(monkeypatch, config)
     secret_accessed = False
 
     def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
@@ -694,7 +740,7 @@ def test_provider_run_deleted_ledger_fails_without_recreating_budget_state(
 ) -> None:
     tmp_path.chmod(0o700)
     config = config_factory()
-    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+    _patch_loaded_audit_config(monkeypatch, config)
     secret_accessed = False
 
     def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
@@ -732,7 +778,7 @@ def test_provider_run_cap_mismatch_fails_before_secret_access(
 ) -> None:
     tmp_path.chmod(0o700)
     config = config_factory(execution={"budget_usd": 20.0})
-    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+    _patch_loaded_audit_config(monkeypatch, config)
     ledger_path = tmp_path / "different-cap-ledger.json"
     AtomicCostLedger.initialize(ledger_path, cap_usd=Decimal("19.0"))
     secret_accessed = False
@@ -809,7 +855,7 @@ def test_provider_run_uses_existing_configured_campaign_ledger(
         def clear_credentials(self) -> None:
             return None
 
-    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+    _patch_loaded_audit_config(monkeypatch, config)
     monkeypatch.setattr("mmaudit.cli.AuditPipeline", SyntheticPipeline)
     for index in range(2):
         output = tmp_path / f"output-{index}"

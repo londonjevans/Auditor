@@ -11,9 +11,20 @@ from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_validator
 
-from mmaudit.config import AuditConfig
+from mmaudit.config import (
+    AuditConfig,
+    AuditConfigOverrides,
+    AuditRunOptions,
+    canonical_audit_config_json,
+    parse_canonical_audit_config,
+)
 from mmaudit.constants import ALL_MODEL_ROLES, VERSION
-from mmaudit.models.schemas import AuditReport, StrictModel
+from mmaudit.models.schemas import (
+    AuditProfile,
+    AuditReport,
+    MaximumAssuranceStatus,
+    StrictModel,
+)
 from mmaudit.reporting.json_report import write_json
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_name, is_sensitive_workspace_path
@@ -90,10 +101,84 @@ class ManifestBindingSet(StrictModel):
         return self
 
 
+class RunConfigurationBinding(StrictModel):
+    """Self-contained, secret-free reconstruction record for one audit invocation."""
+
+    file_configuration_json: str = Field(min_length=2, max_length=2_000_000)
+    file_config_sha256: str = Field(pattern=_SHA256_PATTERN)
+    environment_overrides: AuditConfigOverrides
+    environment_overrides_sha256: str = Field(pattern=_SHA256_PATTERN)
+    cli_overrides: AuditConfigOverrides
+    cli_overrides_sha256: str = Field(pattern=_SHA256_PATTERN)
+    run_options: AuditRunOptions
+    run_options_sha256: str = Field(pattern=_SHA256_PATTERN)
+    effective_configuration_json: str = Field(min_length=2, max_length=2_000_000)
+    effective_config_sha256: str = Field(pattern=_SHA256_PATTERN)
+    model_config_sha256: str = Field(pattern=_SHA256_PATTERN)
+    invocation_sha256: str = Field(pattern=_SHA256_PATTERN)
+    requested_profile: AuditProfile
+    achieved_profile: AuditProfile | None = None
+
+    @model_validator(mode="after")
+    def configuration_layers_reconcile(self) -> RunConfigurationBinding:
+        file_config = parse_canonical_audit_config(self.file_configuration_json)
+        if file_config.stable_hash() != self.file_config_sha256:
+            raise ValueError("run file-configuration hash is inconsistent")
+        if self.environment_overrides.stable_hash() != self.environment_overrides_sha256:
+            raise ValueError("run environment-override hash is inconsistent")
+        if self.cli_overrides.stable_hash() != self.cli_overrides_sha256:
+            raise ValueError("run CLI-override hash is inconsistent")
+        if self.run_options.stable_hash() != self.run_options_sha256:
+            raise ValueError("run-options hash is inconsistent")
+        effective = self.cli_overrides.apply(self.environment_overrides.apply(file_config))
+        if canonical_audit_config_json(effective) != self.effective_configuration_json:
+            raise ValueError("run effective configuration does not replay from its override layers")
+        if effective.stable_hash() != self.effective_config_sha256:
+            raise ValueError("run effective-configuration hash is inconsistent")
+        if effective.model_hash() != self.model_config_sha256:
+            raise ValueError("run model-configuration hash is inconsistent")
+        if effective.profile is not self.requested_profile:
+            raise ValueError("run requested profile differs from the effective configuration")
+        if (
+            self.achieved_profile is not None
+            and self.achieved_profile is not self.requested_profile
+        ):
+            raise ValueError("run cannot claim an unrequested achieved profile")
+        expected_invocation = canonical_sha256(
+            {
+                "environment_overrides_sha256": self.environment_overrides_sha256,
+                "cli_overrides_sha256": self.cli_overrides_sha256,
+                "run_options_sha256": self.run_options_sha256,
+                "effective_config_sha256": self.effective_config_sha256,
+                "requested_profile": self.requested_profile.value,
+                "achieved_profile": (
+                    self.achieved_profile.value if self.achieved_profile is not None else None
+                ),
+            }
+        )
+        if self.invocation_sha256 != expected_invocation:
+            raise ValueError("run invocation hash is inconsistent")
+        return self
+
+    def reconstruct_effective_config(
+        self,
+        *,
+        file_config: AuditConfig | None = None,
+    ) -> AuditConfig:
+        """Replay recorded safe layers over recorded or explicitly observed file config."""
+
+        base = (
+            parse_canonical_audit_config(self.file_configuration_json)
+            if file_config is None
+            else file_config
+        )
+        return self.cli_overrides.apply(self.environment_overrides.apply(base))
+
+
 class RunEvidenceManifest(StrictModel):
     """Self-hashed manifest over source, run evidence projections, and artifacts."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.1"
     generated_by: Literal["mmaudit"] = "mmaudit"
     tool_version: str = Field(min_length=1, max_length=100)
     run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -101,12 +186,15 @@ class RunEvidenceManifest(StrictModel):
     git_commit: str | None = Field(default=None, pattern=r"^[0-9a-f]{40,64}$")
     sources: list[ManifestFileBinding] = Field(max_length=_MAX_MANIFEST_FILES)
     source_tree_sha256: str = Field(pattern=_SHA256_PATTERN)
+    run_configuration: RunConfigurationBinding | None = None
     bindings: ManifestBindingSet
     artifacts: list[ManifestFileBinding] = Field(min_length=1, max_length=_MAX_MANIFEST_FILES)
     manifest_sha256: str = Field(pattern=_SHA256_PATTERN)
 
     @model_validator(mode="after")
     def hashes_and_paths_are_consistent(self) -> RunEvidenceManifest:
+        if (self.schema_version == "1.1") != (self.run_configuration is not None):
+            raise ValueError("manifest 1.1 requires run configuration provenance")
         source_paths = [binding.path for binding in self.sources]
         if source_paths != sorted(set(source_paths)):
             raise ValueError("manifest source paths must be unique and sorted")
@@ -120,9 +208,10 @@ class RunEvidenceManifest(StrictModel):
         )
         if self.source_tree_sha256 != expected_source:
             raise ValueError("manifest source-tree hash does not match source bindings")
-        expected_manifest = canonical_sha256(
-            self.model_dump(mode="json", exclude={"manifest_sha256"})
-        )
+        exclusions = {"manifest_sha256"}
+        if self.schema_version == "1.0":
+            exclusions.add("run_configuration")
+        expected_manifest = canonical_sha256(self.model_dump(mode="json", exclude=exclusions))
         if self.manifest_sha256 != expected_manifest:
             raise ValueError("manifest self-hash does not match its canonical contents")
         return self
@@ -147,6 +236,7 @@ def seal_run_evidence_manifest(
     repository_root_name: str,
     git_commit: str | None,
     sources: list[ManifestFileBinding],
+    run_configuration: RunConfigurationBinding,
     bindings: ManifestBindingSet,
     artifacts: list[ManifestFileBinding],
     tool_version: str = VERSION,
@@ -156,7 +246,7 @@ def seal_run_evidence_manifest(
     ordered_sources = sorted(sources, key=lambda item: item.path)
     ordered_artifacts = sorted(artifacts, key=lambda item: item.path)
     payload: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "generated_by": "mmaudit",
         "tool_version": tool_version,
         "run_id": run_id,
@@ -166,6 +256,7 @@ def seal_run_evidence_manifest(
         "source_tree_sha256": canonical_sha256(
             [item.model_dump(mode="json") for item in ordered_sources]
         ),
+        "run_configuration": run_configuration.model_dump(mode="json"),
         "bindings": bindings.model_dump(mode="json"),
         "artifacts": [item.model_dump(mode="json") for item in ordered_artifacts],
     }
@@ -178,10 +269,27 @@ def build_run_evidence_manifest(
     run_dir: Path,
     report: AuditReport,
     config: AuditConfig,
+    file_config: AuditConfig | None = None,
+    environment_overrides: AuditConfigOverrides | None = None,
+    cli_overrides: AuditConfigOverrides | None = None,
+    run_options: AuditRunOptions | None = None,
 ) -> RunEvidenceManifest:
     """Build all MAN-001 projections from typed runtime state and emitted artifacts."""
 
     root = run_dir.resolve(strict=True)
+    effective_config = config.effective()
+    base_config = file_config or effective_config
+    environment_layer = environment_overrides or AuditConfigOverrides()
+    cli_layer = cli_overrides or AuditConfigOverrides()
+    invocation_options = run_options or AuditRunOptions()
+    run_configuration = _run_configuration_binding(
+        report=report,
+        file_config=base_config,
+        environment_overrides=environment_layer,
+        cli_overrides=cli_layer,
+        run_options=invocation_options,
+        effective_config=effective_config,
+    )
     sources = sorted(
         (
             ManifestFileBinding(
@@ -212,16 +320,16 @@ def build_run_evidence_manifest(
     )
 
     bindings = ManifestBindingSet(
-        configuration=_configuration_bindings(config),
+        configuration=_configuration_bindings(effective_config),
         prompts=_prompt_bindings(report),
         models=_model_bindings(
-            config,
+            effective_config,
             report,
             qualification_runtime=qualification_runtime,
         ),
-        tools=_tool_bindings(config, report),
-        compilers=_compiler_bindings(config, compilation),
-        isolation=_isolation_bindings(config, report, compilation),
+        tools=_tool_bindings(effective_config, report),
+        compilers=_compiler_bindings(effective_config, compilation),
+        isolation=_isolation_bindings(effective_config, report, compilation),
         seeds=_seed_bindings(
             property_corpus,
             harness_plan,
@@ -244,8 +352,77 @@ def build_run_evidence_manifest(
         repository_root_name=report.repository.root_name,
         git_commit=report.repository.git_commit,
         sources=sources,
+        run_configuration=run_configuration,
         bindings=bindings,
         artifacts=_collect_artifacts(root),
+    )
+
+
+def _run_configuration_binding(
+    *,
+    report: AuditReport,
+    file_config: AuditConfig,
+    environment_overrides: AuditConfigOverrides,
+    cli_overrides: AuditConfigOverrides,
+    run_options: AuditRunOptions,
+    effective_config: AuditConfig,
+) -> RunConfigurationBinding:
+    replayed = cli_overrides.apply(environment_overrides.apply(file_config))
+    if canonical_audit_config_json(replayed) != canonical_audit_config_json(effective_config):
+        raise ValueError("run configuration provenance does not reproduce the effective config")
+    if report.configuration_hash != effective_config.stable_hash():
+        raise ValueError("report configuration hash differs from the effective config")
+    if report.model_configuration_hash != effective_config.model_hash():
+        raise ValueError("report model-configuration hash differs from the effective config")
+    if report.audit_profile is not effective_config.profile:
+        raise ValueError("report audit profile differs from the effective config")
+    if report.metadata.get("run_options") != run_options.model_dump(mode="json"):
+        raise ValueError("report run options differ from the sealed invocation")
+    expected_provenance = {
+        "file_config_sha256": file_config.stable_hash(),
+        "environment_overrides_sha256": environment_overrides.stable_hash(),
+        "cli_overrides_sha256": cli_overrides.stable_hash(),
+        "run_options_sha256": run_options.stable_hash(),
+    }
+    if report.metadata.get("configuration_provenance") != expected_provenance:
+        raise ValueError("report configuration provenance differs from the sealed invocation")
+    achieved_profile: AuditProfile | None = None
+    if report.completed:
+        if effective_config.profile is not AuditProfile.MAXIMUM_ASSURANCE:
+            achieved_profile = effective_config.profile
+        elif (
+            report.maximum_assurance is not None
+            and report.maximum_assurance.status is MaximumAssuranceStatus.COMPLETE
+        ):
+            achieved_profile = AuditProfile.MAXIMUM_ASSURANCE
+
+    environment_hash = environment_overrides.stable_hash()
+    cli_hash = cli_overrides.stable_hash()
+    run_options_hash = run_options.stable_hash()
+    effective_hash = effective_config.stable_hash()
+    invocation = {
+        "environment_overrides_sha256": environment_hash,
+        "cli_overrides_sha256": cli_hash,
+        "run_options_sha256": run_options_hash,
+        "effective_config_sha256": effective_hash,
+        "requested_profile": effective_config.profile.value,
+        "achieved_profile": achieved_profile.value if achieved_profile is not None else None,
+    }
+    return RunConfigurationBinding(
+        file_configuration_json=canonical_audit_config_json(file_config),
+        file_config_sha256=file_config.stable_hash(),
+        environment_overrides=environment_overrides,
+        environment_overrides_sha256=environment_hash,
+        cli_overrides=cli_overrides,
+        cli_overrides_sha256=cli_hash,
+        run_options=run_options,
+        run_options_sha256=run_options_hash,
+        effective_configuration_json=canonical_audit_config_json(effective_config),
+        effective_config_sha256=effective_hash,
+        model_config_sha256=effective_config.model_hash(),
+        invocation_sha256=canonical_sha256(invocation),
+        requested_profile=effective_config.profile,
+        achieved_profile=achieved_profile,
     )
 
 
@@ -267,7 +444,38 @@ def load_run_evidence_manifest(path: Path) -> RunEvidenceManifest:
     metadata = path.stat()
     if metadata.st_nlink != 1 or metadata.st_size > _MAX_JSON_ARTIFACT_BYTES:
         raise ValueError("run evidence manifest must be a bounded unshared file")
-    return RunEvidenceManifest.model_validate_json(path.read_text(encoding="utf-8"))
+
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("run evidence manifest contains duplicate keys")
+            result[key] = value
+        return result
+
+    def reject_nonfinite(value: str) -> None:
+        raise ValueError(f"run evidence manifest contains non-finite value: {value}")
+
+    payload = json.loads(
+        path.read_text(encoding="utf-8"),
+        object_pairs_hook=unique_object,
+        parse_constant=reject_nonfinite,
+    )
+    return RunEvidenceManifest.model_validate(payload)
+
+
+def resolve_run_evidence_config(
+    manifest: RunEvidenceManifest,
+    *,
+    file_config: AuditConfig | None = None,
+) -> AuditConfig:
+    """Resolve the exact effective config, replaying recorded layers when available."""
+
+    if manifest.run_configuration is None:
+        if file_config is None:
+            raise ValueError("legacy run manifest has no reconstructable configuration")
+        return file_config.effective()
+    return manifest.run_configuration.reconstruct_effective_config(file_config=file_config)
 
 
 def collect_run_artifacts(run_dir: Path) -> list[ManifestFileBinding]:

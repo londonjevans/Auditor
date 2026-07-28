@@ -12,10 +12,17 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from mmaudit.cli import app
+from mmaudit.config import (
+    AuditConfig,
+    AuditConfigOverrides,
+    AuditRunOptions,
+    audit_config_overrides,
+)
 from mmaudit.constants import ExitCode
 from mmaudit.models.schemas import (
     AnalysisState,
     AttackerCapabilityPolicy,
+    AuditProfile,
     AuditReport,
     ForkActor,
     ForkAssertion,
@@ -45,6 +52,7 @@ from mmaudit.models.schemas import (
     StatefulActionSpec,
 )
 from mmaudit.orchestration.manifest import (
+    RunEvidenceManifest,
     build_run_evidence_manifest,
     canonical_sha256,
     write_run_evidence_manifest,
@@ -56,6 +64,11 @@ from mmaudit.orchestration.replay import (
     ReplayComponentKind,
     ReplayComponentStatus,
     write_offline_replay,
+)
+from mmaudit.orchestration.verification import (
+    RunVerification,
+    RunVerificationStatus,
+    verify_run_evidence,
 )
 from mmaudit.reporting.json_report import write_json
 
@@ -292,9 +305,16 @@ def _invariant_suite(source_hash: str) -> InvariantSuite:
 
 def _write_replay_run(
     root: Path,
-    config,
+    config: AuditConfig,
     candidate,
+    *,
+    file_config: AuditConfig | None = None,
+    cli_overrides: AuditConfigOverrides | None = None,
 ) -> tuple[Path, Path, Path]:
+    base_config = file_config or config
+    environment_overrides = AuditConfigOverrides()
+    invocation_overrides = cli_overrides or AuditConfigOverrides()
+    run_options = AuditRunOptions()
     repository = root / "repository"
     source = repository / "src" / "Vault.sol"
     source.parent.mkdir(parents=True)
@@ -353,6 +373,16 @@ def _write_replay_run(
         accounted_cost_usd=0,
         findings=[],
         rejected_findings=[],
+        audit_profile=config.profile,
+        metadata={
+            "run_options": run_options.model_dump(mode="json"),
+            "configuration_provenance": {
+                "file_config_sha256": base_config.stable_hash(),
+                "environment_overrides_sha256": environment_overrides.stable_hash(),
+                "cli_overrides_sha256": invocation_overrides.stable_hash(),
+                "run_options_sha256": run_options.stable_hash(),
+            },
+        },
     )
     run_dir = root / "run"
     run_dir.mkdir()
@@ -406,11 +436,29 @@ def _write_replay_run(
     }
     for name, payload in artifacts.items():
         write_json(run_dir / name, payload)
+    write_json(
+        run_dir / "metadata.json",
+        {
+            "schema_version": report.schema_version,
+            "run_id": report.run_id,
+            "generated_at": report.generated_at.isoformat(),
+            "completed": report.completed,
+            "incomplete_reasons": report.incomplete_reasons,
+            "configuration_hash": report.configuration_hash,
+            "model_configuration_hash": report.model_configuration_hash,
+            "privacy": report.privacy,
+            "metadata": report.metadata,
+        },
+    )
     write_json(run_dir / "final-findings.json", report)
     manifest = build_run_evidence_manifest(
         run_dir=run_dir,
         report=report,
         config=config,
+        file_config=base_config,
+        environment_overrides=environment_overrides,
+        cli_overrides=invocation_overrides,
+        run_options=run_options,
     )
     manifest_path = run_dir / "run-evidence-manifest.json"
     write_run_evidence_manifest(manifest_path, manifest)
@@ -418,7 +466,7 @@ def _write_replay_run(
 
 
 def _orchestrator(
-    config,
+    config: AuditConfig | None,
 ) -> tuple[
     OfflineReplayOrchestrator,
     _LocalScannerRunner,
@@ -439,6 +487,48 @@ def _orchestrator(
         invariant,
         reproduction,
     )
+
+
+def _rewrite_manifest_as_legacy(manifest_path: Path) -> None:
+    manifest = RunEvidenceManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+    payload = manifest.model_dump(mode="json")
+    payload["schema_version"] = "1.0"
+    payload["run_configuration"] = None
+    payload["manifest_sha256"] = canonical_sha256(
+        {
+            key: value
+            for key, value in payload.items()
+            if key not in {"manifest_sha256", "run_configuration"}
+        }
+    )
+    write_run_evidence_manifest(
+        manifest_path,
+        RunEvidenceManifest.model_validate(payload),
+    )
+
+
+def _reseal_manifest_payload(
+    manifest_path: Path,
+    payload: dict[str, object],
+) -> None:
+    payload["manifest_sha256"] = canonical_sha256(
+        {key: value for key, value in payload.items() if key != "manifest_sha256"}
+    )
+    write_run_evidence_manifest(
+        manifest_path,
+        RunEvidenceManifest.model_validate(payload),
+    )
+
+
+def _rebind_artifact(payload: dict[str, object], path: Path) -> None:
+    artifacts = payload["artifacts"]
+    assert isinstance(artifacts, list)
+    binding = next(
+        item for item in artifacts if isinstance(item, dict) and item.get("path") == path.name
+    )
+    artifact_bytes = path.read_bytes()
+    binding["sha256"] = hashlib.sha256(artifact_bytes).hexdigest()
+    binding["size"] = len(artifact_bytes)
 
 
 @pytest.mark.asyncio
@@ -488,6 +578,513 @@ async def test_local_fixture_replays_scanner_saved_test_and_counterexample_offli
     assert all(item.status is ReplayComponentStatus.MATCHED for item in first.components)
     assert (scanner.calls, invariant.calls, reproduction.calls) == (2, 2, 2)
     assert OfflineReplay.model_validate_json(first.model_dump_json()) == first
+
+
+@pytest.mark.asyncio
+async def test_v11_replay_reconstructs_embedded_profile_override(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+) -> None:
+    base_config = config_factory()
+    cli_overrides = audit_config_overrides({"profile": AuditProfile.DEEP.value})
+    effective_config = cli_overrides.apply(base_config)
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    repository, run_dir, manifest_path = _write_replay_run(
+        tmp_path,
+        effective_config,
+        candidate,
+        file_config=base_config,
+        cli_overrides=cli_overrides,
+    )
+    orchestrator, scanner, invariant, reproduction = _orchestrator(None)
+
+    replay = await orchestrator.replay(
+        manifest_path=manifest_path,
+        run_dir=run_dir,
+        repository_root=repository,
+        work_dir=tmp_path / "embedded-work",
+    )
+
+    assert replay.status is OfflineReplayStatus.REPLAYED
+    assert orchestrator.config is not None
+    assert orchestrator.config.stable_hash() == effective_config.stable_hash()
+    assert orchestrator.config.profile is AuditProfile.DEEP
+    assert (scanner.calls, invariant.calls, reproduction.calls) == (1, 1, 1)
+
+
+def test_verify_run_cli_reconstructs_embedded_maximum_profile_without_config(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+) -> None:
+    base_config = config_factory()
+    cli_overrides = audit_config_overrides({"profile": AuditProfile.MAXIMUM_ASSURANCE.value})
+    effective_config = cli_overrides.apply(base_config)
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    repository, run_dir, manifest_path = _write_replay_run(
+        tmp_path,
+        effective_config,
+        candidate,
+        file_config=base_config,
+        cli_overrides=cli_overrides,
+    )
+    output = tmp_path / "maximum-profile-verification.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "verify-run",
+            "--manifest",
+            str(manifest_path),
+            "--run-dir",
+            str(run_dir),
+            "--repo",
+            str(repository),
+            "--output",
+            str(output),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.SUCCESS, result.stdout
+    verification = RunVerification.model_validate_json(output.read_text(encoding="utf-8"))
+    manifest = RunEvidenceManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+    assert verification.status is RunVerificationStatus.CURRENT
+    assert not verification.mismatches
+    assert manifest.run_configuration is not None
+    assert manifest.run_configuration.requested_profile is AuditProfile.MAXIMUM_ASSURANCE
+    assert manifest.run_configuration.cli_overrides_sha256 == cli_overrides.stable_hash()
+
+
+@pytest.mark.asyncio
+async def test_v11_replay_reapplies_profile_override_to_explicit_base_config(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+) -> None:
+    base_config = config_factory()
+    cli_overrides = audit_config_overrides({"profile": AuditProfile.DEEP.value})
+    effective_config = cli_overrides.apply(base_config)
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    repository, run_dir, manifest_path = _write_replay_run(
+        tmp_path,
+        effective_config,
+        candidate,
+        file_config=base_config,
+        cli_overrides=cli_overrides,
+    )
+    scanner = _LocalScannerRunner([_scanner_run()])
+    invariant = _LocalInvariantRunner(_invariant_result())
+    reproduction = _LocalReproductionRunner(_reproduction_result())
+    orchestrator = OfflineReplayOrchestrator(
+        file_config=base_config,
+        scanner_runner=scanner,
+        invariant_runner=invariant,
+        reproduction_runner=reproduction,
+    )
+
+    replay = await orchestrator.replay(
+        manifest_path=manifest_path,
+        run_dir=run_dir,
+        repository_root=repository,
+        work_dir=tmp_path / "explicit-base-work",
+    )
+
+    assert replay.status is OfflineReplayStatus.REPLAYED
+    assert orchestrator.config is not None
+    assert orchestrator.config.stable_hash() == effective_config.stable_hash()
+    assert orchestrator.config.profile is AuditProfile.DEEP
+
+
+@pytest.mark.asyncio
+async def test_v11_replay_rejects_changed_base_masked_by_profile_override(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+) -> None:
+    base_config = config_factory()
+    cli_overrides = audit_config_overrides({"profile": AuditProfile.DEEP.value})
+    effective_config = cli_overrides.apply(base_config)
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    repository, run_dir, manifest_path = _write_replay_run(
+        tmp_path,
+        effective_config,
+        candidate,
+        file_config=base_config,
+        cli_overrides=cli_overrides,
+    )
+    changed_base = base_config.model_copy(update={"profile": AuditProfile.QUICK})
+    scanner = _LocalScannerRunner([_scanner_run()])
+    invariant = _LocalInvariantRunner(_invariant_result())
+    reproduction = _LocalReproductionRunner(_reproduction_result())
+    orchestrator = OfflineReplayOrchestrator(
+        file_config=changed_base,
+        scanner_runner=scanner,
+        invariant_runner=invariant,
+        reproduction_runner=reproduction,
+    )
+
+    with pytest.raises(ValueError, match="refused stale"):
+        await orchestrator.replay(
+            manifest_path=manifest_path,
+            run_dir=run_dir,
+            repository_root=repository,
+            work_dir=tmp_path / "changed-base-work",
+        )
+
+    assert (scanner.calls, invariant.calls, reproduction.calls) == (0, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_v10_replay_requires_explicit_config(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+) -> None:
+    config = config_factory()
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    repository, run_dir, manifest_path = _write_replay_run(tmp_path, config, candidate)
+    _rewrite_manifest_as_legacy(manifest_path)
+    without_config, scanner, invariant, reproduction = _orchestrator(None)
+
+    missing_config_verification = verify_run_evidence(
+        manifest_path=manifest_path,
+        run_dir=run_dir,
+        repository_root=repository,
+    )
+    assert missing_config_verification.status is RunVerificationStatus.STALE
+    explicit_config_verification = verify_run_evidence(
+        manifest_path=manifest_path,
+        run_dir=run_dir,
+        repository_root=repository,
+        config=config,
+    )
+    assert explicit_config_verification.status is RunVerificationStatus.CURRENT
+
+    with pytest.raises(ValueError, match="legacy run manifest requires"):
+        await without_config.replay(
+            manifest_path=manifest_path,
+            run_dir=run_dir,
+            repository_root=repository,
+            work_dir=tmp_path / "legacy-missing-config-work",
+        )
+
+    assert (scanner.calls, invariant.calls, reproduction.calls) == (0, 0, 0)
+    with_config, _, _, _ = _orchestrator(config)
+    replay = await with_config.replay(
+        manifest_path=manifest_path,
+        run_dir=run_dir,
+        repository_root=repository,
+        work_dir=tmp_path / "legacy-explicit-config-work",
+    )
+    assert replay.status is OfflineReplayStatus.REPLAYED
+
+
+def test_verify_run_rejects_self_consistent_run_options_manifest_tamper(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+) -> None:
+    config = config_factory()
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    repository, run_dir, manifest_path = _write_replay_run(tmp_path, config, candidate)
+    manifest = RunEvidenceManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+    payload = manifest.model_dump(mode="json")
+    run_configuration = payload["run_configuration"]
+    assert isinstance(run_configuration, dict)
+    options = AuditRunOptions.model_validate(run_configuration["run_options"]).model_copy(
+        update={"scanner_only": True}
+    )
+    run_configuration["run_options"] = options.model_dump(mode="json")
+    run_configuration["run_options_sha256"] = options.stable_hash()
+    run_configuration["invocation_sha256"] = canonical_sha256(
+        {
+            "environment_overrides_sha256": run_configuration["environment_overrides_sha256"],
+            "cli_overrides_sha256": run_configuration["cli_overrides_sha256"],
+            "run_options_sha256": run_configuration["run_options_sha256"],
+            "effective_config_sha256": run_configuration["effective_config_sha256"],
+            "requested_profile": run_configuration["requested_profile"],
+            "achieved_profile": run_configuration["achieved_profile"],
+        }
+    )
+    _reseal_manifest_payload(manifest_path, payload)
+
+    verification = verify_run_evidence(
+        manifest_path=manifest_path,
+        run_dir=run_dir,
+        repository_root=repository,
+    )
+
+    assert verification.status is RunVerificationStatus.STALE
+    assert {mismatch.identifier for mismatch in verification.mismatches} >= {
+        "report/configuration-provenance",
+        "report/run-options",
+    }
+
+
+def test_verify_run_rejects_manifest_and_report_tamper_against_emitted_metadata(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+) -> None:
+    config = config_factory()
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    repository, run_dir, manifest_path = _write_replay_run(tmp_path, config, candidate)
+    manifest = RunEvidenceManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+    payload = manifest.model_dump(mode="json")
+    run_configuration = payload["run_configuration"]
+    assert isinstance(run_configuration, dict)
+    options = AuditRunOptions.model_validate(run_configuration["run_options"]).model_copy(
+        update={"scanner_only": True}
+    )
+    run_configuration["run_options"] = options.model_dump(mode="json")
+    run_configuration["run_options_sha256"] = options.stable_hash()
+    run_configuration["invocation_sha256"] = canonical_sha256(
+        {
+            "environment_overrides_sha256": run_configuration["environment_overrides_sha256"],
+            "cli_overrides_sha256": run_configuration["cli_overrides_sha256"],
+            "run_options_sha256": run_configuration["run_options_sha256"],
+            "effective_config_sha256": run_configuration["effective_config_sha256"],
+            "requested_profile": run_configuration["requested_profile"],
+            "achieved_profile": run_configuration["achieved_profile"],
+        }
+    )
+
+    report_path = run_dir / "final-findings.json"
+    report = AuditReport.model_validate_json(report_path.read_text(encoding="utf-8"))
+    report_metadata = dict(report.metadata)
+    report_metadata["run_options"] = options.model_dump(mode="json")
+    provenance = dict(report_metadata["configuration_provenance"])
+    provenance["run_options_sha256"] = options.stable_hash()
+    report_metadata["configuration_provenance"] = provenance
+    write_json(
+        report_path,
+        report.model_copy(update={"metadata": report_metadata}),
+    )
+    report_bytes = report_path.read_bytes()
+    artifacts = payload["artifacts"]
+    assert isinstance(artifacts, list)
+    final_binding = next(
+        binding
+        for binding in artifacts
+        if isinstance(binding, dict) and binding.get("path") == "final-findings.json"
+    )
+    final_binding["sha256"] = hashlib.sha256(report_bytes).hexdigest()
+    final_binding["size"] = len(report_bytes)
+    _reseal_manifest_payload(manifest_path, payload)
+
+    verification = verify_run_evidence(
+        manifest_path=manifest_path,
+        run_dir=run_dir,
+        repository_root=repository,
+    )
+
+    assert verification.status is RunVerificationStatus.STALE
+    assert {mismatch.identifier for mismatch in verification.mismatches} >= {
+        "metadata/configuration-provenance",
+        "metadata/run-options",
+    }
+
+
+def test_verify_run_rejects_v11_missing_metadata_when_binding_is_removed(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+) -> None:
+    config = config_factory()
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    repository, run_dir, manifest_path = _write_replay_run(tmp_path, config, candidate)
+    (run_dir / "metadata.json").unlink()
+    manifest = RunEvidenceManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+    payload = manifest.model_dump(mode="json")
+    artifacts = payload["artifacts"]
+    assert isinstance(artifacts, list)
+    payload["artifacts"] = [
+        binding
+        for binding in artifacts
+        if not isinstance(binding, dict) or binding.get("path") != "metadata.json"
+    ]
+    _reseal_manifest_payload(manifest_path, payload)
+
+    verification = verify_run_evidence(
+        manifest_path=manifest_path,
+        run_dir=run_dir,
+        repository_root=repository,
+    )
+
+    assert verification.status is RunVerificationStatus.STALE
+    assert "metadata/missing" in {mismatch.identifier for mismatch in verification.mismatches}
+
+
+def test_verify_run_rejects_type_confused_metadata_boolean(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+) -> None:
+    config = config_factory()
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    repository, run_dir, manifest_path = _write_replay_run(tmp_path, config, candidate)
+    metadata_path = run_dir / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["completed"] is True
+    metadata["completed"] = 1
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    manifest = RunEvidenceManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+    payload = manifest.model_dump(mode="json")
+    _rebind_artifact(payload, metadata_path)
+    _reseal_manifest_payload(manifest_path, payload)
+
+    verification = verify_run_evidence(
+        manifest_path=manifest_path,
+        run_dir=run_dir,
+        repository_root=repository,
+    )
+
+    assert verification.status is RunVerificationStatus.STALE
+    assert "metadata/completed" in {mismatch.identifier for mismatch in verification.mismatches}
+
+
+@pytest.mark.parametrize("nonfinite_json", ["NaN", "Infinity", "1e999"])
+def test_verify_run_normalizes_nonfinite_metadata_to_stale(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+    nonfinite_json: str,
+) -> None:
+    config = config_factory()
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    repository, run_dir, manifest_path = _write_replay_run(tmp_path, config, candidate)
+    metadata_path = run_dir / "metadata.json"
+    serialized_metadata = metadata_path.read_text(encoding="utf-8")
+    assert '"completed": true' in serialized_metadata
+    metadata_path.write_text(
+        serialized_metadata.replace(
+            '"completed": true',
+            f'"completed": {nonfinite_json}',
+        ),
+        encoding="utf-8",
+    )
+    manifest = RunEvidenceManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+    payload = manifest.model_dump(mode="json")
+    _rebind_artifact(payload, metadata_path)
+    _reseal_manifest_payload(manifest_path, payload)
+
+    verification = verify_run_evidence(
+        manifest_path=manifest_path,
+        run_dir=run_dir,
+        repository_root=repository,
+    )
+
+    assert verification.status is RunVerificationStatus.STALE
+    assert "metadata/validation" in {mismatch.identifier for mismatch in verification.mismatches}
+
+
+def test_verify_run_rejects_override_layer_reclassification(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+) -> None:
+    base_config = config_factory()
+    cli_overrides = audit_config_overrides({"profile": AuditProfile.DEEP.value})
+    effective_config = cli_overrides.apply(base_config)
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    repository, run_dir, manifest_path = _write_replay_run(
+        tmp_path,
+        effective_config,
+        candidate,
+        file_config=base_config,
+        cli_overrides=cli_overrides,
+    )
+    manifest = RunEvidenceManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+    payload = manifest.model_dump(mode="json")
+    run_configuration = payload["run_configuration"]
+    assert isinstance(run_configuration, dict)
+    empty_overrides = AuditConfigOverrides()
+    run_configuration["environment_overrides"] = run_configuration["cli_overrides"]
+    run_configuration["environment_overrides_sha256"] = cli_overrides.stable_hash()
+    run_configuration["cli_overrides"] = empty_overrides.model_dump(mode="json")
+    run_configuration["cli_overrides_sha256"] = empty_overrides.stable_hash()
+    run_configuration["invocation_sha256"] = canonical_sha256(
+        {
+            "environment_overrides_sha256": run_configuration["environment_overrides_sha256"],
+            "cli_overrides_sha256": run_configuration["cli_overrides_sha256"],
+            "run_options_sha256": run_configuration["run_options_sha256"],
+            "effective_config_sha256": run_configuration["effective_config_sha256"],
+            "requested_profile": run_configuration["requested_profile"],
+            "achieved_profile": run_configuration["achieved_profile"],
+        }
+    )
+    _reseal_manifest_payload(manifest_path, payload)
+
+    verification = verify_run_evidence(
+        manifest_path=manifest_path,
+        run_dir=run_dir,
+        repository_root=repository,
+    )
+
+    assert verification.status is RunVerificationStatus.STALE
+    assert "report/configuration-provenance" in {
+        mismatch.identifier for mismatch in verification.mismatches
+    }
 
 
 @pytest.mark.asyncio
@@ -553,11 +1150,10 @@ def test_replay_cli_and_published_schema(
         end_line=1,
     )
     repository, run_dir, manifest_path = _write_replay_run(tmp_path, config, candidate)
-    orchestrator, _, _, _ = _orchestrator(config)
-    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+    orchestrator, _, _, _ = _orchestrator(None)
     monkeypatch.setattr(
         "mmaudit.cli.OfflineReplayOrchestrator",
-        lambda _config: orchestrator,
+        lambda _config=None, **_kwargs: orchestrator,
     )
     output = tmp_path / "offline-replay.json"
     result = runner.invoke(
@@ -570,8 +1166,6 @@ def test_replay_cli_and_published_schema(
             str(run_dir),
             "--repo",
             str(repository),
-            "--config",
-            str(tmp_path / "synthetic.toml"),
             "--output",
             str(output),
             "--work-dir",
@@ -587,7 +1181,6 @@ def test_replay_cli_and_published_schema(
     tampered["run_id"] = "tampered"
     with pytest.raises(ValidationError, match="hash is inconsistent"):
         OfflineReplay.model_validate(tampered)
-
     schema = json.loads(
         (Path(__file__).resolve().parents[2] / "schemas" / "offline_replay.schema.json").read_text(
             encoding="utf-8"
@@ -599,6 +1192,42 @@ def test_replay_cli_and_published_schema(
     assert schema["properties"]["applicable_kinds"]["minItems"] == 1
     assert schema["$defs"]["component"]["additionalProperties"] is False
     assert schema["properties"]["model_provider_contacted"] == {"const": False}
+
+
+def test_verify_run_cli_uses_embedded_v11_configuration(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+) -> None:
+    config = config_factory()
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    repository, run_dir, manifest_path = _write_replay_run(tmp_path, config, candidate)
+    output = tmp_path / "run-verification.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "verify-run",
+            "--manifest",
+            str(manifest_path),
+            "--run-dir",
+            str(run_dir),
+            "--repo",
+            str(repository),
+            "--output",
+            str(output),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.SUCCESS, result.stdout
+    verification = RunVerification.model_validate_json(output.read_text(encoding="utf-8"))
+    assert verification.status is RunVerificationStatus.CURRENT
 
 
 def test_replay_writer_rejects_links(

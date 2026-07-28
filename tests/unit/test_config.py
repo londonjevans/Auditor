@@ -10,14 +10,21 @@ from mmaudit.config import (
     MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_SHA256,
     MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_VERSION,
     MAXIMUM_ASSURANCE_QUALIFICATION_POLICY_SHA256,
+    AuditConfigOverride,
+    AuditConfigOverrides,
+    AuditRunOptions,
     ConfigError,
     ReproductionConfig,
+    audit_config_overrides,
+    canonical_audit_config_json,
     load_config,
+    load_config_with_provenance,
     model_family,
+    parse_canonical_audit_config,
     require_maximum_assurance_qualification_pins,
     validate_model_independence,
 )
-from mmaudit.models.schemas import AuditProfile, AuditScope
+from mmaudit.models.schemas import AuditProfile, AuditScope, Severity
 from tests.conftest import base_config_data
 
 
@@ -112,6 +119,73 @@ def test_environment_profile_override_is_effective(tmp_path: Path) -> None:
     assert config.quality_gates.min_classified_external_call_fraction == 1.0
     assert config.quality_gates.min_classified_asset_flow_fraction == 1.0
     assert config.quality_gates.min_model_role_completion_fraction == 1.0
+
+
+def test_configuration_provenance_replays_only_allowlisted_environment_values(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "mmaudit.toml"
+    _write_config(path)
+    canary = "synthetic-secret-canary"
+
+    loaded = load_config_with_provenance(
+        path,
+        environ={
+            "MMAUDIT_PROFILE": "maximum-assurance",
+            "MMAUDIT_CONCURRENCY": "2",
+            "OPENROUTER_API_KEY": canary,
+            "UNRELATED_CONTROL_VALUE": canary,
+        },
+    )
+
+    assert loaded.file_config.profile is AuditProfile.STANDARD
+    assert loaded.effective_config.profile is AuditProfile.MAXIMUM_ASSURANCE
+    assert loaded.environment_overrides.apply(loaded.file_config) == loaded.effective_config
+    assert [entry.path for entry in loaded.environment_overrides.entries] == [
+        "execution.concurrency",
+        "profile",
+    ]
+    serialized = loaded.environment_overrides.model_dump_json()
+    assert canary not in serialized
+    assert "OPENROUTER_API_KEY" not in serialized
+
+
+def test_canonical_config_and_override_hashes_are_reconstructable(config_factory) -> None:
+    file_config = config_factory()
+    environment = audit_config_overrides({"execution.concurrency": 2})
+    cli = audit_config_overrides({"profile": AuditProfile.MAXIMUM_ASSURANCE.value})
+    effective = cli.apply(environment.apply(file_config))
+    serialized = canonical_audit_config_json(effective)
+
+    assert parse_canonical_audit_config(serialized) == effective
+    assert effective.stable_hash() == parse_canonical_audit_config(serialized).stable_hash()
+    assert environment.stable_hash() != cli.stable_hash()
+    assert AuditRunOptions().stable_hash() != AuditRunOptions(scanner_only=True).stable_hash()
+    assert AuditRunOptions().stable_hash() != AuditRunOptions(fail_on=Severity.HIGH).stable_hash()
+
+
+@pytest.mark.parametrize("value", [1, 0, "true", "false"])
+def test_run_option_booleans_reject_coercible_non_booleans(value: object) -> None:
+    with pytest.raises(ValueError, match="JSON boolean"):
+        AuditRunOptions.model_validate({"scanner_only": value})
+
+
+def test_configuration_provenance_rejects_unapproved_or_non_scalar_overrides() -> None:
+    with pytest.raises(ValueError, match="not allowlisted"):
+        AuditConfigOverride(path="operator.secret", value="canary")
+    with pytest.raises(ValueError, match="JSON scalar"):
+        AuditConfigOverride.model_validate(
+            {"path": "execution.concurrency", "value": {"nested": "value"}}
+        )
+    with pytest.raises(ValueError, match="wrong type"):
+        AuditConfigOverride(path="execution.concurrency", value=True)
+    with pytest.raises(ValueError, match="unique and sorted"):
+        AuditConfigOverrides(
+            entries=(
+                AuditConfigOverride(path="profile", value="standard"),
+                AuditConfigOverride(path="execution.concurrency", value=2),
+            )
+        )
 
 
 def test_invalid_environment_boolean_fails(tmp_path: Path) -> None:

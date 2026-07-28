@@ -19,7 +19,10 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "1.0"
+      "enum": [
+        "1.0",
+        "1.1"
+      ]
     },
     "generated_by": {
       "const": "mmaudit"
@@ -59,6 +62,16 @@
     "source_tree_sha256": {
       "$ref": "#/$defs/sha256"
     },
+    "run_configuration": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/runConfiguration"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "bindings": {
       "$ref": "#/$defs/bindingSet"
     },
@@ -74,6 +87,49 @@
       "$ref": "#/$defs/sha256"
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.0"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "properties": {
+          "run_configuration": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "1.1"
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "required": [
+          "run_configuration"
+        ],
+        "properties": {
+          "run_configuration": {
+            "$ref": "#/$defs/runConfiguration"
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "sha256": {
       "type": "string",
@@ -132,6 +188,371 @@
             "type": "string",
             "maxLength": 2000
           }
+        }
+      }
+    },
+    "auditConfigOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "value"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "enum": [
+            "execution.budget_usd",
+            "execution.concurrency",
+            "execution.cost_ledger_path",
+            "execution.max_request_bytes",
+            "maximum_assurance.allow_downgrade",
+            "maximum_assurance.benchmark_gate",
+            "maximum_assurance.minimum_model_families",
+            "maximum_assurance.minimum_specialist_agents",
+            "maximum_assurance.require",
+            "maximum_assurance.require_formal_or_reproduction_for_confirmed_critical",
+            "maximum_assurance.require_reproduction_for_critical",
+            "models.minimum_distinct_families",
+            "prior_audit.fail_on_missed",
+            "prior_audit.path",
+            "prior_audit.required",
+            "privacy.allow_code_egress",
+            "privacy.require_zdr",
+            "profile",
+            "repository.max_discovery_bytes",
+            "repository.max_file_bytes",
+            "repository.max_files",
+            "repository.max_total_context_bytes",
+            "repository.max_walk_entries",
+            "reproduction.expected_chain_id",
+            "reproduction.pinned_block_number",
+            "reproduction.rootless_container_image",
+            "reproduction.rootless_container_runtime",
+            "scanners.slither.enabled",
+            "scope.mode",
+            "scope.require_complete",
+            "smart_contracts.allow_fork_probing",
+            "smart_contracts.allow_network",
+            "smart_contracts.compile",
+            "smart_contracts.enabled",
+            "smart_contracts.fork_rpc_url_env",
+            "smart_contracts.foundry_match_path",
+            "smart_contracts.framework",
+            "smart_contracts.project_root"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "path",
+            "value"
+          ],
+          "properties": {
+            "path": {
+              "enum": [
+                "maximum_assurance.allow_downgrade",
+                "maximum_assurance.benchmark_gate",
+                "maximum_assurance.require",
+                "maximum_assurance.require_formal_or_reproduction_for_confirmed_critical",
+                "maximum_assurance.require_reproduction_for_critical",
+                "prior_audit.fail_on_missed",
+                "prior_audit.required",
+                "privacy.allow_code_egress",
+                "privacy.require_zdr",
+                "scanners.slither.enabled",
+                "scope.require_complete",
+                "smart_contracts.allow_fork_probing",
+                "smart_contracts.allow_network",
+                "smart_contracts.compile",
+                "smart_contracts.enabled"
+              ]
+            },
+            "value": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "required": [
+            "path",
+            "value"
+          ],
+          "properties": {
+            "path": {
+              "enum": [
+                "execution.concurrency",
+                "execution.max_request_bytes",
+                "maximum_assurance.minimum_model_families",
+                "maximum_assurance.minimum_specialist_agents",
+                "models.minimum_distinct_families",
+                "repository.max_discovery_bytes",
+                "repository.max_file_bytes",
+                "repository.max_files",
+                "repository.max_total_context_bytes",
+                "repository.max_walk_entries",
+                "reproduction.expected_chain_id",
+                "reproduction.pinned_block_number"
+              ]
+            },
+            "value": {
+              "type": "integer"
+            }
+          }
+        },
+        {
+          "required": [
+            "path",
+            "value"
+          ],
+          "properties": {
+            "path": {
+              "enum": [
+                "execution.budget_usd"
+              ]
+            },
+            "value": {
+              "type": "number"
+            }
+          }
+        },
+        {
+          "required": [
+            "path",
+            "value"
+          ],
+          "properties": {
+            "path": {
+              "enum": [
+                "execution.cost_ledger_path",
+                "prior_audit.path",
+                "profile",
+                "reproduction.rootless_container_image",
+                "reproduction.rootless_container_runtime",
+                "scope.mode",
+                "smart_contracts.fork_rpc_url_env",
+                "smart_contracts.foundry_match_path",
+                "smart_contracts.framework",
+                "smart_contracts.project_root"
+              ]
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "auditConfigOverrides": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entries"
+      ],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "maxItems": 38,
+          "items": {
+            "$ref": "#/$defs/auditConfigOverride"
+          }
+        }
+      }
+    },
+    "auditRunOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scanner_only",
+        "allow_code_egress",
+        "skip_codeql",
+        "changed_since",
+        "severity_threshold",
+        "fail_on",
+        "refresh_models",
+        "allow_fork_probing",
+        "require_maximum_assurance",
+        "allow_maximum_assurance_downgrade",
+        "benchmark_repository_git_commit"
+      ],
+      "properties": {
+        "scanner_only": {
+          "type": "boolean"
+        },
+        "allow_code_egress": {
+          "type": "boolean"
+        },
+        "skip_codeql": {
+          "type": "boolean"
+        },
+        "changed_since": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "severity_threshold": {
+          "enum": [
+            "informational",
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "fail_on": {
+          "anyOf": [
+            {
+              "enum": [
+                "informational",
+                "low",
+                "medium",
+                "high",
+                "critical"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "refresh_models": {
+          "type": "boolean"
+        },
+        "allow_fork_probing": {
+          "type": "boolean"
+        },
+        "require_maximum_assurance": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "allow_maximum_assurance_downgrade": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "benchmark_repository_git_commit": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40,64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "runConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file_configuration_json",
+        "file_config_sha256",
+        "environment_overrides",
+        "environment_overrides_sha256",
+        "cli_overrides",
+        "cli_overrides_sha256",
+        "run_options",
+        "run_options_sha256",
+        "effective_configuration_json",
+        "effective_config_sha256",
+        "model_config_sha256",
+        "invocation_sha256",
+        "requested_profile",
+        "achieved_profile"
+      ],
+      "properties": {
+        "file_configuration_json": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 2000000
+        },
+        "file_config_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "environment_overrides": {
+          "$ref": "#/$defs/auditConfigOverrides"
+        },
+        "environment_overrides_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cli_overrides": {
+          "$ref": "#/$defs/auditConfigOverrides"
+        },
+        "cli_overrides_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "run_options": {
+          "$ref": "#/$defs/auditRunOptions"
+        },
+        "run_options_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "effective_configuration_json": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 2000000
+        },
+        "effective_config_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "model_config_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "invocation_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requested_profile": {
+          "enum": [
+            "quick",
+            "standard",
+            "deep",
+            "maximum-assurance"
+          ]
+        },
+        "achieved_profile": {
+          "anyOf": [
+            {
+              "enum": [
+                "quick",
+                "standard",
+                "deep",
+                "maximum-assurance"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },

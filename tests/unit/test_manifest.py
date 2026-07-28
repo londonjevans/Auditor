@@ -10,6 +10,14 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from mmaudit.cli import app
+from mmaudit.config import (
+    _AUDIT_OVERRIDE_PATHS,
+    _AUDIT_OVERRIDE_VALUE_TYPES,
+    AuditConfigOverride,
+    AuditConfigOverrides,
+    AuditRunOptions,
+    LoadedAuditConfig,
+)
 from mmaudit.constants import ExitCode
 from mmaudit.models.registry import ModelRegistry
 from mmaudit.models.schemas import (
@@ -21,8 +29,11 @@ from mmaudit.orchestration.manifest import (
     ManifestBindingSet,
     ManifestFileBinding,
     ManifestHashBinding,
+    RunConfigurationBinding,
     RunEvidenceManifest,
     build_run_evidence_manifest,
+    canonical_sha256,
+    load_run_evidence_manifest,
     validate_manifest_artifacts,
     write_run_evidence_manifest,
 )
@@ -39,6 +50,8 @@ runner = CliRunner()
 
 
 def _report(config) -> AuditReport:
+    empty_overrides = AuditConfigOverrides()
+    run_options = AuditRunOptions()
     return AuditReport(
         schema_version="1.0",
         run_id="manifest-test-run",
@@ -78,6 +91,15 @@ def _report(config) -> AuditReport:
         accounted_cost_usd=0,
         findings=[],
         rejected_findings=[],
+        metadata={
+            "run_options": run_options.model_dump(mode="json"),
+            "configuration_provenance": {
+                "file_config_sha256": config.stable_hash(),
+                "environment_overrides_sha256": empty_overrides.stable_hash(),
+                "cli_overrides_sha256": empty_overrides.stable_hash(),
+                "run_options_sha256": run_options.stable_hash(),
+            },
+        },
     )
 
 
@@ -157,6 +179,25 @@ def _write_verifiable_run(
     )
     run_dir = root / "run"
     _write_required_artifacts(run_dir)
+    (run_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "schema_version": report.schema_version,
+                "run_id": report.run_id,
+                "generated_at": report.generated_at.isoformat(),
+                "completed": report.completed,
+                "incomplete_reasons": report.incomplete_reasons,
+                "configuration_hash": report.configuration_hash,
+                "model_configuration_hash": report.model_configuration_hash,
+                "privacy": report.privacy,
+                "metadata": report.metadata,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     (run_dir / "final-findings.json").write_text(
         report.model_dump_json(),
         encoding="utf-8",
@@ -201,6 +242,12 @@ def test_manifest_serialization_and_all_required_bindings_are_stable(
     assert first.model_dump_json() == second.model_dump_json()
     assert first.manifest_sha256 == second.manifest_sha256
     assert first.source_tree_sha256
+    assert first.schema_version == "1.1"
+    assert first.run_configuration is not None
+    assert first.run_configuration.requested_profile.value == "standard"
+    assert first.run_configuration.achieved_profile is not None
+    assert first.run_configuration.effective_config_sha256 == config.stable_hash()
+    assert first.run_configuration.model_config_sha256 == config.model_hash()
     assert set(ManifestBindingSet.model_fields) == {
         name for name, bindings in first.bindings if bindings
     }
@@ -237,6 +284,58 @@ def test_manifest_self_hash_and_artifact_hashes_reject_tampering(
     )
     with pytest.raises(ValueError, match="artifact hash mismatch"):
         validate_manifest_artifacts(manifest, run_dir)
+
+
+def test_manifest_provenance_hashes_fail_closed_and_v1_0_remains_readable(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    run_dir = tmp_path / "run"
+    _write_required_artifacts(run_dir)
+    manifest = build_run_evidence_manifest(
+        run_dir=run_dir,
+        report=_report(config),
+        config=config,
+    )
+
+    tampered = manifest.model_dump(mode="json")
+    tampered["run_configuration"]["cli_overrides_sha256"] = "0" * 64
+    tampered["manifest_sha256"] = canonical_sha256(
+        {key: value for key, value in tampered.items() if key != "manifest_sha256"}
+    )
+    with pytest.raises(ValidationError, match="CLI-override hash"):
+        RunEvidenceManifest.model_validate(tampered)
+
+    missing_provenance = manifest.model_dump(mode="json")
+    missing_provenance.pop("run_configuration")
+    missing_provenance["manifest_sha256"] = canonical_sha256(
+        {key: value for key, value in missing_provenance.items() if key != "manifest_sha256"}
+    )
+    with pytest.raises(ValidationError, match=r"1\.1 requires"):
+        RunEvidenceManifest.model_validate(missing_provenance)
+
+    legacy = manifest.model_dump(mode="json")
+    legacy["schema_version"] = "1.0"
+    legacy.pop("run_configuration")
+    legacy["manifest_sha256"] = canonical_sha256(
+        {key: value for key, value in legacy.items() if key != "manifest_sha256"}
+    )
+    parsed_legacy = RunEvidenceManifest.model_validate(legacy)
+    assert parsed_legacy.schema_version == "1.0"
+    assert parsed_legacy.run_configuration is None
+
+    legacy_with_provenance = manifest.model_dump(mode="json")
+    legacy_with_provenance["schema_version"] = "1.0"
+    legacy_with_provenance["manifest_sha256"] = canonical_sha256(
+        {
+            key: value
+            for key, value in legacy_with_provenance.items()
+            if key not in {"manifest_sha256", "run_configuration"}
+        }
+    )
+    with pytest.raises(ValidationError, match=r"1\.1 requires"):
+        RunEvidenceManifest.model_validate(legacy_with_provenance)
 
 
 def test_manifest_semantically_binds_runtime_model_qualification(
@@ -367,6 +466,104 @@ def test_published_manifest_schema_is_strict_and_bounded() -> None:
     assert schema["$defs"]["fileBinding"]["additionalProperties"] is False
     assert schema["$defs"]["hashBinding"]["additionalProperties"] is False
     assert schema["$defs"]["bindingSet"]["additionalProperties"] is False
+    assert schema["properties"]["schema_version"]["enum"] == ["1.0", "1.1"]
+    expected_profiles = {"quick", "standard", "deep", "maximum-assurance"}
+    assert (
+        set(schema["$defs"]["runConfiguration"]["properties"]["requested_profile"]["enum"])
+        == expected_profiles
+    )
+    achieved_profile = schema["$defs"]["runConfiguration"]["properties"]["achieved_profile"]
+    assert set(achieved_profile["anyOf"][0]["enum"]) == expected_profiles
+    assert schema["$defs"]["runConfiguration"]["additionalProperties"] is False
+    assert set(schema["$defs"]["runConfiguration"]["required"]) == set(
+        RunConfigurationBinding.model_fields
+    )
+    assert schema["$defs"]["auditConfigOverride"]["additionalProperties"] is False
+    assert schema["$defs"]["auditConfigOverrides"]["additionalProperties"] is False
+    assert schema["$defs"]["auditRunOptions"]["additionalProperties"] is False
+    assert set(schema["$defs"]["auditConfigOverride"]["required"]) == set(
+        AuditConfigOverride.model_fields
+    )
+    assert set(schema["$defs"]["auditConfigOverrides"]["required"]) == set(
+        AuditConfigOverrides.model_fields
+    )
+    assert set(schema["$defs"]["auditRunOptions"]["required"]) == set(AuditRunOptions.model_fields)
+    assert set(schema["$defs"]["auditConfigOverride"]["properties"]["path"]["enum"]) == set(
+        _AUDIT_OVERRIDE_PATHS
+    )
+    assert schema["$defs"]["auditConfigOverrides"]["properties"]["entries"]["maxItems"] == len(
+        _AUDIT_OVERRIDE_PATHS
+    )
+    override_variants = schema["$defs"]["auditConfigOverride"]["oneOf"]
+    schema_paths_by_type = {
+        variant["properties"]["value"]["type"]: set(variant["properties"]["path"]["enum"])
+        for variant in override_variants
+    }
+    expected_paths_by_type = {
+        "boolean": {
+            path
+            for path, value_types in _AUDIT_OVERRIDE_VALUE_TYPES.items()
+            if value_types == (bool,)
+        },
+        "integer": {
+            path
+            for path, value_types in _AUDIT_OVERRIDE_VALUE_TYPES.items()
+            if value_types == (int,)
+        },
+        "number": {
+            path
+            for path, value_types in _AUDIT_OVERRIDE_VALUE_TYPES.items()
+            if value_types == (float,)
+        },
+        "string": {
+            path
+            for path, value_types in _AUDIT_OVERRIDE_VALUE_TYPES.items()
+            if value_types == (str,)
+        },
+    }
+    assert schema_paths_by_type == expected_paths_by_type
+    assert set().union(*schema_paths_by_type.values()) == set(_AUDIT_OVERRIDE_PATHS)
+    serialized_schema = json.dumps(schema, sort_keys=True)
+    assert "OPENROUTER_API_KEY" not in serialized_schema
+    assert "MMAUDIT_SECRETS_ENV_FILE" not in serialized_schema
+
+    compatibility = schema["allOf"]
+    legacy_rule = next(
+        rule
+        for rule in compatibility
+        if rule["if"]["properties"]["schema_version"]["const"] == "1.0"
+    )
+    current_rule = next(
+        rule
+        for rule in compatibility
+        if rule["if"]["properties"]["schema_version"]["const"] == "1.1"
+    )
+    assert legacy_rule["then"]["properties"]["run_configuration"] == {"type": "null"}
+    assert "run_configuration" in current_rule["then"]["required"]
+    assert current_rule["then"]["properties"]["run_configuration"] == {
+        "$ref": "#/$defs/runConfiguration"
+    }
+
+
+def test_manifest_loader_rejects_duplicate_json_keys(tmp_path: Path, config_factory) -> None:
+    run_dir = tmp_path / "run"
+    _write_required_artifacts(run_dir)
+    manifest = build_run_evidence_manifest(
+        run_dir=run_dir,
+        report=_report(config_factory()),
+        config=config_factory(),
+    )
+    path = run_dir / "run-evidence-manifest.json"
+    write_run_evidence_manifest(path, manifest)
+    duplicate = path.read_text(encoding="utf-8").replace(
+        "{",
+        '{"schema_version":"1.1",',
+        1,
+    )
+    path.write_text(duplicate, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="duplicate keys"):
+        load_run_evidence_manifest(path)
 
 
 def test_verify_run_is_current_and_serializes_deterministically(
@@ -399,6 +596,51 @@ def test_verify_run_is_current_and_serializes_deterministically(
     tampered["status"] = RunVerificationStatus.STALE
     with pytest.raises(ValidationError, match="inconsistent"):
         RunVerification.model_validate(tampered)
+
+
+def test_verify_run_rejects_report_configuration_identity_resealed_into_manifest(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    repository, run_dir, manifest, report = _write_verifiable_run(tmp_path, config)
+    tampered_report = report.model_copy(
+        update={
+            "configuration_hash": "d" * 64,
+            "model_configuration_hash": "e" * 64,
+        }
+    )
+    report_bytes = tampered_report.model_dump_json().encode("utf-8")
+    (run_dir / "final-findings.json").write_bytes(report_bytes)
+
+    resealed = manifest.model_dump(mode="json")
+    for artifact in resealed["artifacts"]:
+        if artifact["path"] == "final-findings.json":
+            artifact["sha256"] = hashlib.sha256(report_bytes).hexdigest()
+            artifact["size"] = len(report_bytes)
+    resealed["manifest_sha256"] = canonical_sha256(
+        {key: value for key, value in resealed.items() if key != "manifest_sha256"}
+    )
+    write_run_evidence_manifest(
+        run_dir / "run-evidence-manifest.json",
+        RunEvidenceManifest.model_validate(resealed),
+    )
+
+    verification = verify_run_evidence(
+        manifest_path=run_dir / "run-evidence-manifest.json",
+        run_dir=run_dir,
+        repository_root=repository,
+    )
+
+    assert verification.status is RunVerificationStatus.STALE
+    assert {
+        mismatch.identifier
+        for mismatch in verification.mismatches
+        if mismatch.category is RunVerificationCategory.CONFIGURATION
+    } >= {
+        "report/configuration-hash",
+        "report/model-configuration-hash",
+    }
 
 
 def test_verify_run_detects_every_security_relevant_drift_category(
@@ -492,7 +734,14 @@ def test_verify_run_cli_clean_tampered_and_missing_artifact(
     monkeypatch,
 ) -> None:
     config = config_factory()
-    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+    monkeypatch.setattr(
+        "mmaudit.cli.load_config_with_provenance",
+        lambda _path, **_kwargs: LoadedAuditConfig(
+            file_config=config,
+            environment_overrides=AuditConfigOverrides(),
+            effective_config=config,
+        ),
+    )
 
     clean_repository, clean_run, _, _ = _write_verifiable_run(
         tmp_path / "clean",
