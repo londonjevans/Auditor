@@ -302,6 +302,7 @@ class OpenRouterGenerationEvidence(BaseModel):
     latency_ms: str | None = None
     generation_time_ms: str | None = None
     retrieved_at: datetime
+    retrieval_attempts: int = Field(ge=1, le=4)
     execution_evidence: ExecutionEvidenceKind
     evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
@@ -366,6 +367,7 @@ def validate_openrouter_generation_payload(
     requested_generation_id: str,
     retrieved_at: datetime,
     execution_evidence: ExecutionEvidenceKind,
+    retrieval_attempts: int = 1,
 ) -> OpenRouterGenerationEvidence:
     """Project a generation response without retaining source or completion content."""
 
@@ -375,6 +377,14 @@ def validate_openrouter_generation_payload(
     if retrieved_at.tzinfo is None or retrieved_at.utcoffset() is None:
         raise GenerationEvidenceValidationError(
             "generation retrieval timestamp must be timezone-aware"
+        )
+    if (
+        not isinstance(retrieval_attempts, int)
+        or isinstance(retrieval_attempts, bool)
+        or not 1 <= retrieval_attempts <= 4
+    ):
+        raise GenerationEvidenceValidationError(
+            "generation retrieval attempts are outside the bounded polling policy"
         )
     envelope = _required_mapping(payload, "generation response")
     data = _required_mapping(envelope.get("data"), "generation response data")
@@ -471,6 +481,7 @@ def validate_openrouter_generation_payload(
         "latency_ms": latency,
         "generation_time_ms": generation_time,
         "retrieved_at": _datetime_json(retrieved_at.astimezone(UTC)),
+        "retrieval_attempts": retrieval_attempts,
         "execution_evidence": execution_evidence,
     }
     return OpenRouterGenerationEvidence.model_validate(

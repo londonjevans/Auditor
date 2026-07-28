@@ -23,9 +23,11 @@ from mmaudit.models.generation_evidence import (
 from mmaudit.models.openrouter import (
     OpenRouterAuthenticationError,
     OpenRouterClient,
+    OpenRouterGenerationMetadataNotReadyError,
     OpenRouterModelError,
     OpenRouterPrivacyError,
     OpenRouterRequestLimitError,
+    OpenRouterSchemaError,
 )
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
@@ -521,6 +523,135 @@ async def test_client_uses_fixed_authenticated_bounded_generation_query(
 
 
 @pytest.mark.asyncio
+async def test_generation_metadata_polls_until_same_generation_is_complete(
+    config_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[httpx.Request] = []
+    waits: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        if len(observed) == 1:
+            return httpx.Response(404)
+        if len(observed) == 2:
+            return httpx.Response(200, json={"data": {"id": _GENERATION_ID}})
+        return httpx.Response(200, json=_generation_payload())
+
+    async def no_wait(delay_seconds: float) -> None:
+        waits.append(delay_seconds)
+
+    config = config_factory(execution={"max_model_retries": 0})
+    client, http_client = _client(config, handler)
+    monkeypatch.setattr(
+        client,
+        "_wait_for_generation_metadata",
+        no_wait,
+        raising=False,
+    )
+    try:
+        evidence = await client.get_generation_evidence(_GENERATION_ID)
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert evidence.generation_id == _GENERATION_ID
+    assert evidence.retrieval_attempts == 3
+    assert len(observed) == 3
+    assert waits == [1.0, 3.0]
+
+
+@pytest.mark.asyncio
+async def test_generation_metadata_poll_is_bounded_for_incomplete_same_generation(
+    config_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    waits: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"data": {"id": _GENERATION_ID}})
+
+    async def no_wait(delay_seconds: float) -> None:
+        waits.append(delay_seconds)
+
+    config = config_factory(execution={"max_model_retries": 0})
+    client, http_client = _client(config, handler)
+    monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
+    try:
+        with pytest.raises(OpenRouterSchemaError, match="incomplete"):
+            await client.get_generation_evidence(_GENERATION_ID)
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert calls == 4
+    assert waits == [1.0, 3.0, 7.0]
+
+
+@pytest.mark.asyncio
+async def test_generation_metadata_does_not_poll_contradictory_generation_id(
+    config_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    waits: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"data": {"id": "gen-other"}})
+
+    async def no_wait(delay_seconds: float) -> None:
+        waits.append(delay_seconds)
+
+    config = config_factory(execution={"max_model_retries": 0})
+    client, http_client = _client(config, handler)
+    monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
+    try:
+        with pytest.raises(OpenRouterSchemaError, match="invalid"):
+            await client.get_generation_evidence(_GENERATION_ID)
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert calls == 1
+    assert waits == []
+
+
+@pytest.mark.asyncio
+async def test_generation_metadata_not_ready_is_bounded_and_typed(
+    config_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    waits: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(404)
+
+    async def no_wait(delay_seconds: float) -> None:
+        waits.append(delay_seconds)
+
+    config = config_factory(execution={"max_model_retries": 0})
+    client, http_client = _client(config, handler)
+    monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
+    try:
+        with pytest.raises(OpenRouterGenerationMetadataNotReadyError):
+            await client.get_generation_evidence(_GENERATION_ID)
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert calls == 4
+    assert waits == [1.0, 3.0, 7.0]
+
+
+@pytest.mark.asyncio
 async def test_invalid_generation_id_is_rejected_before_transport(
     config_factory: Callable[..., Any],
 ) -> None:
@@ -549,8 +680,11 @@ async def test_generation_authentication_error_never_echoes_credential(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     canary = "SYNTHETIC_SECRET_CANARY_987"
+    calls = 0
 
     def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
         return httpx.Response(
             401,
             json={"error": {"message": canary, "authorization": canary}},
@@ -569,6 +703,7 @@ async def test_generation_authentication_error_never_echoes_credential(
     assert canary not in str(raised.value)
     assert canary not in captured.out
     assert canary not in captured.err
+    assert calls == 1
 
 
 @pytest.mark.asyncio

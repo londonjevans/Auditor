@@ -132,6 +132,7 @@ _ROUTER_MAX_PRICE_FIELDS = frozenset({"completion", "image", "prompt", "request"
 _PER_MILLION_ROUTER_PRICE_FIELDS = frozenset({"completion", "prompt"})
 _MUTABLE_IDENTITY_TTL = timedelta(days=7)
 _MAX_RETAINED_UNBOUND_COMPLETIONS = 512
+_GENERATION_METADATA_POLL_DELAYS_SECONDS = (0.0, 1.0, 3.0, 7.0)
 _UNENFORCEABLE_VARIABLE_PRICING_FIELDS = frozenset(
     {
         "input_cache_read",
@@ -484,6 +485,10 @@ class OpenRouterPrivacyError(OpenRouterError):
 
 class OpenRouterModelError(OpenRouterError):
     pass
+
+
+class OpenRouterGenerationMetadataNotReadyError(OpenRouterModelError):
+    """Generation metadata remained unavailable after bounded post-call polling."""
 
 
 class OpenRouterUnboundIdentityError(OpenRouterModelError):
@@ -963,27 +968,68 @@ class OpenRouterClient:
         self,
         generation_id: str,
     ) -> OpenRouterGenerationEvidence:
-        """Retrieve a bounded, content-free attestation for one generation."""
+        """Poll boundedly for one eventual, content-free generation attestation."""
 
         try:
             validated_generation_id = validate_generation_id(generation_id)
         except GenerationEvidenceValidationError as exc:
             raise OpenRouterRequestLimitError(str(exc)) from None
-        payload = await OpenRouterClient._request_metadata(
-            self,
-            f"/generation?id={quote(validated_generation_id, safe='')}",
-            max_bytes=1_000_000,
-            exact_decimal_json=True,
+        last_pending_error: OpenRouterError | None = None
+        for attempt, delay_seconds in enumerate(
+            _GENERATION_METADATA_POLL_DELAYS_SECONDS,
+            start=1,
+        ):
+            if delay_seconds:
+                await self._wait_for_generation_metadata(delay_seconds)
+            try:
+                payload = await OpenRouterClient._request_metadata(
+                    self,
+                    f"/generation?id={quote(validated_generation_id, safe='')}",
+                    max_bytes=1_000_000,
+                    exact_decimal_json=True,
+                    maximum_attempts=1,
+                    not_found_is_pending=True,
+                )
+            except (
+                OpenRouterGenerationMetadataNotReadyError,
+                OpenRouterProviderUnavailableError,
+                OpenRouterRateLimitError,
+                OpenRouterTimeoutError,
+            ) as exc:
+                last_pending_error = exc
+                continue
+            try:
+                return validate_openrouter_generation_payload(
+                    payload,
+                    requested_generation_id=validated_generation_id,
+                    retrieved_at=datetime.now(UTC),
+                    retrieval_attempts=attempt,
+                    execution_evidence=self.execution_evidence,
+                )
+            except (GenerationEvidenceValidationError, ValidationError):
+                if _generation_metadata_payload_may_be_pending(
+                    payload,
+                    requested_generation_id=validated_generation_id,
+                ):
+                    last_pending_error = OpenRouterSchemaError(
+                        "OpenRouter generation metadata remained incomplete"
+                    )
+                    continue
+                raise OpenRouterSchemaError(
+                    "OpenRouter returned invalid generation metadata"
+                ) from None
+        if isinstance(last_pending_error, OpenRouterGenerationMetadataNotReadyError):
+            raise last_pending_error
+        if last_pending_error is not None:
+            raise last_pending_error
+        raise OpenRouterGenerationMetadataNotReadyError(
+            "OpenRouter generation metadata was unavailable after bounded polling"
         )
-        try:
-            return validate_openrouter_generation_payload(
-                payload,
-                requested_generation_id=validated_generation_id,
-                retrieved_at=datetime.now(UTC),
-                execution_evidence=self.execution_evidence,
-            )
-        except (GenerationEvidenceValidationError, ValidationError):
-            raise OpenRouterSchemaError("OpenRouter returned invalid generation metadata") from None
+
+    async def _wait_for_generation_metadata(self, delay_seconds: float) -> None:
+        """Wait only one fixed bounded delay between metadata observations."""
+
+        await asyncio.sleep(delay_seconds)
 
     async def create_trusted_generation_verification(
         self,
@@ -1518,7 +1564,20 @@ class OpenRouterClient:
         *,
         max_bytes: int = 20_000_000,
         exact_decimal_json: bool = False,
+        maximum_attempts: int | None = None,
+        not_found_is_pending: bool = False,
     ) -> dict[str, Any]:
+        attempt_limit = (
+            self.execution.max_model_retries + 1
+            if maximum_attempts is None
+            else maximum_attempts
+        )
+        if (
+            not isinstance(attempt_limit, int)
+            or isinstance(attempt_limit, bool)
+            or not 1 <= attempt_limit <= 32
+        ):
+            raise OpenRouterRequestLimitError("metadata retry bound is invalid")
         attempts = 0
         while True:
             attempts += 1
@@ -1529,7 +1588,7 @@ class OpenRouterClient:
                     max_bytes=max_bytes,
                 )
             except (httpx.TimeoutException, httpx.NetworkError):
-                if attempts >= self.execution.max_model_retries + 1:
+                if attempts >= attempt_limit:
                     raise OpenRouterTimeoutError("OpenRouter metadata request failed") from None
                 await self._backoff(attempts, None)
                 continue
@@ -1539,8 +1598,12 @@ class OpenRouterClient:
                 ) from None
             if response.status_code in {401, 403}:
                 raise OpenRouterAuthenticationError("OpenRouter rejected the API credentials")
+            if response.status_code == 404 and not_found_is_pending:
+                raise OpenRouterGenerationMetadataNotReadyError(
+                    "OpenRouter generation metadata is not ready"
+                )
             if is_retryable_status(response.status_code):
-                if attempts >= self.execution.max_model_retries + 1:
+                if attempts >= attempt_limit:
                     if response.status_code == 429:
                         raise OpenRouterRateLimitError(
                             "OpenRouter metadata rate limit exhausted the retry policy"
@@ -3801,6 +3864,27 @@ def _provider_error_classification(error: Exception) -> str:
     return "internal"
 
 
+def _generation_metadata_payload_may_be_pending(
+    payload: Mapping[str, Any],
+    *,
+    requested_generation_id: str,
+) -> bool:
+    """Retry only absent or same-generation metadata that is not definitively cancelled."""
+
+    data = payload.get("data")
+    if data is None:
+        return True
+    if not isinstance(data, dict):
+        return False
+    observed_generation_id = data.get("id")
+    if observed_generation_id is None:
+        return True
+    return (
+        observed_generation_id == requested_generation_id
+        and data.get("cancelled") is not True
+    )
+
+
 def _generation_metadata_failure_diagnostic(
     error: OpenRouterError,
 ) -> OpenRouterIdentityDiagnosticCode:
@@ -3812,6 +3896,8 @@ def _generation_metadata_failure_diagnostic(
         return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_RATE_LIMITED
     if isinstance(error, OpenRouterProviderUnavailableError):
         return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_PROVIDER_UNAVAILABLE
+    if isinstance(error, OpenRouterGenerationMetadataNotReadyError):
+        return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_NOT_READY
     if isinstance(error, OpenRouterPrivacyError):
         return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_INTEGRITY_REJECTED
     if isinstance(error, OpenRouterSchemaError):
