@@ -8,9 +8,9 @@ AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: Commit and push the attempt-ten preflight record, verify clean synchronization, then run exactly one explicitly gated Qwen/AkashML smoke through the corrected reconciler.
-LAST_COMMAND: <exact non-secret attempt-ten environment> .venv/bin/python -c <typed no-network smoke preflight>
-LAST_RESULT: PASS; clean checkpoint a36302c, exact Qwen/AkashML route, STRICT_ZDR, pinned fixture, fresh attempt-ten output, accepted secret-file metadata, and a terminal zero-reservation ledger validated without reading secret content or accessing network.
+NEXT_ACTION: Reconcile the single attempt-ten result, validate any durable success or rejection artifact, and do not repeat an unchanged provider action.
+LAST_COMMAND: MMAUDIT_RUN_REAL_PROVIDER_TESTS=1 <exact gated Qwen/AkashML attempt-ten environment> .venv/bin/pytest -q tests/integration/test_real_openrouter_provider.py
+LAST_RESULT: IN_PROGRESS; exactly one paid provider smoke is authorized from the clean synchronized preflight checkpoint.
 REAL_MODEL_CALLS_ATTEMPTED: 9
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 9
