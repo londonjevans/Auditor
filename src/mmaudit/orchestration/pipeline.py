@@ -2396,11 +2396,11 @@ class AuditPipeline:
                 single_model_payload: dict[str, Any] | None = None
                 if real_provider_client:
                     assert models_payload is not None
-                    canonical_slug = openrouter_catalog_canonical_slug(
+                    openrouter_catalog_canonical_slug(
                         exact_model_id=model_id,
                         models_payload=models_payload,
                     )
-                    single_model_payload = await self.client.get_model_metadata(canonical_slug)
+                    single_model_payload = await self.client.get_model_metadata(model_id)
                     single_model_payloads[model_id] = single_model_payload
                 endpoint_payload = await self.client.get_model_endpoint_metadata(model_id)
                 endpoint_payloads[model_id] = endpoint_payload

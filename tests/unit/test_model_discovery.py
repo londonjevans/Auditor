@@ -172,7 +172,7 @@ def _real_evidence(
         DiscoveryModelMetadataBinding(
             exact_model_id=payload.exact_model_id,
             canonical_slug=payload.canonical_slug,
-            api_query=openrouter_model_query(payload.canonical_slug),
+            api_query=openrouter_model_query(payload.exact_model_id),
             response_snapshot_sha256="e" * 64,
             model_metadata_snapshot_sha256=payload.model_metadata_snapshot_sha256,
         )
@@ -330,6 +330,27 @@ def test_canonical_lookup_accepts_only_requested_or_canonical_model_identity() -
         )
 
 
+def test_single_model_metadata_binding_queries_exact_id_not_dated_canonical_slug() -> None:
+    payload = _discover()
+    binding = DiscoveryModelMetadataBinding(
+        exact_model_id=payload.exact_model_id,
+        canonical_slug=payload.canonical_slug,
+        api_query=openrouter_model_query(payload.exact_model_id),
+        response_snapshot_sha256="e" * 64,
+        model_metadata_snapshot_sha256=payload.model_metadata_snapshot_sha256,
+    )
+
+    assert binding.api_query == "/model/alpha/atlas-secure"
+    with pytest.raises(ValidationError, match="exact model ID"):
+        DiscoveryModelMetadataBinding(
+            exact_model_id=payload.exact_model_id,
+            canonical_slug=payload.canonical_slug,
+            api_query=openrouter_model_query(payload.canonical_slug),
+            response_snapshot_sha256="e" * 64,
+            model_metadata_snapshot_sha256=payload.model_metadata_snapshot_sha256,
+        )
+
+
 def test_catalog_and_exact_endpoint_limits_must_be_compatible() -> None:
     with pytest.raises(ValidationError, match="endpoint context exceeds"):
         _discover(
@@ -392,7 +413,7 @@ def test_real_provenance_requires_the_trusted_issuer_and_whole_second_utc() -> N
     model_binding = DiscoveryModelMetadataBinding(
         exact_model_id=payload.exact_model_id,
         canonical_slug=payload.canonical_slug,
-        api_query=openrouter_model_query(payload.canonical_slug),
+        api_query=openrouter_model_query(payload.exact_model_id),
         response_snapshot_sha256="e" * 64,
         model_metadata_snapshot_sha256=payload.model_metadata_snapshot_sha256,
     )

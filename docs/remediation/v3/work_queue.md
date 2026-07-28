@@ -51,9 +51,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Pause evidence:** The first v3 launch stopped before a completion POST when
   single-model metadata lookup returned HTTP `404`; no artifact, spend, or
   reservation was added.
-- **Next action:** On operator resume, verify the current metadata route from
-  official OpenRouter documentation, add the local regression, correct the
-  confirmed defect, and revalidate before any materially changed provider attempt.
+- **Next action:** Query single-model metadata with the exact catalog/requested
+  model ID, validate and bind the returned canonical slug, add the local
+  regression, and revalidate before any materially changed provider attempt.
 
 ## V3-PRIVACY-001 — Explicit privacy and retention profiles
 

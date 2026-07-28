@@ -152,7 +152,7 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     exact_model_id=settings.model_id,
                     models_payload=models_payload,
                 )
-                single_model_payload = await client.get_model_metadata(canonical_slug)
+                single_model_payload = await client.get_model_metadata(settings.model_id)
                 endpoint_payload = await client.get_model_endpoint_metadata(settings.model_id)
                 zdr_payload = await client.list_zdr_endpoints()
                 endpoint_snapshot = validate_openrouter_endpoint_snapshot(
@@ -169,6 +169,7 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     single_model_payload=single_model_payload,
                     endpoint_snapshot=endpoint_snapshot,
                 )
+                assert discovery_payload.canonical_slug == canonical_slug
                 _provenance, discovery_evidence = client.seal_real_model_discovery_run(
                     run_id=uuid.uuid4().hex,
                     retrieved_at=datetime.now(UTC).replace(microsecond=0),

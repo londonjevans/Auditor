@@ -106,7 +106,7 @@ class DiscoveryEndpointMetadataBinding(BaseModel):
 
 
 class DiscoveryModelMetadataBinding(BaseModel):
-    """Hash binding for one canonical single-model metadata response."""
+    """Hash binding for an exact-ID lookup and its canonical metadata response."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -125,8 +125,8 @@ class DiscoveryModelMetadataBinding(BaseModel):
         _validate_non_alias_model_id(self.canonical_slug, "single-model canonical slug")
         if self.exact_model_id.split("/", 1)[0] != self.canonical_slug.split("/", 1)[0]:
             raise ValueError("single-model metadata changes the requested model author")
-        if self.api_query != openrouter_model_query(self.canonical_slug):
-            raise ValueError("single-model metadata query is not bound to the canonical slug")
+        if self.api_query != openrouter_model_query(self.exact_model_id):
+            raise ValueError("single-model metadata query is not bound to the exact model ID")
         return self
 
 

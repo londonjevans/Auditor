@@ -79,6 +79,7 @@ class _CandidateSpec:
     provider_endpoint: str
     provider_name: str
     reasoning_supported: bool = True
+    canonical_model_id: str | None = None
 
 
 @dataclass
@@ -129,6 +130,7 @@ class _MockClientFactory:
             provider_endpoint=candidate.approved_provider_endpoint,
             provider_name=candidate.approved_provider_name,
             reasoning_supported=candidate.reasoning_supported,
+            canonical_model_id=candidate.canonical_model_slug,
         )
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -159,6 +161,13 @@ class _MockClientFactory:
                     json={"data": [_catalog_model(candidate_spec)]},
                 )
             if request.method == "GET" and "/model/" in request.url.path:
+                expected_path = f"/api/v1/model/{candidate.exact_model_id}"
+                if request.url.path != expected_path:
+                    return httpx.Response(
+                        404,
+                        request=request,
+                        json={"error": {"message": "synthetic exact lookup required"}},
+                    )
                 failure_mode = self.single_model_failure_modes.get(candidate.exact_model_id)
                 if failure_mode == "missing":
                     return httpx.Response(
@@ -267,7 +276,7 @@ def _catalog_model(spec: _CandidateSpec) -> dict[str, Any]:
         parameters.append("reasoning")
     return {
         "id": spec.model_id,
-        "canonical_slug": spec.model_id,
+        "canonical_slug": spec.canonical_model_id or spec.model_id,
         "context_length": 100_000,
         "top_provider": {
             "context_length": 100_000,
@@ -343,7 +352,7 @@ def _discovery_and_registry(
             DiscoveryModelMetadataBinding(
                 exact_model_id=payload.exact_model_id,
                 canonical_slug=payload.canonical_slug,
-                api_query=openrouter_model_query(payload.canonical_slug),
+                api_query=openrouter_model_query(payload.exact_model_id),
                 response_snapshot_sha256=_canonical_hash(
                     {
                         "data": _catalog_model(
@@ -613,6 +622,7 @@ async def test_candidate_benchmark_uses_exact_mock_certification_route(
         model_id="alpha/atlas-secure",
         provider_endpoint="provider-alpha",
         provider_name="Provider Alpha",
+        canonical_model_id="alpha/atlas-secure-20260727",
     )
     manifest, evidence, registry = _discovery_and_registry(
         tmp_path=tmp_path,
@@ -653,6 +663,8 @@ async def test_candidate_benchmark_uses_exact_mock_certification_route(
     assert factory.calls[0][2] == OpenRouterReasoning(effort="high")
     assert any(path.endswith("/endpoints") for path in factory.metadata_requests)
     assert any(path.endswith("/endpoints/zdr") for path in factory.metadata_requests)
+    assert f"/api/v1/model/{spec.model_id}" in factory.metadata_requests
+    assert f"/api/v1/model/{spec.model_id}-20260727" not in factory.metadata_requests
     for body in factory.request_bodies:
         assert isinstance(body["provider"], dict)
         assert {

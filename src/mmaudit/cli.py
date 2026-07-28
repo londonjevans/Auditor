@@ -647,11 +647,11 @@ def models_discover(
                 endpoint_payloads: dict[str, dict[str, Any]] = {}
                 structural_payloads = []
                 for model_id, provider_endpoint in candidates:
-                    canonical_slug = openrouter_catalog_canonical_slug(
+                    openrouter_catalog_canonical_slug(
                         exact_model_id=model_id,
                         models_payload=models_payload,
                     )
-                    single_model_payload = await client.get_model_metadata(canonical_slug)
+                    single_model_payload = await client.get_model_metadata(model_id)
                     single_model_payloads[model_id] = single_model_payload
                     endpoint_payload = await client.get_model_endpoint_metadata(model_id)
                     endpoint_payloads[model_id] = endpoint_payload
@@ -949,11 +949,11 @@ def models_benchmark(
                 endpoint_payloads: dict[str, dict[str, Any]] = {}
                 discovery_payloads = []
                 for target in targets:
-                    canonical_slug = openrouter_catalog_canonical_slug(
+                    openrouter_catalog_canonical_slug(
                         exact_model_id=target.model_id,
                         models_payload=models_payload,
                     )
-                    single_model_payload = await client.get_model_metadata(canonical_slug)
+                    single_model_payload = await client.get_model_metadata(target.model_id)
                     single_model_payloads[target.model_id] = single_model_payload
                     endpoint_payload = await client.get_model_endpoint_metadata(target.model_id)
                     endpoint_payloads[target.model_id] = endpoint_payload

@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_BY_OPERATOR
+AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: On operator resume, verify the current single-model metadata route from official OpenRouter documentation, add a regression for the observed 404, correct only the confirmed route defect, revalidate locally, and do not retry the provider request unchanged.
-LAST_COMMAND: MMAUDIT_RUN_REAL_PROVIDER_TESTS=1 MMAUDIT_SECRETS_ENV_FILE=<operator-controlled Auditor .env> MMAUDIT_REAL_PROVIDER_COST_CAP_USD=250.00 MMAUDIT_OPENROUTER_COST_LEDGER=<Auditor cumulative ledger> MMAUDIT_REAL_PROVIDER_MODEL_ID=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_MODEL_ALLOWLIST=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_ENDPOINT_ALLOWLIST=akashml/fp8 MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=STRICT_ZDR MMAUDIT_REAL_PROVIDER_EVIDENCE_OUTPUT=<fresh v3 runtime artifact> .venv/bin/pytest -q tests/integration/test_real_openrouter_provider.py
-LAST_RESULT: FAILED_PREFLIGHT_NO_POST; authentication and the model-catalog GET succeeded, but single-model metadata lookup returned HTTP 404 before any completion POST. No response artifact was emitted, the atomic ledger remains unchanged at spent=0.00118674 USD and reserved=0, and the request must not be retried unchanged.
+NEXT_ACTION: Complete independent diff review, commit and push the exact-ID metadata correction, verify the clean checkpoint and fresh artifact path, then execute at most one materially changed gated synthetic provider attempt.
+LAST_COMMAND: .venv/bin/ruff format . && .venv/bin/ruff check . && .venv/bin/mypy
+LAST_RESULT: PASS; full pytest passed 1872 tests with 10 explicit external/provider/isolation skips in 252.25s, full Ruff left 297 files unchanged and passed, strict mypy passed 129 source files, the artifact remains absent, and the ledger is unchanged.
 REAL_MODEL_CALLS_ATTEMPTED: 2
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 2
@@ -95,6 +95,47 @@ LAST_CHECKPOINT_COMMIT: d2a54d9d3d57b89f6abeb567caaad7719eb74f96
   single-model metadata route, reproduce the `404` with a local regression,
   correct the confirmed route defect, and re-run local gates before considering
   one materially changed provider attempt.
+- **Resume diagnosis:** Official OpenRouter API references confirm that the
+  single-model route remains singular,
+  `/api/v1/model/:author/:slug`; the endpoints route remains plural. The
+  preflight defect is therefore not the route shape. The client queried the
+  route using a catalog-resolved dated `canonical_slug` that returned `404`,
+  while the catalog `id` is the documented API model ID. The remediation is to
+  query by the exact requested/catalog ID and independently validate and bind
+  the returned canonical slug.
+- **Independent route assay:** Credential-free status-only GETs returned HTTP
+  `200` for `/api/v1/model/qwen/qwen3.6-35b-a3b` and HTTP `404` for
+  `/api/v1/model/qwen/qwen3.6-35b-a3b-20260415`. No response body, secret, or
+  completion request was used.
+- **Negative regression:** A benchmark-client fixture now returns `404` unless
+  single-model metadata is queried with the exact catalog ID while returning a
+  distinct dated canonical slug in the validated response. Before the source
+  correction,
+  `test_candidate_benchmark_uses_exact_mock_certification_route` failed with
+  `UNVERIFIED` evidence; after the correction it passes.
+- **Local correction:** CLI discovery/benchmark, pipeline discovery, candidate
+  qualification, smoke integration, and trusted provenance sealing now query
+  `/model/:author/:slug` with the exact requested/catalog ID. The response's
+  independently validated canonical slug remains frozen in discovery evidence;
+  the binding rejects a provenance query made with that canonical slug.
+- **Focused validation:** The exact three-test route regression passed; affected
+  Ruff passed; strict mypy reports no issues in `129` source files; release
+  schema generation produced no drift; and the expanded discovery, provider,
+  candidate, qualification, CLI, pipeline, and gated integration subset passed
+  `335` tests with one explicit paid-provider skip in `74.05s`.
+- **Complete local validation:** `.venv/bin/pytest -q` passed `1872` tests and
+  skipped `10` explicitly gated paid-provider, external-engine, isolation, and
+  loopback prerequisites in `252.25s`. `.venv/bin/ruff format .` left `297`
+  files unchanged, `.venv/bin/ruff check .` passed, strict mypy passed all
+  `129` source files, and `git diff --check` passed. The provider artifact
+  remains absent and the atomic ledger remains exactly
+  `spent=0.00118674`, `reserved=0`, `remaining=249.99881326`, two entries.
+- **Independent acceptance review:** A read-only reviewer found no missed
+  production caller: CLI discovery, CLI benchmark, candidate benchmark, audit
+  pipeline, and the gated smoke all query with the requested/catalog ID.
+  Provenance independently binds the returned canonical slug. The reviewer
+  passed the three focused route regressions in `0.35s` and made no edit,
+  network request, secret access, or paid call.
 
 ## 2026-07-28 — V3-BASELINE-001
 

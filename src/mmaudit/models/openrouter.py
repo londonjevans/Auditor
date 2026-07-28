@@ -774,11 +774,11 @@ class OpenRouterClient:
             raise OpenRouterModelError("OpenRouter returned invalid endpoint metadata")
         return response
 
-    async def get_model_metadata(self, model: str) -> dict[str, Any]:
-        """Resolve one exact slug through OpenRouter's canonical model lookup."""
+    async def get_model_metadata(self, exact_model_id: str) -> dict[str, Any]:
+        """Resolve one exact catalog ID and validate the returned canonical identity."""
 
-        _require_exact_model_id(model)
-        response = await self._request_metadata(openrouter_model_query(model))
+        _require_exact_model_id(exact_model_id)
+        response = await self._request_metadata(openrouter_model_query(exact_model_id))
         data = response.get("data")
         if not isinstance(data, dict):
             raise OpenRouterModelError("OpenRouter returned invalid single-model metadata")
@@ -789,9 +789,9 @@ class OpenRouterClient:
             or not is_exact_openrouter_model_id(observed_id)
             or not isinstance(canonical_slug, str)
             or not is_exact_openrouter_model_id(canonical_slug)
-            or observed_id.split("/", 1)[0] != model.split("/", 1)[0]
-            or canonical_slug.split("/", 1)[0] != model.split("/", 1)[0]
-            or model not in {observed_id, canonical_slug}
+            or observed_id.split("/", 1)[0] != exact_model_id.split("/", 1)[0]
+            or canonical_slug.split("/", 1)[0] != exact_model_id.split("/", 1)[0]
+            or exact_model_id not in {observed_id, canonical_slug}
         ):
             raise OpenRouterModelError(
                 "OpenRouter single-model metadata has an invalid canonical identity"
@@ -873,7 +873,7 @@ class OpenRouterClient:
             )
         for model_id in sorted(route_ids):
             supplied_discovery = supplied_payloads[model_id]
-            model_query = openrouter_model_query(supplied_discovery.canonical_slug)
+            model_query = openrouter_model_query(model_id)
             single_model_payload = single_model_payloads[model_id]
             single_model_response_hash = _canonical_sha256(single_model_payload)
             if self._metadata_observations.get(model_query) != single_model_response_hash:

@@ -188,7 +188,7 @@ def _discovery_run(
     model_binding = DiscoveryModelMetadataBinding(
         exact_model_id=model_id,
         canonical_slug=payload.canonical_slug,
-        api_query=openrouter_model_query(payload.canonical_slug),
+        api_query=openrouter_model_query(model_id),
         response_snapshot_sha256=_sha(f"model-response-{index}"),
         model_metadata_snapshot_sha256=payload.model_metadata_snapshot_sha256,
     )

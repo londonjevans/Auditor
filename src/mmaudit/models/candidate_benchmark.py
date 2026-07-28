@@ -557,11 +557,11 @@ async def _execute_candidate(
             )
         try:
             models_payload = await client.get_certification_model_metadata()
-            canonical_slug = openrouter_catalog_canonical_slug(
+            openrouter_catalog_canonical_slug(
                 exact_model_id=candidate.exact_model_id,
                 models_payload=models_payload,
             )
-            single_model_payload = await client.get_model_metadata(canonical_slug)
+            single_model_payload = await client.get_model_metadata(candidate.exact_model_id)
             endpoint_payload = await client.get_model_endpoint_metadata(candidate.exact_model_id)
             zdr_payload = await client.list_zdr_endpoints()
             current_endpoint_evidence = validate_openrouter_endpoint_snapshot(
