@@ -47,7 +47,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   privacy, reconciled cost, bounded output, schema validation, and canary
   non-disclosure are evidenced in a non-secret runtime artifact.
 - **Dependencies:** `V3-IDENTITY-001`.
-- **Status:** `IN_PROGRESS`
+- **Status:** `COMPLETE`
 - **Pause evidence:** The first v3 launch stopped before a completion POST when
   single-model metadata lookup returned HTTP `404`; no artifact, spend, or
   reservation was added.
@@ -159,8 +159,29 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `0.0032767225 USD`, reserved is zero, and remaining budget is
   `249.9967232775 USD`. Only secret-file metadata was checked; no secret content
   or network endpoint was accessed.
-- **Current next action:** Commit and push the preflight record, then run exactly
-  one explicitly gated attempt through the corrected reconciler.
+- **Tenth runtime attempt:** From clean synchronized launch checkpoint `d473305`,
+  the exact Qwen/AkashML response completed, schema-validated, stopped normally,
+  and reconciled against independently re-fetched generation evidence through
+  one complete native token pair. The explicitly gated integration passed
+  `1` test in `13.73s`.
+- **Successful durable evidence:** Private artifact
+  `v3-smoke-qwen-akash-success-20260728-attempt10.json` is mode `0600`,
+  single-link, self-hashed, descriptor-safe, and success-only in its attempt
+  namespace. File SHA-256 is
+  `a49573826590c928902507a0ccc1d54be9c776a6dd9d5afd914384f4e7ef8674`;
+  evidence SHA-256 is
+  `cb32ca347acafc219a7bf66b28c26d7dc87898463769a9368ac248db066d4dcf`.
+  It records exact/canonical Qwen identity, `akashml/fp8`, provider `AkashML`,
+  `CANONICAL_MODEL_AND_ENDPOINT_BOUND`, `finish=stop`, strict ZDR, no fallback,
+  and no raw prompt or response.
+- **Runtime accounting:** Completion usage is `256` prompt, `29` completion,
+  zero reasoning, zero cached tokens; latency is `829 ms`. Actual and accounted
+  cost are both `0.00006484 USD`. The ten-entry ledger is fully terminal with
+  `0.0033415625 USD` spent, zero reserved, and `249.9966584375 USD` remaining.
+- **Acceptance:** Typed readback, self-hash, fixture binding, ledger totals,
+  success-only namespace, and source/path/credential/authorization canary checks
+  passed. No unbound response was credited. All ticket criteria are satisfied.
+- **Next action:** None; continue with `V3-PRIVACY-001`.
 
 ## V3-PRIVACY-001 — Explicit privacy and retention profiles
 
@@ -170,7 +191,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   implicitly; private source never routes under weaker policy without validated
   consent; effective privacy evidence is recorded.
 - **Dependencies:** `V3-SMOKE-001`.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
+- **Next action:** Inspect the existing privacy schema, effective request routing,
+  operator-consent boundary, manifests, reports, and negative tests before
+  defining the smallest cohesive profile correction.
 
 ## V3-OUTPUT-001 — Capability-adaptive structured output
 

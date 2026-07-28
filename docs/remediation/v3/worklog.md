@@ -5,20 +5,20 @@ The objective source has SHA-256
 Do not record credentials, raw private prompts, or raw provider completions here.
 
 AUTORUN_STATUS: ACTIVE
-CURRENT_MILESTONE: Real synthetic OpenRouter smoke
-CURRENT_TICKET: V3-SMOKE-001
-LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: Reconcile the single attempt-ten result, validate any durable success or rejection artifact, and do not repeat an unchanged provider action.
-LAST_COMMAND: MMAUDIT_RUN_REAL_PROVIDER_TESTS=1 <exact gated Qwen/AkashML attempt-ten environment> .venv/bin/pytest -q tests/integration/test_real_openrouter_provider.py
-LAST_RESULT: IN_PROGRESS; exactly one paid provider smoke is authorized from the clean synchronized preflight checkpoint.
-REAL_MODEL_CALLS_ATTEMPTED: 9
-REAL_MODEL_CALLS_SUCCEEDED: 0
+CURRENT_MILESTONE: Explicit privacy and retention profiles
+CURRENT_TICKET: V3-PRIVACY-001
+LAST_COMPLETED_TICKET: V3-SMOKE-001
+NEXT_ACTION: Inspect the existing privacy schema, effective OpenRouter routing, explicit operator-consent boundary, manifests, reports, and negative tests before implementing the smallest cohesive profile correction.
+LAST_COMMAND: .venv/bin/python -c <typed descriptor-safe attempt-ten success-artifact and atomic-ledger validation>
+LAST_RESULT: PASS; the real success artifact is mode 0600, self-hashed, identity-bound, success-only, canary-free, and exactly reconciles the ten-entry zero-reservation ledger.
+REAL_MODEL_CALLS_ATTEMPTED: 10
+REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
-OPENROUTER_COST_USED_USD: 0.0032767225
+OPENROUTER_COST_USED_USD: 0.0033415625
 OPENROUTER_COST_RESERVED_USD: 0.00
-OPENROUTER_BUDGET_REMAINING_USD: 249.9967232775
+OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
-BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; Qwen/AkashML attempt nine exposed a normalized-versus-native token-basis reconciliation defect and will not be retried unchanged; no successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
+BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
 LAST_CHECKPOINT_COMMIT: 0ff4918568a304bcefc3ad108903ee74b197389b
 
 ## 2026-07-28 — V3-SMOKE-001
@@ -1046,3 +1046,51 @@ LAST_CHECKPOINT_COMMIT: 0ff4918568a304bcefc3ad108903ee74b197389b
   terminal entries, `0.0032767225 USD` spent, zero reserved,
   `249.9967232775 USD` remaining, no over-cap state, and no reservation overrun.
   No network, metadata endpoint, completion endpoint, or ledger mutation occurred.
+- **Attempt-ten launch checkpoint:** The preflight record was committed and pushed
+  over SSH as `94b242e`; the in-progress launch record was committed and pushed as
+  `d473305`. Local `HEAD` and `origin/main` were equal before provider access.
+- **Tenth real attempt:** Exactly one explicitly gated Qwen/AkashML completion ran
+  against only the pinned synthetic fixture using the audited explicit secret
+  loader. The exact response completed with strict structured validation,
+  `finish=stop`, zero reasoning, no fallback or substitution, and independently
+  re-fetched generation evidence. The corrected atomic token-pair reconciliation
+  accepted the complete native pair. The integration passed `1` test in `13.73s`.
+- **Successful smoke evidence:** The private success artifact
+  `v3-smoke-qwen-akash-success-20260728-attempt10.json` is a mode-`0600`,
+  single-link, descriptor-safe, self-hashed `REAL` evidence record. Its file
+  SHA-256 is
+  `a49573826590c928902507a0ccc1d54be9c776a6dd9d5afd914384f4e7ef8674`
+  and evidence SHA-256 is
+  `cb32ca347acafc219a7bf66b28c26d7dc87898463769a9368ac248db066d4dcf`.
+  It is the only attempt-ten artifact; no rejection sibling exists.
+- **Bound runtime facts:** Requested model is `qwen/qwen3.6-35b-a3b`; canonical
+  and generation model are `qwen/qwen3.6-35b-a3b-20260415`; endpoint is
+  `akashml/fp8`; provider is `AkashML`; identity strength is
+  `CANONICAL_MODEL_AND_ENDPOINT_BOUND`. Usage is `256` prompt and `29`
+  completion tokens, with zero reasoning and zero cached tokens. Latency is
+  `829 ms`.
+- **Attempt-ten accounting:** Actual and accounted cost are both
+  `0.00006484 USD`. The durable ledger now contains ten terminal entries,
+  `0.0033415625 USD` spent, zero active reservation, and
+  `249.9966584375 USD` remaining with no over-cap or overrun state.
+- **Independent artifact readback:** Typed descriptor-safe readback revalidated
+  the self-hash, fixture binding, identity, strict privacy claims, cost totals,
+  output namespace, file mode/link count, and atomic ledger. Fixture source,
+  secret path, authorization labels, bearer material, and the credential name
+  are absent. The gated test itself also scanned the in-memory credential value
+  before persisting evidence.
+- **Ticket completion:** `V3-SMOKE-001` is `COMPLETE`. It now proves one real,
+  exact-route, strict-ZDR, schema-valid, non-truncated, identity-bound,
+  cost-reconciled synthetic OpenRouter completion. It does not qualify a
+  production ensemble or constitute a completed real audit.
+
+## 2026-07-28 — V3-PRIVACY-001
+
+- **Status:** `IN_PROGRESS`.
+- **Defensive objective:** Make strict zero-retention the default and require
+  explicit operator-authored, evidence-bound consent before any weaker retention
+  route can receive private source.
+- **Starting action:** Inspect typed configuration, request routing, manifests,
+  reports, CLI surfaces, and negative tests before selecting the smallest
+  cohesive correction. No additional provider spend is authorized for this
+  inspection slice.
