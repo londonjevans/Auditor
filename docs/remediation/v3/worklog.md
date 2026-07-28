@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_BY_OPERATOR
+AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: On operator resume, verify the clean synchronized checkpoint and run a fresh no-network Qwen/AkashML preflight before considering at most one materially changed paid retry.
-LAST_COMMAND: git commit -m "Harden generation evidence readiness"
-LAST_RESULT: PASS; isolated local checkpoint 9f63ab4 records the independently reviewed readiness, reconciliation, deadline, fallback-preservation, regression, queue, and worklog changes. No provider access occurred.
+NEXT_ACTION: Checkpoint this preflight state, verify the tree is clean and synchronized, then execute exactly one explicitly gated Qwen/AkashML synthetic smoke through the validated longer readiness path.
+LAST_COMMAND: .venv/bin/python -c '<typed no-network V3-SMOKE-001 preflight>'
+LAST_RESULT: PASS; exact Qwen/AkashML route, STRICT_ZDR, pinned fixture, fresh attempt-nine output, safe operator-secret metadata, and the eight-entry ledger validated at spent 0.0032118825, reserved 0, remaining 249.9967881175. The secret file was not opened and no network or provider request ran.
 REAL_MODEL_CALLS_ATTEMPTED: 8
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 8
@@ -945,3 +945,13 @@ LAST_CHECKPOINT_COMMIT: 9f63ab48905ee297992feb6f383a573a4e33cef2
   correction and its regression evidence. The operator-requested pause is now at
   a no-provider-access boundary: no process or reservation is active, the paid
   test remains disabled, and `V3-SMOKE-001` remains `IN_PROGRESS`.
+- **Goal continuation and attempt-nine preflight:** Reloaded the complete
+  authoritative objective and repository state from clean synchronized commit
+  `175542c1f21eb5f3329c6fed2d8c7d83b71cacdf`. A fresh typed no-network
+  preflight validated exact model `qwen/qwen3.6-35b-a3b`, canonical model
+  `qwen/qwen3.6-35b-a3b-20260415`, endpoint `akashml/fp8`, provider `AkashML`,
+  `STRICT_ZDR`, the pinned fixture hash, and a fresh attempt-nine success
+  destination. The ledger remains eight terminal entries with
+  `0.0032118825 USD` spent, zero reserved, and `249.9967881175 USD`
+  remaining. Only secret-file metadata was validated; its contents were not
+  opened, and no network or provider request ran.
