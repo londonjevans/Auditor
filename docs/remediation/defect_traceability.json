@@ -78,11 +78,11 @@
       "id": "EVAL-DEFECT-008",
       "summary": "Empty-report benchmark subgates pass vacuously.",
       "baseline_path": "src/mmaudit/benchmark/engine.py",
-      "status": "IN_PROGRESS",
-      "regression_test": null,
-      "runtime_artifact": null,
-      "acceptance_command": null,
-      "completion_commit": null
+      "status": "COMPLETE",
+      "regression_test": "tests/unit/test_benchmark.py::test_empty_reports_make_every_required_denominator_not_evaluable",
+      "runtime_artifact": "docs/remediation/runtime/eval_defect_008.json",
+      "acceptance_command": ".venv/bin/pytest -q tests/unit/test_benchmark.py tests/unit/test_benchmark_certificate.py tests/unit/test_benchmark_model_evidence.py tests/unit/test_benchmark_assurance_binding.py tests/unit/test_benchmark_report_schema.py tests/unit/test_cli.py::test_benchmark_certificate_cli_success_and_current_verification tests/unit/test_cli.py::test_benchmark_certificate_cli_rejects_resealed_semantic_counter_bypass tests/unit/test_scanners_reporting.py tests/integration/test_pipeline.py",
+      "completion_commit": "a80087321a1a4f6ef1f79aee19ff4eebd8d7a0cd"
     },
     {
       "id": "EVAL-DEFECT-009",

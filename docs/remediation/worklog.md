@@ -4,16 +4,16 @@ The seven files under `docs/evaluation/` are immutable baseline evidence from
 commit `e304807cf942542706b88544fa216516f8f95cad`.
 
 AUTORUN_STATUS: IN_PROGRESS
-CURRENT_TICKET: EVAL-DEFECT-008
-LAST_COMPLETED_TICKET: EVAL-DEFECT-007
-NEXT_ACTION: Reproduce zero-denominator benchmark false passes and trace required metric aggregation without changing thresholds.
-LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_replay.py::test_verify_run_cli_reconstructs_embedded_maximum_profile_without_config tests/unit/test_replay.py::test_v11_replay_reconstructs_embedded_profile_override tests/unit/test_replay.py::test_verify_run_rejects_v11_missing_metadata_when_binding_is_removed tests/unit/test_replay.py::test_verify_run_rejects_type_confused_metadata_boolean tests/unit/test_replay.py::test_verify_run_normalizes_nonfinite_metadata_to_stale tests/unit/test_certification.py::test_certification_rejects_manifest_changed_during_verification tests/unit/test_certification.py::test_certification_reloads_only_manifest_bound_report_bytes
-LAST_RESULT: PASS — 9 focused acceptance tests passed in 0.94s; the implementation checkpoint and commit-bound runtime evidence are recorded.
-REMAINING_CODE_DEFECTS: 6
+CURRENT_TICKET: EVAL-DEFECT-009
+LAST_COMPLETED_TICKET: EVAL-DEFECT-008
+NEXT_ACTION: Inventory the release evidence producer, emitted artifact manifest, and validator; reproduce missing, linked, undeclared, name-only, stale, and hash-mismatched artifact acceptance before changing validation behavior.
+LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_benchmark.py tests/unit/test_benchmark_certificate.py tests/unit/test_benchmark_model_evidence.py tests/unit/test_benchmark_assurance_binding.py tests/unit/test_benchmark_report_schema.py tests/unit/test_cli.py::test_benchmark_certificate_cli_success_and_current_verification tests/unit/test_cli.py::test_benchmark_certificate_cli_rejects_resealed_semantic_counter_bypass tests/unit/test_scanners_reporting.py tests/integration/test_pipeline.py
+LAST_RESULT: PASS — 176 focused benchmark, certificate, schema, reporting, pipeline, and CLI tests passed in 58.86s; the exact checkpoint also passed Ruff format/check, strict mypy, and 1590 pytest tests with 10 explicit real-integration skips.
+REMAINING_CODE_DEFECTS: 5
 REMAINING_REAL_INTEGRATIONS: OpenRouter exact-model smoke/qualification/specialist review; certified-isolation Foundry and Slither; Echidna; Medusa; Halmos; formal proof engine; rootless isolation; isolated replay; product benchmark reports
 BLOCKED_EXTERNAL_PREREQUISITES: Operator-reviewed production model lineage mapping; Echidna; Medusa; Kontrol; Certora; rootless runtime/image; private holdout; and independently adjudicated expert comparison are not yet evidenced as available
 OPENROUTER_COST_USED_USD: 0.00118674
-LAST_CHECKPOINT_COMMIT: 2b56995544f6393fd1b1d299beb1d24106aa5071
+LAST_CHECKPOINT_COMMIT: a80087321a1a4f6ef1f79aee19ff4eebd8d7a0cd
 
 ## Immutable baseline
 
@@ -819,10 +819,95 @@ LAST_CHECKPOINT_COMMIT: 2b56995544f6393fd1b1d299beb1d24106aa5071
 
 ## 2026-07-28 — EVAL-DEFECT-008
 
-- **Status:** `IN_PROGRESS`
+- **Status:** `COMPLETE`
 - **Defensive objective:** Represent every unavailable benchmark denominator
   explicitly and make required zero-report, zero-case, zero-call, zero-location,
   and zero-attempt metrics fail closed without weakening acceptance thresholds.
-- **Exact next safe action:** Inspect benchmark engine, schemas, report loaders,
-  release gates, and existing negative assays; then freeze the baseline
-  zero-denominator behavior in focused regression tests.
+- **Baseline empty-report assay (before remediation):** The real local CLI
+  evaluated the frozen 28-case corpus against an empty disposable report
+  directory. Overall status was
+  `INCOMPLETE`, but emitted numeric recall, precision, safe-confirmation,
+  location, and reproduction rates were all misleading `0.0`; the
+  `safe_control_false_confirmations`, `evidence_caps`, and
+  `maximum_assurance_semantic_coverage` gates reported `PASS`.
+- **Baseline additional negative assays (before remediation):** Two parse-valid
+  reports with `completed=false` and `quality_status=failed` still produced overall
+  `PASSED` with every gate passing. Standard-profile reports with unrelated
+  repository identities also passed when evaluated as maximum assurance.
+  Setting all seven required semantic coverage metrics to `0/0` still passed
+  semantic coverage. Aggregate coverage silently drops malformed entries.
+- **Baseline certificate boundary assay (before remediation):** A manually
+  constructed maximum-assurance report with no case results, no coverage
+  metrics, and only arbitrary/mutation gate names was accepted by file-backed
+  certification and could satisfy the assurance certificate clause.
+- **Implementation slice:** Added typed `PASS`, `FAIL`, `NOT_EVALUABLE`,
+  `NOT_APPLICABLE`, and `INCONCLUSIVE` metric states; fixed expected/evaluated
+  denominators; typed missing/malformed/stale/failed report inputs; distinct
+  quality and cost/runtime resources; strict source-hash location credit;
+  unmatched-finding precision accounting; real-only provider/reproduction
+  credit; typed Solidity coverage in product reports; and a fixed benchmark
+  gate/metric portfolio.
+- **Certification slice:** Benchmark report schema `3.0` is intentionally
+  incompatible with vacuous legacy summaries. File-backed certification now
+  calls the central certifiability predicate and rejects missing gates/metrics,
+  non-PASS required metrics, `0/0`, incomplete case inventories, and legacy
+  summaries even when invalid report bytes and the certificate envelope are
+  re-hashed and resealed.
+- **Published contract:** Added a generated strict Draft 2020-12 benchmark
+  report schema and exact schema-parity tests.
+- **Evidence classification:** Model joins, assurance inventories, certificate
+  consistency, and certifier CLI controls use explicit synthetic/mock fixtures.
+  The deliberately complete synthetic certifier fixture is certifiable only as a
+  unit-level contract test; no real engine, provider, isolation, or product
+  benchmark execution is inferred from it.
+- **Commands and results:**
+  - `.venv/bin/python -m mmaudit benchmark --corpus
+    benchmarks/corpus/manifest.json --ground-truth-root . --profile
+    maximum-assurance --output-json
+    docs/remediation/runtime/eval_defect_008.json --no-color` — expected
+    fail-closed exit `6`; emitted `INCOMPLETE`, 2 expected/0 loaded reports, and
+    all 12 maximum-assurance gates `NOT_EVALUABLE`.
+  - `.venv/bin/python -c 'from pathlib import Path; from
+    mmaudit.benchmark.engine import BenchmarkReport;
+    p=Path("docs/remediation/runtime/eval_defect_008.json");
+    r=BenchmarkReport.model_validate_json(p.read_text());
+    print({"schema_version": r.schema_version, "status": r.status.value,
+    "reports_expected": r.reports_expected, "reports_loaded":
+    r.reports_loaded, "gate_states": sorted({g.state.value for g in r.gates}),
+    "gate_count": len(r.gates), "limitations": len(r.limitations)})'` — PASS;
+    schema `3.0`, status `incomplete`, 2 expected/0 loaded, 12 gates, only
+    `NOT_EVALUABLE` gate states.
+  - `.venv/bin/pytest -q
+    tests/unit/test_cli.py::test_benchmark_certificate_cli_success_and_current_verification
+    tests/unit/test_cli.py::test_benchmark_certificate_cli_rejects_resealed_semantic_counter_bypass`
+    — PASS, `2 passed in 0.45s`; this is synthetic CLI contract evidence.
+  - `.venv/bin/pytest -q tests/unit/test_benchmark.py
+    tests/unit/test_benchmark_certificate.py
+    tests/unit/test_benchmark_model_evidence.py
+    tests/unit/test_benchmark_assurance_binding.py
+    tests/unit/test_benchmark_report_schema.py
+    tests/unit/test_cli.py::test_benchmark_certificate_cli_success_and_current_verification
+    tests/unit/test_cli.py::test_benchmark_certificate_cli_rejects_resealed_semantic_counter_bypass
+    tests/unit/test_scanners_reporting.py tests/integration/test_pipeline.py` —
+    PASS, `176 passed in 58.86s`.
+  - `.venv/bin/ruff format .` — PASS, `264 files left unchanged`.
+  - `.venv/bin/ruff check .` — PASS.
+  - `.venv/bin/mypy` — PASS, `116 source files`.
+  - `.venv/bin/pytest -q` — PASS, `1590 passed, 10 skipped in 196.79s`;
+    every skip names an unavailable real provider, engine, hardened-isolation,
+    replay, rootless image, or loopback prerequisite and earns no certification
+    credit.
+- **Integrity review:** `git diff --check` passed; all seven immutable evaluation
+  hashes match; `docs/evaluation/` is unchanged; `.env` remains ignored and
+  untracked; no credential material or unrelated generated debris was added.
+- **Runtime evidence:** `docs/remediation/runtime/eval_defect_008.json`, SHA-256
+  `b47e674c9ee86efdf505ce48d138327d1ae0beb3dd785134bd3f6a4bf8286cd7`.
+- **Result:** `COMPLETE` at implementation checkpoint
+  `a80087321a1a4f6ef1f79aee19ff4eebd8d7a0cd`. Required empty/partial
+  denominators can no longer pass or certify, and report/case/coverage/model/
+  resource/mutation/corpus evidence is internally reconciled before
+  certification. Product artifact and candidate-commit binding remain correctly
+  deferred to `EVAL-DEFECT-009` and `EVAL-DEFECT-010`.
+- **Next action:** Begin `EVAL-DEFECT-009` by reproducing declared-name,
+  missing/link, undeclared, stale, and hash-mismatch acceptance in release
+  validation.

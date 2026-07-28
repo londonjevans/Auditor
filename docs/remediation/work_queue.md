@@ -177,10 +177,12 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `NOT_EVALUABLE`, never `PASS`; malformed/stale/failed analyses remain in
   denominators; required metrics and costs are distinct.
 - **Dependencies:** `EVAL-DEFECT-007`.
-- **Status:** `IN_PROGRESS`
-- **Next action:** Inventory benchmark metric construction, report loading, and
-  release-gate aggregation; reproduce every zero-denominator false pass before
-  changing metric semantics.
+- **Status:** `COMPLETE`
+- **Evidence:** `docs/remediation/runtime/eval_defect_008.json`; implementation
+  checkpoint `a80087321a1a4f6ef1f79aee19ff4eebd8d7a0cd`; full validation
+  `1590 passed, 10 skipped`.
+- **Next action:** Preserve typed denominator and certifier consistency while
+  validating actual emitted release artifacts under `EVAL-DEFECT-009`.
 
 ## EVAL-DEFECT-009 — Release validation trusts declared names
 
@@ -188,7 +190,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Acceptance criteria:** Missing, linked, undeclared, name-only, stale, or
   hash-mismatched runtime artifacts fail validation.
 - **Dependencies:** `EVAL-DEFECT-008`.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
+- **Next action:** Inventory the release evidence producer, emitted artifact
+  manifest, and validator; reproduce each declared-name and hash-binding bypass
+  before changing validation behavior.
 
 ## EVAL-DEFECT-010 — Release report is stale and unbound
 
