@@ -1295,6 +1295,11 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
         for finding in [*result.report.findings, *result.report.rejected_findings]
     )
     quality_metrics = result.report.metadata["solidity"]["coverage"]["quality_metrics"]
+    assert result.report.solidity_coverage is not None
+    assert (
+        result.report.solidity_coverage.model_dump(mode="json")
+        == result.report.metadata["solidity"]["coverage"]
+    )
     assert quality_metrics
     required_coverage_fields = {
         "numerator",

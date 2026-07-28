@@ -1628,13 +1628,22 @@ class MaximumAssuranceAssessment(StrictModel):
 
     @model_validator(mode="after")
     def complete_requires_every_clause(self) -> MaximumAssuranceAssessment:
+        engines = [requirement.engine for requirement in self.requirements]
+        if engines != list(dict.fromkeys(engines)):
+            raise ValueError("maximum-assurance requirement engines must be unique")
         if self.status is MaximumAssuranceStatus.COMPLETE and (
-            self.downgraded
+            not self.requested
+            or not self.requirements
+            or not any(requirement.required for requirement in self.requirements)
+            or self.downgraded
             or any(
-                requirement.required and not requirement.passed for requirement in self.requirements
+                requirement.required and (not requirement.passed or requirement.blocking)
+                for requirement in self.requirements
             )
         ):
-            raise ValueError("maximum-assurance COMPLETE requires every required clause to pass")
+            raise ValueError(
+                "maximum-assurance COMPLETE requires a non-empty passing required clause inventory"
+            )
         if self.downgraded and self.status is not MaximumAssuranceStatus.DOWNGRADED:
             raise ValueError("downgraded maximum-assurance runs must use DOWNGRADED status")
         return self
@@ -4649,6 +4658,34 @@ class AuditReport(StrictModel):
     invariant_executions: list[InvariantExecutionResult] = Field(default_factory=list)
     economic_simulations: list[EconomicSimulationPlan] = Field(default_factory=list)
     formal_runs: list[FormalToolRun] = Field(default_factory=list)
+    solidity_coverage: SolidityCoverage | None = None
     model_review_coverage: ModelReviewCoverage | None = None
     report_quality_review: ReportQualityReview | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def solidity_coverage_sources_are_consistent(self) -> AuditReport:
+        legacy_coverage = self._legacy_solidity_coverage()
+        if legacy_coverage is None or self.solidity_coverage is None:
+            return self
+        if legacy_coverage != self.solidity_coverage:
+            raise ValueError(
+                "typed solidity_coverage conflicts with legacy metadata.solidity.coverage"
+            )
+        return self
+
+    def effective_solidity_coverage(self) -> SolidityCoverage | None:
+        """Prefer typed coverage while retaining validated legacy-report compatibility."""
+
+        if self.solidity_coverage is not None:
+            return self.solidity_coverage
+        return self._legacy_solidity_coverage()
+
+    def _legacy_solidity_coverage(self) -> SolidityCoverage | None:
+        solidity = self.metadata.get("solidity")
+        if not isinstance(solidity, dict):
+            return None
+        coverage = solidity.get("coverage")
+        if coverage is None:
+            return None
+        return SolidityCoverage.model_validate(coverage)

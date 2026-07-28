@@ -2553,6 +2553,7 @@ class AuditPipeline:
             invariant_executions=invariant_executions,
             economic_simulations=economic_simulations,
             formal_runs=formal_runs,
+            solidity_coverage=solidity_coverage,
             model_review_coverage=model_review_coverage,
             report_quality_review=report_quality_review,
             metadata={

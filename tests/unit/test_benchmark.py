@@ -9,12 +9,17 @@ import pytest
 
 from mmaudit.benchmark.claims import SuperiorityClaimStatus
 from mmaudit.benchmark.engine import (
+    MAXIMUM_ASSURANCE_CORE_CLAUSES,
     BenchmarkManifest,
     BenchmarkManifestPayload,
+    BenchmarkMetricState,
     BenchmarkReport,
+    BenchmarkReportInputStatus,
     BenchmarkStatus,
+    benchmark_certification_failures,
     evaluate_benchmark,
     load_manifest,
+    load_reports,
     validate_benchmark_ground_truth,
     write_benchmark_report,
 )
@@ -26,8 +31,12 @@ from mmaudit.benchmark.mutations import (
     score_mutation_outcomes,
 )
 from mmaudit.models.schemas import (
+    AnalysisState,
     AuditProfile,
+    AuditQualityStatus,
     AuditReport,
+    CoverageMetric,
+    CoverageProvenance,
     Evidence,
     EvidenceStrength,
     Finding,
@@ -35,9 +44,12 @@ from mmaudit.models.schemas import (
     Location,
     LocationValidation,
     MaximumAssuranceAssessment,
+    MaximumAssuranceRequirement,
     MaximumAssuranceStatus,
     RepositoryMap,
     ReproductionState,
+    Severity,
+    SolidityCoverage,
     VerificationTest,
 )
 
@@ -62,6 +74,7 @@ def _finding(case, *, status: FindingStatus = FindingStatus.CONFIRMED) -> Findin
                 path=case.path,
                 start_line=case.start_line,
                 end_line=case.end_line,
+                content_hash=case.source_sha256,
             )
         ],
         attack_path=["Invoke the planted local sequence", "Observe the violated property"],
@@ -77,7 +90,8 @@ def _finding(case, *, status: FindingStatus = FindingStatus.CONFIRMED) -> Findin
         false_positive_conditions=["The fixture is replaced with its patched control"],
         recommendation="Apply the fixture's documented local guard.",
         verification_test=VerificationTest(description="Run the synthetic regression test"),
-        location_validation=LocationValidation(valid=True, content_hash="a" * 64),
+        location_validation=LocationValidation(valid=True, content_hash=case.source_sha256),
+        contributing_candidate_ids=[f"candidate-{case.id}"],
         evidence_strength=EvidenceStrength.MINIMIZED_LOCAL_FORK_REPRODUCTION,
         reproduction_state=ReproductionState.REPRODUCED_AND_MINIMIZED,
     )
@@ -86,6 +100,54 @@ def _finding(case, *, status: FindingStatus = FindingStatus.CONFIRMED) -> Findin
 def _report(
     findings: list[Finding], *, root_name: str = "maximum_assurance_protocol"
 ) -> AuditReport:
+    def coverage_metric(
+        numerator: int,
+        denominator: int,
+        *,
+        state: AnalysisState = AnalysisState.DETERMINISTIC,
+    ) -> CoverageMetric:
+        return CoverageMetric(
+            numerator=numerator,
+            denominator=denominator,
+            population=denominator,
+            percentage=round((numerator / denominator) * 100, 4),
+            exclusions=[],
+            not_applicable_evidence=[],
+            confidence=1,
+            provenance=[CoverageProvenance.RUNTIME],
+            failures=[] if numerator == denominator else ["synthetic coverage gap"],
+            state=state,
+            detail="synthetic typed benchmark coverage",
+        )
+
+    quality_metrics = {
+        "compiler_contracts_indexed": coverage_metric(13, 13),
+        "public_external_entry_points_reviewed": coverage_metric(
+            12,
+            12,
+            state=AnalysisState.MODEL_ONLY,
+        ),
+        "privileged_entry_points_reviewed": coverage_metric(
+            2,
+            2,
+            state=AnalysisState.MODEL_ONLY,
+        ),
+        "high_value_paths_reviewed": coverage_metric(
+            3,
+            3,
+            state=AnalysisState.MODEL_ONLY,
+        ),
+        "external_calls_classified": coverage_metric(4, 4),
+        "asset_flows_classified": coverage_metric(3, 3),
+        "storage_variables_modelled": coverage_metric(5, 5),
+        "invariants_executed": coverage_metric(2, 2),
+        "economic_templates_executed": coverage_metric(1, 1),
+        "economic_templates_with_typed_harness": coverage_metric(1, 1),
+    }
+    solidity_coverage = SolidityCoverage(
+        contracts_indexed=13,
+        quality_metrics=quality_metrics,
+    )
     return AuditReport(
         schema_version="1.0",
         run_id="benchmark-run",
@@ -117,64 +179,12 @@ def _report(
         accounted_cost_usd=1,
         findings=findings,
         rejected_findings=[],
+        solidity_coverage=solidity_coverage,
         metadata={
             "duration_seconds": 12.5,
             "time_to_first_candidate_seconds": 2.25,
             "solidity": {
-                "coverage": {
-                    "contracts_indexed": 13,
-                    "quality_metrics": {
-                        "public_external_entry_points_reviewed": {
-                            "numerator": 12,
-                            "denominator": 12,
-                            "percentage": 100.0,
-                            "state": "model_only",
-                            "detail": "synthetic benchmark coverage",
-                        },
-                        "external_calls_classified": {
-                            "numerator": 4,
-                            "denominator": 4,
-                            "percentage": 100.0,
-                            "state": "deterministic",
-                            "detail": "synthetic external-call graph coverage",
-                        },
-                        "asset_flows_classified": {
-                            "numerator": 3,
-                            "denominator": 3,
-                            "percentage": 100.0,
-                            "state": "deterministic",
-                            "detail": "synthetic asset-flow graph coverage",
-                        },
-                        "storage_variables_modelled": {
-                            "numerator": 5,
-                            "denominator": 5,
-                            "percentage": 100.0,
-                            "state": "deterministic",
-                            "detail": "synthetic storage-layout coverage",
-                        },
-                        "invariants_executed": {
-                            "numerator": 2,
-                            "denominator": 2,
-                            "percentage": 100.0,
-                            "state": "deterministic",
-                            "detail": "synthetic invariant execution coverage",
-                        },
-                        "economic_templates_executed": {
-                            "numerator": 1,
-                            "denominator": 1,
-                            "percentage": 100.0,
-                            "state": "deterministic",
-                            "detail": "synthetic economic simulation coverage",
-                        },
-                        "economic_templates_with_typed_harness": {
-                            "numerator": 1,
-                            "denominator": 1,
-                            "percentage": 100.0,
-                            "state": "deterministic",
-                            "detail": "synthetic typed economic harness coverage",
-                        },
-                    },
-                }
+                "coverage": solidity_coverage.model_dump(mode="json"),
             },
         },
     )
@@ -193,13 +203,25 @@ def _reports_by_repository(cases) -> dict[str, AuditReport]:
 def _complete_maximum(report: AuditReport) -> AuditReport:
     return report.model_copy(
         update={
+            "audit_profile": AuditProfile.MAXIMUM_ASSURANCE,
             "maximum_assurance": MaximumAssuranceAssessment(
                 requested=True,
                 required=True,
                 downgrade_allowed=False,
                 downgraded=False,
                 status=MaximumAssuranceStatus.COMPLETE,
-            )
+                requirements=[
+                    MaximumAssuranceRequirement(
+                        engine=engine,
+                        required=True,
+                        passed=True,
+                        blocking=False,
+                        state=AnalysisState.DETERMINISTIC,
+                        detail=f"synthetic passing core clause: {engine}",
+                    )
+                    for engine in MAXIMUM_ASSURANCE_CORE_CLAUSES
+                ],
+            ),
         }
     )
 
@@ -242,14 +264,15 @@ def test_benchmark_measures_recall_safe_controls_and_evidence_caps() -> None:
         _reports_by_repository(vulnerable),
         profile=AuditProfile.STANDARD,
     )
-    assert report.status is BenchmarkStatus.PASSED
+    assert report.status is BenchmarkStatus.FAILED
     assert report.recall == report.critical_recall == 1
     assert all(value == 1 for value in report.recall_by_severity.values())
     assert report.precision == 1
     assert report.false_positive_rate == 0
     assert report.safe_high_critical_confirmations == 0
-    assert report.reproduction_success_rate == 1
-    assert report.vulnerable_cases_reproduced == report.vulnerable_cases
+    assert report.reproduction_success_rate is None
+    assert report.metrics.reproduction_success_rate.state.value == "NOT_EVALUABLE"
+    assert report.vulnerable_cases_reproduced == 0
     report_count = len({case.repository_id for case in vulnerable})
     assert report.total_cost_usd == report_count
     assert report.total_runtime_seconds == 12.5 * report_count
@@ -260,7 +283,7 @@ def test_benchmark_measures_recall_safe_controls_and_evidence_caps() -> None:
     assert report.coverage_metrics["asset_flows_classified"].percentage == 100
     assert report.evidence_cap_bypasses == 0
     assert report.superiority_claim.status is SuperiorityClaimStatus.NOT_EVALUATED
-    assert all(gate.passed for gate in report.gates)
+    assert not {gate.name: gate.passed for gate in report.gates}["repository_metrics_unmasked"]
 
 
 def test_benchmark_has_secure_counterpart_and_valid_source_range_for_every_class() -> None:
@@ -409,6 +432,48 @@ def test_overlapping_but_inexact_location_fails_location_gate() -> None:
     assert not {gate.name: gate.passed for gate in result.gates}["exact_ground_truth_locations"]
 
 
+def test_location_hash_and_range_must_validate_on_the_same_location() -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
+    selected = vulnerable[0]
+    reports = _reports_by_repository(vulnerable)
+    report = reports[selected.repository_id]
+    findings: list[Finding] = []
+    for finding in report.findings:
+        if finding.id != f"MMA-BENCH-{selected.id}":
+            findings.append(finding)
+            continue
+        findings.append(
+            finding.model_copy(
+                update={
+                    "locations": [
+                        finding.locations[0].model_copy(update={"content_hash": "0" * 64}),
+                        finding.locations[0].model_copy(
+                            update={
+                                "start_line": selected.end_line + 100,
+                                "end_line": selected.end_line + 100,
+                                "content_hash": selected.source_sha256,
+                            }
+                        ),
+                    ],
+                }
+            )
+        )
+    reports[selected.repository_id] = report.model_copy(update={"findings": findings})
+
+    result = evaluate_benchmark(
+        manifest,
+        reports,
+        profile=AuditProfile.STANDARD,
+    )
+    selected_result = next(
+        case_result for case_result in result.case_results if case_result.case_id == selected.id
+    )
+
+    assert not selected_result.detected
+    assert not selected_result.exact_location
+
+
 def test_benchmark_fails_on_safe_confirmation_and_model_only_confirmation() -> None:
     manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
     vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
@@ -457,6 +522,31 @@ def test_benchmark_fails_on_safe_confirmation_and_model_only_confirmation() -> N
     }
 
 
+def test_medium_safe_confirmation_is_not_mislabeled_as_high_critical() -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
+    safe_medium = next(
+        case
+        for case in manifest.cases
+        if case.variant == "safe" and case.minimum_severity is Severity.MEDIUM
+    )
+    reports = _reports_by_repository(vulnerable)
+    report = reports[safe_medium.repository_id]
+    reports[safe_medium.repository_id] = report.model_copy(
+        update={"findings": [*report.findings, _finding(safe_medium)]}
+    )
+
+    result = evaluate_benchmark(manifest, reports, profile=AuditProfile.STANDARD)
+    safe_gate = next(
+        gate for gate in result.gates if gate.name == "safe_control_false_confirmations"
+    )
+
+    assert result.safe_high_critical_confirmations == 0
+    assert safe_gate.passed
+    assert safe_gate.detail.startswith("0 safe high/critical")
+    assert result.metrics.safe_near_miss_rejection_rate.state is BenchmarkMetricState.FAIL
+
+
 def test_maximum_assurance_benchmark_requires_semantic_coverage_metrics() -> None:
     manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
     vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
@@ -470,19 +560,31 @@ def test_maximum_assurance_benchmark_requires_semantic_coverage_metrics() -> Non
         profile=AuditProfile.MAXIMUM_ASSURANCE,
         mutation_scorecard=_passing_mutation_scorecard(),
     )
-    assert report.status is BenchmarkStatus.PASSED
+    assert report.status is BenchmarkStatus.INCOMPLETE
     assert {gate.name: gate.passed for gate in report.gates}["maximum_assurance_semantic_coverage"]
 
     first_repository = next(iter(reports))
-    coverage = reports[first_repository].metadata["solidity"]["coverage"]["quality_metrics"]
-    del coverage["asset_flows_classified"]
+    solidity_coverage = reports[first_repository].solidity_coverage
+    assert solidity_coverage is not None
+    quality_metrics = {
+        name: metric
+        for name, metric in solidity_coverage.quality_metrics.items()
+        if name != "asset_flows_classified"
+    }
+    reports[first_repository] = reports[first_repository].model_copy(
+        update={
+            "solidity_coverage": solidity_coverage.model_copy(
+                update={"quality_metrics": quality_metrics}
+            )
+        }
+    )
     downgraded = evaluate_benchmark(
         manifest,
         reports,
         profile=AuditProfile.MAXIMUM_ASSURANCE,
         mutation_scorecard=_passing_mutation_scorecard(),
     )
-    assert downgraded.status is BenchmarkStatus.FAILED
+    assert downgraded.status is BenchmarkStatus.INCOMPLETE
     failed = {gate.name: gate.detail for gate in downgraded.gates if not gate.passed}
     assert "maximum_assurance_semantic_coverage" in failed
     assert "asset_flows_classified" in failed["maximum_assurance_semantic_coverage"]
@@ -504,7 +606,7 @@ def test_maximum_assurance_property_mutation_gate_passes_and_serializes(
         mutation_scorecard=_passing_mutation_scorecard(),
     )
 
-    assert result.status is BenchmarkStatus.PASSED
+    assert result.status is BenchmarkStatus.INCOMPLETE
     assert result.mutation_scorecard is not None
     assert result.mutation_scorecard.gate_passed
     assert {item.repository_id: item.mutation_kill_score for item in result.repository_metrics} == {
@@ -550,7 +652,7 @@ def test_surviving_mutation_blocks_maximum_assurance() -> None:
         mutation_scorecard=scorecard,
     )
     gate = {item.name: item for item in result.gates}["maximum_assurance_property_mutation_score"]
-    assert result.status is BenchmarkStatus.FAILED
+    assert result.status is BenchmarkStatus.INCOMPLETE
     assert not gate.passed
     assert PROPERTY_B in gate.detail
     payload = result.model_dump(mode="json")
@@ -559,7 +661,7 @@ def test_surviving_mutation_blocks_maximum_assurance() -> None:
         for item in payload["gates"]
         if item["name"] == "maximum_assurance_property_mutation_score"
     )["passed"] = True
-    with pytest.raises(ValueError, match="mutation gate is inconsistent"):
+    with pytest.raises(ValueError, match="gate pass flag"):
         BenchmarkReport.model_validate(payload)
 
 
@@ -593,6 +695,247 @@ def test_aggregate_mutation_score_cannot_hide_unexercised_property() -> None:
         mutation_scorecard=scorecard,
     )
     gate = {item.name: item for item in result.gates}["maximum_assurance_property_mutation_score"]
-    assert result.status is BenchmarkStatus.FAILED
+    assert result.status is BenchmarkStatus.INCOMPLETE
     assert not gate.passed
     assert PROPERTY_B in gate.detail
+
+
+def test_empty_reports_make_every_required_denominator_not_evaluable() -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+
+    result = evaluate_benchmark(
+        manifest,
+        {},
+        profile=AuditProfile.STANDARD,
+    )
+
+    assert result.status is BenchmarkStatus.INCOMPLETE
+    assert result.reports_expected == len(manifest.repositories)
+    assert result.reports_attempted == result.reports_parsed == result.reports_loaded == 0
+    assert all(item.status is BenchmarkReportInputStatus.MISSING for item in result.report_inputs)
+    assert result.recall is None
+    assert result.precision is None
+    assert result.location_accuracy is None
+    assert result.reproduction_success_rate is None
+    for metric in (
+        result.metrics.overall_recall,
+        result.metrics.critical_recall,
+        result.metrics.confirmed_precision,
+        result.metrics.exact_location_accuracy,
+        result.metrics.reproduction_success_rate,
+        result.metrics.model_call_success_rate,
+    ):
+        assert metric.state is BenchmarkMetricState.NOT_EVALUABLE
+        assert metric.value is None
+    assert all(not gate.passed for gate in result.gates)
+    assert benchmark_certification_failures(result)
+
+
+def test_failed_and_stale_reports_remain_in_attempt_and_case_denominators() -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
+    reports = _reports_by_repository(vulnerable)
+    first_repository = next(iter(reports))
+    reports[first_repository] = reports[first_repository].model_copy(
+        update={
+            "completed": False,
+            "quality_status": AuditQualityStatus.FAILED,
+        }
+    )
+    second_repository = next(
+        repository_id for repository_id in reports if repository_id != first_repository
+    )
+    reports[second_repository] = reports[second_repository].model_copy(
+        update={
+            "repository": reports[second_repository].repository.model_copy(
+                update={"root_name": "different_repository"}
+            )
+        }
+    )
+
+    result = evaluate_benchmark(
+        manifest,
+        reports,
+        profile=AuditProfile.STANDARD,
+    )
+
+    assert result.status is BenchmarkStatus.INCOMPLETE
+    assert result.reports_attempted == result.reports_parsed == 2
+    assert result.reports_loaded == 0
+    assert {item.status for item in result.report_inputs} == {
+        BenchmarkReportInputStatus.FAILED,
+        BenchmarkReportInputStatus.STALE,
+    }
+    assert result.metrics.overall_recall.denominator == result.vulnerable_cases
+    assert result.metrics.overall_recall.evaluated == 0
+    assert result.metrics.overall_recall.state is BenchmarkMetricState.NOT_EVALUABLE
+    assert all(not case.evaluated for case in result.case_results)
+
+
+def test_missing_report_keeps_aggregate_coverage_inconclusive() -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
+    reports = _reports_by_repository(vulnerable)
+    reports.pop(sorted(reports)[0])
+
+    result = evaluate_benchmark(
+        manifest,
+        reports,
+        profile=AuditProfile.STANDARD,
+    )
+
+    assert result.reports_loaded == 1
+    assert result.reports_missing_coverage == 1
+    assert (
+        result.coverage_metrics["public_external_entry_points_reviewed"].state
+        is BenchmarkMetricState.INCONCLUSIVE
+    )
+    assert result.metrics.entry_point_coverage.state is BenchmarkMetricState.INCONCLUSIVE
+    assert next(gate for gate in result.gates if gate.name == "coverage_present").state is (
+        BenchmarkMetricState.INCONCLUSIVE
+    )
+    assert next(gate for gate in result.gates if gate.name == "evidence_caps").state is (
+        BenchmarkMetricState.INCONCLUSIVE
+    )
+
+
+def test_malformed_report_load_is_typed_and_not_removed_from_inventory(
+    tmp_path: Path,
+) -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    repository_ids = {repository.repository_id for repository in manifest.repositories}
+    malformed_repository = sorted(repository_ids)[0]
+    (tmp_path / f"{malformed_repository}.json").write_text("{", encoding="utf-8")
+
+    reports, inputs, limitations = load_reports(
+        tmp_path,
+        repository_ids,
+        profile=AuditProfile.STANDARD,
+    )
+
+    assert reports == {}
+    by_repository = {item.repository_id: item for item in inputs}
+    assert by_repository[malformed_repository].status is BenchmarkReportInputStatus.MALFORMED
+    assert by_repository[malformed_repository].attempted
+    assert not by_repository[malformed_repository].parsed
+    assert {item.status for item in inputs if item.repository_id != malformed_repository} == {
+        BenchmarkReportInputStatus.MISSING
+    }
+    assert len(limitations) == len(repository_ids)
+
+
+def test_report_reader_falls_back_to_valid_legacy_solidity_coverage(tmp_path: Path) -> None:
+    repository_id = "legacy-coverage-fixture"
+    report = _report([], root_name=repository_id)
+    expected_coverage = report.solidity_coverage
+    assert expected_coverage is not None
+    payload = report.model_dump(mode="json")
+    del payload["solidity_coverage"]
+    (tmp_path / f"{repository_id}.json").write_text(
+        json.dumps(payload),
+        encoding="utf-8",
+    )
+
+    reports, inputs, limitations = load_reports(
+        tmp_path,
+        {repository_id},
+        profile=AuditProfile.STANDARD,
+    )
+
+    assert limitations == []
+    assert inputs[0].status is BenchmarkReportInputStatus.USABLE
+    assert reports[repository_id].solidity_coverage is None
+    assert reports[repository_id].effective_solidity_coverage() == expected_coverage
+
+
+def test_required_zero_denominator_semantic_coverage_cannot_pass() -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
+    reports = {
+        repository_id: _complete_maximum(report)
+        for repository_id, report in _reports_by_repository(vulnerable).items()
+    }
+    for repository_id, report in list(reports.items()):
+        coverage = report.solidity_coverage
+        assert coverage is not None
+        quality_metrics = dict(coverage.quality_metrics)
+        for name in (
+            "public_external_entry_points_reviewed",
+            "external_calls_classified",
+            "asset_flows_classified",
+            "storage_variables_modelled",
+            "invariants_executed",
+            "economic_templates_executed",
+            "economic_templates_with_typed_harness",
+        ):
+            quality_metrics[name] = CoverageMetric(
+                numerator=0,
+                denominator=0,
+                population=0,
+                percentage=None,
+                exclusions=[],
+                not_applicable_evidence=["synthetic empty population"],
+                confidence=1,
+                provenance=[CoverageProvenance.RUNTIME],
+                failures=[],
+                state=AnalysisState.DETERMINISTIC,
+                detail="synthetic zero denominator",
+            )
+        reports[repository_id] = report.model_copy(
+            update={
+                "solidity_coverage": coverage.model_copy(
+                    update={"quality_metrics": quality_metrics}
+                )
+            }
+        )
+
+    result = evaluate_benchmark(
+        manifest,
+        reports,
+        profile=AuditProfile.MAXIMUM_ASSURANCE,
+        mutation_scorecard=_passing_mutation_scorecard(),
+    )
+
+    semantic_gate = {gate.name: gate for gate in result.gates}[
+        "maximum_assurance_semantic_coverage"
+    ]
+    assert not semantic_gate.passed
+    assert semantic_gate.state is BenchmarkMetricState.FAIL
+    assert (
+        result.coverage_metrics["public_external_entry_points_reviewed"].state
+        is BenchmarkMetricState.NOT_EVALUABLE
+    )
+
+
+def test_invalid_location_and_unmatched_finding_reduce_precision_and_recall() -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
+    reports = _reports_by_repository(vulnerable)
+    selected = vulnerable[0]
+    report = reports[selected.repository_id]
+    findings = [
+        (
+            finding.model_copy(
+                update={
+                    "location_validation": LocationValidation(
+                        valid=False,
+                        errors=["synthetic hash mismatch"],
+                    )
+                }
+            )
+            if finding.id == f"MMA-BENCH-{selected.id}"
+            else finding
+        )
+        for finding in report.findings
+    ]
+    reports[selected.repository_id] = report.model_copy(update={"findings": findings})
+
+    result = evaluate_benchmark(
+        manifest,
+        reports,
+        profile=AuditProfile.STANDARD,
+    )
+
+    assert result.metrics.overall_recall.state is BenchmarkMetricState.FAIL
+    assert result.metrics.confirmed_precision.state is BenchmarkMetricState.FAIL
+    assert result.metrics.exact_location_accuracy.state is BenchmarkMetricState.FAIL

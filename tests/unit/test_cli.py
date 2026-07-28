@@ -28,10 +28,8 @@ from mmaudit.benchmark.claims import (
     seal_human_comparison_evidence,
 )
 from mmaudit.benchmark.engine import (
-    BenchmarkBlindingProtocol,
-    BenchmarkGate,
+    BenchmarkMetricState,
     BenchmarkReport,
-    BenchmarkRepositoryMetrics,
     BenchmarkStatus,
 )
 from mmaudit.benchmark.mutations import (
@@ -55,6 +53,8 @@ from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.manifest import canonical_sha256
 from tests.conftest import base_config_data, model_registry_entry
 from tests.qualification_support import synthetic_release_observation
+from tests.unit import test_benchmark as benchmark_fixtures
+from tests.unit import test_benchmark_certificate as certificate_fixtures
 from tests.unit import test_model_qualification as qualification_fixtures
 
 ROOT = Path(__file__).parents[2]
@@ -1051,6 +1051,8 @@ def test_benchmark_without_reports_is_explicitly_incomplete(tmp_path: Path) -> N
             str(ROOT / "benchmarks" / "corpus" / "manifest.json"),
             "--ground-truth-root",
             str(ROOT),
+            "--profile",
+            AuditProfile.MAXIMUM_ASSURANCE.value,
             "--output-json",
             str(output),
             "--no-color",
@@ -1058,7 +1060,127 @@ def test_benchmark_without_reports_is_explicitly_incomplete(tmp_path: Path) -> N
     )
     assert result.exit_code == ExitCode.INCOMPLETE
     assert "incomplete" in result.stdout
-    assert output.is_file()
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == "3.0"
+    assert payload["profile"] == AuditProfile.MAXIMUM_ASSURANCE.value
+    assert payload["status"] == BenchmarkStatus.INCOMPLETE.value
+    assert (
+        payload["reports_expected"],
+        payload["reports_attempted"],
+        payload["reports_parsed"],
+        payload["reports_loaded"],
+    ) == (2, 0, 0, 0)
+    assert {
+        item["repository_id"]: (
+            item["status"],
+            item["attempted"],
+            item["parsed"],
+            item["usable"],
+        )
+        for item in payload["report_inputs"]
+    } == {
+        "economic_erc4626": ("MISSING", False, False, False),
+        "maximum_assurance_protocol": ("MISSING", False, False, False),
+    }
+    assert {
+        name for name, metric in payload["metrics"].items() if metric["state"] != "NOT_EVALUABLE"
+    } == set()
+    critical_recall = payload["metrics"]["critical_recall"]
+    assert {name: critical_recall[name] for name in critical_recall if name != "detail"} == {
+        "direction": "minimum",
+        "evaluated": 0,
+        "numerator": 0,
+        "denominator": 4,
+        "state": "NOT_EVALUABLE",
+        "threshold": 1.0,
+        "value": None,
+    }
+    assert critical_recall["detail"]
+    assert payload["metrics"]["safe_near_miss_rejection_rate"]["denominator"] == 15
+    assert payload["metrics"]["exact_location_accuracy"]["denominator"] == 13
+    assert payload["metrics"]["reproduction_success_rate"]["denominator"] == 13
+    assert all(gate["state"] == "NOT_EVALUABLE" and not gate["passed"] for gate in payload["gates"])
+    assert {gate["name"] for gate in payload["gates"]} >= {
+        "safe_control_false_confirmations",
+        "evidence_caps",
+        "maximum_assurance_semantic_coverage",
+        "maximum_assurance_real_model_calls",
+        "maximum_assurance_substantive_model_review",
+    }
+
+
+@pytest.mark.parametrize(
+    ("report_state", "expected_status", "expected_parsed"),
+    [
+        ("malformed", "MALFORMED", False),
+        ("stale", "STALE", True),
+        ("failed", "FAILED", True),
+    ],
+)
+def test_benchmark_keeps_unusable_reports_in_failure_accounting(
+    tmp_path: Path,
+    report_state: str,
+    expected_status: str,
+    expected_parsed: bool,
+) -> None:
+    repository_id = "economic_erc4626"
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    report_path = reports / f"{repository_id}.json"
+    if report_state == "malformed":
+        report_path.write_text("{", encoding="utf-8")
+    else:
+        report = benchmark_fixtures._report([], root_name=repository_id)
+        if report_state == "stale":
+            report = report.model_copy(
+                update={
+                    "repository": report.repository.model_copy(
+                        update={"root_name": "different_repository"}
+                    )
+                }
+            )
+        else:
+            report = report.model_copy(
+                update={
+                    "completed": False,
+                    "incomplete_reasons": ["synthetic failed analysis"],
+                }
+            )
+        report_path.write_text(report.model_dump_json(), encoding="utf-8")
+
+    output = tmp_path / "benchmark.json"
+    result = runner.invoke(
+        app,
+        [
+            "benchmark",
+            "--corpus",
+            str(ROOT / "benchmarks" / "corpus" / "manifest.json"),
+            "--reports",
+            str(reports),
+            "--ground-truth-root",
+            str(ROOT),
+            "--output-json",
+            str(output),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.INCOMPLETE
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    inputs = {item["repository_id"]: item for item in payload["report_inputs"]}
+    assert payload["reports_expected"] == 2
+    assert payload["reports_attempted"] == 1
+    assert payload["reports_parsed"] == int(expected_parsed)
+    assert payload["reports_loaded"] == 0
+    assert inputs[repository_id]["status"] == expected_status
+    assert inputs[repository_id]["attempted"]
+    assert inputs[repository_id]["parsed"] is expected_parsed
+    assert not inputs[repository_id]["usable"]
+    assert inputs["maximum_assurance_protocol"]["status"] == "MISSING"
+    assert payload["metrics"]["critical_recall"]["denominator"] == 4
+    assert payload["metrics"]["critical_recall"]["evaluated"] == 0
+    assert payload["metrics"]["critical_recall"]["state"] == "NOT_EVALUABLE"
+    assert all(not result["evaluated"] for result in payload["case_results"])
 
 
 def test_benchmark_loads_typed_mutation_scorecard(tmp_path: Path) -> None:
@@ -1217,6 +1339,29 @@ def test_benchmark_serializes_demonstrated_human_comparison_claim(
     assert not wrong_output.exists()
 
 
+def _failed_benchmark_report(report: BenchmarkReport) -> BenchmarkReport:
+    payload = report.model_dump(mode="json")
+    payload["status"] = BenchmarkStatus.FAILED.value
+    payload["metrics"]["model_review_coverage"] = {
+        "numerator": 0,
+        "denominator": 1,
+        "evaluated": 1,
+        "value": 0,
+        "state": BenchmarkMetricState.FAIL.value,
+        "threshold": 1,
+        "direction": "minimum",
+        "detail": "Synthetic substantive review did not meet its threshold.",
+    }
+    substantive_gate = next(
+        gate
+        for gate in payload["gates"]
+        if gate["name"] == "maximum_assurance_substantive_model_review"
+    )
+    substantive_gate["state"] = BenchmarkMetricState.FAIL.value
+    substantive_gate["passed"] = False
+    return BenchmarkReport.model_validate(payload)
+
+
 def _write_certificate_components(
     tmp_path: Path,
     *,
@@ -1225,78 +1370,20 @@ def _write_certificate_components(
     component_root = tmp_path / "components"
     (component_root / "prompts").mkdir(parents=True)
     component_contents = {
-        "mmaudit.toml": 'profile = "standard"\n',
+        "mmaudit.toml": 'profile = "maximum-assurance"\n',
         "prompts/discovery.md": "Synthetic defensive prompt.\n",
         "models.json": '{"lineage":"synthetic-a"}\n',
         "tools.json": '{"scanner":"synthetic","version":"1"}\n',
         "compilers.json": '{"compiler":"solc","version":"0.8.30"}\n',
-        "corpus.json": '{"cases":["unsafe","safe"]}\n',
+        "corpus.json": certificate_fixtures._benchmark_manifest().model_dump_json() + "\n",
         "ground-truth.json": '{"case_hashes":["aaaaaaaa"]}\n',
     }
     for relative_path, contents in component_contents.items():
         (component_root / relative_path).write_text(contents, encoding="utf-8")
-    passed = status is BenchmarkStatus.PASSED
-    repository_metrics = BenchmarkRepositoryMetrics(
-        repository_id="synthetic_repository",
-        report_loaded=True,
-        vulnerable_cases=1,
-        vulnerable_cases_detected=int(passed),
-        recall=float(passed),
-        critical_cases=1,
-        critical_cases_detected=int(passed),
-        critical_recall=float(passed),
-        safe_cases=1,
-        safe_false_confirmations=0,
-        safe_false_confirmation_rate=0,
-        location_cases=1,
-        exact_locations=int(passed),
-        location_accuracy=float(passed),
-        vulnerable_cases_reproduced=int(passed),
-        reproduction_success_rate=float(passed),
-        cost_usd=0,
-        total_tokens=0,
-    )
-    report = BenchmarkReport(
-        corpus_name="Synthetic CLI benchmark",
-        corpus_sha256="a" * 64,
-        blinding=BenchmarkBlindingProtocol(),
-        profile=AuditProfile.STANDARD,
-        status=status,
-        reports_expected=1,
-        reports_loaded=1,
-        vulnerable_cases=1,
-        vulnerable_cases_detected=int(passed),
-        vulnerable_cases_reproduced=int(passed),
-        critical_cases=1,
-        critical_cases_detected=int(passed),
-        safe_cases=1,
-        safe_high_critical_confirmations=0,
-        evidence_cap_bypasses=0,
-        reports_missing_coverage=0,
-        model_only_findings_kept_below_confirmed=0,
-        recall=float(passed),
-        recall_by_severity={"critical": float(passed)},
-        critical_recall=float(passed),
-        precision=float(passed),
-        false_positive_rate=0,
-        safe_false_confirmation_rate=0,
-        reproduction_success_rate=float(passed),
-        location_cases=1,
-        exact_locations=int(passed),
-        location_accuracy=float(passed),
-        total_cost_usd=0,
-        total_tokens=0,
-        repository_metrics=[repository_metrics],
-        case_results=[],
-        gates=[
-            BenchmarkGate(
-                name="synthetic_gate",
-                passed=passed,
-                detail="synthetic passed gate" if passed else "synthetic failed gate",
-            )
-        ],
-        limitations=[],
-    )
+    report = certificate_fixtures._benchmark_report()
+    if status is BenchmarkStatus.FAILED:
+        report = _failed_benchmark_report(report)
+    assert report.status is status
     (component_root / "benchmark-results.json").write_text(
         report.model_dump_json(),
         encoding="utf-8",
@@ -1370,10 +1457,32 @@ def test_benchmark_certificate_cli_success_and_current_verification(
 
     assert certify_result.exit_code == ExitCode.SUCCESS
     assert load_benchmark_certificate(certificate_path).benchmark_name == (
-        "Synthetic CLI benchmark"
+        "Synthetic file-backed benchmark"
     )
     assert verify_result.exit_code == ExitCode.SUCCESS
     assert json.loads(verification_path.read_text(encoding="utf-8"))["status"] == ("current")
+
+
+def test_benchmark_certificate_cli_rejects_resealed_semantic_counter_bypass(
+    tmp_path: Path,
+) -> None:
+    component_root, inputs_path = _write_certificate_components(tmp_path)
+    report_path = component_root / "benchmark-results.json"
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    payload["coverage_metrics"] = {}
+    payload["reports_missing_coverage"] = 1
+    payload["evidence_cap_bypasses"] = 1
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    certificate_path, result = _certify(
+        tmp_path,
+        component_root,
+        inputs_path,
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "failed safely" in result.stdout
+    assert not certificate_path.exists()
 
 
 def test_verify_certificate_cli_rejects_stale_component_binding(
@@ -1454,8 +1563,9 @@ def test_benchmark_certify_cli_requires_passed_gates(tmp_path: Path) -> None:
     certificate_path, result = _certify(tmp_path, component_root, inputs_path)
 
     assert result.exit_code == ExitCode.CONFIGURATION
-    assert "requires a passed" in result.stdout
-    assert "report and passed gates" in result.stdout
+    assert "benchmark report is not certifiable" in result.stdout
+    assert "benchmark status is failed, not passed" in result.stdout
+    assert "required benchmark gates" in result.stdout
     assert not certificate_path.exists()
 
 
@@ -1847,10 +1957,10 @@ def test_run_benchmark_gate_rejects_current_failed_corpus_before_pipeline(
     )
     assert certify_result.exit_code == ExitCode.SUCCESS
     report_path = component_root / "benchmark-results.json"
-    failed_report = json.loads(report_path.read_text(encoding="utf-8"))
-    failed_report["status"] = "failed"
-    failed_report["gates"][0]["passed"] = False
-    report_path.write_text(json.dumps(failed_report), encoding="utf-8")
+    failed_report = _failed_benchmark_report(
+        BenchmarkReport.model_validate_json(report_path.read_text(encoding="utf-8"))
+    )
+    report_path.write_text(failed_report.model_dump_json(), encoding="utf-8")
     original = load_benchmark_certificate(certificate_path)
     observed_bindings, observed_report = observe_file_backed_certificate(
         original,
@@ -1889,8 +1999,9 @@ def test_run_benchmark_gate_rejects_current_failed_corpus_before_pipeline(
     )
 
     assert result.exit_code == ExitCode.CONFIGURATION
-    assert "requires a passed report" in result.stdout
-    assert "passed gates" in result.stdout
+    assert "benchmark report is not certifiable" in result.stdout
+    assert "failed, not passed" in result.stdout
+    assert "required benchmark gates did not pass" in result.stdout
     assert not constructed
 
 

@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -29,11 +30,26 @@ from mmaudit.benchmark.certificate import (
     write_benchmark_certificate,
 )
 from mmaudit.benchmark.engine import (
+    MAXIMUM_ASSURANCE_CORE_CLAUSES,
     BenchmarkBlindingProtocol,
+    BenchmarkCase,
+    BenchmarkCaseResult,
+    BenchmarkCoverageMetric,
     BenchmarkGate,
+    BenchmarkManifest,
+    BenchmarkManifestPayload,
+    BenchmarkMetricDirection,
+    BenchmarkMetrics,
+    BenchmarkMetricState,
+    BenchmarkRateMetric,
     BenchmarkReport,
+    BenchmarkReportInput,
+    BenchmarkReportInputStatus,
+    BenchmarkRepository,
     BenchmarkRepositoryMetrics,
-    BenchmarkStatus,
+    BenchmarkResourceMetric,
+    BenchmarkResourceMetrics,
+    seal_benchmark_manifest,
 )
 from mmaudit.benchmark.mutations import (
     MutationKind,
@@ -41,11 +57,25 @@ from mmaudit.benchmark.mutations import (
     MutationTestOutcome,
     score_mutation_outcomes,
 )
-from mmaudit.models.schemas import AuditProfile
+from mmaudit.models.schemas import AuditProfile, Severity
 from mmaudit.orchestration.manifest import canonical_sha256
 
 COMMIT = "a" * 40
 PROPERTY_ID = "prop-" + ("a" * 24)
+MAXIMUM_ASSURANCE_GATE_NAMES = (
+    "known_critical_recall",
+    "safe_control_false_confirmations",
+    "exact_ground_truth_locations",
+    "repository_metrics_unmasked",
+    "evidence_caps",
+    "coverage_present",
+    "maximum_assurance_complete",
+    "maximum_assurance_repository_mutation_score",
+    "maximum_assurance_semantic_coverage",
+    "maximum_assurance_property_mutation_score",
+    "maximum_assurance_real_model_calls",
+    "maximum_assurance_substantive_model_review",
+)
 
 
 def _bindings(*, configuration_value: str = "base") -> BenchmarkCertificateBindingSet:
@@ -100,6 +130,49 @@ def _report_binding() -> CertificateComponentBinding:
     )
 
 
+def _benchmark_manifest() -> BenchmarkManifest:
+    cases = [
+        BenchmarkCase(
+            id=f"case-{index:03d}-{severity.value}-{variant}",
+            repository_id="synthetic_repository",
+            variant="vulnerable" if variant == "unsafe" else "safe",
+            category="Synthetic defensive condition",
+            path="src/Synthetic.sol",
+            start_line=index,
+            end_line=index,
+            source_sha256="f" * 64,
+            minimum_severity=severity,
+            expected_cwe=[],
+            source_attribution="Synthetic local certificate fixture.",
+            training_exposure="unknown",
+        )
+        for index, (severity, variant) in enumerate(
+            (
+                (Severity.CRITICAL, "unsafe"),
+                (Severity.HIGH, "unsafe"),
+                (Severity.MEDIUM, "unsafe"),
+                (Severity.CRITICAL, "safe"),
+                (Severity.HIGH, "safe"),
+            ),
+            start=1,
+        )
+    ]
+    return seal_benchmark_manifest(
+        BenchmarkManifestPayload(
+            name="Synthetic file-backed benchmark",
+            description="Synthetic manifest for certificate inventory binding.",
+            blinding=BenchmarkBlindingProtocol(),
+            repositories=[
+                BenchmarkRepository(
+                    repository_id="synthetic_repository",
+                    source_root="tests/fixtures/synthetic_repository",
+                )
+            ],
+            cases=cases,
+        )
+    )
+
+
 def _certificate() -> BenchmarkCertificate:
     return seal_benchmark_certificate(
         BenchmarkCertificatePayload(
@@ -113,156 +186,295 @@ def _certificate() -> BenchmarkCertificate:
     )
 
 
-def _benchmark_report(
+def _passing_rate(
+    numerator: int = 1,
+    denominator: int = 1,
     *,
-    status: BenchmarkStatus = BenchmarkStatus.PASSED,
-    gates: list[BenchmarkGate] | None = None,
-    profile: AuditProfile = AuditProfile.MAXIMUM_ASSURANCE,
-) -> BenchmarkReport:
-    passed = status is BenchmarkStatus.PASSED
-    mutation_scorecard = (
-        score_mutation_outcomes(
-            property_corpus_hash="d" * 64,
-            expected_property_ids=[PROPERTY_ID],
-            property_repositories={PROPERTY_ID: "synthetic_repository"},
-            outcomes=[
-                MutationPropertyOutcome(
-                    mutation_id="mut-accounting",
-                    mutation_kind=MutationKind.ACCOUNTING_OPERATOR_REPLACEMENT,
-                    property_id=PROPERTY_ID,
-                    outcome=MutationTestOutcome.KILLED,
-                    evidence_sha256="e" * 64,
-                )
-            ],
-            minimum_property_kill_score=1,
-        )
-        if profile is AuditProfile.MAXIMUM_ASSURANCE
-        else None
+    direction: BenchmarkMetricDirection = BenchmarkMetricDirection.MINIMUM,
+) -> BenchmarkRateMetric:
+    threshold = 0.0 if direction is BenchmarkMetricDirection.MAXIMUM else 1.0
+    return BenchmarkRateMetric(
+        numerator=numerator,
+        denominator=denominator,
+        evaluated=denominator,
+        value=round(numerator / denominator, 6),
+        state=BenchmarkMetricState.PASS,
+        threshold=threshold,
+        direction=direction,
+        detail="Synthetic abstract certification metric.",
     )
+
+
+def _informational_rate(
+    numerator: int,
+    denominator: int,
+) -> BenchmarkRateMetric:
+    return BenchmarkRateMetric(
+        numerator=numerator,
+        denominator=denominator,
+        evaluated=denominator,
+        value=round(numerator / denominator, 6),
+        state=BenchmarkMetricState.NOT_APPLICABLE,
+        threshold=None,
+        direction=BenchmarkMetricDirection.INFORMATIONAL,
+        detail="Synthetic informational metric without a release threshold.",
+    )
+
+
+def _benchmark_report() -> BenchmarkReport:
+    manifest = _benchmark_manifest()
+    mutation_scorecard = score_mutation_outcomes(
+        property_corpus_hash="d" * 64,
+        expected_property_ids=[PROPERTY_ID],
+        property_repositories={PROPERTY_ID: "synthetic_repository"},
+        outcomes=[
+            MutationPropertyOutcome(
+                mutation_id="mut-accounting",
+                mutation_kind=MutationKind.ACCOUNTING_OPERATOR_REPLACEMENT,
+                property_id=PROPERTY_ID,
+                outcome=MutationTestOutcome.KILLED,
+                evidence_sha256="e" * 64,
+            )
+        ],
+        minimum_property_kill_score=1,
+    )
+    report_input = BenchmarkReportInput(
+        repository_id="synthetic_repository",
+        status=BenchmarkReportInputStatus.USABLE,
+        attempted=True,
+        parsed=True,
+        usable=True,
+        maximum_assurance_status="COMPLETE",
+        maximum_assurance_required_clauses=sorted(MAXIMUM_ASSURANCE_CORE_CLAUSES),
+        detail="Synthetic report input is complete and eligible.",
+    )
+    coverage_metrics = {
+        name: BenchmarkCoverageMetric(
+            numerator=1,
+            denominator=1,
+            evaluated=1,
+            percentage=100,
+            state=BenchmarkMetricState.PASS,
+            detail=f"Synthetic complete coverage for {name}.",
+        )
+        for name in (
+            "compiler_contracts_indexed",
+            "public_external_entry_points_reviewed",
+            "privileged_entry_points_reviewed",
+            "high_value_paths_reviewed",
+            "external_calls_classified",
+            "asset_flows_classified",
+            "storage_variables_modelled",
+            "invariants_executed",
+            "economic_templates_executed",
+            "economic_templates_with_typed_harness",
+        )
+    }
     repository_metrics = BenchmarkRepositoryMetrics(
         repository_id="synthetic_repository",
+        report_status=BenchmarkReportInputStatus.USABLE,
+        report_attempted=True,
+        report_parsed=True,
         report_loaded=True,
-        vulnerable_cases=1,
-        vulnerable_cases_detected=int(passed),
-        recall=float(passed),
+        cases_evaluated=5,
+        vulnerable_cases=3,
+        vulnerable_cases_detected=3,
+        recall=1,
         critical_cases=1,
-        critical_cases_detected=int(passed),
-        critical_recall=float(passed),
-        safe_cases=1,
+        critical_cases_detected=1,
+        critical_recall=1,
+        safe_cases=2,
+        ambiguous_cases=0,
         safe_false_confirmations=0,
+        safe_high_critical_confirmations=0,
         safe_false_confirmation_rate=0,
-        location_cases=1,
-        exact_locations=int(passed),
-        location_accuracy=float(passed),
-        vulnerable_cases_reproduced=int(passed),
-        reproduction_success_rate=float(passed),
-        mutation_property_ids=([PROPERTY_ID] if mutation_scorecard is not None else []),
-        mutation_kill_score=(1.0 if mutation_scorecard is not None else None),
-        mutation_gate_passed=(True if mutation_scorecard is not None else None),
+        location_cases=3,
+        exact_locations=3,
+        location_accuracy=1,
+        vulnerable_cases_reproduced=3,
+        reproduction_success_rate=1,
+        mutation_property_ids=[PROPERTY_ID],
+        mutation_kill_score=1,
+        mutation_gate_passed=True,
+        evidence_cap_bypasses=0,
+        model_only_findings_kept_below_confirmed=0,
+        coverage_metrics=coverage_metrics,
         cost_usd=0,
-        total_tokens=0,
+        total_tokens=1,
+        runtime_seconds=1,
+        time_to_first_valid_finding_seconds=0.25,
     )
-    default_gates = [
-        BenchmarkGate(
-            name="synthetic_gate",
-            passed=passed,
-            detail="synthetic benchmark gate",
+    metrics = BenchmarkMetrics(
+        overall_recall=_passing_rate(3, 3),
+        critical_recall=_passing_rate(),
+        high_recall=_passing_rate(),
+        medium_recall=_passing_rate(),
+        confirmed_precision=_passing_rate(3, 3),
+        all_finding_precision=_informational_rate(3, 3),
+        false_confirmed_critical_rate=_passing_rate(
+            0,
+            1,
+            direction=BenchmarkMetricDirection.MAXIMUM,
+        ),
+        false_confirmed_high_rate=_passing_rate(
+            0,
+            1,
+            direction=BenchmarkMetricDirection.MAXIMUM,
+        ),
+        safe_near_miss_rejection_rate=_passing_rate(2, 2),
+        exact_location_accuracy=_passing_rate(3, 3),
+        attack_path_reachability_accuracy=_informational_rate(3, 3),
+        reproduction_success_rate=_passing_rate(3, 3),
+        symbolic_counterexample_success_rate=_informational_rate(1, 1),
+        formal_property_mutation_score=_informational_rate(1, 1),
+        invariant_mutation_score=_passing_rate(),
+        contract_coverage=_passing_rate(),
+        entry_point_coverage=_passing_rate(),
+        privileged_function_coverage=_passing_rate(),
+        asset_moving_function_coverage=_passing_rate(),
+        external_call_coverage=_passing_rate(),
+        model_call_success_rate=_passing_rate(),
+        model_review_coverage=_passing_rate(),
+        critical_model_review_coverage=_passing_rate(),
+        economic_template_applicability_coverage=_passing_rate(),
+        economic_template_execution_coverage=_passing_rate(),
+    )
+    case_results = [
+        BenchmarkCaseResult(
+            case_id=f"case-{index:03d}-{severity.value}-unsafe",
+            repository_id="synthetic_repository",
+            variant="vulnerable",
+            minimum_severity=severity,
+            evaluated=True,
+            detected=True,
+            confirmed=True,
+            reproduction_attempted=True,
+            reproduced=True,
+            exact_location=True,
+            matched_finding_ids=[f"finding-{index:03d}"],
+            confirmed_finding_ids=[f"finding-{index:03d}"],
+            cwe_match=True,
+        )
+        for index, severity in enumerate(
+            (Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM),
+            start=1,
         )
     ]
-    if profile is AuditProfile.MAXIMUM_ASSURANCE:
-        default_gates.extend(
-            [
-                BenchmarkGate(
-                    name="maximum_assurance_property_mutation_score",
-                    passed=True,
-                    detail="synthetic property mutation score passed",
-                ),
-                BenchmarkGate(
-                    name="maximum_assurance_repository_mutation_score",
-                    passed=True,
-                    detail="synthetic repository mutation score passed",
-                ),
-            ]
+    case_results.extend(
+        [
+            BenchmarkCaseResult(
+                case_id=f"case-{index:03d}-{severity.value}-safe",
+                repository_id="synthetic_repository",
+                variant="safe",
+                minimum_severity=severity,
+                evaluated=True,
+                detected=False,
+                confirmed=False,
+            )
+            for index, severity in enumerate(
+                (Severity.CRITICAL, Severity.HIGH),
+                start=4,
+            )
+        ]
+    )
+    gates = [
+        BenchmarkGate(
+            name=name,
+            state=BenchmarkMetricState.PASS,
+            passed=True,
+            detail=f"Synthetic abstract evidence passed {name}.",
         )
+        for name in MAXIMUM_ASSURANCE_GATE_NAMES
+    ]
     return BenchmarkReport(
-        corpus_name="Synthetic file-backed benchmark",
-        corpus_sha256="a" * 64,
-        blinding=BenchmarkBlindingProtocol(),
-        profile=profile,
-        status=status,
+        schema_version="3.0",
+        corpus_name=manifest.name,
+        corpus_sha256=manifest.corpus_sha256,
+        blinding=manifest.blinding,
+        profile=AuditProfile.MAXIMUM_ASSURANCE,
+        status="passed",
         reports_expected=1,
+        reports_attempted=1,
+        reports_parsed=1,
         reports_loaded=1,
-        vulnerable_cases=1,
-        vulnerable_cases_detected=int(passed),
-        vulnerable_cases_reproduced=int(passed),
+        report_inputs=[report_input],
+        vulnerable_cases=3,
+        vulnerable_cases_detected=3,
+        vulnerable_cases_reproduced=3,
         critical_cases=1,
-        critical_cases_detected=int(passed),
-        safe_cases=1,
+        critical_cases_detected=1,
+        safe_cases=2,
+        ambiguous_cases=0,
         safe_high_critical_confirmations=0,
         evidence_cap_bypasses=0,
         reports_missing_coverage=0,
         model_only_findings_kept_below_confirmed=0,
-        recall=float(passed),
-        recall_by_severity={"critical": float(passed)},
-        critical_recall=float(passed),
-        precision=float(passed),
+        active_findings=3,
+        active_findings_matching_vulnerable_cases=3,
+        confirmed_findings=3,
+        confirmed_findings_matching_vulnerable_cases=3,
+        recall=1,
+        recall_by_severity={"critical": 1, "high": 1, "medium": 1},
+        critical_recall=1,
+        precision=1,
         false_positive_rate=0,
         safe_false_confirmation_rate=0,
-        reproduction_success_rate=float(passed),
-        location_cases=1,
-        exact_locations=int(passed),
-        location_accuracy=float(passed),
+        reproduction_success_rate=1,
+        location_cases=3,
+        exact_locations=3,
+        location_accuracy=1,
         total_cost_usd=0,
-        total_tokens=0,
+        total_tokens=1,
+        total_runtime_seconds=1,
+        time_to_first_valid_finding_seconds=0.25,
+        resource_metrics=BenchmarkResourceMetrics(
+            cost_usd=BenchmarkResourceMetric(
+                observations=1,
+                total=0,
+                average=0,
+                worst=0,
+                state=BenchmarkMetricState.NOT_APPLICABLE,
+                detail="Synthetic observed zero-cost report.",
+            ),
+            runtime_seconds=BenchmarkResourceMetric(
+                observations=1,
+                total=1,
+                average=1,
+                worst=1,
+                state=BenchmarkMetricState.NOT_APPLICABLE,
+                detail="Synthetic observed report runtime.",
+            ),
+        ),
+        metrics=metrics,
         mutation_scorecard=mutation_scorecard,
+        coverage_metrics=coverage_metrics,
         repository_metrics=[repository_metrics],
-        case_results=[],
-        gates=(gates if gates is not None else default_gates),
+        case_results=case_results,
+        gates=gates,
         limitations=[],
     )
 
 
-def _empty_benchmark_report() -> BenchmarkReport:
-    payload = _benchmark_report(profile=AuditProfile.STANDARD).model_dump(mode="json")
-    payload.update(
-        {
-            "reports_expected": 0,
-            "reports_loaded": 0,
-            "vulnerable_cases": 0,
-            "vulnerable_cases_detected": 0,
-            "vulnerable_cases_reproduced": 0,
-            "critical_cases": 0,
-            "critical_cases_detected": 0,
-            "safe_cases": 0,
-            "safe_high_critical_confirmations": 0,
-            "recall": 0,
-            "critical_recall": 0,
-            "precision": 0,
-            "reproduction_success_rate": 0,
-            "location_cases": 0,
-            "exact_locations": 0,
-            "location_accuracy": 0,
-            "repository_metrics": [],
-        }
-    )
-    return BenchmarkReport.model_validate(payload)
-
-
 def _write_file_backed_components(
     tmp_path: Path,
-    report: BenchmarkReport,
+    report: BenchmarkReport | dict[str, Any],
 ) -> tuple[Path, BenchmarkCertificateFileInputs]:
     component_root = tmp_path / "components"
-    component_root.mkdir()
+    component_root.mkdir(parents=True)
+    report_json = (
+        report.model_dump_json()
+        if isinstance(report, BenchmarkReport)
+        else json.dumps(report, sort_keys=True)
+    )
     contents = {
         "mmaudit.toml": 'profile = "maximum-assurance"\n',
         "prompt.md": "Synthetic defensive prompt.\n",
         "models.json": '{"lineage":"synthetic-a"}\n',
         "tools.json": '{"scanner":"synthetic","version":"1"}\n',
         "compilers.json": '{"compiler":"solc","version":"0.8.30"}\n',
-        "corpus.json": '{"cases":["unsafe","safe"]}\n',
+        "corpus.json": _benchmark_manifest().model_dump_json() + "\n",
         "ground-truth.json": '{"case_hashes":["aaaaaaaa"]}\n',
-        "benchmark-results.json": report.model_dump_json(),
+        "benchmark-results.json": report_json,
     }
     for name, content in contents.items():
         (component_root / name).write_text(content, encoding="utf-8")
@@ -297,6 +509,118 @@ def _write_file_backed_certificate(
     certificate_path = tmp_path / "benchmark-certificate.json"
     write_benchmark_certificate(certificate_path, certificate)
     return component_root, certificate_path, certificate
+
+
+def _invalid_report_payload(mutation: str) -> dict[str, Any]:
+    payload = _benchmark_report().model_dump(mode="json")
+    if mutation == "missing_gate":
+        payload["gates"] = [
+            gate
+            for gate in payload["gates"]
+            if gate["name"] != "maximum_assurance_real_model_calls"
+        ]
+    elif mutation == "missing_metric":
+        del payload["metrics"]["model_review_coverage"]
+    elif mutation == "failed_required_metric":
+        payload["metrics"]["model_review_coverage"] = {
+            "numerator": 0,
+            "denominator": 1,
+            "evaluated": 1,
+            "value": 0,
+            "state": "FAIL",
+            "threshold": 1,
+            "direction": "minimum",
+            "detail": "Synthetic substantive review did not meet its threshold.",
+        }
+    elif mutation == "zero_denominator_required_metric":
+        payload["metrics"]["model_review_coverage"] = {
+            "numerator": 0,
+            "denominator": 0,
+            "evaluated": 0,
+            "value": None,
+            "state": "NOT_EVALUABLE",
+            "threshold": 1,
+            "direction": "minimum",
+            "detail": "Synthetic substantive review had no evaluable calls.",
+        }
+    elif mutation == "incomplete_case_inventory":
+        safe_case = next(case for case in payload["case_results"] if case["variant"] == "safe")
+        safe_case["evaluated"] = False
+        safe_case["limitation"] = "Synthetic safe control was not evaluated."
+    elif mutation == "legacy_report":
+        payload["schema_version"] = "2.0"
+    elif mutation == "missing_schema_version":
+        del payload["schema_version"]
+    elif mutation == "coverage_counter_bypass":
+        payload["coverage_metrics"] = {}
+        payload["reports_missing_coverage"] = 1
+        payload["evidence_cap_bypasses"] = 1
+    elif mutation == "negative_contribution":
+        payload["unique_finding_contribution_by_role"] = {"source_audit": -1}
+    elif mutation == "resource_summary_tamper":
+        payload["resource_metrics"]["runtime_seconds"].update(
+            {
+                "observations": 100,
+                "average": 0.01,
+                "worst": 0,
+            }
+        )
+    elif mutation == "precision_evidence_tamper":
+        for case in payload["case_results"]:
+            if case["variant"] == "vulnerable":
+                case["confirmed"] = False
+                case["confirmed_finding_ids"] = []
+    elif mutation == "duplicate_confirmed_finding":
+        vulnerable_case = next(
+            case for case in payload["case_results"] if case["variant"] == "vulnerable"
+        )
+        vulnerable_case["confirmed_finding_ids"] *= 2
+    elif mutation == "threshold_override":
+        payload["metrics"]["confirmed_precision"]["threshold"] = 0
+    elif mutation == "missing_runtime":
+        payload["repository_metrics"][0]["runtime_seconds"] = None
+        payload["total_runtime_seconds"] = None
+        payload["resource_metrics"]["runtime_seconds"] = {
+            "observations": 0,
+            "total": None,
+            "average": None,
+            "worst": None,
+            "state": "NOT_EVALUABLE",
+            "detail": "Synthetic runtime observation is unavailable.",
+        }
+    elif mutation == "nonfinite_resource":
+        payload["resource_metrics"]["runtime_seconds"]["total"] = float("inf")
+    else:
+        raise AssertionError(f"unknown synthetic report mutation: {mutation}")
+    return payload
+
+
+def _replace_report_and_reseal_certificate(
+    *,
+    component_root: Path,
+    certificate_path: Path,
+    certificate: BenchmarkCertificate,
+    report_payload: dict[str, Any],
+) -> None:
+    (component_root / "benchmark-results.json").write_text(
+        json.dumps(report_payload, sort_keys=True),
+        encoding="utf-8",
+    )
+    observed_bindings, observed_report = observe_file_backed_certificate(
+        certificate,
+        component_root=component_root,
+    )
+    manually_resealed = seal_benchmark_certificate(
+        BenchmarkCertificatePayload(
+            certificate_id=certificate.certificate_id,
+            benchmark_name=certificate.benchmark_name,
+            profile=certificate.profile,
+            repository_git_commit=certificate.repository_git_commit,
+            bindings=observed_bindings,
+            benchmark_report=observed_report,
+        )
+    )
+    write_benchmark_certificate(certificate_path, manually_resealed)
 
 
 def test_certificate_round_trip_and_current_verification_are_deterministic(
@@ -358,7 +682,7 @@ def test_file_backed_verification_attests_exact_loaded_passed_report(
         == hashlib.sha256((component_root / "benchmark-results.json").read_bytes()).hexdigest()
     )
     assert evidence.benchmark_report_status == "passed"
-    assert evidence.benchmark_report_gate_count == 3
+    assert evidence.benchmark_report_gate_count == len(MAXIMUM_ASSURANCE_GATE_NAMES)
     assert evidence.benchmark_name == "Synthetic file-backed benchmark"
     assert evidence.benchmark_profile is AuditProfile.MAXIMUM_ASSURANCE
     assert evidence.benchmark_reports_expected == 1
@@ -368,6 +692,53 @@ def test_file_backed_verification_attests_exact_loaded_passed_report(
         BenchmarkCertificateVerification.model_validate_json(verification.model_dump_json())
         == verification
     )
+
+
+def test_file_backed_certificate_requires_exact_bound_corpus_case_inventory(
+    tmp_path: Path,
+) -> None:
+    manifest = _benchmark_manifest()
+    payload = BenchmarkManifestPayload.model_validate(
+        manifest.model_dump(mode="json", exclude={"corpus_sha256"})
+    )
+    expanded = seal_benchmark_manifest(
+        payload.model_copy(
+            update={
+                "cases": [
+                    *payload.cases,
+                    BenchmarkCase(
+                        id="case-006-high-safe",
+                        repository_id="synthetic_repository",
+                        variant="safe",
+                        category="Synthetic defensive condition",
+                        path="src/Synthetic.sol",
+                        start_line=6,
+                        end_line=6,
+                        source_sha256="f" * 64,
+                        minimum_severity=Severity.HIGH,
+                        expected_cwe=[],
+                        source_attribution="Synthetic local certificate fixture.",
+                        training_exposure="unknown",
+                    ),
+                ]
+            }
+        )
+    )
+    report_payload = _benchmark_report().model_dump(mode="json")
+    report_payload["corpus_sha256"] = expanded.corpus_sha256
+    component_root, inputs = _write_file_backed_components(tmp_path, report_payload)
+    (component_root / "corpus.json").write_text(
+        expanded.model_dump_json() + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="case inventory differs"):
+        build_file_backed_benchmark_certificate(
+            component_root=component_root,
+            inputs=inputs,
+            repository_git_commit=COMMIT,
+            certificate_id="mismatched-corpus-inventory",
+        )
 
 
 def test_legacy_hand_constructed_current_verification_remains_non_file_backed() -> None:
@@ -393,64 +764,100 @@ def test_legacy_hand_constructed_current_verification_remains_non_file_backed() 
 
 
 @pytest.mark.parametrize(
-    "report",
+    ("mutation", "error_pattern"),
     [
+        pytest.param("missing_gate", "gate portfolio", id="missing_gate"),
+        pytest.param("missing_metric", "model_review_coverage", id="missing_metric"),
         pytest.param(
-            _benchmark_report(
-                gates=[],
-                profile=AuditProfile.STANDARD,
-            ),
-            id="empty_gate_evidence",
+            "failed_required_metric",
+            "typed evidence|required benchmark metric is not a complete pass",
+            id="failed_required_metric",
         ),
         pytest.param(
-            _empty_benchmark_report(),
-            id="empty_loaded_reports",
+            "zero_denominator_required_metric",
+            "typed evidence|required benchmark metric is not a complete pass",
+            id="zero_denominator_required_metric",
         ),
         pytest.param(
-            _benchmark_report(
-                status=BenchmarkStatus.FAILED,
-                gates=[
-                    BenchmarkGate(
-                        name="synthetic_gate",
-                        passed=False,
-                        detail="synthetic failed gate",
-                    )
-                ],
-                profile=AuditProfile.STANDARD,
-            ),
-            id="failed_report",
+            "incomplete_case_inventory",
+            "case results|case inventory",
+            id="incomplete_case_inventory",
+        ),
+        pytest.param("legacy_report", "schema_version", id="legacy_report"),
+        pytest.param(
+            "missing_schema_version",
+            "schema_version",
+            id="missing_schema_version",
+        ),
+        pytest.param(
+            "coverage_counter_bypass",
+            "aggregate counts|aggregate coverage|typed evidence",
+            id="coverage_counter_bypass",
+        ),
+        pytest.param(
+            "negative_contribution",
+            "contribution counts",
+            id="negative_contribution",
+        ),
+        pytest.param(
+            "resource_summary_tamper",
+            "resource average|runtime resource metric",
+            id="resource_summary_tamper",
+        ),
+        pytest.param(
+            "precision_evidence_tamper",
+            "precision inventory",
+            id="precision_evidence_tamper",
+        ),
+        pytest.param(
+            "duplicate_confirmed_finding",
+            "confirmed finding IDs must be unique and sorted",
+            id="duplicate_confirmed_finding",
+        ),
+        pytest.param(
+            "threshold_override",
+            "threshold policy",
+            id="threshold_override",
+        ),
+        pytest.param(
+            "missing_runtime",
+            "cost or runtime observations are incomplete",
+            id="missing_runtime",
+        ),
+        pytest.param(
+            "nonfinite_resource",
+            "finite number",
+            id="nonfinite_resource",
         ),
     ],
 )
-def test_file_backed_verification_rejects_empty_or_failed_report(
+def test_file_backed_certificate_rejects_incomplete_report_even_after_reseal(
     tmp_path: Path,
-    report: BenchmarkReport,
+    mutation: str,
+    error_pattern: str,
 ) -> None:
-    component_root, certificate_path, original = _write_file_backed_certificate(tmp_path)
-    (component_root / "benchmark-results.json").write_text(
-        report.model_dump_json(),
-        encoding="utf-8",
+    report_payload = _invalid_report_payload(mutation)
+    build_root, inputs = _write_file_backed_components(
+        tmp_path / "build",
+        report_payload,
     )
-    observed_bindings, observed_report = observe_file_backed_certificate(
-        original,
-        component_root=component_root,
-    )
-    manually_resealed = seal_benchmark_certificate(
-        BenchmarkCertificatePayload(
-            certificate_id=original.certificate_id,
-            benchmark_name=report.corpus_name,
-            profile=report.profile,
-            repository_git_commit=original.repository_git_commit,
-            bindings=observed_bindings,
-            benchmark_report=observed_report,
+    with pytest.raises(ValueError, match=error_pattern):
+        build_file_backed_benchmark_certificate(
+            component_root=build_root,
+            inputs=inputs,
+            repository_git_commit=COMMIT,
+            certificate_id="invalid-synthetic-certificate",
         )
-    )
-    write_benchmark_certificate(certificate_path, manually_resealed)
 
-    with pytest.raises(
-        ValueError,
-        match="requires a passed report and passed gates",
-    ):
+    component_root, certificate_path, original = _write_file_backed_certificate(tmp_path / "verify")
+    _replace_report_and_reseal_certificate(
+        component_root=component_root,
+        certificate_path=certificate_path,
+        certificate=original,
+        report_payload=report_payload,
+    )
+
+    with pytest.raises(ValueError, match=error_pattern):
         verify_file_backed_benchmark_certificate(
             certificate_path,
             component_root=component_root,

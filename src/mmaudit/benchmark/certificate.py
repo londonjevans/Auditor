@@ -11,7 +11,12 @@ from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_validator
 
-from mmaudit.benchmark.engine import BenchmarkReport, BenchmarkStatus
+from mmaudit.benchmark.engine import (
+    BenchmarkManifest,
+    BenchmarkReport,
+    require_benchmark_report_matches_manifest,
+    require_certifiable_benchmark_report,
+)
 from mmaudit.models.schemas import AuditProfile, StrictModel
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.reporting.json_report import write_json
@@ -447,6 +452,11 @@ def build_file_backed_benchmark_certificate(
         component_root,
         inputs.benchmark_report,
     )
+    _load_matching_corpus_manifest(
+        component_root,
+        inputs.corpus,
+        benchmark_report,
+    )
     bindings = BenchmarkCertificateBindingSet(
         configuration=_bind_file_category(
             component_root,
@@ -652,6 +662,12 @@ def verify_file_backed_benchmark_certificate(
         or report.profile is not certificate.profile
     ):
         raise ValueError("benchmark report identity does not match the certificate")
+    corpus_paths = [
+        binding.path for binding in certificate.bindings.corpus if binding.path is not None
+    ]
+    if len(corpus_paths) != len(certificate.bindings.corpus):
+        raise ValueError("file-backed certificate corpus bindings must retain local paths")
+    _load_matching_corpus_manifest(component_root, corpus_paths, report)
     verification = verify_benchmark_certificate(
         certificate,
         repository_git_commit=repository_git_commit,
@@ -796,18 +812,44 @@ def _load_passed_benchmark_report_with_binding(
     if len(contents) != binding.size or hashlib.sha256(contents).hexdigest() != binding.sha256:
         raise ValueError("benchmark report changed while it was being loaded")
     report = BenchmarkReport.model_validate_json(contents)
-    if (
-        report.status is not BenchmarkStatus.PASSED
-        or not report.gates
-        or not all(gate.passed for gate in report.gates)
-        or report.reports_expected < 1
-        or report.reports_loaded != report.reports_expected
-    ):
-        raise ValueError(
-            "benchmark certification requires a passed report and passed gates "
-            "with non-empty complete coverage"
-        )
+    require_certifiable_benchmark_report(report)
     return report, binding
+
+
+def _load_matching_corpus_manifest(
+    component_root: Path,
+    relative_paths: list[str],
+    report: BenchmarkReport,
+) -> BenchmarkManifest:
+    """Load exactly one bound typed corpus whose inventory matches the report."""
+
+    candidates: list[BenchmarkManifest] = []
+    resolved_root = component_root.resolve(strict=True)
+    for index, relative_path in enumerate(relative_paths):
+        binding = bind_certificate_file(
+            component_root,
+            relative_path,
+            identifier=f"corpus-validation/{index:05d}",
+        )
+        if binding.path is None:
+            raise ValueError("corpus binding did not retain its local path")
+        path = resolved_root.joinpath(*PurePosixPath(binding.path).parts)
+        try:
+            manifest = BenchmarkManifest.model_validate_json(path.read_bytes())
+        except ValueError:
+            continue
+        candidates.append(manifest)
+    matching = [
+        manifest
+        for manifest in candidates
+        if manifest.name == report.corpus_name and manifest.corpus_sha256 == report.corpus_sha256
+    ]
+    if len(matching) != 1:
+        raise ValueError(
+            "certificate corpus inputs require exactly one typed manifest matching the report"
+        )
+    require_benchmark_report_matches_manifest(report, matching[0])
+    return matching[0]
 
 
 def _rebind_expected_file(

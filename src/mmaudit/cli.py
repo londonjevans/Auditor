@@ -29,6 +29,7 @@ from mmaudit.benchmark.certificate import (
 )
 from mmaudit.benchmark.claims import load_human_comparison_evidence
 from mmaudit.benchmark.engine import (
+    BenchmarkMetricState,
     BenchmarkStatus,
     evaluate_benchmark,
     load_manifest,
@@ -1990,6 +1991,10 @@ def explain_command(
     _print_finding(finding, Console(no_color=no_color))
 
 
+def _format_optional_rate(value: float | None) -> str:
+    return f"{value:.1%}" if value is not None else BenchmarkMetricState.NOT_EVALUABLE.value
+
+
 @benchmark_app.callback(invoke_without_command=True)
 def benchmark_command(
     ctx: typer.Context,
@@ -2055,16 +2060,22 @@ def benchmark_command(
         repository_ids = {case.repository_id for case in manifest.cases}
         if reports is None:
             loaded: dict[str, AuditReport] = {}
+            report_inputs = None
             limitations = [
                 "no audit-report directory supplied; corpus validated but no audit quality "
                 "measurement was performed"
             ]
         else:
-            loaded, limitations = load_reports(reports, repository_ids)
+            loaded, report_inputs, limitations = load_reports(
+                reports,
+                repository_ids,
+                profile=profile,
+            )
         benchmark = evaluate_benchmark(
             manifest,
             loaded,
             profile=profile,
+            report_inputs=report_inputs,
             initial_limitations=limitations,
             mutation_scorecard=(
                 load_mutation_scorecard(mutation_scorecard)
@@ -2085,8 +2096,8 @@ def benchmark_command(
         raise typer.Exit(ExitCode.CONFIGURATION) from exc
     local_console.print(
         f"Benchmark {benchmark.status.value}: "
-        f"recall={benchmark.recall:.1%}, "
-        f"critical_recall={benchmark.critical_recall:.1%}, "
+        f"recall={_format_optional_rate(benchmark.recall)}, "
+        f"critical_recall={_format_optional_rate(benchmark.critical_recall)}, "
         f"safe_false_confirmations={benchmark.safe_high_critical_confirmations}"
     )
     local_console.print(f"Ground truth: {len(ground_truth_bindings)} source binding(s) verified")

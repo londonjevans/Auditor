@@ -252,7 +252,12 @@ def render_markdown(report: AuditReport) -> str:
     model_fallbacks = report.metadata.get("configured_fallbacks", {})
     dependency_preparation = report.metadata.get("dependency_preparation", {})
     solidity = report.metadata.get("solidity", {})
-    solidity_coverage = solidity.get("coverage", {}) if isinstance(solidity, dict) else {}
+    effective_solidity_coverage = report.effective_solidity_coverage()
+    solidity_coverage = (
+        effective_solidity_coverage.model_dump(mode="json")
+        if effective_solidity_coverage is not None
+        else {}
+    )
     solidity_compilation = solidity.get("compilation", []) if isinstance(solidity, dict) else []
     lines = [
         "# Corrovera Security Assurance Report",

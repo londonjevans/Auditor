@@ -1,0 +1,1808 @@
+{
+  "$defs": {
+    "AuditProfile": {
+      "enum": [
+        "quick",
+        "standard",
+        "deep",
+        "maximum-assurance"
+      ],
+      "title": "AuditProfile",
+      "type": "string"
+    },
+    "BenchmarkBlindingProtocol": {
+      "additionalProperties": false,
+      "description": "Declared separation between audit generation and ground-truth disclosure.",
+      "properties": {
+        "ground_truth_disclosure": {
+          "const": "post_run_only",
+          "default": "post_run_only",
+          "title": "Ground Truth Disclosure",
+          "type": "string"
+        },
+        "reports_generated_before_ground_truth": {
+          "const": true,
+          "default": true,
+          "title": "Reports Generated Before Ground Truth",
+          "type": "boolean"
+        }
+      },
+      "title": "BenchmarkBlindingProtocol",
+      "type": "object"
+    },
+    "BenchmarkCaseResult": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "confirmed": {
+          "title": "Confirmed",
+          "type": "boolean"
+        },
+        "confirmed_finding_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "title": "Confirmed Finding Ids",
+          "type": "array"
+        },
+        "cwe_match": {
+          "default": false,
+          "title": "Cwe Match",
+          "type": "boolean"
+        },
+        "detected": {
+          "title": "Detected",
+          "type": "boolean"
+        },
+        "evaluated": {
+          "title": "Evaluated",
+          "type": "boolean"
+        },
+        "exact_location": {
+          "default": false,
+          "title": "Exact Location",
+          "type": "boolean"
+        },
+        "limitation": {
+          "anyOf": [
+            {
+              "maxLength": 2000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limitation"
+        },
+        "matched_finding_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "title": "Matched Finding Ids",
+          "type": "array"
+        },
+        "minimum_severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "repository_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$",
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "reproduced": {
+          "default": false,
+          "title": "Reproduced",
+          "type": "boolean"
+        },
+        "reproduction_attempted": {
+          "default": false,
+          "title": "Reproduction Attempted",
+          "type": "boolean"
+        },
+        "variant": {
+          "enum": [
+            "vulnerable",
+            "safe",
+            "ambiguous"
+          ],
+          "title": "Variant",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "repository_id",
+        "variant",
+        "minimum_severity",
+        "evaluated",
+        "detected",
+        "confirmed"
+      ],
+      "title": "BenchmarkCaseResult",
+      "type": "object"
+    },
+    "BenchmarkCoverageMetric": {
+      "additionalProperties": false,
+      "description": "Aggregate an existing coverage numerator/denominator across reports.",
+      "properties": {
+        "denominator": {
+          "minimum": 0,
+          "title": "Denominator",
+          "type": "integer"
+        },
+        "detail": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "evaluated": {
+          "minimum": 0,
+          "title": "Evaluated",
+          "type": "integer"
+        },
+        "numerator": {
+          "minimum": 0,
+          "title": "Numerator",
+          "type": "integer"
+        },
+        "percentage": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Percentage"
+        },
+        "state": {
+          "$ref": "#/$defs/BenchmarkMetricState"
+        }
+      },
+      "required": [
+        "numerator",
+        "denominator",
+        "evaluated",
+        "state",
+        "detail"
+      ],
+      "title": "BenchmarkCoverageMetric",
+      "type": "object"
+    },
+    "BenchmarkGate": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "name": {
+          "enum": [
+            "known_critical_recall",
+            "safe_control_false_confirmations",
+            "exact_ground_truth_locations",
+            "repository_metrics_unmasked",
+            "evidence_caps",
+            "coverage_present",
+            "maximum_assurance_complete",
+            "maximum_assurance_repository_mutation_score",
+            "maximum_assurance_semantic_coverage",
+            "maximum_assurance_property_mutation_score",
+            "maximum_assurance_real_model_calls",
+            "maximum_assurance_substantive_model_review"
+          ],
+          "title": "Name",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/$defs/BenchmarkMetricState"
+        }
+      },
+      "required": [
+        "name",
+        "state",
+        "passed",
+        "detail"
+      ],
+      "title": "BenchmarkGate",
+      "type": "object"
+    },
+    "BenchmarkMetricDirection": {
+      "enum": [
+        "minimum",
+        "maximum",
+        "informational"
+      ],
+      "title": "BenchmarkMetricDirection",
+      "type": "string"
+    },
+    "BenchmarkMetricState": {
+      "description": "Whether a benchmark metric was evaluable and met its declared threshold.",
+      "enum": [
+        "PASS",
+        "FAIL",
+        "NOT_EVALUABLE",
+        "NOT_APPLICABLE",
+        "INCONCLUSIVE"
+      ],
+      "title": "BenchmarkMetricState",
+      "type": "string"
+    },
+    "BenchmarkMetrics": {
+      "additionalProperties": false,
+      "description": "Fixed quality metric inventory; unavailable evidence cannot disappear.",
+      "properties": {
+        "all_finding_precision": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "asset_moving_function_coverage": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "attack_path_reachability_accuracy": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "confirmed_precision": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "contract_coverage": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "critical_model_review_coverage": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "critical_recall": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "economic_template_applicability_coverage": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "economic_template_execution_coverage": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "entry_point_coverage": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "exact_location_accuracy": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "external_call_coverage": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "false_confirmed_critical_rate": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "false_confirmed_high_rate": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "formal_property_mutation_score": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "high_recall": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "invariant_mutation_score": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "medium_recall": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "model_call_success_rate": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "model_review_coverage": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "overall_recall": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "privileged_function_coverage": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "reproduction_success_rate": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "safe_near_miss_rejection_rate": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        },
+        "symbolic_counterexample_success_rate": {
+          "$ref": "#/$defs/BenchmarkRateMetric"
+        }
+      },
+      "required": [
+        "overall_recall",
+        "critical_recall",
+        "high_recall",
+        "medium_recall",
+        "confirmed_precision",
+        "all_finding_precision",
+        "false_confirmed_critical_rate",
+        "false_confirmed_high_rate",
+        "safe_near_miss_rejection_rate",
+        "exact_location_accuracy",
+        "attack_path_reachability_accuracy",
+        "reproduction_success_rate",
+        "symbolic_counterexample_success_rate",
+        "formal_property_mutation_score",
+        "invariant_mutation_score",
+        "contract_coverage",
+        "entry_point_coverage",
+        "privileged_function_coverage",
+        "asset_moving_function_coverage",
+        "external_call_coverage",
+        "model_call_success_rate",
+        "model_review_coverage",
+        "critical_model_review_coverage",
+        "economic_template_applicability_coverage",
+        "economic_template_execution_coverage"
+      ],
+      "title": "BenchmarkMetrics",
+      "type": "object"
+    },
+    "BenchmarkRateMetric": {
+      "additionalProperties": false,
+      "description": "One rate with its complete expected denominator and evaluation state.",
+      "properties": {
+        "denominator": {
+          "minimum": 0,
+          "title": "Denominator",
+          "type": "integer"
+        },
+        "detail": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "direction": {
+          "$ref": "#/$defs/BenchmarkMetricDirection"
+        },
+        "evaluated": {
+          "minimum": 0,
+          "title": "Evaluated",
+          "type": "integer"
+        },
+        "numerator": {
+          "minimum": 0,
+          "title": "Numerator",
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/BenchmarkMetricState"
+        },
+        "threshold": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Threshold"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "required": [
+        "numerator",
+        "denominator",
+        "evaluated",
+        "state",
+        "direction",
+        "detail"
+      ],
+      "title": "BenchmarkRateMetric",
+      "type": "object"
+    },
+    "BenchmarkReportInput": {
+      "additionalProperties": false,
+      "description": "One expected report load attempt, including failed and stale analyses.",
+      "properties": {
+        "attempted": {
+          "title": "Attempted",
+          "type": "boolean"
+        },
+        "detail": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "maximum_assurance_required_clauses": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "title": "Maximum Assurance Required Clauses",
+          "type": "array"
+        },
+        "maximum_assurance_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MaximumAssuranceStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "parsed": {
+          "title": "Parsed",
+          "type": "boolean"
+        },
+        "repository_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$",
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/BenchmarkReportInputStatus"
+        },
+        "usable": {
+          "title": "Usable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "repository_id",
+        "status",
+        "attempted",
+        "parsed",
+        "usable",
+        "detail"
+      ],
+      "title": "BenchmarkReportInput",
+      "type": "object"
+    },
+    "BenchmarkReportInputStatus": {
+      "description": "Typed disposition for one expected product report.",
+      "enum": [
+        "USABLE",
+        "MISSING",
+        "MALFORMED",
+        "STALE",
+        "FAILED"
+      ],
+      "title": "BenchmarkReportInputStatus",
+      "type": "string"
+    },
+    "BenchmarkRepositoryMetrics": {
+      "additionalProperties": false,
+      "description": "Explicit metrics for one repository; global averages cannot replace these.",
+      "properties": {
+        "ambiguous_cases": {
+          "minimum": 0,
+          "title": "Ambiguous Cases",
+          "type": "integer"
+        },
+        "cases_evaluated": {
+          "minimum": 0,
+          "title": "Cases Evaluated",
+          "type": "integer"
+        },
+        "cost_usd": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cost Usd"
+        },
+        "coverage_metrics": {
+          "additionalProperties": {
+            "$ref": "#/$defs/BenchmarkCoverageMetric"
+          },
+          "maxProperties": 1000,
+          "title": "Coverage Metrics",
+          "type": "object"
+        },
+        "critical_cases": {
+          "minimum": 0,
+          "title": "Critical Cases",
+          "type": "integer"
+        },
+        "critical_cases_detected": {
+          "minimum": 0,
+          "title": "Critical Cases Detected",
+          "type": "integer"
+        },
+        "critical_recall": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Critical Recall"
+        },
+        "evidence_cap_bypasses": {
+          "minimum": 0,
+          "title": "Evidence Cap Bypasses",
+          "type": "integer"
+        },
+        "exact_locations": {
+          "minimum": 0,
+          "title": "Exact Locations",
+          "type": "integer"
+        },
+        "location_accuracy": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Location Accuracy"
+        },
+        "location_cases": {
+          "minimum": 0,
+          "title": "Location Cases",
+          "type": "integer"
+        },
+        "model_only_findings_kept_below_confirmed": {
+          "minimum": 0,
+          "title": "Model Only Findings Kept Below Confirmed",
+          "type": "integer"
+        },
+        "mutation_gate_passed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mutation Gate Passed"
+        },
+        "mutation_kill_score": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mutation Kill Score"
+        },
+        "mutation_property_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "title": "Mutation Property Ids",
+          "type": "array"
+        },
+        "recall": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recall"
+        },
+        "report_attempted": {
+          "title": "Report Attempted",
+          "type": "boolean"
+        },
+        "report_loaded": {
+          "title": "Report Loaded",
+          "type": "boolean"
+        },
+        "report_parsed": {
+          "title": "Report Parsed",
+          "type": "boolean"
+        },
+        "report_status": {
+          "$ref": "#/$defs/BenchmarkReportInputStatus"
+        },
+        "repository_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$",
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "reproduction_success_rate": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reproduction Success Rate"
+        },
+        "runtime_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime Seconds"
+        },
+        "safe_cases": {
+          "minimum": 0,
+          "title": "Safe Cases",
+          "type": "integer"
+        },
+        "safe_false_confirmation_rate": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Safe False Confirmation Rate"
+        },
+        "safe_false_confirmations": {
+          "minimum": 0,
+          "title": "Safe False Confirmations",
+          "type": "integer"
+        },
+        "safe_high_critical_confirmations": {
+          "minimum": 0,
+          "title": "Safe High Critical Confirmations",
+          "type": "integer"
+        },
+        "time_to_first_valid_finding_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Time To First Valid Finding Seconds"
+        },
+        "total_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total Tokens"
+        },
+        "vulnerable_cases": {
+          "minimum": 0,
+          "title": "Vulnerable Cases",
+          "type": "integer"
+        },
+        "vulnerable_cases_detected": {
+          "minimum": 0,
+          "title": "Vulnerable Cases Detected",
+          "type": "integer"
+        },
+        "vulnerable_cases_reproduced": {
+          "minimum": 0,
+          "title": "Vulnerable Cases Reproduced",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "repository_id",
+        "report_status",
+        "report_attempted",
+        "report_parsed",
+        "report_loaded",
+        "cases_evaluated",
+        "vulnerable_cases",
+        "vulnerable_cases_detected",
+        "critical_cases",
+        "critical_cases_detected",
+        "safe_cases",
+        "ambiguous_cases",
+        "safe_false_confirmations",
+        "safe_high_critical_confirmations",
+        "location_cases",
+        "exact_locations",
+        "vulnerable_cases_reproduced",
+        "evidence_cap_bypasses",
+        "model_only_findings_kept_below_confirmed"
+      ],
+      "title": "BenchmarkRepositoryMetrics",
+      "type": "object"
+    },
+    "BenchmarkResourceMetric": {
+      "additionalProperties": false,
+      "description": "Observed resource use, intentionally separate from quality gates.",
+      "properties": {
+        "average": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Average"
+        },
+        "detail": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "observations": {
+          "minimum": 0,
+          "title": "Observations",
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/BenchmarkMetricState"
+        },
+        "total": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total"
+        },
+        "worst": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Worst"
+        }
+      },
+      "required": [
+        "observations",
+        "state",
+        "detail"
+      ],
+      "title": "BenchmarkResourceMetric",
+      "type": "object"
+    },
+    "BenchmarkResourceMetrics": {
+      "additionalProperties": false,
+      "properties": {
+        "cost_usd": {
+          "$ref": "#/$defs/BenchmarkResourceMetric"
+        },
+        "runtime_seconds": {
+          "$ref": "#/$defs/BenchmarkResourceMetric"
+        }
+      },
+      "required": [
+        "cost_usd",
+        "runtime_seconds"
+      ],
+      "title": "BenchmarkResourceMetrics",
+      "type": "object"
+    },
+    "BenchmarkStatus": {
+      "enum": [
+        "passed",
+        "failed",
+        "incomplete"
+      ],
+      "title": "BenchmarkStatus",
+      "type": "string"
+    },
+    "ComparativeMetric": {
+      "enum": [
+        "precision",
+        "recall"
+      ],
+      "title": "ComparativeMetric",
+      "type": "string"
+    },
+    "MaximumAssuranceStatus": {
+      "description": "Public status for the maximum-assurance contract.",
+      "enum": [
+        "NOT_REQUESTED",
+        "COMPLETE",
+        "DOWNGRADED",
+        "FAILED",
+        "INCONCLUSIVE"
+      ],
+      "title": "MaximumAssuranceStatus",
+      "type": "string"
+    },
+    "MutationKind": {
+      "description": "Required source-local classes used to challenge defensive properties.",
+      "enum": [
+        "access_control_guard_removal",
+        "replay_state_update_removal",
+        "boundary_check_weakening",
+        "accounting_operator_replacement",
+        "external_call_result_check_removal"
+      ],
+      "title": "MutationKind",
+      "type": "string"
+    },
+    "MutationPropertyOutcome": {
+      "additionalProperties": false,
+      "description": "Hash-linked outcome for one property/mutation pair.",
+      "properties": {
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "mutation_id": {
+          "pattern": "^mut-[a-z0-9][a-z0-9-]{0,75}$",
+          "title": "Mutation Id",
+          "type": "string"
+        },
+        "mutation_kind": {
+          "$ref": "#/$defs/MutationKind"
+        },
+        "outcome": {
+          "$ref": "#/$defs/MutationTestOutcome"
+        },
+        "property_id": {
+          "pattern": "^prop-[0-9a-f]{24}$",
+          "title": "Property Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mutation_id",
+        "mutation_kind",
+        "property_id",
+        "outcome",
+        "evidence_sha256"
+      ],
+      "title": "MutationPropertyOutcome",
+      "type": "object"
+    },
+    "MutationScorecard": {
+      "additionalProperties": false,
+      "description": "Per-property mutation quality evidence; aggregate scores cannot hide weak properties.",
+      "properties": {
+        "expected_property_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Expected Property Ids",
+          "type": "array"
+        },
+        "gate_passed": {
+          "title": "Gate Passed",
+          "type": "boolean"
+        },
+        "minimum_property_kill_score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Minimum Property Kill Score",
+          "type": "number"
+        },
+        "mutation_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Mutation Count",
+          "type": "integer"
+        },
+        "outcomes": {
+          "items": {
+            "$ref": "#/$defs/MutationPropertyOutcome"
+          },
+          "maxItems": 100000,
+          "title": "Outcomes",
+          "type": "array"
+        },
+        "overall_kill_score": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Overall Kill Score"
+        },
+        "property_corpus_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Property Corpus Hash",
+          "type": "string"
+        },
+        "property_repositories": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "maxProperties": 10000,
+          "minProperties": 1,
+          "title": "Property Repositories",
+          "type": "object"
+        },
+        "property_scores": {
+          "items": {
+            "$ref": "#/$defs/PropertyMutationScore"
+          },
+          "maxItems": 10000,
+          "minItems": 1,
+          "title": "Property Scores",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "property_corpus_hash",
+        "minimum_property_kill_score",
+        "expected_property_ids",
+        "property_repositories",
+        "mutation_count",
+        "property_scores",
+        "gate_passed"
+      ],
+      "title": "MutationScorecard",
+      "type": "object"
+    },
+    "MutationTestOutcome": {
+      "description": "Normalized result of challenging one property with one applicable mutation.",
+      "enum": [
+        "killed",
+        "survived",
+        "inconclusive"
+      ],
+      "title": "MutationTestOutcome",
+      "type": "string"
+    },
+    "PropertyMutationScore": {
+      "additionalProperties": false,
+      "description": "Explicit kill score for one expected invariant/property.",
+      "properties": {
+        "applicable_mutations": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Applicable Mutations",
+          "type": "integer"
+        },
+        "gate_passed": {
+          "title": "Gate Passed",
+          "type": "boolean"
+        },
+        "inconclusive": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Inconclusive",
+          "type": "integer"
+        },
+        "kill_score": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kill Score"
+        },
+        "killed": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Killed",
+          "type": "integer"
+        },
+        "minimum_required": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Minimum Required",
+          "type": "number"
+        },
+        "property_id": {
+          "pattern": "^prop-[0-9a-f]{24}$",
+          "title": "Property Id",
+          "type": "string"
+        },
+        "survived": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Survived",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "property_id",
+        "applicable_mutations",
+        "killed",
+        "survived",
+        "inconclusive",
+        "minimum_required",
+        "gate_passed"
+      ],
+      "title": "PropertyMutationScore",
+      "type": "object"
+    },
+    "Severity": {
+      "enum": [
+        "informational",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "StatisticalComparisonResult": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence_level": {
+          "default": 0.95,
+          "maximum": 0.95,
+          "minimum": 0.95,
+          "title": "Confidence Level",
+          "type": "number"
+        },
+        "difference_lower_bound": {
+          "maximum": 1,
+          "minimum": -1,
+          "title": "Difference Lower Bound",
+          "type": "number"
+        },
+        "human_rate": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Human Rate",
+          "type": "number"
+        },
+        "human_successes": {
+          "minimum": 0,
+          "title": "Human Successes",
+          "type": "integer"
+        },
+        "human_trials": {
+          "minimum": 1,
+          "title": "Human Trials",
+          "type": "integer"
+        },
+        "metric": {
+          "$ref": "#/$defs/ComparativeMetric"
+        },
+        "mmaudit_rate": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Mmaudit Rate",
+          "type": "number"
+        },
+        "mmaudit_successes": {
+          "minimum": 0,
+          "title": "Mmaudit Successes",
+          "type": "integer"
+        },
+        "mmaudit_trials": {
+          "minimum": 1,
+          "title": "Mmaudit Trials",
+          "type": "integer"
+        },
+        "observed_difference": {
+          "maximum": 1,
+          "minimum": -1,
+          "title": "Observed Difference",
+          "type": "number"
+        },
+        "statistically_supported": {
+          "title": "Statistically Supported",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "metric",
+        "mmaudit_successes",
+        "mmaudit_trials",
+        "human_successes",
+        "human_trials",
+        "mmaudit_rate",
+        "human_rate",
+        "observed_difference",
+        "difference_lower_bound",
+        "statistically_supported"
+      ],
+      "title": "StatisticalComparisonResult",
+      "type": "object"
+    },
+    "SuperiorityClaimAssessment": {
+      "additionalProperties": false,
+      "properties": {
+        "assessment_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Assessment Sha256",
+          "type": "string"
+        },
+        "benchmark_report_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Benchmark Report Sha256"
+        },
+        "comparison_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Comparison Id"
+        },
+        "corpus_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Corpus Sha256"
+        },
+        "evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Evidence Sha256"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Limitations",
+          "type": "array"
+        },
+        "precision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StatisticalComparisonResult"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "preconditions": {
+          "items": {
+            "$ref": "#/$defs/SuperiorityPreconditionResult"
+          },
+          "maxItems": 5,
+          "minItems": 5,
+          "title": "Preconditions",
+          "type": "array"
+        },
+        "recall": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StatisticalComparisonResult"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/SuperiorityClaimStatus"
+        }
+      },
+      "required": [
+        "status",
+        "preconditions",
+        "assessment_sha256"
+      ],
+      "title": "SuperiorityClaimAssessment",
+      "type": "object"
+    },
+    "SuperiorityClaimStatus": {
+      "description": "A claim is absent, evaluated but unsupported, or fully demonstrated.",
+      "enum": [
+        "not_evaluated",
+        "not_demonstrated",
+        "demonstrated"
+      ],
+      "title": "SuperiorityClaimStatus",
+      "type": "string"
+    },
+    "SuperiorityPrecondition": {
+      "enum": [
+        "blinded_review",
+        "comparable_human_review",
+        "independent_adjudication",
+        "precision_statistically_supported",
+        "recall_statistically_supported"
+      ],
+      "title": "SuperiorityPrecondition",
+      "type": "string"
+    },
+    "SuperiorityPreconditionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        },
+        "precondition": {
+          "$ref": "#/$defs/SuperiorityPrecondition"
+        }
+      },
+      "required": [
+        "precondition",
+        "passed",
+        "detail"
+      ],
+      "title": "SuperiorityPreconditionResult",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/benchmark_report.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "active_findings": {
+      "maximum": 1000000,
+      "minimum": 0,
+      "title": "Active Findings",
+      "type": "integer"
+    },
+    "active_findings_matching_vulnerable_cases": {
+      "maximum": 1000000,
+      "minimum": 0,
+      "title": "Active Findings Matching Vulnerable Cases",
+      "type": "integer"
+    },
+    "ambiguous_cases": {
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Ambiguous Cases",
+      "type": "integer"
+    },
+    "blinding": {
+      "$ref": "#/$defs/BenchmarkBlindingProtocol"
+    },
+    "case_results": {
+      "items": {
+        "$ref": "#/$defs/BenchmarkCaseResult"
+      },
+      "maxItems": 10000,
+      "minItems": 1,
+      "title": "Case Results",
+      "type": "array"
+    },
+    "confirmed_findings": {
+      "maximum": 1000000,
+      "minimum": 0,
+      "title": "Confirmed Findings",
+      "type": "integer"
+    },
+    "confirmed_findings_matching_vulnerable_cases": {
+      "maximum": 1000000,
+      "minimum": 0,
+      "title": "Confirmed Findings Matching Vulnerable Cases",
+      "type": "integer"
+    },
+    "corpus_name": {
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Corpus Name",
+      "type": "string"
+    },
+    "corpus_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Corpus Sha256",
+      "type": "string"
+    },
+    "coverage_metrics": {
+      "additionalProperties": {
+        "$ref": "#/$defs/BenchmarkCoverageMetric"
+      },
+      "maxProperties": 1000,
+      "title": "Coverage Metrics",
+      "type": "object"
+    },
+    "critical_cases": {
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Critical Cases",
+      "type": "integer"
+    },
+    "critical_cases_detected": {
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Critical Cases Detected",
+      "type": "integer"
+    },
+    "critical_recall": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Critical Recall"
+    },
+    "evidence_cap_bypasses": {
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Evidence Cap Bypasses",
+      "type": "integer"
+    },
+    "exact_locations": {
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Exact Locations",
+      "type": "integer"
+    },
+    "false_positive_rate": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "False Positive Rate"
+    },
+    "gates": {
+      "items": {
+        "$ref": "#/$defs/BenchmarkGate"
+      },
+      "maxItems": 12,
+      "minItems": 6,
+      "title": "Gates",
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 10000,
+      "title": "Limitations",
+      "type": "array"
+    },
+    "location_accuracy": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Location Accuracy"
+    },
+    "location_cases": {
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Location Cases",
+      "type": "integer"
+    },
+    "metrics": {
+      "$ref": "#/$defs/BenchmarkMetrics"
+    },
+    "model_only_findings_kept_below_confirmed": {
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Model Only Findings Kept Below Confirmed",
+      "type": "integer"
+    },
+    "mutation_scorecard": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MutationScorecard"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "precision": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Precision"
+    },
+    "profile": {
+      "$ref": "#/$defs/AuditProfile"
+    },
+    "recall": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Recall"
+    },
+    "recall_by_severity": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "maxProperties": 10,
+      "title": "Recall By Severity",
+      "type": "object"
+    },
+    "report_inputs": {
+      "items": {
+        "$ref": "#/$defs/BenchmarkReportInput"
+      },
+      "maxItems": 10000,
+      "minItems": 1,
+      "title": "Report Inputs",
+      "type": "array"
+    },
+    "reports_attempted": {
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Reports Attempted",
+      "type": "integer"
+    },
+    "reports_expected": {
+      "maximum": 10000,
+      "minimum": 1,
+      "title": "Reports Expected",
+      "type": "integer"
+    },
+    "reports_loaded": {
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Reports Loaded",
+      "type": "integer"
+    },
+    "reports_missing_coverage": {
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Reports Missing Coverage",
+      "type": "integer"
+    },
+    "reports_parsed": {
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Reports Parsed",
+      "type": "integer"
+    },
+    "repository_metrics": {
+      "items": {
+        "$ref": "#/$defs/BenchmarkRepositoryMetrics"
+      },
+      "maxItems": 10000,
+      "minItems": 1,
+      "title": "Repository Metrics",
+      "type": "array"
+    },
+    "reproduction_success_rate": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reproduction Success Rate"
+    },
+    "resource_metrics": {
+      "$ref": "#/$defs/BenchmarkResourceMetrics"
+    },
+    "safe_cases": {
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Safe Cases",
+      "type": "integer"
+    },
+    "safe_false_confirmation_rate": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Safe False Confirmation Rate"
+    },
+    "safe_high_critical_confirmations": {
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Safe High Critical Confirmations",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "3.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/BenchmarkStatus"
+    },
+    "superiority_claim": {
+      "$ref": "#/$defs/SuperiorityClaimAssessment"
+    },
+    "time_to_first_valid_finding_seconds": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Time To First Valid Finding Seconds"
+    },
+    "total_cost_usd": {
+      "minimum": 0,
+      "title": "Total Cost Usd",
+      "type": "number"
+    },
+    "total_runtime_seconds": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Total Runtime Seconds"
+    },
+    "total_tokens": {
+      "minimum": 0,
+      "title": "Total Tokens",
+      "type": "integer"
+    },
+    "unique_finding_contribution_by_family": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "maxProperties": 1000,
+      "title": "Unique Finding Contribution By Family",
+      "type": "object"
+    },
+    "unique_finding_contribution_by_role": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "maxProperties": 1000,
+      "title": "Unique Finding Contribution By Role",
+      "type": "object"
+    },
+    "vulnerable_cases": {
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Vulnerable Cases",
+      "type": "integer"
+    },
+    "vulnerable_cases_detected": {
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Vulnerable Cases Detected",
+      "type": "integer"
+    },
+    "vulnerable_cases_reproduced": {
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Vulnerable Cases Reproduced",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "corpus_name",
+    "corpus_sha256",
+    "blinding",
+    "profile",
+    "status",
+    "reports_expected",
+    "reports_attempted",
+    "reports_parsed",
+    "reports_loaded",
+    "report_inputs",
+    "vulnerable_cases",
+    "vulnerable_cases_detected",
+    "vulnerable_cases_reproduced",
+    "critical_cases",
+    "critical_cases_detected",
+    "safe_cases",
+    "ambiguous_cases",
+    "safe_high_critical_confirmations",
+    "evidence_cap_bypasses",
+    "reports_missing_coverage",
+    "model_only_findings_kept_below_confirmed",
+    "active_findings",
+    "active_findings_matching_vulnerable_cases",
+    "confirmed_findings",
+    "confirmed_findings_matching_vulnerable_cases",
+    "recall_by_severity",
+    "location_cases",
+    "exact_locations",
+    "total_cost_usd",
+    "total_tokens",
+    "resource_metrics",
+    "metrics",
+    "repository_metrics",
+    "case_results",
+    "gates"
+  ],
+  "title": "mmaudit benchmark report",
+  "type": "object"
+}
