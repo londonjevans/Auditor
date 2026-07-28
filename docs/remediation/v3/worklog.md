@@ -9,8 +9,8 @@ CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
 NEXT_ACTION: Validate the preserved opt-in harness and committed synthetic fixture, then execute one paid request only if every secret, privacy, routing, identity, artifact, and budget gate passes.
-LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_real_provider_harness.py tests/unit/test_operator_secrets.py tests/unit/test_cost_ledger.py tests/unit/test_model_discovery.py tests/unit/test_generation_evidence.py tests/unit/test_usage.py tests/unit/test_openrouter.py tests/integration/test_real_openrouter_provider.py
-LAST_RESULT: PASS; 295 tests passed and the one paid provider integration remained explicitly skipped in 1.14s after adding the exact STRICT_ZDR opt-in prerequisite. Ruff, strict mypy, and diff checks passed. No network or secret access occurred.
+LAST_COMMAND: MMAUDIT_RUN_REAL_PROVIDER_TESTS=1 MMAUDIT_SECRETS_ENV_FILE=<operator-controlled Auditor .env> MMAUDIT_REAL_PROVIDER_COST_CAP_USD=250.00 MMAUDIT_OPENROUTER_COST_LEDGER=<Auditor cumulative ledger> MMAUDIT_REAL_PROVIDER_MODEL_ID=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_MODEL_ALLOWLIST=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_ENDPOINT_ALLOWLIST=akashml/fp8 MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=STRICT_ZDR MMAUDIT_REAL_PROVIDER_EVIDENCE_OUTPUT=<fresh v3 runtime artifact> .venv/bin/pytest -q tests/integration/test_real_openrouter_provider.py
+LAST_RESULT: PENDING; the exact one-call synthetic provider smoke is authorized to start only from the clean committed checkpoint and all local gates have passed.
 REAL_MODEL_CALLS_ATTEMPTED: 2
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 2
@@ -71,6 +71,13 @@ LAST_CHECKPOINT_COMMIT: d2a54d9d3d57b89f6abeb567caaad7719eb74f96
   alone cannot enable provider access. The corrected focused provider/security
   subset passed `295` tests with one paid skip; Ruff, strict mypy, and diff checks
   passed.
+- **Paid-call launch preflight:** Clean synchronized `main` at
+  `b45a6e19ebf648e6bb5919ed4349e86cf32ca97a`; implementation checkpoint
+  `d2a54d9d3d57b89f6abeb567caaad7719eb74f96`; fixture and evidence directory are
+  committed; the destination is absent; the operator secret is a regular
+  non-writable-by-group/world file; and the existing atomic ledger reports
+  `cap=250.00`, `spent=0.00118674`, `reserved=0`, `remaining=249.99881326`,
+  two entries, no over-cap state, and no reservation overrun.
 
 ## 2026-07-28 — V3-BASELINE-001
 
