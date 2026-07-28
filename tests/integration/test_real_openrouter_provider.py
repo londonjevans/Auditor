@@ -19,7 +19,11 @@ from mmaudit.models.discovery import (
     validate_openrouter_model_discovery,
 )
 from mmaudit.models.endpoint_snapshots import validate_openrouter_endpoint_snapshot
-from mmaudit.models.generation_evidence import GenerationVerificationRequest
+from mmaudit.models.generation_evidence import (
+    GenerationVerificationRequest,
+    OpenRouterGenerationEvidence,
+)
+from mmaudit.models.identity import OpenRouterIdentityBindingResult
 from mmaudit.models.openrouter import (
     OpenRouterClient,
     OpenRouterProviderPolicy,
@@ -29,11 +33,21 @@ from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     ModelIdentityStrength,
     ModelRequestValidationStatus,
+    UsageRecord,
 )
-from mmaudit.models.usage import UsageLedger, is_creditable_usage_record
+from mmaudit.models.usage import (
+    UsageLedger,
+    is_creditable_usage_record,
+    is_generation_bindable_usage_record,
+)
 from mmaudit.operator_secrets import load_operator_secrets
 from mmaudit.orchestration.budgets import BudgetManager
-from mmaudit.orchestration.cost_ledger import AtomicCostLedger, CostEntryStatus
+from mmaudit.orchestration.cost_ledger import (
+    AtomicCostLedger,
+    CostEntry,
+    CostEntryStatus,
+    CostLedgerSnapshot,
+)
 from mmaudit.release_io import read_json_evidence
 from tests.real_provider_harness import (
     REAL_PROVIDER_OPT_IN,
@@ -41,15 +55,20 @@ from tests.real_provider_harness import (
     SMOKE_MAX_OUTPUT_TOKENS,
     SMOKE_REASONING_EFFORT,
     RealProviderSmokeEvidence,
+    RealProviderSmokeRejectionEvidence,
+    RealProviderTestSettings,
     SyntheticProviderSmokeResponse,
     load_pinned_synthetic_smoke_fixture,
     load_real_provider_test_settings,
     preflight_real_provider_smoke_output,
+    real_provider_smoke_rejection_output_path,
     real_provider_smoke_verification_subject_sha256,
     real_provider_tests_enabled,
     seal_real_provider_smoke_evidence,
+    seal_real_provider_smoke_rejection_evidence,
     validate_smoke_reasoning_off_preflight,
     write_real_provider_smoke_evidence,
+    write_real_provider_smoke_rejection_evidence,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -218,7 +237,7 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     "exclude": True,
                     "effort": SMOKE_REASONING_EFFORT,
                 }
-                response = await client.complete(
+                completion = await client.complete_with_evidence(
                     role="real_provider_smoke",
                     models=[settings.model_id],
                     system_prompt=_SYSTEM_PROMPT,
@@ -226,7 +245,47 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     response_model=SyntheticProviderSmokeResponse,
                     schema_name="mmaudit_real_provider_smoke_v1",
                 )
-                record = usage.records[0]
+                response = completion.value
+                record = completion.usage_record
+                assert usage.records == [record]
+                if record.identity_strength is ModelIdentityStrength.UNBOUND:
+                    snapshot = atomic_ledger.snapshot()
+                    ledger_entry, smoke_spend_delta = _reconciled_smoke_ledger_entry(
+                        snapshot=snapshot,
+                        ledger_before=ledger_before,
+                        record=record,
+                    )
+                    rejection_output, rejection = _write_unbound_smoke_rejection(
+                        settings=settings,
+                        fixture_source=fixture_source,
+                        fixture_sha256=fixture_sha256,
+                        user_prompt=user_prompt,
+                        canonical_model_id=discovery_payload.canonical_slug,
+                        endpoint_snapshot_sha256=endpoint_snapshot.snapshot_sha256,
+                        model_metadata_snapshot_sha256=(
+                            discovery_payload.model_metadata_snapshot_sha256
+                        ),
+                        discovery_provenance_sha256=(
+                            discovery_evidence[0].provenance.provenance_sha256
+                        ),
+                        discovery_evidence_sha256=(discovery_evidence[0].discovery_evidence_sha256),
+                        record=record,
+                        response=response,
+                        ledger_before=ledger_before,
+                        snapshot=snapshot,
+                        ledger_entry=ledger_entry,
+                        smoke_spend_delta=smoke_spend_delta,
+                        api_key=api_key,
+                    )
+                    client.clear_retained_unbound_completions()
+                    diagnostics = ",".join(
+                        code.value for code in rejection.identity_diagnostic_codes
+                    )
+                    raise AssertionError(
+                        "provider smoke identity remained unbound; "
+                        f"diagnostics={diagnostics}; "
+                        f"rejection_artifact={rejection_output.name}"
+                    )
                 selected_provider_name = record.routing.get("selected_provider_name")
                 if not isinstance(selected_provider_name, str):
                     raise AssertionError("provider response omitted its selected provider")
@@ -463,6 +522,236 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
             assert RealProviderSmokeEvidence.model_validate(observed.value) == evidence
     finally:
         api_key = None
+
+
+def _reconciled_smoke_ledger_entry(
+    *,
+    snapshot: CostLedgerSnapshot,
+    ledger_before: CostLedgerSnapshot,
+    record: UsageRecord,
+) -> tuple[CostEntry, Decimal]:
+    if (
+        snapshot.active_reserved_usd != 0
+        or snapshot.over_cap
+        or snapshot.has_reservation_overrun
+        or snapshot.spent_usd > snapshot.cap_usd
+    ):
+        raise AssertionError("provider smoke ledger is not safely reconciled")
+    matching_entries = [
+        entry for entry in snapshot.entries if entry.request_id == record.request_id
+    ]
+    if len(matching_entries) != 1:
+        raise AssertionError("provider smoke ledger lacks one exact request entry")
+    ledger_entry = matching_entries[0]
+    if (
+        ledger_entry.status is not CostEntryStatus.RECONCILED
+        or ledger_entry.actual_cost_usd is None
+        or record.reported_cost_usd is None
+        or ledger_entry.actual_cost_usd != Decimal(str(record.reported_cost_usd))
+        or ledger_entry.accounted_cost_usd != Decimal(str(record.accounted_cost_usd))
+    ):
+        raise AssertionError("provider smoke ledger entry does not reconcile runtime usage")
+    smoke_spend_delta = snapshot.spent_usd - ledger_before.spent_usd
+    if smoke_spend_delta != ledger_entry.accounted_cost_usd:
+        raise AssertionError("provider smoke spend delta is invalid")
+    return ledger_entry, smoke_spend_delta
+
+
+def _write_unbound_smoke_rejection(
+    *,
+    settings: RealProviderTestSettings,
+    fixture_source: str,
+    fixture_sha256: str,
+    user_prompt: str,
+    canonical_model_id: str,
+    endpoint_snapshot_sha256: str,
+    model_metadata_snapshot_sha256: str,
+    discovery_provenance_sha256: str,
+    discovery_evidence_sha256: str,
+    record: UsageRecord,
+    response: SyntheticProviderSmokeResponse,
+    ledger_before: CostLedgerSnapshot,
+    snapshot: CostLedgerSnapshot,
+    ledger_entry: CostEntry,
+    smoke_spend_delta: Decimal,
+    api_key: str,
+) -> tuple[Path, RealProviderSmokeRejectionEvidence]:
+    if (
+        record.identity_strength is not ModelIdentityStrength.UNBOUND
+        or record.routing.get("identity_binding_status") != "generation_metadata_unbound"
+        or not is_generation_bindable_usage_record(record)
+        or is_creditable_usage_record(
+            record,
+            require_real=True,
+            require_certification=True,
+        )
+    ):
+        raise AssertionError("provider rejection sink requires one concluded unbound response")
+    actual_cost_usd = ledger_entry.actual_cost_usd
+    if actual_cost_usd is None:
+        raise AssertionError("provider rejection lacks reconciled actual cost")
+    raw_binding = record.routing.get("identity_binding")
+    if not isinstance(raw_binding, dict):
+        raise AssertionError("provider rejection omitted typed identity binding evidence")
+    identity_binding = OpenRouterIdentityBindingResult.model_validate(raw_binding)
+    if (
+        identity_binding.strength is not ModelIdentityStrength.UNBOUND
+        or not identity_binding.diagnostic_codes
+        or identity_binding.binding_sha256 != record.routing.get("identity_binding_sha256")
+    ):
+        raise AssertionError("provider rejection identity binding is inconsistent")
+    binding_request = identity_binding.request
+    binding_snapshot = identity_binding.snapshot
+    started_at = record.started_at
+    ended_at = record.ended_at
+    selected_provider_name = record.routing.get("selected_provider_name")
+    if (
+        started_at is None
+        or ended_at is None
+        or binding_request.execution_evidence != record.execution_evidence.value
+        or binding_request.internal_request_id != record.request_id
+        or binding_request.requested_slug != settings.model_id
+        or binding_request.returned_slug != record.returned_model
+        or binding_request.selected_model_slug != record.actual_model
+        or binding_request.actual_provider_endpoint != record.actual_provider_endpoint
+        or binding_request.actual_provider_name != selected_provider_name
+        or binding_request.openrouter_generation_id != record.openrouter_generation_id
+        or binding_request.request_body_sha256 != record.request_body_sha256
+        or binding_request.response_sha256 != record.response_sha256
+        or binding_request.validated_response_sha256 != record.validated_response_sha256
+        or binding_request.started_at != started_at.astimezone(UTC).replace(microsecond=0)
+        or binding_request.completed_at != ended_at.astimezone(UTC).replace(microsecond=0)
+        or binding_request.fallback_used != record.routing.get("provider_fallback_used")
+        or binding_snapshot.requested_slug != settings.model_id
+        or binding_snapshot.canonical_slug != canonical_model_id
+        or binding_snapshot.approved_provider_endpoint != settings.provider_endpoint_allowlist[0]
+        or binding_snapshot.provider_name != selected_provider_name
+        or binding_snapshot.snapshot_sha256 != record.routing.get("identity_snapshot_sha256")
+        or binding_snapshot.endpoint_snapshot_sha256 != endpoint_snapshot_sha256
+        or binding_snapshot.model_metadata_snapshot_sha256 != model_metadata_snapshot_sha256
+        or binding_snapshot.discovery_provenance_sha256 != discovery_provenance_sha256
+        or binding_snapshot.discovery_evidence_sha256 != discovery_evidence_sha256
+    ):
+        raise AssertionError("provider rejection identity binding does not match runtime evidence")
+    raw_generation_observation = record.routing.get("unbound_generation_observation")
+    generation_observation = (
+        None
+        if raw_generation_observation is None
+        else OpenRouterGenerationEvidence.model_validate(raw_generation_observation)
+    )
+    rejection = seal_real_provider_smoke_rejection_evidence(
+        {
+            "schema_version": "1.0",
+            "ticket_id": "V3-SMOKE-001",
+            "evidence_kind": "real_openrouter_synthetic_smoke_rejection",
+            "status": "REJECTED_IDENTITY_UNBOUND",
+            "creditable": False,
+            "execution_evidence": record.execution_evidence.value,
+            "fixture_path": SMOKE_FIXTURE_PATH,
+            "fixture_sha256": fixture_sha256,
+            "internal_request_id": record.request_id,
+            "openrouter_generation_id": record.openrouter_generation_id,
+            "requested_model_id": settings.model_id,
+            "canonical_model_id": canonical_model_id,
+            "returned_model_id": record.returned_model,
+            "selected_model_id": record.actual_model,
+            "approved_provider_endpoint": settings.provider_endpoint_allowlist[0],
+            "actual_provider_endpoint": record.actual_provider_endpoint,
+            "selected_provider_identity": record.routing.get("selected_provider_identity"),
+            "selected_provider_name": record.routing.get("selected_provider_name"),
+            "response_provider_identity": record.routing.get("response_provider_identity"),
+            "model_identity_control_satisfied": (
+                record.returned_model in {settings.model_id, canonical_model_id}
+                and record.actual_model in {settings.model_id, canonical_model_id}
+            ),
+            "endpoint_control_satisfied": (
+                record.actual_provider_endpoint == settings.provider_endpoint_allowlist[0]
+            ),
+            "provider_policy_sha256": _routing_sha256(
+                record.routing,
+                "provider_policy_sha256",
+            ),
+            "endpoint_snapshot_sha256": endpoint_snapshot_sha256,
+            "model_metadata_snapshot_sha256": model_metadata_snapshot_sha256,
+            "discovery_provenance_sha256": discovery_provenance_sha256,
+            "discovery_evidence_sha256": discovery_evidence_sha256,
+            "identity_snapshot_sha256": _routing_sha256(
+                record.routing,
+                "identity_snapshot_sha256",
+            ),
+            "identity_binding_sha256": identity_binding.binding_sha256,
+            "identity_binding_status": "generation_metadata_unbound",
+            "identity_diagnostic_codes": identity_binding.diagnostic_codes,
+            "generation_observation": generation_observation,
+            "prompt_sha256": record.prompt_sha256,
+            "user_prompt_sha256": record.user_prompt_sha256,
+            "schema_sha256": record.schema_sha256,
+            "request_body_sha256": record.request_body_sha256,
+            "response_sha256": record.response_sha256,
+            "validated_response_sha256": record.validated_response_sha256,
+            "started_at": record.started_at,
+            "ended_at": record.ended_at,
+            "latency_ms": record.latency_ms,
+            "finish_reason": record.finish_reason,
+            "prompt_tokens": record.prompt_tokens,
+            "completion_tokens": record.completion_tokens,
+            "reasoning_tokens": record.reasoning_tokens,
+            "cached_tokens": record.cached_tokens,
+            "total_tokens": record.total_tokens,
+            "requested_max_output_tokens": SMOKE_MAX_OUTPUT_TOKENS,
+            "requested_reasoning_effort": SMOKE_REASONING_EFFORT,
+            "requested_reasoning_excluded": True,
+            "reasoning_control_satisfied": record.reasoning_tokens == 0,
+            "output_control_satisfied": (record.completion_tokens <= SMOKE_MAX_OUTPUT_TOKENS),
+            "actual_cost_usd": _canonical_money(actual_cost_usd),
+            "accounted_cost_usd": _canonical_money(ledger_entry.accounted_cost_usd),
+            "ledger_cap_usd": _canonical_money(snapshot.cap_usd),
+            "ledger_spent_before_usd": _canonical_money(ledger_before.spent_usd),
+            "ledger_spent_usd": _canonical_money(snapshot.spent_usd),
+            "smoke_spend_delta_usd": _canonical_money(smoke_spend_delta),
+            "ledger_active_reserved_usd": "0",
+            "ledger_remaining_usd": _canonical_money(snapshot.remaining_usd),
+            "stage_cost_control_satisfied": smoke_spend_delta <= _SMOKE_STAGE_CAP_USD,
+            "validation_status": record.validation_status.value,
+            "identity_strength": record.identity_strength.value,
+            "privacy_profile": settings.privacy_profile,
+            "require_zdr": True,
+            "data_collection": "deny",
+            "allow_fallbacks": False,
+            "fallback_used": record.fallback_used,
+            "substitution_detected": record.substitution_detected,
+            "raw_prompts_stored": False,
+            "raw_responses_stored": False,
+            "validated_output": response.model_dump(mode="json"),
+        }
+    )
+    rejection_output = real_provider_smoke_rejection_output_path(
+        success_output=settings.evidence_output,
+        internal_request_id=record.request_id,
+    )
+    file_binding = write_real_provider_smoke_rejection_evidence(
+        success_output=settings.evidence_output,
+        evidence=rejection,
+        forbidden_values=(
+            api_key,
+            str(settings.secret_file),
+            fixture_source,
+            _SYSTEM_PROMPT,
+            user_prompt,
+        ),
+    )
+    observed = read_json_evidence(
+        evidence_root=rejection_output.parent,
+        relative_path=rejection_output.name,
+        max_bytes=64_000,
+    )
+    if (
+        observed.binding != file_binding
+        or RealProviderSmokeRejectionEvidence.model_validate(observed.value) != rejection
+        or settings.evidence_output.exists()
+    ):
+        raise AssertionError("provider rejection artifact did not round-trip safely")
+    return rejection_output, rejection
 
 
 def _assert_private_exact_request(

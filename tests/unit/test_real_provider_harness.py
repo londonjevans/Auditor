@@ -2,13 +2,40 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from mmaudit.models.schemas import ModelIdentityStrength
+from mmaudit.models.generation_evidence import validate_openrouter_generation_payload
+from mmaudit.models.identity import (
+    OpenRouterIdentityBindingResult,
+    OpenRouterIdentityDiagnosticCode,
+    seal_unbound_openrouter_identity,
+)
+from mmaudit.models.schemas import (
+    ExecutionEvidenceKind,
+    ModelIdentityStrength,
+    ModelRequestValidationStatus,
+    UsageRecord,
+)
+from mmaudit.models.usage import is_generation_bindable_usage_record
+from mmaudit.orchestration.cost_ledger import (
+    CostEntry,
+    CostEntryStatus,
+    CostLedgerSnapshot,
+)
+from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.release_io import read_json_evidence
+from tests.identity_fixtures import (
+    bind_synthetic_usage_identity,
+    reattest_synthetic_real_usage,
+)
+from tests.integration.test_real_openrouter_provider import (
+    _reconciled_smoke_ledger_entry,
+    _write_unbound_smoke_rejection,
+)
 from tests.real_provider_harness import (
     REAL_PROVIDER_COST_CAP,
     REAL_PROVIDER_COST_LEDGER,
@@ -24,16 +51,21 @@ from tests.real_provider_harness import (
     SMOKE_MAX_OUTPUT_TOKENS,
     SMOKE_REASONING_EFFORT,
     RealProviderSmokeEvidence,
+    RealProviderSmokeRejectionEvidence,
     RealProviderTestConfigurationError,
+    RealProviderTestSettings,
     SyntheticProviderSmokeResponse,
     load_pinned_synthetic_smoke_fixture,
     load_real_provider_test_settings,
     preflight_real_provider_smoke_output,
+    real_provider_smoke_rejection_output_path,
     real_provider_smoke_verification_subject_sha256,
     real_provider_tests_enabled,
     seal_real_provider_smoke_evidence,
+    seal_real_provider_smoke_rejection_evidence,
     validate_smoke_reasoning_off_preflight,
     write_real_provider_smoke_evidence,
+    write_real_provider_smoke_rejection_evidence,
 )
 
 
@@ -367,6 +399,233 @@ def _valid_smoke_evidence_payload() -> dict[str, object]:
     return payload
 
 
+def _valid_smoke_rejection_payload() -> dict[str, object]:
+    success = _valid_smoke_evidence_payload()
+    generation_observation = validate_openrouter_generation_payload(
+        {
+            "data": {
+                "id": success["openrouter_generation_id"],
+                "model": success["canonical_model_id"],
+                "provider_name": "Different Provider",
+                "finish_reason": "stop",
+                "native_finish_reason": "stop",
+                "tokens_prompt": success["prompt_tokens"],
+                "tokens_completion": success["completion_tokens"],
+                "native_tokens_prompt": success["prompt_tokens"],
+                "native_tokens_completion": success["completion_tokens"],
+                "native_tokens_reasoning": success["reasoning_tokens"],
+                "native_tokens_cached": success["cached_tokens"],
+                "total_cost": float(str(success["actual_cost_usd"])),
+                "usage": float(str(success["actual_cost_usd"])),
+                "cancelled": False,
+                "created_at": success["started_at"],
+                "prompt": "raw-provider-prompt-canary",
+                "completion": "raw-provider-completion-canary",
+            }
+        },
+        requested_generation_id=str(success["openrouter_generation_id"]),
+        retrieved_at=datetime(2026, 7, 28, 12, 0, 2, tzinfo=UTC),
+        execution_evidence=ExecutionEvidenceKind.REAL,
+    )
+    return {
+        "schema_version": "1.0",
+        "ticket_id": "V3-SMOKE-001",
+        "evidence_kind": "real_openrouter_synthetic_smoke_rejection",
+        "status": "REJECTED_IDENTITY_UNBOUND",
+        "creditable": False,
+        "execution_evidence": "real",
+        "fixture_path": success["fixture_path"],
+        "fixture_sha256": success["fixture_sha256"],
+        "internal_request_id": success["internal_request_id"],
+        "openrouter_generation_id": success["openrouter_generation_id"],
+        "requested_model_id": success["requested_model_id"],
+        "canonical_model_id": success["canonical_model_id"],
+        "returned_model_id": success["returned_model_id"],
+        "selected_model_id": success["canonical_model_id"],
+        "approved_provider_endpoint": success["approved_provider_endpoint"],
+        "actual_provider_endpoint": success["actual_provider_endpoint"],
+        "selected_provider_identity": "akashml/fp8",
+        "selected_provider_name": success["actual_provider_name"],
+        "response_provider_identity": "akashml/fp8",
+        "model_identity_control_satisfied": True,
+        "endpoint_control_satisfied": True,
+        "provider_policy_sha256": success["provider_policy_sha256"],
+        "endpoint_snapshot_sha256": success["endpoint_snapshot_sha256"],
+        "model_metadata_snapshot_sha256": success["model_metadata_snapshot_sha256"],
+        "discovery_provenance_sha256": success["discovery_provenance_sha256"],
+        "discovery_evidence_sha256": success["discovery_evidence_sha256"],
+        "identity_snapshot_sha256": success["identity_snapshot_sha256"],
+        "identity_binding_sha256": "f" * 64,
+        "identity_binding_status": "generation_metadata_unbound",
+        "identity_diagnostic_codes": [
+            OpenRouterIdentityDiagnosticCode.GENERATION_PROVIDER_MISMATCH.value
+        ],
+        "generation_observation": generation_observation.model_dump(mode="json"),
+        "prompt_sha256": success["prompt_sha256"],
+        "user_prompt_sha256": success["user_prompt_sha256"],
+        "schema_sha256": success["schema_sha256"],
+        "request_body_sha256": success["request_body_sha256"],
+        "response_sha256": success["response_sha256"],
+        "validated_response_sha256": success["validated_response_sha256"],
+        "started_at": success["started_at"],
+        "ended_at": success["ended_at"],
+        "latency_ms": success["latency_ms"],
+        "finish_reason": success["finish_reason"],
+        "prompt_tokens": success["prompt_tokens"],
+        "completion_tokens": success["completion_tokens"],
+        "reasoning_tokens": success["reasoning_tokens"],
+        "cached_tokens": success["cached_tokens"],
+        "total_tokens": success["total_tokens"],
+        "requested_max_output_tokens": success["requested_max_output_tokens"],
+        "requested_reasoning_effort": success["requested_reasoning_effort"],
+        "requested_reasoning_excluded": success["requested_reasoning_excluded"],
+        "reasoning_control_satisfied": True,
+        "output_control_satisfied": True,
+        "actual_cost_usd": success["actual_cost_usd"],
+        "accounted_cost_usd": success["accounted_cost_usd"],
+        "ledger_cap_usd": success["ledger_cap_usd"],
+        "ledger_spent_before_usd": success["ledger_spent_before_usd"],
+        "ledger_spent_usd": success["ledger_spent_usd"],
+        "smoke_spend_delta_usd": success["smoke_spend_delta_usd"],
+        "ledger_active_reserved_usd": success["ledger_active_reserved_usd"],
+        "ledger_remaining_usd": success["ledger_remaining_usd"],
+        "stage_cost_control_satisfied": True,
+        "validation_status": success["validation_status"],
+        "identity_strength": ModelIdentityStrength.UNBOUND.value,
+        "privacy_profile": success["privacy_profile"],
+        "require_zdr": success["require_zdr"],
+        "data_collection": success["data_collection"],
+        "allow_fallbacks": success["allow_fallbacks"],
+        "fallback_used": success["fallback_used"],
+        "substitution_detected": success["substitution_detected"],
+        "raw_prompts_stored": success["raw_prompts_stored"],
+        "raw_responses_stored": success["raw_responses_stored"],
+        "validated_output": success["validated_output"],
+    }
+
+
+def _synthetic_unbound_real_smoke_record() -> UsageRecord:
+    success = _valid_smoke_evidence_payload()
+    requested_model = str(success["requested_model_id"])
+    canonical_model = str(success["canonical_model_id"])
+    endpoint = str(success["approved_provider_endpoint"])
+    provider_name = str(success["actual_provider_name"])
+    started_at = datetime.fromisoformat(str(success["started_at"]))
+    ended_at = datetime.fromisoformat(str(success["ended_at"]))
+    routing = {
+        "generation_id": success["openrouter_generation_id"],
+        "provider": provider_name,
+        "selected_model": canonical_model,
+        "canonical_model": canonical_model,
+        "selected_provider_endpoint": endpoint,
+        "selected_provider_identity": endpoint,
+        "selected_provider_name": provider_name,
+        "response_provider_identity": endpoint,
+        "router_strategy": "direct",
+        "router_attempt": 1,
+        "router_attempt_count": 1,
+        "router_attempts_observed": True,
+        "router_metadata_sha256": "1" * 64,
+        "router_pipeline": [],
+        "finish_reason": "stop",
+        "native_finish_reason": "stop",
+        "reasoning_tokens": success["reasoning_tokens"],
+        "cached_tokens": success["cached_tokens"],
+        "schema_sha256": success["schema_sha256"],
+        "provider_policy_sha256": success["provider_policy_sha256"],
+        "endpoint_snapshot_sha256": success["endpoint_snapshot_sha256"],
+        "endpoint_pricing_sha256": "0" * 64,
+        "catalog_identity_binding_sha256": canonical_sha256(
+            {
+                "canonical_slug": canonical_model,
+                "id": requested_model,
+            }
+        ),
+        "catalog_snapshot_sha256": "2" * 64,
+        "model_metadata_snapshot_sha256": success["model_metadata_snapshot_sha256"],
+        "discovery_provenance_sha256": success["discovery_provenance_sha256"],
+        "discovery_evidence_sha256": success["discovery_evidence_sha256"],
+        "configured_provider_only": [endpoint],
+        "configured_provider_order": [],
+        "provider_fallbacks_allowed": False,
+        "provider_fallback_used": False,
+        "host_model_fallback_used": False,
+        "certification_request": True,
+        "zdr_requested": True,
+        "data_collection": "deny",
+        "request_started_at": started_at.isoformat(),
+        "request_ended_at": ended_at.isoformat(),
+        "latency_ms": success["latency_ms"],
+        "validation_status": "valid",
+        "repair_used": False,
+        "repair_request": False,
+    }
+    provisional = UsageRecord(
+        request_id=str(success["internal_request_id"]),
+        role="real_provider_smoke",
+        execution_evidence=ExecutionEvidenceKind.REAL,
+        requested_model=requested_model,
+        returned_model=str(success["returned_model_id"]),
+        actual_model=canonical_model,
+        provider=provider_name,
+        model_family="qwen",
+        timestamp=started_at,
+        prompt_tokens=int(success["prompt_tokens"]),
+        completion_tokens=int(success["completion_tokens"]),
+        total_tokens=int(success["total_tokens"]),
+        reported_cost_usd=float(str(success["actual_cost_usd"])),
+        accounted_cost_usd=float(str(success["accounted_cost_usd"])),
+        routing=routing,
+        prompt_sha256=str(success["prompt_sha256"]),
+        user_prompt_sha256=str(success["user_prompt_sha256"]),
+        response_sha256=str(success["response_sha256"]),
+        validated_response_sha256=str(success["validated_response_sha256"]),
+        request_body_sha256=str(success["request_body_sha256"]),
+        schema_sha256=str(success["schema_sha256"]),
+        openrouter_generation_id=str(success["openrouter_generation_id"]),
+        configured_provider_endpoints=[endpoint],
+        actual_provider_endpoint=endpoint,
+        started_at=started_at,
+        ended_at=ended_at,
+        latency_ms=int(success["latency_ms"]),
+        finish_reason="stop",
+        reasoning_tokens=int(success["reasoning_tokens"]),
+        cached_tokens=int(success["cached_tokens"]),
+        retry_count=0,
+        validation_status=ModelRequestValidationStatus.VALID,
+        identity_strength=ModelIdentityStrength.UNBOUND,
+        fallback_used=False,
+        substitution_detected=False,
+        status="success",
+        attempts=1,
+    )
+    bound = bind_synthetic_usage_identity(provisional)
+    bound_identity = OpenRouterIdentityBindingResult.model_validate(
+        bound.routing["identity_binding"]
+    )
+    unbound_identity = seal_unbound_openrouter_identity(
+        snapshot=bound_identity.snapshot,
+        request=bound_identity.request,
+        diagnostic_codes=(OpenRouterIdentityDiagnosticCode.GENERATION_PROVIDER_MISMATCH,),
+        evaluated_at=bound_identity.evaluated_at,
+    )
+    generation_observation = _valid_smoke_rejection_payload()["generation_observation"]
+    unbound = UsageRecord.model_validate(
+        {
+            **bound.model_dump(mode="json"),
+            "identity_strength": ModelIdentityStrength.UNBOUND,
+            "routing": {
+                **bound.routing,
+                "identity_binding": unbound_identity.model_dump(mode="json"),
+                "identity_binding_sha256": unbound_identity.binding_sha256,
+                "identity_binding_status": "generation_metadata_unbound",
+                "unbound_generation_observation": generation_observation,
+            },
+        }
+    )
+    return reattest_synthetic_real_usage(unbound)
+
+
 def test_real_provider_smoke_evidence_rejects_unbound_or_substituted_identity() -> None:
     payload = _valid_smoke_evidence_payload()
     payload["identity_strength"] = ModelIdentityStrength.UNBOUND.value
@@ -457,4 +716,248 @@ def test_real_provider_smoke_evidence_writer_rejects_forbidden_value(
             output_path=tmp_path / "provider-smoke.json",
             evidence=evidence,
             forbidden_values=("synthetic-secret-canary",),
+        )
+
+
+def test_real_provider_smoke_rejection_is_typed_self_hashed_and_never_success() -> None:
+    rejection = seal_real_provider_smoke_rejection_evidence(_valid_smoke_rejection_payload())
+
+    assert rejection.status == "REJECTED_IDENTITY_UNBOUND"
+    assert rejection.creditable is False
+    assert rejection.identity_strength is ModelIdentityStrength.UNBOUND
+    assert rejection.identity_diagnostic_codes == (
+        OpenRouterIdentityDiagnosticCode.GENERATION_PROVIDER_MISMATCH,
+    )
+    assert rejection.generation_observation is not None
+    assert rejection.generation_observation.provider_name == "Different Provider"
+    with pytest.raises(ValidationError):
+        RealProviderSmokeEvidence.model_validate(rejection.model_dump(mode="json"))
+
+    tampered = rejection.model_dump(mode="json")
+    tampered["selected_provider_identity"] = "different/provider"
+    with pytest.raises(ValidationError, match="self-hash"):
+        RealProviderSmokeRejectionEvidence.model_validate(tampered)
+
+
+def test_real_provider_smoke_rejection_preserves_secondary_control_failures() -> None:
+    payload = _valid_smoke_rejection_payload()
+    payload["actual_provider_endpoint"] = "different-provider/fp8"
+    payload["endpoint_control_satisfied"] = False
+    payload["reasoning_tokens"] = 1
+    payload["reasoning_control_satisfied"] = False
+
+    rejection = seal_real_provider_smoke_rejection_evidence(payload)
+
+    assert rejection.endpoint_control_satisfied is False
+    assert rejection.reasoning_control_satisfied is False
+    assert rejection.creditable is False
+
+
+def test_real_provider_smoke_rejection_preserves_missing_generation_diagnostics() -> None:
+    payload = _valid_smoke_rejection_payload()
+    payload["generation_observation"] = None
+    payload["identity_diagnostic_codes"] = [
+        OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_MISSING.value,
+        OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_TIMEOUT.value,
+    ]
+
+    rejection = seal_real_provider_smoke_rejection_evidence(payload)
+
+    assert rejection.generation_observation is None
+    assert rejection.identity_diagnostic_codes == (
+        OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_MISSING,
+        OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_TIMEOUT,
+    )
+
+
+@pytest.mark.parametrize(
+    "diagnostics",
+    [
+        [],
+        [
+            OpenRouterIdentityDiagnosticCode.PROVIDER_MISMATCH.value,
+            OpenRouterIdentityDiagnosticCode.GENERATION_PROVIDER_MISMATCH.value,
+        ],
+        [
+            OpenRouterIdentityDiagnosticCode.GENERATION_PROVIDER_MISMATCH.value,
+            OpenRouterIdentityDiagnosticCode.GENERATION_PROVIDER_MISMATCH.value,
+        ],
+    ],
+)
+def test_real_provider_smoke_rejection_requires_nonempty_sorted_unique_diagnostics(
+    diagnostics: list[str],
+) -> None:
+    payload = _valid_smoke_rejection_payload()
+    payload["identity_diagnostic_codes"] = diagnostics
+
+    with pytest.raises(ValidationError, match="diagnostic"):
+        seal_real_provider_smoke_rejection_evidence(payload)
+
+
+def test_real_provider_smoke_rejection_writer_is_separate_fresh_private_and_secret_free(
+    tmp_path: Path,
+) -> None:
+    rejection = seal_real_provider_smoke_rejection_evidence(_valid_smoke_rejection_payload())
+    success_output = tmp_path / "provider-smoke.json"
+    rejection_output = real_provider_smoke_rejection_output_path(
+        success_output=success_output,
+        internal_request_id=rejection.internal_request_id,
+    )
+
+    assert rejection_output.parent == success_output.parent
+    assert rejection_output != success_output
+    assert rejection.internal_request_id not in rejection_output.name
+    binding = write_real_provider_smoke_rejection_evidence(
+        success_output=success_output,
+        evidence=rejection,
+        forbidden_values=(
+            "synthetic-secret-canary",
+            "/operator/control/openrouter.env",
+            "contract ProviderSmoke",
+        ),
+    )
+    observed = read_json_evidence(
+        evidence_root=tmp_path,
+        relative_path=rejection_output.name,
+    )
+    assert observed.binding == binding
+    assert RealProviderSmokeRejectionEvidence.model_validate(observed.value) == rejection
+    assert "synthetic-secret-canary" not in observed.content.decode()
+    assert "contract ProviderSmoke" not in observed.content.decode()
+    assert "raw-provider-prompt-canary" not in observed.content.decode()
+    assert "raw-provider-completion-canary" not in observed.content.decode()
+    assert not success_output.exists()
+    assert rejection_output.stat().st_mode & 0o777 == 0o600
+
+    with pytest.raises(ValueError, match="fresh"):
+        write_real_provider_smoke_rejection_evidence(
+            success_output=success_output,
+            evidence=rejection,
+            forbidden_values=(),
+        )
+
+
+def test_real_provider_smoke_rejection_writer_rejects_forbidden_value(
+    tmp_path: Path,
+) -> None:
+    payload = _valid_smoke_rejection_payload()
+    payload["selected_provider_name"] = "synthetic-secret-canary"
+    rejection = seal_real_provider_smoke_rejection_evidence(payload)
+
+    with pytest.raises(ValueError, match="forbidden"):
+        write_real_provider_smoke_rejection_evidence(
+            success_output=tmp_path / "provider-smoke.json",
+            evidence=rejection,
+            forbidden_values=("synthetic-secret-canary",),
+        )
+
+
+def test_unbound_smoke_integration_branch_requires_live_real_evidence_and_writes_rejection(
+    tmp_path: Path,
+) -> None:
+    record = _synthetic_unbound_real_smoke_record()
+    assert is_generation_bindable_usage_record(record)
+    settings = RealProviderTestSettings(
+        secret_file=tmp_path / "operator-control.env",
+        cost_ledger=tmp_path / "cost-ledger.json",
+        cost_cap_usd=Decimal("250"),
+        model_id=record.requested_model,
+        model_allowlist=(record.requested_model,),
+        provider_endpoint_allowlist=(str(record.actual_provider_endpoint),),
+        privacy_profile="STRICT_ZDR",
+        evidence_output=tmp_path / "provider-smoke.json",
+    )
+    entry = CostEntry(
+        request_id=record.request_id,
+        reservation_id="reservation-smoke-1",
+        status=CostEntryStatus.RECONCILED,
+        reserved_usd=Decimal("0.001"),
+        actual_cost_usd=Decimal("0.0002"),
+        accounted_cost_usd=Decimal("0.0002"),
+        release_reason=None,
+        created_at=record.started_at or datetime(2026, 7, 28, 12, 0, tzinfo=UTC),
+        updated_at=record.ended_at or datetime(2026, 7, 28, 12, 0, 1, tzinfo=UTC),
+    )
+    ledger_before = CostLedgerSnapshot(
+        cap_usd=Decimal("250"),
+        spent_usd=Decimal("0.00118674"),
+        active_reserved_usd=Decimal("0"),
+        remaining_usd=Decimal("249.99881326"),
+        over_cap=False,
+        has_reservation_overrun=False,
+        entries=(),
+    )
+    snapshot = CostLedgerSnapshot(
+        cap_usd=Decimal("250"),
+        spent_usd=Decimal("0.00138674"),
+        active_reserved_usd=Decimal("0"),
+        remaining_usd=Decimal("249.99861326"),
+        over_cap=False,
+        has_reservation_overrun=False,
+        entries=(entry,),
+    )
+    ledger_entry, spend_delta = _reconciled_smoke_ledger_entry(
+        snapshot=snapshot,
+        ledger_before=ledger_before,
+        record=record,
+    )
+    binding = OpenRouterIdentityBindingResult.model_validate(record.routing["identity_binding"])
+    repository_root = Path(__file__).resolve().parents[2]
+    fixture_source, fixture_sha256 = load_pinned_synthetic_smoke_fixture(repository_root)
+    user_prompt = f"synthetic local prompt\n{fixture_source}"
+
+    rejection_output, rejection = _write_unbound_smoke_rejection(
+        settings=settings,
+        fixture_source=fixture_source,
+        fixture_sha256=fixture_sha256,
+        user_prompt=user_prompt,
+        canonical_model_id=binding.snapshot.canonical_slug,
+        endpoint_snapshot_sha256=binding.snapshot.endpoint_snapshot_sha256,
+        model_metadata_snapshot_sha256=(binding.snapshot.model_metadata_snapshot_sha256),
+        discovery_provenance_sha256=binding.snapshot.discovery_provenance_sha256,
+        discovery_evidence_sha256=binding.snapshot.discovery_evidence_sha256,
+        record=record,
+        response=SyntheticProviderSmokeResponse(
+            status="OK",
+            marker="mmaudit-synthetic-provider-smoke-v1",
+        ),
+        ledger_before=ledger_before,
+        snapshot=snapshot,
+        ledger_entry=ledger_entry,
+        smoke_spend_delta=spend_delta,
+        api_key="synthetic-api-key-canary",
+    )
+
+    assert rejection.status == "REJECTED_IDENTITY_UNBOUND"
+    assert rejection.creditable is False
+    assert rejection_output.exists()
+    assert not settings.evidence_output.exists()
+    serialized = rejection_output.read_text(encoding="utf-8")
+    assert "synthetic-api-key-canary" not in serialized
+    assert fixture_source not in serialized
+    assert user_prompt not in serialized
+
+    unattested = UsageRecord.model_validate(record.model_dump(mode="json"))
+    assert not is_generation_bindable_usage_record(unattested)
+    with pytest.raises(AssertionError, match="concluded unbound"):
+        _write_unbound_smoke_rejection(
+            settings=settings,
+            fixture_source=fixture_source,
+            fixture_sha256=fixture_sha256,
+            user_prompt=user_prompt,
+            canonical_model_id=binding.snapshot.canonical_slug,
+            endpoint_snapshot_sha256=binding.snapshot.endpoint_snapshot_sha256,
+            model_metadata_snapshot_sha256=(binding.snapshot.model_metadata_snapshot_sha256),
+            discovery_provenance_sha256=(binding.snapshot.discovery_provenance_sha256),
+            discovery_evidence_sha256=binding.snapshot.discovery_evidence_sha256,
+            record=unattested,
+            response=SyntheticProviderSmokeResponse(
+                status="OK",
+                marker="mmaudit-synthetic-provider-smoke-v1",
+            ),
+            ledger_before=ledger_before,
+            snapshot=snapshot,
+            ledger_entry=ledger_entry,
+            smoke_spend_delta=spend_delta,
+            api_key="synthetic-api-key-canary",
         )

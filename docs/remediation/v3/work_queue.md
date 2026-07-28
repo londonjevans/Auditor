@@ -61,9 +61,18 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   regressions. Typed unbound generation observations are retained without review
   credit; affected validation passed `198` tests, Ruff, strict mypy, and diff
   checks. No provider call ran.
-- **Next action:** On operator resume, add the private typed rejection artifact
-  and its non-disclosure/no-credit regressions, then use its bounded diagnostics
-  before considering a materially different provider request.
+- **Durable rejection evidence:** The real smoke path now retains a schema-valid
+  concluded `UNBOUND` response in a separate private, self-hashed,
+  non-creditable artifact; the success artifact remains absent and the test fails
+  closed. An executed local branch regression requires process-attested REAL
+  provenance, rejects reconstructed evidence, reconciles cost, and proves prompt,
+  source, path, and credential canaries do not persist.
+- **Local validation:** Independent re-review found no remaining blocker. Ruff,
+  strict mypy, and the full suite passed, ending with `1892 passed, 10 skipped in
+  240.48s`; the paid provider test remained explicitly disabled.
+- **Next action:** Checkpoint the green local slice, then run every metadata,
+  ledger, privacy, fresh-path, fixture, and secret-boundary preflight before at
+  most one materially changed paid request.
 
 ## V3-PRIVACY-001 — Explicit privacy and retention profiles
 

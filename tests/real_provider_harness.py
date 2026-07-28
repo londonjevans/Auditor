@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import stat
@@ -14,7 +15,9 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from mmaudit.models.schemas import ModelIdentityStrength
+from mmaudit.models.generation_evidence import OpenRouterGenerationEvidence
+from mmaudit.models.identity import OpenRouterIdentityDiagnosticCode
+from mmaudit.models.schemas import ExecutionEvidenceKind, ModelIdentityStrength
 from mmaudit.orchestration.manifest import ManifestFileBinding, canonical_sha256
 from mmaudit.release_io import read_file_evidence, write_json_evidence
 from mmaudit.reporting.json_report import stable_json
@@ -323,6 +326,219 @@ class RealProviderSmokeEvidence(_RealProviderSmokeEvidenceBody):
         return self
 
 
+class _RealProviderSmokeRejectionEvidenceBody(BaseModel):
+    """Bounded non-secret facts for one schema-valid but unbound smoke response."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"]
+    ticket_id: Literal["V3-SMOKE-001"]
+    evidence_kind: Literal["real_openrouter_synthetic_smoke_rejection"]
+    status: Literal["REJECTED_IDENTITY_UNBOUND"]
+    creditable: Literal[False]
+    execution_evidence: Literal["real"]
+    fixture_path: Literal["tests/fixtures/solidity/provider_smoke/src/ProviderSmoke.sol"]
+    fixture_sha256: str = Field(pattern=_SHA256_PATTERN)
+    internal_request_id: str = Field(pattern=_SAFE_REQUEST_ID_PATTERN)
+    openrouter_generation_id: str = Field(pattern=_SAFE_GENERATION_ID_PATTERN)
+    requested_model_id: str
+    canonical_model_id: str
+    returned_model_id: str
+    selected_model_id: str
+    approved_provider_endpoint: str
+    actual_provider_endpoint: str
+    selected_provider_identity: str = Field(min_length=1, max_length=128)
+    selected_provider_name: str = Field(min_length=1, max_length=128)
+    response_provider_identity: str | None = Field(default=None, max_length=128)
+    model_identity_control_satisfied: bool
+    endpoint_control_satisfied: bool
+    provider_policy_sha256: str = Field(pattern=_SHA256_PATTERN)
+    endpoint_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
+    model_metadata_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
+    discovery_provenance_sha256: str = Field(pattern=_SHA256_PATTERN)
+    discovery_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+    identity_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
+    identity_binding_sha256: str = Field(pattern=_SHA256_PATTERN)
+    identity_binding_status: Literal["generation_metadata_unbound"]
+    identity_diagnostic_codes: tuple[OpenRouterIdentityDiagnosticCode, ...] = Field(
+        min_length=1,
+        max_length=32,
+    )
+    generation_observation: OpenRouterGenerationEvidence | None = None
+    prompt_sha256: str = Field(pattern=_SHA256_PATTERN)
+    user_prompt_sha256: str = Field(pattern=_SHA256_PATTERN)
+    schema_sha256: str = Field(pattern=_SHA256_PATTERN)
+    request_body_sha256: str = Field(pattern=_SHA256_PATTERN)
+    response_sha256: str = Field(pattern=_SHA256_PATTERN)
+    validated_response_sha256: str = Field(pattern=_SHA256_PATTERN)
+    started_at: datetime
+    ended_at: datetime
+    latency_ms: int = Field(ge=0)
+    finish_reason: Literal["stop"]
+    prompt_tokens: int = Field(ge=0)
+    completion_tokens: int = Field(ge=0)
+    reasoning_tokens: int = Field(ge=0)
+    cached_tokens: int = Field(ge=0)
+    total_tokens: int = Field(ge=0)
+    requested_max_output_tokens: Literal[1024]
+    requested_reasoning_effort: Literal["none"]
+    requested_reasoning_excluded: Literal[True]
+    reasoning_control_satisfied: bool
+    output_control_satisfied: bool
+    actual_cost_usd: str
+    accounted_cost_usd: str
+    ledger_cap_usd: str
+    ledger_spent_before_usd: str
+    ledger_spent_usd: str
+    smoke_spend_delta_usd: str
+    ledger_active_reserved_usd: Literal["0"]
+    ledger_remaining_usd: str
+    stage_cost_control_satisfied: bool
+    validation_status: Literal["valid"]
+    identity_strength: Literal[ModelIdentityStrength.UNBOUND]
+    privacy_profile: Literal["STRICT_ZDR"]
+    require_zdr: Literal[True]
+    data_collection: Literal["deny"]
+    allow_fallbacks: Literal[False]
+    fallback_used: Literal[False]
+    substitution_detected: Literal[False]
+    raw_prompts_stored: Literal[False]
+    raw_responses_stored: Literal[False]
+    validated_output: SyntheticProviderSmokeResponse
+
+    @field_validator(
+        "requested_model_id",
+        "canonical_model_id",
+        "returned_model_id",
+        "selected_model_id",
+    )
+    @classmethod
+    def rejection_model_ids_are_exact(cls, value: str) -> str:
+        if _MODEL_PATTERN.fullmatch(value) is None:
+            raise ValueError("smoke rejection model ID must be exact")
+        return value
+
+    @field_validator("approved_provider_endpoint", "actual_provider_endpoint")
+    @classmethod
+    def rejection_provider_endpoints_are_safe(cls, value: str) -> str:
+        if _PROVIDER_PATTERN.fullmatch(value) is None:
+            raise ValueError("smoke rejection provider endpoint is invalid")
+        return value
+
+    @field_validator(
+        "selected_provider_identity",
+        "selected_provider_name",
+        "response_provider_identity",
+    )
+    @classmethod
+    def rejection_provider_observations_are_safe(cls, value: str | None) -> str | None:
+        if value is not None and (
+            value != value.strip() or any(not character.isprintable() for character in value)
+        ):
+            raise ValueError("smoke rejection provider observation is invalid")
+        return value
+
+    @field_validator("identity_diagnostic_codes")
+    @classmethod
+    def rejection_diagnostics_are_sorted_unique(
+        cls,
+        value: tuple[OpenRouterIdentityDiagnosticCode, ...],
+    ) -> tuple[OpenRouterIdentityDiagnosticCode, ...]:
+        labels = tuple(item.value for item in value)
+        if labels != tuple(sorted(set(labels))):
+            raise ValueError("smoke rejection diagnostic codes must be sorted and unique")
+        return value
+
+    @field_validator(
+        "actual_cost_usd",
+        "accounted_cost_usd",
+        "ledger_cap_usd",
+        "ledger_spent_before_usd",
+        "ledger_spent_usd",
+        "smoke_spend_delta_usd",
+        "ledger_active_reserved_usd",
+        "ledger_remaining_usd",
+    )
+    @classmethod
+    def rejection_money_is_canonical(cls, value: str) -> str:
+        if _canonical_nonnegative_decimal(value) != value:
+            raise ValueError("smoke rejection cost must be a canonical non-negative decimal")
+        return value
+
+    @model_validator(mode="after")
+    def rejection_evidence_is_coherent(self) -> Self:
+        if self.fixture_sha256 != SMOKE_FIXTURE_SHA256:
+            raise ValueError("smoke rejection fixture differs from the committed pinned fixture")
+        aliases = {self.requested_model_id, self.canonical_model_id}
+        if self.requested_model_id.split("/", 1)[0] != self.canonical_model_id.split("/", 1)[0]:
+            raise ValueError("requested and canonical smoke rejection models differ by author")
+        models_satisfied = self.returned_model_id in aliases and self.selected_model_id in aliases
+        if self.model_identity_control_satisfied is not models_satisfied:
+            raise ValueError("smoke rejection model-control status is inconsistent")
+        endpoint_satisfied = self.actual_provider_endpoint == self.approved_provider_endpoint
+        if self.endpoint_control_satisfied is not endpoint_satisfied:
+            raise ValueError("smoke rejection endpoint-control status is inconsistent")
+        if self.ended_at < self.started_at:
+            raise ValueError("smoke rejection request ended before it started")
+        if self.reasoning_tokens > self.completion_tokens:
+            raise ValueError("smoke rejection reasoning tokens exceed completion tokens")
+        if self.reasoning_control_satisfied is not (self.reasoning_tokens == 0):
+            raise ValueError("smoke rejection reasoning-control status is inconsistent")
+        if self.output_control_satisfied is not (
+            self.completion_tokens <= self.requested_max_output_tokens
+        ):
+            raise ValueError("smoke rejection output-control status is inconsistent")
+        if self.cached_tokens > self.prompt_tokens:
+            raise ValueError("smoke rejection cached tokens exceed prompt tokens")
+        if self.total_tokens != self.prompt_tokens + self.completion_tokens:
+            raise ValueError("smoke rejection token totals do not reconcile")
+        if self.generation_observation is None:
+            if (
+                OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_MISSING
+                not in self.identity_diagnostic_codes
+            ):
+                raise ValueError(
+                    "smoke rejection without generation observation lacks missing-metadata "
+                    "diagnostic"
+                )
+        elif (
+            self.generation_observation.execution_evidence is not ExecutionEvidenceKind.REAL
+            or self.generation_observation.generation_id != self.openrouter_generation_id
+        ):
+            raise ValueError("smoke rejection generation observation is not request-bound REAL")
+        actual = Decimal(self.actual_cost_usd)
+        accounted = Decimal(self.accounted_cost_usd)
+        cap = Decimal(self.ledger_cap_usd)
+        spent_before = Decimal(self.ledger_spent_before_usd)
+        spent = Decimal(self.ledger_spent_usd)
+        spend_delta = Decimal(self.smoke_spend_delta_usd)
+        remaining = Decimal(self.ledger_remaining_usd)
+        if accounted < actual:
+            raise ValueError("smoke rejection accounted cost is below actual cost")
+        if spent < accounted:
+            raise ValueError("ledger spent total is below the rejection accounted cost")
+        if spent_before + spend_delta != spent or spend_delta != accounted:
+            raise ValueError("smoke rejection ledger spend delta does not reconcile")
+        if self.stage_cost_control_satisfied is not (spend_delta <= Decimal("5")):
+            raise ValueError("smoke rejection stage-cost status is inconsistent")
+        if remaining != max(Decimal(0), cap - spent):
+            raise ValueError("smoke rejection ledger totals do not reconcile")
+        return self
+
+
+class RealProviderSmokeRejectionEvidence(_RealProviderSmokeRejectionEvidenceBody):
+    """Self-hashed non-creditable evidence for one valid unbound provider response."""
+
+    evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @model_validator(mode="after")
+    def rejection_evidence_is_self_hashed(self) -> Self:
+        expected = canonical_sha256(self.model_dump(mode="json", exclude={"evidence_sha256"}))
+        if self.evidence_sha256 != expected:
+            raise ValueError("smoke rejection evidence self-hash is inconsistent")
+        return self
+
+
 def real_provider_tests_enabled(environ: Mapping[str, str]) -> bool:
     """Require the exact opt-in sentinel; truthy alternatives are rejected."""
 
@@ -504,6 +720,23 @@ def seal_real_provider_smoke_evidence(
     )
 
 
+def seal_real_provider_smoke_rejection_evidence(
+    value: Mapping[str, Any],
+) -> RealProviderSmokeRejectionEvidence:
+    """Validate one non-creditable rejection and bind its canonical public projection."""
+
+    if "evidence_sha256" in value:
+        raise ValueError("smoke rejection evidence must be sealed exactly once")
+    body = _RealProviderSmokeRejectionEvidenceBody.model_validate(dict(value))
+    payload = body.model_dump(mode="json")
+    return RealProviderSmokeRejectionEvidence.model_validate(
+        {
+            **payload,
+            "evidence_sha256": canonical_sha256(payload),
+        }
+    )
+
+
 def preflight_real_provider_smoke_output(
     *,
     output_path: Path,
@@ -559,6 +792,33 @@ def preflight_real_provider_smoke_output(
     )
 
 
+def real_provider_smoke_rejection_output_path(
+    *,
+    success_output: Path,
+    internal_request_id: str,
+) -> Path:
+    """Derive a bounded sibling path without exposing the provider request identifier."""
+
+    preflight_real_provider_smoke_output(
+        output_path=success_output,
+        forbidden_paths=(),
+    )
+    if re.fullmatch(_SAFE_REQUEST_ID_PATTERN, internal_request_id) is None:
+        raise ValueError("smoke rejection request ID is invalid")
+    request_digest = hashlib.sha256(
+        f"{success_output.name}\0{internal_request_id}".encode()
+    ).hexdigest()[:24]
+    bounded_stem = success_output.stem[:80]
+    rejection_output = success_output.with_name(
+        f"{bounded_stem}.rejected-unbound-{request_digest}.json"
+    )
+    preflight_real_provider_smoke_output(
+        output_path=rejection_output,
+        forbidden_paths=(success_output,),
+    )
+    return rejection_output
+
+
 def write_real_provider_smoke_evidence(
     *,
     output_path: Path,
@@ -580,6 +840,32 @@ def write_real_provider_smoke_evidence(
     return write_json_evidence(
         evidence_root=output_path.parent,
         relative_path=output_path.name,
+        value=evidence,
+        max_bytes=64_000,
+    )
+
+
+def write_real_provider_smoke_rejection_evidence(
+    *,
+    success_output: Path,
+    evidence: RealProviderSmokeRejectionEvidence,
+    forbidden_values: tuple[str, ...],
+) -> ManifestFileBinding:
+    """Write one fresh private rejection artifact while leaving success absent."""
+
+    rejection_output = real_provider_smoke_rejection_output_path(
+        success_output=success_output,
+        internal_request_id=evidence.internal_request_id,
+    )
+    serialized = stable_json(evidence)
+    lowered = serialized.casefold()
+    if "authorization" in lowered or "bearer " in lowered:
+        raise ValueError("smoke rejection evidence contains a forbidden authorization surface")
+    if any(value and value in serialized for value in forbidden_values):
+        raise ValueError("smoke rejection evidence contains a forbidden value")
+    return write_json_evidence(
+        evidence_root=rejection_output.parent,
+        relative_path=rejection_output.name,
         value=evidence,
         max_bytes=64_000,
     )

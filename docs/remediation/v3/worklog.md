@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_BY_OPERATOR
+AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: On operator resume, add a private typed rejection artifact for schema-valid UNBOUND smoke completions, prove it cannot receive success credit or leak forbidden values, then use preserved diagnostics before considering another materially different paid request.
-LAST_COMMAND: .venv/bin/ruff format src/mmaudit/models/openrouter.py src/mmaudit/models/generation_evidence.py src/mmaudit/models/usage.py tests/unit/test_openrouter.py tests/unit/test_generation_evidence.py tests/unit/test_usage.py && .venv/bin/ruff check src/mmaudit/models/openrouter.py src/mmaudit/models/generation_evidence.py src/mmaudit/models/usage.py tests/unit/test_openrouter.py tests/unit/test_generation_evidence.py tests/unit/test_usage.py && .venv/bin/mypy src/mmaudit/models/openrouter.py src/mmaudit/models/generation_evidence.py src/mmaudit/models/usage.py && .venv/bin/pytest -q tests/unit/test_openrouter.py tests/unit/test_generation_evidence.py tests/unit/test_usage.py && git diff --check
-LAST_RESULT: PASS; Ruff formatting/checks passed, strict mypy found no issues in the three affected source files, 198 focused tests passed in 1.25s, and git diff validation passed.
+NEXT_ACTION: Create and push an isolated checkpoint for the green durable rejection path, then re-run all pre-call metadata, ledger, fresh-output, privacy, and secret-boundary gates before at most one materially changed paid smoke request.
+LAST_COMMAND: .venv/bin/ruff format . && .venv/bin/ruff check . && .venv/bin/mypy && .venv/bin/pytest -q
+LAST_RESULT: PASS; Ruff left 297 files unchanged, Ruff check passed, strict mypy found no issues in 129 source files, and the full suite passed 1892 tests with 10 explicit external/provider/isolation skips in 240.48s.
 REAL_MODEL_CALLS_ATTEMPTED: 4
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 4
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.99820086
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: No successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: c97c23b8d9cf6102b943e31d74f99c6f7456fbb0
+LAST_CHECKPOINT_COMMIT: 41a84b42d361e032a4603b150189308903b5350a
 
 ## 2026-07-28 — V3-SMOKE-001
 
@@ -567,3 +567,45 @@ LAST_CHECKPOINT_COMMIT: c97c23b8d9cf6102b943e31d74f99c6f7456fbb0
 - **Resume action:** Implement the separate private typed rejection artifact,
   validate non-disclosure and no-credit behavior, then inspect its bounded
   diagnostics before any materially different paid completion.
+
+### V3-SMOKE-001 durable unbound-rejection evidence
+
+- **Status:** `IN_PROGRESS`; local implementation complete, full validation in
+  progress, and no paid request has run.
+- **Reproduced gap:** The first new harness test failed at collection because no
+  typed rejection artifact existed. After the initial schema/writer slice,
+  focused execution exposed missing generation-fixture controls before reaching
+  the intended assertions; these were corrected without weakening validation.
+- **Durable fail-closed path:** The real-provider test now calls
+  `complete_with_evidence`, branches before independent success verification when
+  identity is concluded `UNBOUND`, reconciles the exact atomic-ledger entry, and
+  writes a distinct self-hashed `REJECTED_IDENTITY_UNBOUND` artifact. The success
+  artifact remains absent and the test still fails.
+- **Evidence integrity:** The sink requires a process-attested, generation-bindable
+  REAL usage record and cross-checks its self-hashed identity request and frozen
+  snapshot against runtime, route, discovery, model, endpoint, response, and
+  source-hash evidence. A JSON-roundtripped fabricated REAL record is rejected.
+- **Privacy and retention:** The fresh hashed sibling uses descriptor-safe private
+  release I/O. The writer scans the API key, secret path, complete system prompt,
+  complete user prompt, and fixture source. Raw provider prompt/completion fields
+  are discarded by the typed generation projection.
+- **No false credit:** Rejection status, evidence kind, `creditable=false`, and
+  `UNBOUND` identity are literals; the artifact cannot parse as successful smoke
+  evidence. Secondary model, endpoint, reasoning, output, and stage-cost control
+  failures remain visible as non-creditable booleans rather than suppressing the
+  rejection record.
+- **Focused evidence:** The end-to-end local branch test and harness passed `56`
+  tests with the paid provider test explicitly skipped. The broader OpenRouter,
+  generation, usage, release-I/O, harness, and gated integration subset passed
+  `296` tests with one paid skip. Affected Ruff, mypy, and diff checks passed.
+- **Independent review:** A first review identified the missing executed branch
+  regression and missing positive REAL-provenance check. Both were implemented.
+  Re-review found no remaining blocker and independently passed Ruff, mypy, `56`
+  focused tests with one paid skip, and diff validation.
+- **Complete local gates:** `.venv/bin/ruff format .` left `297` files unchanged;
+  Ruff check passed; strict mypy found no issues in `129` source files; and
+  `.venv/bin/pytest -q` passed `1892` tests with `10` explicit external,
+  provider, and isolation skips in `240.48s`.
+- **Provider state:** No secret file was opened and no metadata or completion
+  network request ran. Spend, reservations, and runtime call counters are
+  unchanged.
