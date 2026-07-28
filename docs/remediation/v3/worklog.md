@@ -8,9 +8,9 @@ AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: Commit and push the complete explicit reasoning-off smoke correction, verify the clean synchronized checkpoint and unchanged budget, then execute at most one materially changed provider call.
-LAST_COMMAND: .venv/bin/ruff format . && .venv/bin/ruff check . && .venv/bin/mypy
-LAST_RESULT: PASS; post-review full pytest passed 1879 tests with 10 explicit external/provider/isolation skips in 228.56s, full Ruff left 297 files unchanged and passed, strict mypy passed 129 source files, no success artifact exists, and the ledger remains reconciled with zero reservation.
+NEXT_ACTION: Push the explicit reasoning-off checkpoint via SSH, verify the clean synchronized tree, fresh artifact path, unchanged budget, and current reasoning capability metadata, then execute at most one materially changed provider call.
+LAST_COMMAND: git commit -m 'Reserve smoke response token space'
+LAST_RESULT: PASS; the bounded explicit reasoning-off source, regression, and evidence changes were committed as 432cfd0c0b976939c05abe2df1fe8eb8673fb107 after complete validation.
 REAL_MODEL_CALLS_ATTEMPTED: 3
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 3
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.99826570
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: No successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 8004dd7662ca521565db1d87cd3e76d8678cf44b
+LAST_CHECKPOINT_COMMIT: 432cfd0c0b976939c05abe2df1fe8eb8673fb107
 
 ## 2026-07-28 — V3-SMOKE-001
 
@@ -205,6 +205,8 @@ LAST_CHECKPOINT_COMMIT: 8004dd7662ca521565db1d87cd3e76d8678cf44b
   and strict mypy passed. The expected success artifact remains absent and the
   ledger remains `spent=0.00173430`, `reserved=0`,
   `remaining=249.99826570`, three entries.
+- **Reasoning/output checkpoint:**
+  `432cfd0c0b976939c05abe2df1fe8eb8673fb107`.
 
 ## 2026-07-28 — V3-BASELINE-001
 
