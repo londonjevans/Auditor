@@ -8,9 +8,9 @@ AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: Create and push an isolated checkpoint for the green durable rejection path, then re-run all pre-call metadata, ledger, fresh-output, privacy, and secret-boundary gates before at most one materially changed paid smoke request.
-LAST_COMMAND: .venv/bin/ruff format . && .venv/bin/ruff check . && .venv/bin/mypy && .venv/bin/pytest -q
-LAST_RESULT: PASS; Ruff left 297 files unchanged, Ruff check passed, strict mypy found no issues in 129 source files, and the full suite passed 1892 tests with 10 explicit external/provider/isolation skips in 240.48s.
+NEXT_ACTION: Execute exactly one materially changed, explicitly opted-in real synthetic smoke request from the clean checkpoint; accept only a bound non-truncated success artifact, otherwise preserve the typed rejection and do not retry unchanged.
+LAST_COMMAND: MMAUDIT_RUN_REAL_PROVIDER_TESTS=1 MMAUDIT_SECRETS_ENV_FILE=<operator-controlled Auditor .env> MMAUDIT_REAL_PROVIDER_COST_CAP_USD=250.00 MMAUDIT_OPENROUTER_COST_LEDGER=<absolute cumulative ledger> MMAUDIT_REAL_PROVIDER_MODEL_ID=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_MODEL_ALLOWLIST=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_ENDPOINT_ALLOWLIST=akashml/fp8 MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=STRICT_ZDR MMAUDIT_REAL_PROVIDER_EVIDENCE_OUTPUT=<fresh v3 success artifact> .venv/bin/pytest -q tests/integration/test_real_openrouter_provider.py
+LAST_RESULT: READY; checkpoint e4a9444bfe65fd63c9184f64c69d1211b71250a0 is green and pushed, the success/rejection destinations are fresh, the committed fixture SHA-256 matches, and the validated atomic ledger reports cap 250.00 USD, spent 0.00179914 USD, reserved 0, remaining 249.99820086 USD, four entries, no over-cap state, and no reservation overrun.
 REAL_MODEL_CALLS_ATTEMPTED: 4
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 4
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.99820086
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: No successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 41a84b42d361e032a4603b150189308903b5350a
+LAST_CHECKPOINT_COMMIT: e4a9444bfe65fd63c9184f64c69d1211b71250a0
 
 ## 2026-07-28 — V3-SMOKE-001
 
@@ -609,3 +609,12 @@ LAST_CHECKPOINT_COMMIT: 41a84b42d361e032a4603b150189308903b5350a
 - **Provider state:** No secret file was opened and no metadata or completion
   network request ran. Spend, reservations, and runtime call counters are
   unchanged.
+- **Checkpoint and paid-call preflight:** Commit
+  `e4a9444bfe65fd63c9184f64c69d1211b71250a0` is clean and synchronized to the
+  SSH origin. The pinned fixture hash is
+  `bbb0127919f734caedffb6f9143a634b6925ff4451985d1410a47e1637f1517b`;
+  no success or derived rejection destination exists. The operator ledger
+  validates at `250.00` cap, `0.00179914` spent, zero reserved,
+  `249.99820086` remaining, four terminal entries, and no over-cap or overrun
+  state. This makes one materially changed request eligible; unchanged retry is
+  prohibited.
