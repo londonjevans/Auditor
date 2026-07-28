@@ -48,19 +48,26 @@
       "id": "D",
       "title": "One successful real model call before large refactoring",
       "tickets": ["V3-SMOKE-001"],
-      "status": "QUEUED",
+      "status": "IN_PROGRESS",
       "current_evidence_class": "HISTORICAL_REJECTED",
-      "evidence": ["Two prior paid attempts, zero successful or credited calls, cost 0.00118674 USD."],
+      "evidence": [
+        "Seven bounded paid attempts, zero successful or credited calls, cumulative accounted cost 0.0031470425 USD.",
+        "The sixth response was schema-valid, non-truncated, and canonically bound before fresh generation-usage reconciliation rejected it.",
+        "The seventh exact Mistral/Venice route returned HTTP 429 before any completion; no model output or artifact was credited."
+      ],
       "remaining_proof": "One identity-bound, non-truncated, schema-valid synthetic completion with exact endpoint and reconciled cost."
     },
     {
       "id": "E",
       "title": "Canonical model and provider identity",
       "tickets": ["V3-IDENTITY-001"],
-      "status": "IN_PROGRESS",
-      "current_evidence_class": "LOCAL_IMPLEMENTATION",
-      "evidence": ["Frozen discovery, endpoint snapshots, and generation refetch exist but raw requested/returned equality still rejects legitimate canonical normalization."],
-      "remaining_proof": "Typed identity strengths, frozen alias resolution, exact endpoint binding, unbound response retention, regressions, and real smoke evidence."
+      "status": "COMPLETE",
+      "current_evidence_class": "REAL_RUNTIME",
+      "evidence": [
+        "Typed identity strengths, frozen alias resolution, exact endpoint binding, generation refetch, valid-unbound retention, and no-credit behavior passed the complete suite and independent review.",
+        "A real sixth response reached CANONICAL_MODEL_AND_ENDPOINT_BOUND before a separate generation-usage reconciliation gate rejected smoke completion."
+      ],
+      "remaining_proof": null
     },
     {
       "id": "F",

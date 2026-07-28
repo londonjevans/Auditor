@@ -8,17 +8,17 @@ AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: From the clean synchronized checkpoint, execute at most one materially changed exact Mistral/Venice STRICT_ZDR smoke with the explicit operator-secret loader and validate either a qualifying success artifact or the separate durable typed rejection.
-LAST_COMMAND: MMAUDIT_RUN_REAL_PROVIDER_TESTS=1 MMAUDIT_SECRETS_ENV_FILE=<operator-control-plane-file> MMAUDIT_REAL_PROVIDER_COST_CAP_USD=250.00 MMAUDIT_OPENROUTER_COST_LEDGER=<existing-ledger> MMAUDIT_REAL_PROVIDER_MODEL_ID=mistralai/mistral-small-2603 MMAUDIT_REAL_PROVIDER_MODEL_ALLOWLIST=mistralai/mistral-small-2603 MMAUDIT_REAL_PROVIDER_ENDPOINT_ALLOWLIST=venice/fp8 MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=STRICT_ZDR MMAUDIT_REAL_PROVIDER_EVIDENCE_OUTPUT=<fresh-private-attempt-7-output> <no-network-typed-preflight>
-LAST_RESULT: PASS; pinned fixture and exact allowlists validated, the private success/rejection namespace is fresh, and the atomic ledger has 6 terminal entries, 0.0019275425 USD spent, zero reserved, 249.9980724575 USD remaining, no over-cap state, and no reservation overrun. The secret file was not opened and no network request ran.
-REAL_MODEL_CALLS_ATTEMPTED: 6
+NEXT_ACTION: Do not retry Mistral/Venice unchanged. Run metadata-only discovery for a materially different exact STRICT_ZDR route, freeze and validate its current endpoint facts, and complete a fresh no-network smoke preflight.
+LAST_COMMAND: MMAUDIT_RUN_REAL_PROVIDER_TESTS=1 MMAUDIT_SECRETS_ENV_FILE=<operator-control-plane-file> MMAUDIT_REAL_PROVIDER_COST_CAP_USD=250.00 MMAUDIT_OPENROUTER_COST_LEDGER=<existing-ledger> MMAUDIT_REAL_PROVIDER_MODEL_ID=mistralai/mistral-small-2603 MMAUDIT_REAL_PROVIDER_MODEL_ALLOWLIST=mistralai/mistral-small-2603 MMAUDIT_REAL_PROVIDER_ENDPOINT_ALLOWLIST=venice/fp8 MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=STRICT_ZDR MMAUDIT_REAL_PROVIDER_EVIDENCE_OUTPUT=<fresh-private-attempt-7-output> .venv/bin/pytest -q tests/integration/test_real_openrouter_provider.py
+LAST_RESULT: REJECTED_RATE_LIMIT; the exact provider returned HTTP 429 before any completion or model output. The zero-retry policy failed closed, no success or rejection artifact was written, and no review credit exists. The seventh terminal entry is uncertain_accounted with 0.00072452 USD conservatively accounted; cumulative spent is 0.0031470425, reserved is zero, remaining is 249.9968529575, and there is no over-cap state or reservation overrun.
+REAL_MODEL_CALLS_ATTEMPTED: 7
 REAL_MODEL_CALLS_SUCCEEDED: 0
-REAL_MODEL_CALLS_REJECTED: 6
-OPENROUTER_COST_USED_USD: 0.0019275425
+REAL_MODEL_CALLS_REJECTED: 7
+OPENROUTER_COST_USED_USD: 0.0031470425
 OPENROUTER_COST_RESERVED_USD: 0.00
-OPENROUTER_BUDGET_REMAINING_USD: 249.9980724575
+OPENROUTER_BUDGET_REMAINING_USD: 249.9968529575
 COMPLETED_REAL_AUDITS: 0
-BLOCKED_EXTERNAL_ITEMS: No successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
+BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
 LAST_CHECKPOINT_COMMIT: a6ef7bb04cdc58a1b01b06f94a8aa69461e5e44d
 
 ## 2026-07-28 — V3-SMOKE-001
@@ -807,3 +807,18 @@ LAST_CHECKPOINT_COMMIT: a6ef7bb04cdc58a1b01b06f94a8aa69461e5e44d
   terminal entries, `0.0019275425 USD` spent, zero reserved,
   `249.9980724575 USD` remaining, no over-cap state, and no reservation overrun.
   The secret file was not opened and no network request ran.
+- **Seventh real attempt:** From clean synchronized checkpoint
+  `1ceab96`, exact Mistral/Venice authentication and metadata preflight reached
+  the completion request, which returned HTTP `429` before any model output.
+  The configured zero-retry policy failed closed. No completion, success
+  artifact, rejection artifact, or review credit exists.
+- **Attempt-seven accounting:** The attempt-qualified terminal entry is
+  `uncertain_accounted`; the provider supplied no usable actual cost, so the
+  complete `0.00072452 USD` reservation was conservatively accounted without
+  fabrication. Cumulative spend is `0.0031470425 USD`, active reservation is
+  zero, remaining budget is `249.9968529575 USD`, and the ledger has neither
+  over-cap state nor reservation overrun.
+- **No-progress control:** Mistral/Venice will not be retried unchanged.
+  The next safe action is metadata-only discovery of a materially different
+  exact `STRICT_ZDR` route, followed by fresh endpoint binding and local
+  preflight before another completion is considered.

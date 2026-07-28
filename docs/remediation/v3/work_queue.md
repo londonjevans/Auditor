@@ -100,10 +100,17 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   Ruff format/check, strict mypy, release-schema generation, `320` focused tests
   plus one paid skip, and the complete suite passed, ending with `1912 passed,
   10 skipped`. No seventh provider request ran.
-- **Current next action:** Checkpoint the complete local correction, revalidate
-  the exact route, fresh destinations, and atomic ledger, then consider one
-  materially changed provider retry. Do not repeat the prior implementation
-  unchanged.
+- **Seventh runtime attempt:** From clean synchronized checkpoint `1ceab96`, the
+  exact Mistral/Venice route passed local preflight but the completion endpoint
+  returned provider rate limiting before any model output. The bounded zero-retry
+  policy failed closed; no response, success artifact, rejection artifact, or
+  review credit exists. The terminal entry conservatively accounted its
+  `0.00072452 USD` reservation, bringing cumulative spend to `0.0031470425 USD`
+  with zero active reservation.
+- **Current next action:** Do not retry Mistral/Venice unchanged. Perform
+  metadata-only discovery for a materially different exact `STRICT_ZDR` route,
+  bind its live endpoint facts, and repeat the complete no-network preflight
+  before considering another bounded smoke.
 
 ## V3-PRIVACY-001 — Explicit privacy and retention profiles
 
