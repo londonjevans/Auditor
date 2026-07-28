@@ -8,9 +8,9 @@ AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: Push the explicit reasoning-off checkpoint via SSH, verify the clean synchronized tree, fresh artifact path, unchanged budget, and current reasoning capability metadata, then execute at most one materially changed provider call.
-LAST_COMMAND: git commit -m 'Reserve smoke response token space'
-LAST_RESULT: PASS; the bounded explicit reasoning-off source, regression, and evidence changes were committed as 432cfd0c0b976939c05abe2df1fe8eb8673fb107 after complete validation.
+NEXT_ACTION: Execute exactly one materially changed, explicitly gated synthetic smoke with reasoning disabled and a 1024-token ceiling; stop and record the first outcome without an unchanged retry.
+LAST_COMMAND: MMAUDIT_RUN_REAL_PROVIDER_TESTS=1 MMAUDIT_SECRETS_ENV_FILE=<operator-controlled Auditor .env> MMAUDIT_REAL_PROVIDER_COST_CAP_USD=250.00 MMAUDIT_OPENROUTER_COST_LEDGER=<Auditor cumulative ledger> MMAUDIT_REAL_PROVIDER_MODEL_ID=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_MODEL_ALLOWLIST=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_ENDPOINT_ALLOWLIST=akashml/fp8 MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=STRICT_ZDR MMAUDIT_REAL_PROVIDER_EVIDENCE_OUTPUT=<fresh v3 runtime artifact> .venv/bin/pytest -q tests/integration/test_real_openrouter_provider.py
+LAST_RESULT: PENDING; the reasoning-off source checkpoint is synchronized, full local gates pass, exact model and endpoint metadata return HTTP 200, reasoning remains optional and default-enabled, the artifact path is fresh, and 249.99826570 USD remains with no reservation.
 REAL_MODEL_CALLS_ATTEMPTED: 3
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 3
@@ -207,6 +207,14 @@ LAST_CHECKPOINT_COMMIT: 432cfd0c0b976939c05abe2df1fe8eb8673fb107
   `remaining=249.99826570`, three entries.
 - **Reasoning/output checkpoint:**
   `432cfd0c0b976939c05abe2df1fe8eb8673fb107`.
+- **Third launch preflight:** Clean synchronized `main` at
+  `abef98c2bd4c5761bdca3b7f3727efe08d82d304`, source checkpoint
+  `432cfd0c0b976939c05abe2df1fe8eb8673fb107`; artifact absent; operator secret
+  regular and non-writable-by-group/world; exact model and endpoint metadata
+  return HTTP `200`; current reasoning metadata remains
+  `mandatory=false`, `default_enabled=true`; ledger remains
+  `spent=0.00173430`, `reserved=0`, `remaining=249.99826570`, three entries,
+  no over-cap or reservation-overrun state.
 
 ## 2026-07-28 — V3-BASELINE-001
 

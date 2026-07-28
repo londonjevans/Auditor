@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-07-28T16:55:01Z",
+  "updated_at": "2026-07-28T16:56:23Z",
   "candidate_commit": "432cfd0c0b976939c05abe2df1fe8eb8673fb107",
   "autorun_status": "ACTIVE",
   "current_milestone": "real_provider_smoke",
