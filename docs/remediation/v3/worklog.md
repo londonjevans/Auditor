@@ -4,22 +4,22 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: ACTIVE
+AUTORUN_STATUS: PAUSED_OPERATOR_REQUEST
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: Execute exactly one materially changed, explicitly opted-in real synthetic smoke request from the clean checkpoint; accept only a bound non-truncated success artifact, otherwise preserve the typed rejection and do not retry unchanged.
-LAST_COMMAND: MMAUDIT_RUN_REAL_PROVIDER_TESTS=1 MMAUDIT_SECRETS_ENV_FILE=<operator-controlled Auditor .env> MMAUDIT_REAL_PROVIDER_COST_CAP_USD=250.00 MMAUDIT_OPENROUTER_COST_LEDGER=<absolute cumulative ledger> MMAUDIT_REAL_PROVIDER_MODEL_ID=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_MODEL_ALLOWLIST=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_ENDPOINT_ALLOWLIST=akashml/fp8 MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=STRICT_ZDR MMAUDIT_REAL_PROVIDER_EVIDENCE_OUTPUT=<fresh v3 success artifact> .venv/bin/pytest -q tests/integration/test_real_openrouter_provider.py
-LAST_RESULT: READY; checkpoint e4a9444bfe65fd63c9184f64c69d1211b71250a0 is green and pushed, the success/rejection destinations are fresh, the committed fixture SHA-256 matches, and the validated atomic ledger reports cap 250.00 USD, spent 0.00179914 USD, reserved 0, remaining 249.99820086 USD, four entries, no over-cap state, and no reservation overrun.
-REAL_MODEL_CALLS_ATTEMPTED: 4
+NEXT_ACTION: On operator resume, begin from checkpoint ae5911933d47fd49671730280611cef21185b001; reassess a materially changed identity-bound smoke strategy without repeating the rejected provider request unchanged.
+LAST_COMMAND: .venv/bin/ruff format tests/integration/test_real_openrouter_provider.py tests/unit/test_real_provider_harness.py && .venv/bin/ruff check tests/real_provider_harness.py tests/integration/test_real_openrouter_provider.py tests/unit/test_real_provider_harness.py tests/unit/test_cost_ledger.py && .venv/bin/pytest -q tests/unit/test_real_provider_harness.py tests/unit/test_cost_ledger.py tests/unit/test_usage.py tests/integration/test_real_openrouter_provider.py && .venv/bin/mypy
+LAST_RESULT: PASS_AND_PAUSED; affected Ruff passed, 109 focused tests passed with the one paid provider test explicitly skipped, strict project mypy passed for 129 source files, and independent re-review found no blocker. No provider or network call ran.
+REAL_MODEL_CALLS_ATTEMPTED: 5
 REAL_MODEL_CALLS_SUCCEEDED: 0
-REAL_MODEL_CALLS_REJECTED: 4
-OPENROUTER_COST_USED_USD: 0.00179914
+REAL_MODEL_CALLS_REJECTED: 5
+OPENROUTER_COST_USED_USD: 0.00186398
 OPENROUTER_COST_RESERVED_USD: 0.00
-OPENROUTER_BUDGET_REMAINING_USD: 249.99820086
+OPENROUTER_BUDGET_REMAINING_USD: 249.99813602
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: No successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: e4a9444bfe65fd63c9184f64c69d1211b71250a0
+LAST_CHECKPOINT_COMMIT: ae5911933d47fd49671730280611cef21185b001
 
 ## 2026-07-28 — V3-SMOKE-001
 
@@ -618,3 +618,53 @@ LAST_CHECKPOINT_COMMIT: e4a9444bfe65fd63c9184f64c69d1211b71250a0
   `249.99820086` remaining, four terminal entries, and no over-cap or overrun
   state. This makes one materially changed request eligible; unchanged retry is
   prohibited.
+- **Fifth real attempt:** The clean, materially changed smoke ran once. Provider
+  authentication and metadata preflight passed, one structured response
+  completed, and identity again concluded `UNBOUND`; no success credit was
+  granted. Before the rejection artifact could be written, its ledger join
+  required the parent usage request ID while the atomic ledger correctly stored
+  the network-attempt ID with `:attempt:1`. The terminal ledger entry is
+  `uncertain_accounted` with no fabricated actual cost and `0.00072452` USD
+  conservatively accounted. Cumulative spent is `0.00186398` USD, reserved is
+  zero, remaining is `249.99813602` USD, and no success or rejection artifact
+  exists. Because the process-local completion was lost after this local sink
+  failure, the exact identity diagnostic is not claimed or reconstructed.
+- **No-progress control:** The request will not be repeated unchanged. The next
+  local slice must support attempt-qualified IDs and terminal conservative cost
+  evidence, execute a regression for both, and remain fail-closed.
+- **Local bookkeeping correction:** The smoke harness now joins the exact
+  `:attempt:1` ledger entry, accepts only terminal cost states, and preserves
+  unknown provider cost as `uncertain_accounted` without fabricating an actual
+  value. Rejection evidence records prior-entry hashes, spend-delta consistency,
+  reservation closure, over-cap and overrun state. The successful smoke path
+  additionally requires unchanged prior entries and an exact cost delta.
+- **Integrity assay:** A disposable atomic-ledger regression proves that adding
+  and conservatively closing a new attempt leaves all terminal prior entries
+  unchanged and increases spent cost by exactly the new accounted amount. A
+  separate synthetic rejection regression preserves the observed discrepancy as
+  non-creditable evidence with both integrity booleans false.
+- **No-network validation:** Affected Ruff passed; strict project mypy passed for
+  all `129` configured source files; the focused ledger, budget, provider,
+  usage, harness, and gated-integration subset passed `241` tests with the one
+  paid test explicitly skipped. No provider call ran.
+- **Complete-suite pause gate:** `.venv/bin/ruff format .`,
+  `.venv/bin/ruff check .`, `.venv/bin/mypy`, and `.venv/bin/pytest -q` all
+  passed: `297` files were already formatted, Ruff passed, mypy found no issues
+  in `129` source files, and pytest passed `1894` tests with `10` explicit
+  external/provider/isolation skips in `234.39s`.
+- **Independent-review correction:** Read-only review identified that owned
+  process attestation alone was broader than the prior strict transport
+  predicate. The rejection sink now retains every strict certification check
+  and narrowly permits only a missing reported cost backed by the exact
+  `uncertain_accounted` terminal entry. An attested record carrying a provider
+  error is rejected by regression. The review also caught and corrected a
+  transcribed predecessor commit hash. Affected Ruff, `109` focused tests plus
+  one paid skip, and strict project mypy pass after both corrections.
+- **Independent re-review:** The reviewer found no remaining blocker: the narrow
+  unknown-cost exception retains the full strict REAL certification predicate,
+  the provider-error negative regression fails closed, and checkpoint identity
+  now matches Git. No provider or network call ran.
+- **Pause checkpoint:** Implementation commit
+  `ae5911933d47fd49671730280611cef21185b001` contains the validated terminal
+  accounting and rejection-evidence correction. `V3-SMOKE-001` remains
+  `IN_PROGRESS`; no successful model response or release credit is claimed.

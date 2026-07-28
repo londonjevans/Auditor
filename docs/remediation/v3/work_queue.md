@@ -54,8 +54,11 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Runtime evidence:** Exact-ID metadata succeeds. One response was rejected
   fail-closed as truncated after spending `0.00054756 USD`; a materially changed
   reasoning-disabled response was schema-valid but rejected as identity
-  `UNBOUND` after spending `0.00006484 USD`. Neither response received review
-  credit and no success artifact exists.
+  `UNBOUND` after spending `0.00006484 USD`. A fifth materially changed response
+  also concluded `UNBOUND`; its private rejection sink then exposed an
+  attempt-qualified ledger-ID join defect. The terminal attempt conservatively
+  accounted `0.00072452 USD`. No response received review credit and no success
+  artifact exists.
 - **Local diagnostic correction:** Endpoint-tag versus provider-display identity
   normalization and exact/canonical model reconciliation now have negative
   regressions. Typed unbound generation observations are retained without review
@@ -70,9 +73,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Local validation:** Independent re-review found no remaining blocker. Ruff,
   strict mypy, and the full suite passed, ending with `1892 passed, 10 skipped in
   240.48s`; the paid provider test remained explicitly disabled.
-- **Next action:** Checkpoint the green local slice, then run every metadata,
-  ledger, privacy, fresh-path, fixture, and secret-boundary preflight before at
-  most one materially changed paid request.
+- **Current next action:** Paused at operator request after checkpoint
+  `ae5911933d47fd49671730280611cef21185b001`. On resume, reassess a materially
+  changed identity-bound smoke strategy; do not retry the rejected provider
+  request unchanged.
 
 ## V3-PRIVACY-001 — Explicit privacy and retention profiles
 
