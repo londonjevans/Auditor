@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.99881326
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: No successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 8637d10748257a1d272c3c6e73f3d6ba677a0f22
+LAST_CHECKPOINT_COMMIT: d2a54d9d3d57b89f6abeb567caaad7719eb74f96
 
 ## 2026-07-28 — V3-SMOKE-001
 
