@@ -13,7 +13,7 @@ Real provider tests require all of the following:
 - explicit `MMAUDIT_RUN_REAL_PROVIDER_TESTS=1`;
 - explicit operator-controlled `--secrets-env-file PATH`;
 - an exact model allowlist and exact approved endpoint;
-- an explicit privacy profile;
+- an explicit `MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=STRICT_ZDR` profile;
 - a numeric per-command cost cap within the aggregate remaining budget;
 - a fresh absolute private JSON evidence destination beneath an existing
   operator-controlled directory;

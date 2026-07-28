@@ -17,6 +17,7 @@ from tests.real_provider_harness import (
     REAL_PROVIDER_MODEL,
     REAL_PROVIDER_MODEL_ALLOWLIST,
     REAL_PROVIDER_OPT_IN,
+    REAL_PROVIDER_PRIVACY_PROFILE,
     REAL_PROVIDER_SECRET_FILE,
     SMOKE_FIXTURE_PATH,
     SMOKE_FIXTURE_SHA256,
@@ -44,6 +45,7 @@ def _valid_environment() -> dict[str, str]:
             "acme/secure-reasoner-v1,second-author/security-reviewer-v2"
         ),
         REAL_PROVIDER_ENDPOINT_ALLOWLIST: "approved-provider",
+        REAL_PROVIDER_PRIVACY_PROFILE: "STRICT_ZDR",
         REAL_PROVIDER_EVIDENCE_OUTPUT: "/operator/control/provider-smoke.json",
     }
 
@@ -135,6 +137,7 @@ def test_real_provider_gate_returns_only_non_secret_settings() -> None:
     assert settings.model_id == "acme/secure-reasoner-v1"
     assert settings.model_id in settings.model_allowlist
     assert settings.provider_endpoint_allowlist == ("approved-provider",)
+    assert settings.privacy_profile == "STRICT_ZDR"
     assert settings.evidence_output == Path("/operator/control/provider-smoke.json")
     assert "API_KEY" not in repr(settings)
 
@@ -144,6 +147,14 @@ def test_real_provider_evidence_output_is_explicit_and_absolute(path: str) -> No
     environment = _valid_environment()
     environment[REAL_PROVIDER_EVIDENCE_OUTPUT] = path
     with pytest.raises(RealProviderTestConfigurationError, match="EVIDENCE_OUTPUT"):
+        load_real_provider_test_settings(environment)
+
+
+@pytest.mark.parametrize("profile", ["", "strict_zdr", "SYNTHETIC_BENCHMARK"])
+def test_real_provider_privacy_profile_requires_explicit_strict_zdr(profile: str) -> None:
+    environment = _valid_environment()
+    environment[REAL_PROVIDER_PRIVACY_PROFILE] = profile
+    with pytest.raises(RealProviderTestConfigurationError, match="PRIVACY_PROFILE"):
         load_real_provider_test_settings(environment)
 
 

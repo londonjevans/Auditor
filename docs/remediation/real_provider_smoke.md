@@ -16,6 +16,7 @@ present:
 - `MMAUDIT_REAL_PROVIDER_MODEL_ALLOWLIST` containing that exact model ID; and
 - `MMAUDIT_REAL_PROVIDER_ENDPOINT_ALLOWLIST` containing exactly one approved
   provider endpoint tag or slug;
+- `MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=STRICT_ZDR`;
 - `MMAUDIT_REAL_PROVIDER_EVIDENCE_OUTPUT` set to a fresh absolute `.json` path
   beneath an existing unlinked operator-controlled directory.
 

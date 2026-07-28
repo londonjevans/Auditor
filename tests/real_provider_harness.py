@@ -26,6 +26,7 @@ REAL_PROVIDER_COST_LEDGER = "MMAUDIT_OPENROUTER_COST_LEDGER"
 REAL_PROVIDER_MODEL = "MMAUDIT_REAL_PROVIDER_MODEL_ID"
 REAL_PROVIDER_MODEL_ALLOWLIST = "MMAUDIT_REAL_PROVIDER_MODEL_ALLOWLIST"
 REAL_PROVIDER_ENDPOINT_ALLOWLIST = "MMAUDIT_REAL_PROVIDER_ENDPOINT_ALLOWLIST"
+REAL_PROVIDER_PRIVACY_PROFILE = "MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE"
 REAL_PROVIDER_EVIDENCE_OUTPUT = "MMAUDIT_REAL_PROVIDER_EVIDENCE_OUTPUT"
 
 _MAX_REMEDIATION_BUDGET_USD = Decimal("250.00")
@@ -57,6 +58,7 @@ class RealProviderTestSettings:
     model_id: str
     model_allowlist: tuple[str, ...]
     provider_endpoint_allowlist: tuple[str, ...]
+    privacy_profile: Literal["STRICT_ZDR"]
     evidence_output: Path
 
 
@@ -389,6 +391,11 @@ def load_real_provider_test_settings(
         raise RealProviderTestConfigurationError(
             f"{REAL_PROVIDER_ENDPOINT_ALLOWLIST} must select exactly one provider endpoint"
         )
+    privacy_profile = _required_value(environ, REAL_PROVIDER_PRIVACY_PROFILE)
+    if privacy_profile != "STRICT_ZDR":
+        raise RealProviderTestConfigurationError(
+            f"{REAL_PROVIDER_PRIVACY_PROFILE} must be exactly STRICT_ZDR"
+        )
     evidence_output = Path(_required_value(environ, REAL_PROVIDER_EVIDENCE_OUTPUT))
     if not evidence_output.is_absolute():
         raise RealProviderTestConfigurationError(
@@ -401,6 +408,7 @@ def load_real_provider_test_settings(
         model_id=model_id,
         model_allowlist=model_allowlist,
         provider_endpoint_allowlist=provider_allowlist,
+        privacy_profile="STRICT_ZDR",
         evidence_output=evidence_output,
     )
 

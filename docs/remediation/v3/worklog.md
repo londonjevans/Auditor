@@ -9,8 +9,8 @@ CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
 NEXT_ACTION: Validate the preserved opt-in harness and committed synthetic fixture, then execute one paid request only if every secret, privacy, routing, identity, artifact, and budget gate passes.
-LAST_COMMAND: .venv/bin/pytest -q
-LAST_RESULT: PASS; 1868 tests passed and 10 explicit external/provider/isolation prerequisites skipped in 243.36s. The paid provider integration remained disabled. No network or secret access occurred.
+LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_real_provider_harness.py tests/unit/test_operator_secrets.py tests/unit/test_cost_ledger.py tests/unit/test_model_discovery.py tests/unit/test_generation_evidence.py tests/unit/test_usage.py tests/unit/test_openrouter.py tests/integration/test_real_openrouter_provider.py
+LAST_RESULT: PASS; 295 tests passed and the one paid provider integration remained explicitly skipped in 1.14s after adding the exact STRICT_ZDR opt-in prerequisite. Ruff, strict mypy, and diff checks passed. No network or secret access occurred.
 REAL_MODEL_CALLS_ATTEMPTED: 2
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 2
@@ -65,6 +65,12 @@ LAST_CHECKPOINT_COMMIT: 8637d10748257a1d272c3c6e73f3d6ba677a0f22
 - **Exact pre-call complete suite:** `.venv/bin/pytest -q` passed `1868` tests and
   skipped `10` explicit external/provider/isolation prerequisites in `243.36s`.
   The real provider smoke remained disabled.
+- **Explicit privacy correction:** The paid harness now requires the independent
+  non-secret prerequisite
+  `MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=STRICT_ZDR`; an implicit hardcoded route
+  alone cannot enable provider access. The corrected focused provider/security
+  subset passed `295` tests with one paid skip; Ruff, strict mypy, and diff checks
+  passed.
 
 ## 2026-07-28 — V3-BASELINE-001
 

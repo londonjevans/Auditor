@@ -69,6 +69,7 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
     """Make exactly one bounded paid call after every explicit gate succeeds."""
 
     settings = load_real_provider_test_settings(os.environ)
+    assert settings.privacy_profile == "STRICT_ZDR"
     fixture_source, fixture_sha256 = load_pinned_synthetic_smoke_fixture(_ROOT)
     preflight_real_provider_smoke_output(
         output_path=settings.evidence_output,
