@@ -418,9 +418,19 @@ class OpenRouterGenerationEvidence(BaseModel):
                 "native finish reason",
                 max_length=100,
             )
-        if self.reasoning_tokens is not None and self.reasoning_tokens > self.completion_tokens:
+        completion_token_bound = (
+            self.native_completion_tokens
+            if self.native_completion_tokens is not None
+            else self.completion_tokens
+        )
+        if self.reasoning_tokens is not None and self.reasoning_tokens > completion_token_bound:
             raise ValueError("generation reasoning tokens exceed completion tokens")
-        if self.cached_tokens is not None and self.cached_tokens > self.prompt_tokens:
+        prompt_token_bound = (
+            self.native_prompt_tokens
+            if self.native_prompt_tokens is not None
+            else self.prompt_tokens
+        )
+        if self.cached_tokens is not None and self.cached_tokens > prompt_token_bound:
             raise ValueError("generation cached tokens exceed prompt tokens")
         if _canonical_nonnegative_decimal(self.total_cost_usd, "total cost") != (
             self.total_cost_usd
@@ -808,17 +818,8 @@ def _reconcile_generation_evidence(
             raise GenerationReconciliationMismatchError(
                 GenerationReconciliationMismatchCode.REQUEST_TIMESTAMP
             )
+    _require_matching_generation_token_pair(evidence, usage_record)
     eventual_token_comparisons = (
-        (
-            evidence.prompt_tokens,
-            usage_record.prompt_tokens,
-            GenerationReconciliationMismatchCode.PROMPT_TOKENS,
-        ),
-        (
-            evidence.completion_tokens,
-            usage_record.completion_tokens,
-            GenerationReconciliationMismatchCode.COMPLETION_TOKENS,
-        ),
         (
             evidence.reasoning_tokens,
             usage_record.reasoning_tokens,
@@ -843,6 +844,31 @@ def _reconcile_generation_evidence(
             GenerationReconciliationMismatchCode.REPORTED_COST
         )
     return evidence
+
+
+def _require_matching_generation_token_pair(
+    evidence: OpenRouterGenerationEvidence,
+    usage_record: UsageRecord,
+) -> None:
+    """Require one whole normalized or complete native prompt/completion tuple."""
+
+    expected_pair = (usage_record.prompt_tokens, usage_record.completion_tokens)
+    observed_pairs = [(evidence.prompt_tokens, evidence.completion_tokens)]
+    if evidence.native_prompt_tokens is not None and evidence.native_completion_tokens is not None:
+        observed_pairs.append(
+            (
+                evidence.native_prompt_tokens,
+                evidence.native_completion_tokens,
+            )
+        )
+    if expected_pair in observed_pairs:
+        return
+    mismatch_code = (
+        GenerationReconciliationMismatchCode.PROMPT_TOKENS
+        if all(prompt_tokens != expected_pair[0] for prompt_tokens, _ in observed_pairs)
+        else GenerationReconciliationMismatchCode.COMPLETION_TOKENS
+    )
+    raise GenerationReconciliationMismatchError(mismatch_code)
 
 
 def validate_generation_evidence_against_usage(

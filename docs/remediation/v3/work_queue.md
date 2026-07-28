@@ -131,10 +131,29 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   materialized yet. Initial identity binding uses the same expectation, and
   multi-generation verification shares an auth-inclusive deadline with bounded,
   non-starving GET concurrency and cancellation cleanup.
-- **Current next action:** Fresh no-network attempt-nine preflight passed from
-  validated checkpoint `9f63ab4`. Checkpoint the state update, verify a clean
-  synchronized tree, then execute exactly one explicitly gated Qwen/AkashML
-  synthetic smoke through the materially changed longer readiness path.
+- **Ninth runtime attempt:** From clean synchronized checkpoint `c86bae5`, one
+  Qwen/AkashML response completed structured and non-truncated but failed closed
+  after seven observations. Generation metadata's normalized token pair was
+  `211/19`; its native pair was `256/29`, exactly matching completion usage.
+  The private rejection is self-hashed and non-creditable, cost reconciled at
+  `0.00006484 USD`, and no success artifact exists.
+- **Local token-basis correction:** A pre-fix regression reproduced the observed
+  rejection. Reconciliation now accepts completion usage only when one whole
+  normalized or complete native prompt/completion pair matches; mixed, partial,
+  and unmatched pairs remain typed, retry-bounded failures. Native reasoning and
+  cache bounds use their native parent counts when present. The focused
+  generation, rejection-artifact, and gated-provider slice passes `159` tests
+  with the paid test explicitly skipped; affected Ruff and strict mypy pass.
+- **Independent review:** No production blocker was found. Added terminal
+  unmatched-pair exhaustion, reverse mixed/partial, and native-bound negative
+  coverage identified by the reviewer.
+- **Complete local gate:** Ruff format/check, configured strict mypy over `129`
+  source files, release-schema drift verification, and the full suite passed,
+  ending with `1950 passed, 10 skipped in 227.81s`. Final diff, untracked-file,
+  and secret-pattern checks passed with no generated artifact drift.
+- **Current next action:** Checkpoint and push the validated local correction,
+  then perform a fresh no-network preflight before any materially changed
+  provider action.
 
 ## V3-PRIVACY-001 — Explicit privacy and retention profiles
 

@@ -439,8 +439,23 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
             }
             assert refetched_generation.provider_name == selected_provider_name
             assert refetched_generation.finish_reason == record.finish_reason
-            assert refetched_generation.prompt_tokens == record.prompt_tokens
-            assert refetched_generation.completion_tokens == record.completion_tokens
+            observed_token_pairs = {
+                (
+                    refetched_generation.prompt_tokens,
+                    refetched_generation.completion_tokens,
+                )
+            }
+            if (
+                refetched_generation.native_prompt_tokens is not None
+                and refetched_generation.native_completion_tokens is not None
+            ):
+                observed_token_pairs.add(
+                    (
+                        refetched_generation.native_prompt_tokens,
+                        refetched_generation.native_completion_tokens,
+                    )
+                )
+            assert (record.prompt_tokens, record.completion_tokens) in observed_token_pairs
             if refetched_generation.reasoning_tokens is not None:
                 assert refetched_generation.reasoning_tokens == record.reasoning_tokens
             assert refetched_generation.reasoning_tokens in {None, 0}

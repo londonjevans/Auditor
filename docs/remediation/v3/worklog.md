@@ -8,18 +8,18 @@ AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: Checkpoint this preflight state, verify the tree is clean and synchronized, then execute exactly one explicitly gated Qwen/AkashML synthetic smoke through the validated longer readiness path.
-LAST_COMMAND: .venv/bin/python -c '<typed no-network V3-SMOKE-001 preflight>'
-LAST_RESULT: PASS; exact Qwen/AkashML route, STRICT_ZDR, pinned fixture, fresh attempt-nine output, safe operator-secret metadata, and the eight-entry ledger validated at spent 0.0032118825, reserved 0, remaining 249.9967881175. The secret file was not opened and no network or provider request ran.
-REAL_MODEL_CALLS_ATTEMPTED: 8
+NEXT_ACTION: Commit and push the validated token-basis correction, verify clean synchronization, then perform a fresh no-network preflight before any materially changed provider action.
+LAST_COMMAND: .venv/bin/ruff format . && .venv/bin/ruff check . && .venv/bin/mypy && .venv/bin/python scripts/generate_release_schemas.py && .venv/bin/pytest -q
+LAST_RESULT: PASS; Ruff format/check passed, strict mypy passed 129 source files, release schemas had no drift, and the complete suite passed 1950 tests with 10 explicit prerequisite skips in 227.81s.
+REAL_MODEL_CALLS_ATTEMPTED: 9
 REAL_MODEL_CALLS_SUCCEEDED: 0
-REAL_MODEL_CALLS_REJECTED: 8
-OPENROUTER_COST_USED_USD: 0.0032118825
+REAL_MODEL_CALLS_REJECTED: 9
+OPENROUTER_COST_USED_USD: 0.0032767225
 OPENROUTER_COST_RESERVED_USD: 0.00
-OPENROUTER_BUDGET_REMAINING_USD: 249.9967881175
+OPENROUTER_BUDGET_REMAINING_USD: 249.9967232775
 COMPLETED_REAL_AUDITS: 0
-BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; the validated Qwen/AkashML readiness correction still requires a fresh no-network preflight before any materially changed retry; no successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 9f63ab48905ee297992feb6f383a573a4e33cef2
+BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; Qwen/AkashML attempt nine exposed a normalized-versus-native token-basis reconciliation defect and will not be retried unchanged; no successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
+LAST_CHECKPOINT_COMMIT: c86bae5c8867038ded9e6b8b9a05d40a3155a064
 
 ## 2026-07-28 — V3-SMOKE-001
 
@@ -955,3 +955,73 @@ LAST_CHECKPOINT_COMMIT: 9f63ab48905ee297992feb6f383a573a4e33cef2
   `0.0032118825 USD` spent, zero reserved, and `249.9967881175 USD`
   remaining. Only secret-file metadata was validated; its contents were not
   opened, and no network or provider request ran.
+- **Ninth real attempt:** From clean synchronized checkpoint
+  `c86bae5c8867038ded9e6b8b9a05d40a3155a064`, exactly one explicitly
+  gated Qwen/AkashML completion ran against only the pinned synthetic fixture.
+  The response was structured, schema-valid, non-truncated, `finish=stop`, and
+  used zero reasoning tokens. Identity still concluded `UNBOUND` after all seven
+  bounded generation observations, with
+  `GENERATION_METADATA_INVALID` and `GENERATION_METADATA_MISSING`; no success or
+  review credit was granted.
+- **Attempt-nine durable evidence:** The private self-hashed rejection artifact
+  has file SHA-256
+  `6fd020441eac23069a5e1028cdcb6a7d96b12985cff1ca3c14bac88fdb9e0238`
+  and evidence SHA-256
+  `c859e8d5469bad26b9f5dcb595cab94428c73dfb1ba8b519bd8bf59374121568`.
+  It is mode `0600`, non-creditable, and retains no raw prompt, source, response,
+  secret, or secret path. The success artifact remains absent.
+- **Attempt-nine accounting:** The ninth exact attempt reconciled
+  `0.00006484 USD` against a `0.00135972 USD` reservation. Aggregate spend is
+  `0.0032767225 USD`, active reservation is zero, remaining budget is
+  `249.9967232775 USD`, and all nine entries are terminal with no over-cap or
+  reservation-overrun state.
+- **Token-basis diagnosis:** The final generation observation is exact for model,
+  provider, generation, finish reason, timestamp, cost, reasoning, and cache
+  facts. Its normalized token counts are `211/19`; its native token counts are
+  `256/29`, exactly matching the completion response usage. The current
+  reconciler compares only normalized prompt/completion counts and therefore
+  rejects a coherent native-basis observation. No unchanged provider retry is
+  permitted; the next slice is a local regression and narrow evidence-preserving
+  correction.
+- **Red regression:** Before implementation,
+  `.venv/bin/pytest -q
+  tests/unit/test_generation_evidence.py::test_generation_reconciliation_accepts_one_complete_native_token_basis`
+  failed with typed `PROMPT_TOKENS` reconciliation because the completion usage
+  matched the complete native pair rather than the normalized pair.
+- **Local token-basis correction:** Reconciliation now treats normalized
+  prompt/completion counts as one atomic candidate pair and adds the native pair
+  only when both native values exist. Completion usage must equal one complete
+  pair; it cannot combine fields across bases, and partial or unmatched native
+  evidence remains a typed eventual failure under the existing bounded polling
+  policy. Native reasoning and cache validation now uses native completion and
+  prompt parents when present, with an explicitly tested conservative normalized
+  fallback when a native parent is absent.
+- **Defensive regression matrix:** Added the observed native-basis success,
+  normalized compatibility, both cross-basis orientations, both one-sided native
+  cases, native-parent positive and negative bounds, settlement when a complete
+  matching native pair appears later, and terminal unmatched-pair exhaustion with
+  typed final evidence. The real-provider assertion now accepts only membership
+  in one complete observed pair.
+- **Independent correction review:** A read-only reviewer found no production
+  blocker. It confirmed atomic tuple membership, complete-native-only eligibility,
+  mixed/partial rejection, typed polling, and correct native-parent validation.
+  Its requested terminal-exhaustion and reverse-orientation gaps were added.
+- **Focused correction evidence:** The generation, private rejection-artifact,
+  and explicitly gated provider slice passed `159` tests with one paid-provider
+  skip. Affected Ruff passed and strict mypy found no issues. No secret file,
+  network, metadata endpoint, completion endpoint, or ledger state was accessed.
+- **Pre-full-gate state:** The next command is the complete local Ruff format/check,
+  configured mypy, release-schema generation, and pytest suite. The paid test
+  remains disabled; spend remains `0.0032767225 USD`, reservations remain zero,
+  and no success artifact exists.
+- **Complete correction gate:** `.venv/bin/ruff format .` left `297` files
+  unchanged; Ruff check passed; configured strict mypy passed `129` source files;
+  `.venv/bin/python scripts/generate_release_schemas.py` completed without drift;
+  and `.venv/bin/pytest -q` passed `1950` tests with `10` explicit
+  external-engine, isolation, loopback, and paid-provider prerequisite skips in
+  `227.81s`. Provider access remained disabled.
+- **Final local scope review:** `git diff --check` passed; the worktree contains
+  only the reconciler, its unit and gated integration regressions, and this v3
+  queue/worklog. There are no untracked files, generated schema changes, or
+  secret-pattern additions. Runtime/private artifacts remain ignored and outside
+  the commit.

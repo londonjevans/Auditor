@@ -144,6 +144,8 @@ def _usage_record(
     actual_model: str = _CANONICAL_MODEL,
     generation_id: str = _GENERATION_ID,
     request_id: str = "mmaudit-request-123",
+    prompt_tokens: int = 10,
+    completion_tokens: int = 5,
 ) -> UsageRecord:
     sha = "a" * 64
     routing = {
@@ -194,9 +196,9 @@ def _usage_record(
         provider=_PROVIDER_NAME,
         model_family="atlas",
         timestamp=_STARTED,
-        prompt_tokens=10,
-        completion_tokens=5,
-        total_tokens=15,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
         reported_cost_usd=0.01,
         accounted_cost_usd=0.01,
         routing=routing,
@@ -310,7 +312,7 @@ def test_generation_payload_is_allowlisted_self_hashed_and_mock_labeled() -> Non
     [
         ("cancelled", True),
         ("tokens_prompt", -1),
-        ("native_tokens_cached", 11),
+        ("native_tokens_cached", 13),
         ("total_cost", float("inf")),
         ("provider_name", "bad\nprovider"),
         ("model", "openrouter/auto"),
@@ -356,6 +358,151 @@ def test_optional_native_token_metadata_is_not_fabricated(mode: str) -> None:
     reconciled = _reconcile(evidence)
     assert reconciled.reasoning_tokens is None
     assert reconciled.cached_tokens is None
+
+
+def test_generation_reconciliation_accepts_one_complete_native_token_basis() -> None:
+    payload = _generation_payload()
+    payload["data"].update(
+        {
+            "tokens_prompt": 211,
+            "tokens_completion": 19,
+            "native_tokens_prompt": 256,
+            "native_tokens_completion": 29,
+        }
+    )
+    evidence = _evidence(payload=payload)
+    usage = _usage_record(prompt_tokens=256, completion_tokens=29)
+
+    reconciled = _reconcile(evidence, usage_record=usage)
+
+    assert (reconciled.prompt_tokens, reconciled.completion_tokens) == (211, 19)
+    assert (
+        reconciled.native_prompt_tokens,
+        reconciled.native_completion_tokens,
+    ) == (256, 29)
+
+
+@pytest.mark.parametrize(
+    ("native_field", "value"),
+    [
+        ("native_tokens_reasoning", 6),
+        ("native_tokens_cached", 11),
+    ],
+)
+def test_native_token_details_use_their_native_parent_bounds(
+    native_field: str,
+    value: int,
+) -> None:
+    payload = _generation_payload()
+    payload["data"][native_field] = value
+
+    evidence = _evidence(payload=payload)
+
+    assert (
+        getattr(
+            evidence,
+            "reasoning_tokens" if native_field == "native_tokens_reasoning" else "cached_tokens",
+        )
+        == value
+    )
+
+
+@pytest.mark.parametrize(
+    ("normalized_pair", "native_pair"),
+    [
+        ((10, 4), (12, 5)),
+        ((9, 5), (10, 7)),
+    ],
+)
+def test_generation_reconciliation_rejects_cross_basis_token_pair(
+    normalized_pair: tuple[int, int],
+    native_pair: tuple[int, int],
+) -> None:
+    payload = _generation_payload()
+    payload["data"].update(
+        {
+            "tokens_prompt": normalized_pair[0],
+            "tokens_completion": normalized_pair[1],
+            "native_tokens_prompt": native_pair[0],
+            "native_tokens_completion": native_pair[1],
+        }
+    )
+
+    with pytest.raises(GenerationReconciliationMismatchError) as raised:
+        _reconcile(_evidence(payload=payload))
+
+    assert raised.value.code is GenerationReconciliationMismatchCode.COMPLETION_TOKENS
+    assert raised.value.is_eventual_usage_field
+
+
+@pytest.mark.parametrize(
+    ("normalized_pair", "native_pair", "mismatch_code"),
+    [
+        (
+            (9, 5),
+            (10, None),
+            GenerationReconciliationMismatchCode.PROMPT_TOKENS,
+        ),
+        (
+            (10, 4),
+            (None, 5),
+            GenerationReconciliationMismatchCode.COMPLETION_TOKENS,
+        ),
+    ],
+)
+def test_generation_reconciliation_rejects_partial_native_token_pair(
+    normalized_pair: tuple[int, int],
+    native_pair: tuple[int | None, int | None],
+    mismatch_code: GenerationReconciliationMismatchCode,
+) -> None:
+    payload = _generation_payload()
+    payload["data"].update(
+        {
+            "tokens_prompt": normalized_pair[0],
+            "tokens_completion": normalized_pair[1],
+            "native_tokens_prompt": native_pair[0],
+            "native_tokens_completion": native_pair[1],
+        }
+    )
+
+    with pytest.raises(GenerationReconciliationMismatchError) as raised:
+        _reconcile(_evidence(payload=payload))
+
+    assert raised.value.code is mismatch_code
+
+
+@pytest.mark.parametrize(
+    ("normalized_field", "normalized_value", "native_field", "native_value"),
+    [
+        ("tokens_completion", 10, "native_tokens_reasoning", 8),
+        ("tokens_prompt", 20, "native_tokens_cached", 13),
+    ],
+)
+def test_native_token_details_cannot_exceed_smaller_native_parent(
+    normalized_field: str,
+    normalized_value: int,
+    native_field: str,
+    native_value: int,
+) -> None:
+    payload = _generation_payload()
+    payload["data"][normalized_field] = normalized_value
+    payload["data"][native_field] = native_value
+
+    with pytest.raises(ValidationError, match="exceed"):
+        _evidence(payload=payload)
+
+
+def test_native_token_detail_without_native_parent_uses_conservative_normalized_bound() -> None:
+    payload = _generation_payload()
+    payload["data"].update(
+        {
+            "native_tokens_completion": None,
+            "native_tokens_reasoning": 6,
+        }
+    )
+
+    with pytest.raises(ValidationError, match="reasoning tokens exceed"):
+        _evidence(payload=payload)
 
 
 @pytest.mark.parametrize(
@@ -1272,6 +1419,63 @@ async def test_generation_verification_polls_eventual_usage_until_it_matches(
 
 
 @pytest.mark.asyncio
+async def test_generation_reconciliation_polls_until_complete_native_pair_matches(
+    config_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    waits: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        payload = _generation_payload()
+        payload["data"].update(
+            {
+                "tokens_prompt": 211,
+                "tokens_completion": 19,
+                "native_tokens_prompt": 256,
+                "native_tokens_completion": None if calls == 1 else 29,
+            }
+        )
+        return httpx.Response(200, json=payload)
+
+    async def no_wait(delay_seconds: float) -> None:
+        waits.append(delay_seconds)
+
+    config = config_factory(
+        execution={
+            "request_timeout_seconds": 120,
+            "max_model_retries": 0,
+        }
+    )
+    client, http_client = _client(config, handler)
+    client.execution_evidence = ExecutionEvidenceKind.REAL
+    monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
+    expectation = GenerationReconciliationExpectation(
+        exact_model_id=_MODEL,
+        canonical_model_id=_CANONICAL_MODEL,
+        catalog_identity_binding_sha256=_catalog_identity_binding(),
+        discovery_evidence_sha256=_DISCOVERY_EVIDENCE_SHA256,
+        expected_provider_name=_PROVIDER_NAME,
+        require_certification=True,
+        usage_record=_usage_record(prompt_tokens=256, completion_tokens=29),
+    )
+    try:
+        evidence = await client.get_generation_evidence(
+            _GENERATION_ID,
+            reconciliation_request=expectation,
+        )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert evidence.retrieval_attempts == 2
+    assert calls == 2
+    assert waits == [1.0]
+
+
+@pytest.mark.asyncio
 async def test_generation_verification_exhaustion_preserves_typed_value_free_mismatch(
     config_factory: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
@@ -1328,6 +1532,68 @@ async def test_generation_verification_exhaustion_preserves_typed_value_free_mis
     assert waits == [1.0, 3.0, 7.0]
     assert "0.01" not in str(raised.value)
     assert "0.02" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_unmatched_token_pairs_exhaust_with_typed_final_evidence(
+    config_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    waits: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        payload = _generation_payload()
+        payload["data"].update(
+            {
+                "tokens_prompt": 211,
+                "tokens_completion": 19,
+                "native_tokens_prompt": 256,
+                "native_tokens_completion": 28,
+            }
+        )
+        return httpx.Response(200, json=payload)
+
+    async def no_wait(delay_seconds: float) -> None:
+        waits.append(delay_seconds)
+
+    config = config_factory(
+        execution={
+            "request_timeout_seconds": 11,
+            "max_model_retries": 0,
+        }
+    )
+    client, http_client = _client(config, handler)
+    client.execution_evidence = ExecutionEvidenceKind.REAL
+    monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
+    expectation = GenerationReconciliationExpectation(
+        exact_model_id=_MODEL,
+        canonical_model_id=_CANONICAL_MODEL,
+        catalog_identity_binding_sha256=_catalog_identity_binding(),
+        discovery_evidence_sha256=_DISCOVERY_EVIDENCE_SHA256,
+        expected_provider_name=_PROVIDER_NAME,
+        require_certification=True,
+        usage_record=_usage_record(prompt_tokens=256, completion_tokens=29),
+    )
+    try:
+        with pytest.raises(OpenRouterGenerationReconciliationError) as raised:
+            await client.get_generation_evidence(
+                _GENERATION_ID,
+                reconciliation_request=expectation,
+            )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert raised.value.mismatch_code is GenerationReconciliationMismatchCode.COMPLETION_TOKENS
+    assert raised.value.attempts == 4
+    assert raised.value.exhausted
+    assert raised.value.last_evidence is not None
+    assert raised.value.last_evidence.retrieval_attempts == 4
+    assert calls == 4
+    assert waits == [1.0, 3.0, 7.0]
 
 
 @pytest.mark.asyncio
