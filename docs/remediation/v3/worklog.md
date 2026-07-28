@@ -8,9 +8,9 @@ AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: Push the validated implementation and state checkpoint over SSH, verify clean synchronization, then perform a fresh no-network preflight before any materially changed provider action.
-LAST_COMMAND: git commit -m "Reconcile OpenRouter token bases atomically"
-LAST_RESULT: PASS; isolated validated implementation checkpoint 0ff4918 was created with only the five intended files.
+NEXT_ACTION: Commit and push the attempt-ten preflight record, verify clean synchronization, then run exactly one explicitly gated Qwen/AkashML smoke through the corrected reconciler.
+LAST_COMMAND: <exact non-secret attempt-ten environment> .venv/bin/python -c <typed no-network smoke preflight>
+LAST_RESULT: PASS; clean checkpoint a36302c, exact Qwen/AkashML route, STRICT_ZDR, pinned fixture, fresh attempt-ten output, accepted secret-file metadata, and a terminal zero-reservation ledger validated without reading secret content or accessing network.
 REAL_MODEL_CALLS_ATTEMPTED: 9
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 9
@@ -1029,3 +1029,20 @@ LAST_CHECKPOINT_COMMIT: 0ff4918568a304bcefc3ad108903ee74b197389b
   `0ff4918568a304bcefc3ad108903ee74b197389b` records the reconciler, regression
   coverage, and exact attempt-nine/full-gate evidence. It contains only the five
   intended files and no runtime/private artifact.
+- **SSH publication:** Implementation checkpoint `0ff4918` and state checkpoint
+  `a36302c` were pushed to `git@github.com:londonjevans/Auditor.git`. Local
+  `HEAD` and `origin/main` both resolved to
+  `a36302cab3c32277f47b5154ee469d1699e50b49` with a clean worktree.
+- **Attempt-ten no-network preflight:** From that clean synchronized checkpoint,
+  the exact model `qwen/qwen3.6-35b-a3b`, exact endpoint `akashml/fp8`,
+  `STRICT_ZDR`, pinned fixture SHA-256
+  `bbb0127919f734caedffb6f9143a634b6925ff4451985d1410a47e1637f1517b`,
+  and fresh destination
+  `v3-smoke-qwen-akash-success-20260728-attempt10.json` validated. The operator
+  secret path was checked by metadata only: regular, single-link,
+  non-group/world-writable, bounded, and non-symlink; its contents were not
+  opened.
+- **Attempt-ten budget preflight:** The durable ledger has cap `250.00 USD`, nine
+  terminal entries, `0.0032767225 USD` spent, zero reserved,
+  `249.9967232775 USD` remaining, no over-cap state, and no reservation overrun.
+  No network, metadata endpoint, completion endpoint, or ledger mutation occurred.

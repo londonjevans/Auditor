@@ -153,9 +153,14 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   and secret-pattern checks passed with no generated artifact drift.
 - **Validated implementation checkpoint:** Commit `0ff4918` contains the atomic
   token-basis correction and complete regression matrix.
-- **Current next action:** Push the checkpoint over SSH, verify clean
-  synchronization, then perform a fresh no-network preflight before any
-  materially changed provider action.
+- **Attempt-ten no-network preflight:** From clean synchronized checkpoint
+  `a36302c`, exact Qwen/AkashML allowlists, `STRICT_ZDR`, the pinned fixture, a
+  fresh private output, and the nine-entry terminal ledger validated. Spend is
+  `0.0032767225 USD`, reserved is zero, and remaining budget is
+  `249.9967232775 USD`. Only secret-file metadata was checked; no secret content
+  or network endpoint was accessed.
+- **Current next action:** Commit and push the preflight record, then run exactly
+  one explicitly gated attempt through the corrected reconciler.
 
 ## V3-PRIVACY-001 — Explicit privacy and retention profiles
 
