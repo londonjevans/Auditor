@@ -1224,12 +1224,12 @@ def test_bound_verification_failure_branch_writes_noncreditable_rejection(
         },
         requested_generation_id=record.openrouter_generation_id,
         retrieved_at=datetime(2026, 7, 28, 12, 0, 2, tzinfo=UTC),
-        retrieval_attempts=4,
+        retrieval_attempts=7,
         execution_evidence=ExecutionEvidenceKind.REAL,
     )
     error = OpenRouterGenerationReconciliationError(
         GenerationReconciliationMismatchCode.REPORTED_COST,
-        attempts=4,
+        attempts=7,
         exhausted=True,
         last_evidence=generation,
     )
@@ -1315,7 +1315,7 @@ def test_bound_verification_failure_branch_writes_noncreditable_rejection(
     assert rejection.status == "REJECTED_GENERATION_VERIFICATION"
     assert rejection.creditable is False
     assert rejection.mismatch_code is GenerationReconciliationMismatchCode.REPORTED_COST
-    assert rejection.reconciliation_attempts == 4
+    assert rejection.reconciliation_attempts == 7
     assert rejection_output.exists()
     assert not settings.evidence_output.exists()
     serialized = rejection_output.read_text(encoding="utf-8")

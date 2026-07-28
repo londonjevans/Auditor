@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal, TypeVar, cast
 from urllib.parse import quote
 
 import httpx
@@ -47,7 +47,9 @@ from mmaudit.models.endpoint_snapshots import (
     validate_openrouter_endpoint_snapshot,
 )
 from mmaudit.models.generation_evidence import (
+    MAX_GENERATION_EVIDENCE_RETRIEVAL_ATTEMPTS,
     GenerationEvidenceValidationError,
+    GenerationReconciliationExpectation,
     GenerationReconciliationMismatchCode,
     GenerationReconciliationMismatchError,
     GenerationVerificationRequest,
@@ -135,7 +137,12 @@ _ROUTER_MAX_PRICE_FIELDS = frozenset({"completion", "image", "prompt", "request"
 _PER_MILLION_ROUTER_PRICE_FIELDS = frozenset({"completion", "prompt"})
 _MUTABLE_IDENTITY_TTL = timedelta(days=7)
 _MAX_RETAINED_UNBOUND_COMPLETIONS = 512
-_GENERATION_METADATA_POLL_DELAYS_SECONDS = (0.0, 1.0, 3.0, 7.0)
+_GENERATION_METADATA_POLL_DELAYS_SECONDS = (0.0, 1.0, 3.0, 7.0, 15.0, 30.0, 60.0)
+_MAXIMUM_GENERATION_METADATA_WAIT_SECONDS = sum(_GENERATION_METADATA_POLL_DELAYS_SECONDS)
+_MINIMUM_GENERATION_METADATA_IO_BUDGET_SECONDS = 0.05
+_MAXIMUM_GENERATION_METADATA_IO_BUDGET_SECONDS = 15.0
+_GENERATION_METADATA_IO_BUDGET_FRACTION = 0.25
+_MAX_TRUSTED_GENERATION_VERIFICATION_REQUESTS = 512
 _UNENFORCEABLE_VARIABLE_PRICING_FIELDS = frozenset(
     {
         "input_cache_read",
@@ -509,7 +516,7 @@ class OpenRouterGenerationReconciliationError(OpenRouterSchemaError):
             not isinstance(mismatch_code, GenerationReconciliationMismatchCode)
             or not isinstance(attempts, int)
             or isinstance(attempts, bool)
-            or not 1 <= attempts <= len(_GENERATION_METADATA_POLL_DELAYS_SECONDS)
+            or not 1 <= attempts <= MAX_GENERATION_EVIDENCE_RETRIEVAL_ATTEMPTS
             or not isinstance(exhausted, bool)
         ):
             raise TypeError("generation reconciliation diagnostic is invalid")
@@ -1006,7 +1013,10 @@ class OpenRouterClient:
         self,
         generation_id: str,
         *,
-        reconciliation_request: GenerationVerificationRequest | None = None,
+        reconciliation_request: (
+            GenerationReconciliationExpectation | GenerationVerificationRequest | None
+        ) = None,
+        _request_semaphore: asyncio.Semaphore | None = None,
     ) -> OpenRouterGenerationEvidence:
         """Poll boundedly for one eventual, content-free generation attestation."""
 
@@ -1014,116 +1024,248 @@ class OpenRouterClient:
             validated_generation_id = validate_generation_id(generation_id)
         except GenerationEvidenceValidationError as exc:
             raise OpenRouterRequestLimitError(str(exc)) from None
-        if reconciliation_request is not None and (
-            not isinstance(reconciliation_request, GenerationVerificationRequest)
-            or reconciliation_request.usage_record.openrouter_generation_id
-            != validated_generation_id
+        expectation = (
+            reconciliation_request.reconciliation_expectation()
+            if isinstance(reconciliation_request, GenerationVerificationRequest)
+            else reconciliation_request
+        )
+        if expectation is not None and (
+            not isinstance(expectation, GenerationReconciliationExpectation)
+            or expectation.usage_record.openrouter_generation_id != validated_generation_id
         ):
             raise OpenRouterRequestLimitError(
                 "generation reconciliation request does not bind the requested generation"
             )
+        if _request_semaphore is not None and not isinstance(
+            _request_semaphore,
+            asyncio.Semaphore,
+        ):
+            raise OpenRouterRequestLimitError(
+                "generation metadata request concurrency control is invalid"
+            )
+        poll_delays = _generation_metadata_poll_delays(self.execution.request_timeout_seconds)
+        operation_timeout = _generation_metadata_operation_timeout(
+            self.execution.request_timeout_seconds
+        )
         last_pending_error: OpenRouterError | None = None
         last_reconciliation_code: GenerationReconciliationMismatchCode | None = None
         last_reconciliation_evidence: OpenRouterGenerationEvidence | None = None
-        for attempt, delay_seconds in enumerate(
-            _GENERATION_METADATA_POLL_DELAYS_SECONDS,
-            start=1,
-        ):
-            if delay_seconds:
-                await self._wait_for_generation_metadata(delay_seconds)
-            try:
-                payload = await OpenRouterClient._request_metadata(
-                    self,
-                    f"/generation?id={quote(validated_generation_id, safe='')}",
-                    max_bytes=1_000_000,
-                    exact_decimal_json=True,
-                    maximum_attempts=1,
-                    not_found_is_pending=True,
-                )
-            except (
-                OpenRouterGenerationMetadataNotReadyError,
-                OpenRouterProviderUnavailableError,
-                OpenRouterRateLimitError,
-                OpenRouterTimeoutError,
-            ) as exc:
-                last_pending_error = exc
-                last_reconciliation_code = None
-                last_reconciliation_evidence = None
-                continue
-            try:
-                evidence = validate_openrouter_generation_payload(
-                    payload,
-                    requested_generation_id=validated_generation_id,
-                    retrieved_at=datetime.now(UTC),
-                    retrieval_attempts=attempt,
-                    execution_evidence=self.execution_evidence,
-                )
-            except (GenerationEvidenceValidationError, ValidationError):
-                if _generation_metadata_payload_may_be_pending(
-                    payload,
-                    requested_generation_id=validated_generation_id,
-                ):
-                    last_pending_error = OpenRouterSchemaError(
-                        "OpenRouter generation metadata remained incomplete"
-                    )
+
+        async def poll() -> OpenRouterGenerationEvidence:
+            nonlocal last_pending_error
+            nonlocal last_reconciliation_code
+            nonlocal last_reconciliation_evidence
+            for attempt, delay_seconds in enumerate(
+                poll_delays,
+                start=1,
+            ):
+                if delay_seconds:
+                    await self._wait_for_generation_metadata(delay_seconds)
+                try:
+                    if _request_semaphore is None:
+                        payload = await OpenRouterClient._request_metadata(
+                            self,
+                            f"/generation?id={quote(validated_generation_id, safe='')}",
+                            max_bytes=1_000_000,
+                            exact_decimal_json=True,
+                            maximum_attempts=1,
+                            not_found_is_pending=True,
+                        )
+                    else:
+                        async with _request_semaphore:
+                            payload = await OpenRouterClient._request_metadata(
+                                self,
+                                f"/generation?id={quote(validated_generation_id, safe='')}",
+                                max_bytes=1_000_000,
+                                exact_decimal_json=True,
+                                maximum_attempts=1,
+                                not_found_is_pending=True,
+                            )
+                except (
+                    OpenRouterGenerationMetadataNotReadyError,
+                    OpenRouterProviderUnavailableError,
+                    OpenRouterRateLimitError,
+                    OpenRouterTimeoutError,
+                ) as exc:
+                    last_pending_error = exc
                     last_reconciliation_code = None
                     last_reconciliation_evidence = None
                     continue
-                raise OpenRouterSchemaError(
-                    "OpenRouter returned invalid generation metadata"
-                ) from None
-            if reconciliation_request is not None:
                 try:
-                    _reconcile_generation_evidence_structural(
-                        evidence,
-                        usage_record=reconciliation_request.usage_record,
-                        expected_exact_model=reconciliation_request.exact_model_id,
-                        expected_canonical_model=reconciliation_request.canonical_model_id,
-                        expected_catalog_identity_binding_sha256=(
-                            reconciliation_request.catalog_identity_binding_sha256
-                        ),
-                        expected_discovery_evidence_sha256=(
-                            reconciliation_request.discovery_evidence_sha256
-                        ),
-                        expected_provider_name=reconciliation_request.expected_provider_name,
+                    evidence = validate_openrouter_generation_payload(
+                        payload,
+                        requested_generation_id=validated_generation_id,
+                        retrieved_at=datetime.now(UTC),
+                        retrieval_attempts=attempt,
+                        execution_evidence=self.execution_evidence,
                     )
-                except GenerationReconciliationMismatchError as exc:
-                    if not exc.is_eventual_usage_field:
+                except (GenerationEvidenceValidationError, ValidationError):
+                    try:
+                        may_be_pending = _generation_metadata_payload_may_be_pending(
+                            payload,
+                            requested_generation_id=validated_generation_id,
+                            reconciliation_expectation=expectation,
+                            retrieval_attempts=attempt,
+                            execution_evidence=self.execution_evidence,
+                        )
+                    except GenerationReconciliationMismatchError as exc:
                         raise OpenRouterGenerationReconciliationError(
                             exc.code,
                             attempts=attempt,
                             exhausted=False,
-                            last_evidence=evidence,
+                            last_evidence=None,
                         ) from None
-                    last_pending_error = None
-                    last_reconciliation_code = exc.code
-                    last_reconciliation_evidence = evidence
-                    continue
-                except GenerationEvidenceValidationError:
+                    except (GenerationEvidenceValidationError, ValidationError):
+                        raise OpenRouterSchemaError(
+                            "OpenRouter returned invalid generation metadata"
+                        ) from None
+                    if may_be_pending:
+                        last_pending_error = OpenRouterSchemaError(
+                            "OpenRouter generation metadata remained incomplete"
+                        )
+                        last_reconciliation_code = None
+                        last_reconciliation_evidence = None
+                        continue
                     raise OpenRouterSchemaError(
-                        "OpenRouter generation metadata failed structural reconciliation"
+                        "OpenRouter returned invalid generation metadata"
                     ) from None
-            return evidence
-        if last_reconciliation_code is not None:
-            assert last_reconciliation_evidence is not None
-            raise OpenRouterGenerationReconciliationError(
-                last_reconciliation_code,
-                attempts=len(_GENERATION_METADATA_POLL_DELAYS_SECONDS),
-                exhausted=True,
-                last_evidence=last_reconciliation_evidence,
+                if expectation is not None:
+                    try:
+                        _reconcile_generation_evidence_structural(
+                            evidence,
+                            usage_record=expectation.usage_record,
+                            expected_exact_model=expectation.exact_model_id,
+                            expected_canonical_model=expectation.canonical_model_id,
+                            expected_catalog_identity_binding_sha256=(
+                                expectation.catalog_identity_binding_sha256
+                            ),
+                            expected_discovery_evidence_sha256=(
+                                expectation.discovery_evidence_sha256
+                            ),
+                            expected_provider_name=expectation.expected_provider_name,
+                            require_certification=expectation.require_certification,
+                        )
+                    except GenerationReconciliationMismatchError as exc:
+                        if not exc.is_eventual_usage_field:
+                            raise OpenRouterGenerationReconciliationError(
+                                exc.code,
+                                attempts=attempt,
+                                exhausted=False,
+                                last_evidence=evidence,
+                            ) from None
+                        last_pending_error = None
+                        last_reconciliation_code = exc.code
+                        last_reconciliation_evidence = evidence
+                        continue
+                    except GenerationEvidenceValidationError:
+                        raise OpenRouterSchemaError(
+                            "OpenRouter generation metadata failed structural reconciliation"
+                        ) from None
+                return evidence
+            if last_reconciliation_code is not None:
+                assert last_reconciliation_evidence is not None
+                raise OpenRouterGenerationReconciliationError(
+                    last_reconciliation_code,
+                    attempts=len(poll_delays),
+                    exhausted=True,
+                    last_evidence=last_reconciliation_evidence,
+                )
+            if isinstance(last_pending_error, OpenRouterGenerationMetadataNotReadyError):
+                raise last_pending_error
+            if last_pending_error is not None:
+                raise last_pending_error
+            raise OpenRouterGenerationMetadataNotReadyError(
+                "OpenRouter generation metadata was unavailable after bounded polling"
             )
-        if isinstance(last_pending_error, OpenRouterGenerationMetadataNotReadyError):
-            raise last_pending_error
-        if last_pending_error is not None:
-            raise last_pending_error
-        raise OpenRouterGenerationMetadataNotReadyError(
-            "OpenRouter generation metadata was unavailable after bounded polling"
-        )
+
+        try:
+            async with asyncio.timeout(operation_timeout):
+                return await poll()
+        except TimeoutError:
+            if last_reconciliation_code is not None and last_reconciliation_evidence is not None:
+                raise OpenRouterGenerationReconciliationError(
+                    last_reconciliation_code,
+                    attempts=last_reconciliation_evidence.retrieval_attempts,
+                    exhausted=True,
+                    last_evidence=last_reconciliation_evidence,
+                ) from None
+            raise OpenRouterGenerationMetadataNotReadyError(
+                "OpenRouter generation metadata exceeded the total readiness deadline"
+            ) from None
 
     async def _wait_for_generation_metadata(self, delay_seconds: float) -> None:
         """Wait only one fixed bounded delay between metadata observations."""
 
         await asyncio.sleep(delay_seconds)
+
+    async def _fetch_generation_attestations_with_deadline(
+        self,
+        requests: tuple[GenerationVerificationRequest, ...],
+        generation_ids: tuple[str, ...],
+    ) -> tuple[OpenRouterGenerationEvidence, ...]:
+        """Fetch an ordered generation set under one shared wall-clock deadline."""
+
+        operation_timeout = _generation_metadata_operation_timeout(
+            self.execution.request_timeout_seconds
+        )
+        tasks: list[asyncio.Task[OpenRouterGenerationEvidence]] = []
+
+        async def cancel_and_wait_for_tasks() -> None:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+        async def fetch_attestations() -> tuple[OpenRouterGenerationEvidence, ...]:
+            await OpenRouterClient.validate_authentication(self)
+            OpenRouterClient._validate_transport_provenance(self)
+            if not self._authentication_validated:
+                raise OpenRouterAuthenticationError("OpenRouter authentication was not validated")
+            semaphore = asyncio.Semaphore(self.execution.concurrency)
+
+            async def fetch_one(
+                request: GenerationVerificationRequest,
+                generation_id: str,
+            ) -> OpenRouterGenerationEvidence:
+                return await OpenRouterClient.get_generation_evidence(
+                    self,
+                    generation_id,
+                    reconciliation_request=request.reconciliation_expectation(),
+                    _request_semaphore=semaphore,
+                )
+
+            tasks.extend(
+                asyncio.create_task(fetch_one(request, generation_id))
+                for request, generation_id in zip(
+                    requests,
+                    generation_ids,
+                    strict=True,
+                )
+            )
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, BaseException):
+                    raise result
+            return tuple(cast(OpenRouterGenerationEvidence, result) for result in results)
+
+        try:
+            async with asyncio.timeout(operation_timeout):
+                return await fetch_attestations()
+        except asyncio.CancelledError:
+            await cancel_and_wait_for_tasks()
+            raise
+        except TimeoutError:
+            await cancel_and_wait_for_tasks()
+            for task in tasks:
+                if task.cancelled():
+                    continue
+                failure = task.exception()
+                if failure is not None:
+                    raise failure from None
+            raise OpenRouterGenerationMetadataNotReadyError(
+                "OpenRouter generation verification exceeded the total readiness deadline"
+            ) from None
 
     async def create_trusted_generation_verification(
         self,
@@ -1139,6 +1281,10 @@ class OpenRouterClient:
         if not requests:
             raise OpenRouterRequestLimitError(
                 "trusted generation verification requires at least one request"
+            )
+        if len(requests) > _MAX_TRUSTED_GENERATION_VERIFICATION_REQUESTS:
+            raise OpenRouterRequestLimitError(
+                "trusted generation verification exceeds the fixed request-set limit"
             )
         normalized = tuple(
             GenerationVerificationRequest(
@@ -1169,24 +1315,10 @@ class OpenRouterClient:
                 "trusted generation verification requires an owned REAL provider client"
             )
         verification_started_at = datetime.now(UTC)
-        await OpenRouterClient.validate_authentication(self)
-        OpenRouterClient._validate_transport_provenance(self)
-        if not self._authentication_validated:
-            raise OpenRouterAuthenticationError("OpenRouter authentication was not validated")
-        attestations = tuple(
-            [
-                await OpenRouterClient.get_generation_evidence(
-                    self,
-                    generation_id,
-                    reconciliation_request=request,
-                )
-                for request, generation_id in zip(
-                    normalized,
-                    generation_ids,
-                    strict=True,
-                )
-                if generation_id is not None
-            ]
+        attestations = await OpenRouterClient._fetch_generation_attestations_with_deadline(
+            self,
+            normalized,
+            cast(tuple[str, ...], generation_ids),
         )
         OpenRouterClient._validate_transport_provenance(self)
         try:
@@ -1799,6 +1931,7 @@ class OpenRouterClient:
                 "validate_authentication",
                 "get_generation_evidence",
                 "create_trusted_generation_verification",
+                "_fetch_generation_attestations_with_deadline",
                 "_request_metadata",
                 "_bounded_request",
                 "_validate_transport_provenance",
@@ -2103,31 +2236,81 @@ class OpenRouterClient:
         generation_id = completion.usage_record.openrouter_generation_id
         if generation_id is None:
             raise OpenRouterModelError("REAL provider completion lacks a generation identity")
-        try:
-            generation = await OpenRouterClient.get_generation_evidence(self, generation_id)
-        except OpenRouterError as exc:
-            diagnostic_codes = tuple(
-                sorted(
-                    {
-                        OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_MISSING,
-                        _generation_metadata_failure_diagnostic(exc),
-                    },
-                    key=lambda item: item.value,
-                )
-            )
+        identity = self._model_identities.get(completion.usage_record.requested_model)
+        if identity is None:
+            raise OpenRouterModelError("REAL provider completion lacks frozen model identity")
+
+        def conclude_unbound(
+            diagnostic_codes: set[OpenRouterIdentityDiagnosticCode],
+            *,
+            generation_observation: OpenRouterGenerationEvidence | None = None,
+        ) -> StructuredCompletion[ResponseT]:
             missing_binding = self._bind_generation_identity(
                 usage_record=completion.usage_record,
                 generation_evidence=None,
                 evaluated_at=None,
                 trusted_issuer=_TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER,
-                missing_diagnostic_codes=diagnostic_codes,
+                missing_diagnostic_codes=tuple(
+                    sorted(diagnostic_codes, key=lambda item: item.value)
+                ),
             )
             unbound_usage = self._usage_with_unbound_identity(
                 usage_record=completion.usage_record,
                 identity_binding=missing_binding,
                 trusted_issuer=_TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER,
+                generation_observation=generation_observation,
             )
             return StructuredCompletion(value=completion.value, usage_record=unbound_usage)
+
+        try:
+            reconciliation_expectation = GenerationReconciliationExpectation(
+                exact_model_id=identity.exact_model_id,
+                canonical_model_id=identity.canonical_slug,
+                catalog_identity_binding_sha256=identity.catalog_identity_binding_sha256,
+                discovery_evidence_sha256=identity.discovery_evidence_sha256,
+                expected_provider_name=identity.snapshot.provider_name,
+                require_certification=(
+                    completion.usage_record.routing.get("certification_request") is True
+                ),
+                usage_record=completion.usage_record,
+            )
+        except GenerationEvidenceValidationError:
+            usage = completion.usage_record
+            diagnostic_codes = {
+                OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_INTEGRITY_REJECTED,
+                OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_MISSING,
+            }
+            if usage.actual_provider_endpoint != identity.snapshot.approved_provider_endpoint:
+                diagnostic_codes.add(OpenRouterIdentityDiagnosticCode.ENDPOINT_VARIANT_MISMATCH)
+            if usage.routing.get("selected_provider_name") != identity.snapshot.provider_name:
+                diagnostic_codes.add(OpenRouterIdentityDiagnosticCode.PROVIDER_MISMATCH)
+            if usage.fallback_used:
+                diagnostic_codes.add(OpenRouterIdentityDiagnosticCode.UNAPPROVED_FALLBACK)
+            if (
+                usage.returned_model not in identity.accepted_response_models
+                or usage.actual_model not in identity.accepted_response_models
+            ):
+                diagnostic_codes.add(OpenRouterIdentityDiagnosticCode.MODEL_CANONICAL_MISMATCH)
+            return conclude_unbound(diagnostic_codes)
+        try:
+            generation = await OpenRouterClient.get_generation_evidence(
+                self,
+                generation_id,
+                reconciliation_request=reconciliation_expectation,
+            )
+        except OpenRouterError as exc:
+            generation_observation = (
+                exc.last_evidence
+                if isinstance(exc, OpenRouterGenerationReconciliationError)
+                else None
+            )
+            return conclude_unbound(
+                {
+                    OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_MISSING,
+                    _generation_metadata_failure_diagnostic(exc),
+                },
+                generation_observation=generation_observation,
+            )
         OpenRouterClient._validate_transport_provenance(self)
         binding = self._bind_generation_identity(
             usage_record=completion.usage_record,
@@ -3054,9 +3237,13 @@ def _whole_second_utc(value: datetime) -> datetime:
 
 _TRUSTED_OPENROUTER_CLIENT_TYPE = OpenRouterClient
 _TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER = object()
+_TRUSTED_RECONCILIATION_EXPECTATION = GenerationVerificationRequest.reconciliation_expectation
 _TRUSTED_VALIDATE_AUTHENTICATION = OpenRouterClient.validate_authentication
 _TRUSTED_GET_GENERATION_EVIDENCE = OpenRouterClient.get_generation_evidence
 _TRUSTED_CREATE_GENERATION_VERIFICATION = OpenRouterClient.create_trusted_generation_verification
+_TRUSTED_FETCH_GENERATION_ATTESTATIONS = (
+    OpenRouterClient._fetch_generation_attestations_with_deadline
+)
 _TRUSTED_REQUEST_METADATA = OpenRouterClient._request_metadata
 _TRUSTED_BOUNDED_REQUEST = OpenRouterClient._bounded_request
 _TRUSTED_VALIDATE_TRANSPORT_PROVENANCE = OpenRouterClient._validate_transport_provenance
@@ -3064,11 +3251,19 @@ _TRUSTED_VALIDATE_TRANSPORT_PROVENANCE = OpenRouterClient._validate_transport_pr
 
 def _openrouter_generation_verification_callables_are_pristine() -> bool:
     return (
-        OpenRouterClient.validate_authentication is _TRUSTED_VALIDATE_AUTHENTICATION
+        (
+            GenerationVerificationRequest.reconciliation_expectation
+            is _TRUSTED_RECONCILIATION_EXPECTATION
+        )
+        and OpenRouterClient.validate_authentication is _TRUSTED_VALIDATE_AUTHENTICATION
         and OpenRouterClient.get_generation_evidence is _TRUSTED_GET_GENERATION_EVIDENCE
         and (
             OpenRouterClient.create_trusted_generation_verification
             is _TRUSTED_CREATE_GENERATION_VERIFICATION
+        )
+        and (
+            OpenRouterClient._fetch_generation_attestations_with_deadline
+            is _TRUSTED_FETCH_GENERATION_ATTESTATIONS
         )
         and OpenRouterClient._request_metadata is _TRUSTED_REQUEST_METADATA
         and OpenRouterClient._bounded_request is _TRUSTED_BOUNDED_REQUEST
@@ -3974,20 +4169,28 @@ def _generation_metadata_payload_may_be_pending(
     payload: Mapping[str, Any],
     *,
     requested_generation_id: str,
+    reconciliation_expectation: GenerationReconciliationExpectation | None,
+    retrieval_attempts: int,
+    execution_evidence: ExecutionEvidenceKind,
 ) -> bool:
-    """Retry only absent same-generation fields, never explicit contradictions."""
+    """Validate all explicit fields before retrying one incomplete observation."""
 
     data = payload.get("data")
     if data is None:
         return True
     if not isinstance(data, dict):
-        return False
+        raise GenerationEvidenceValidationError("generation response data is not an object")
     observed_generation_id = data.get("id")
-    if observed_generation_id is None:
-        return True
-    if observed_generation_id != requested_generation_id or data.get("cancelled") is True:
-        return False
+    if observed_generation_id is not None and observed_generation_id != requested_generation_id:
+        if reconciliation_expectation is not None:
+            raise GenerationReconciliationMismatchError(
+                GenerationReconciliationMismatchCode.GENERATION_ID
+            )
+        raise GenerationEvidenceValidationError(
+            "generation response does not bind the requested generation ID"
+        )
     required_fields = (
+        "id",
         "model",
         "provider_name",
         "finish_reason",
@@ -3996,7 +4199,130 @@ def _generation_metadata_payload_may_be_pending(
         "total_cost",
         "cancelled",
     )
-    return any(field not in data for field in required_fields)
+    missing_fields = tuple(field for field in required_fields if field not in data)
+    if not missing_fields:
+        return False
+
+    projected_data = dict(data)
+    projected_data.setdefault("id", requested_generation_id)
+    usage = (
+        reconciliation_expectation.usage_record if reconciliation_expectation is not None else None
+    )
+    projected_data.setdefault(
+        "model",
+        (
+            reconciliation_expectation.canonical_model_id
+            if reconciliation_expectation is not None
+            else "openrouter/pending-generation"
+        ),
+    )
+    projected_data.setdefault(
+        "provider_name",
+        (
+            reconciliation_expectation.expected_provider_name
+            if reconciliation_expectation is not None
+            else "Pending Provider"
+        ),
+    )
+    projected_data.setdefault(
+        "finish_reason",
+        usage.finish_reason if usage is not None else "pending",
+    )
+    projected_data.setdefault(
+        "tokens_prompt",
+        usage.prompt_tokens if usage is not None else 0,
+    )
+    projected_data.setdefault(
+        "tokens_completion",
+        usage.completion_tokens if usage is not None else 0,
+    )
+    projected_data.setdefault("cancelled", False)
+    if "total_cost" not in projected_data and "usage" in projected_data:
+        projected_data["total_cost"] = projected_data["usage"]
+    elif "usage" not in projected_data and "total_cost" in projected_data:
+        projected_data["usage"] = projected_data["total_cost"]
+    elif "total_cost" not in projected_data:
+        expected_cost = usage.reported_cost_usd if usage is not None else 0
+        projected_data["total_cost"] = expected_cost
+        projected_data["usage"] = expected_cost
+    if reconciliation_expectation is not None:
+        projected_data.setdefault(
+            "native_finish_reason",
+            reconciliation_expectation.usage_record.routing.get("native_finish_reason"),
+        )
+    projected = validate_openrouter_generation_payload(
+        {"data": projected_data},
+        requested_generation_id=requested_generation_id,
+        retrieved_at=datetime.now(UTC),
+        retrieval_attempts=retrieval_attempts,
+        execution_evidence=execution_evidence,
+    )
+    if reconciliation_expectation is None:
+        return True
+    try:
+        _reconcile_generation_evidence_structural(
+            projected,
+            usage_record=reconciliation_expectation.usage_record,
+            expected_exact_model=reconciliation_expectation.exact_model_id,
+            expected_canonical_model=reconciliation_expectation.canonical_model_id,
+            expected_catalog_identity_binding_sha256=(
+                reconciliation_expectation.catalog_identity_binding_sha256
+            ),
+            expected_discovery_evidence_sha256=(
+                reconciliation_expectation.discovery_evidence_sha256
+            ),
+            expected_provider_name=reconciliation_expectation.expected_provider_name,
+            require_certification=reconciliation_expectation.require_certification,
+        )
+    except GenerationReconciliationMismatchError as exc:
+        if exc.is_eventual_usage_field:
+            return True
+        raise
+    return True
+
+
+def _generation_metadata_poll_delays(
+    request_timeout_seconds: float,
+) -> tuple[float, ...]:
+    """Select a fixed readiness schedule bounded by the configured request horizon."""
+
+    if (
+        not isinstance(request_timeout_seconds, (int, float))
+        or isinstance(request_timeout_seconds, bool)
+        or not math.isfinite(request_timeout_seconds)
+        or request_timeout_seconds <= 0
+    ):
+        raise OpenRouterRequestLimitError("generation metadata readiness timeout is invalid")
+    wait_budget = min(
+        float(request_timeout_seconds),
+        _MAXIMUM_GENERATION_METADATA_WAIT_SECONDS,
+    )
+    selected: list[float] = []
+    cumulative_wait = 0.0
+    for delay_seconds in _GENERATION_METADATA_POLL_DELAYS_SECONDS:
+        if cumulative_wait + delay_seconds > wait_budget:
+            break
+        selected.append(delay_seconds)
+        cumulative_wait += delay_seconds
+    if not selected or len(selected) > MAX_GENERATION_EVIDENCE_RETRIEVAL_ATTEMPTS:
+        raise OpenRouterRequestLimitError("generation metadata readiness schedule is invalid")
+    return tuple(selected)
+
+
+def _generation_metadata_operation_timeout(
+    request_timeout_seconds: float,
+) -> float:
+    """Return one hard wall-clock budget for all observations and waits."""
+
+    poll_delays = _generation_metadata_poll_delays(request_timeout_seconds)
+    io_budget = min(
+        max(
+            float(request_timeout_seconds) * _GENERATION_METADATA_IO_BUDGET_FRACTION,
+            _MINIMUM_GENERATION_METADATA_IO_BUDGET_SECONDS,
+        ),
+        _MAXIMUM_GENERATION_METADATA_IO_BUDGET_SECONDS,
+    )
+    return sum(poll_delays) + io_budget
 
 
 def _generation_metadata_failure_diagnostic(

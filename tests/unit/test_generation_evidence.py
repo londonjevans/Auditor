@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
 from typing import Any
 
@@ -14,6 +15,7 @@ from pydantic import ValidationError
 from mmaudit.constants import OPENROUTER_DEFAULT_BASE_URL
 from mmaudit.models.generation_evidence import (
     GenerationEvidenceValidationError,
+    GenerationReconciliationExpectation,
     GenerationReconciliationMismatchCode,
     GenerationReconciliationMismatchError,
     GenerationVerificationRequest,
@@ -103,15 +105,49 @@ def _generation_payload(*, model: str = _CANONICAL_MODEL) -> dict[str, Any]:
     }
 
 
+def _reconciliation_expectation() -> GenerationReconciliationExpectation:
+    return GenerationReconciliationExpectation(
+        exact_model_id=_MODEL,
+        canonical_model_id=_CANONICAL_MODEL,
+        catalog_identity_binding_sha256=_catalog_identity_binding(),
+        discovery_evidence_sha256=_DISCOVERY_EVIDENCE_SHA256,
+        expected_provider_name=_PROVIDER_NAME,
+        require_certification=True,
+        usage_record=_usage_record(),
+    )
+
+
+def _verification_request(
+    generation_id: str,
+    *,
+    index: int,
+) -> GenerationVerificationRequest:
+    return GenerationVerificationRequest(
+        benchmark_report_sha256="1" * 64,
+        case_id=f"case-{index}",
+        exact_model_id=_MODEL,
+        canonical_model_id=_CANONICAL_MODEL,
+        catalog_identity_binding_sha256=_catalog_identity_binding(),
+        discovery_evidence_sha256=_DISCOVERY_EVIDENCE_SHA256,
+        expected_provider_name=_PROVIDER_NAME,
+        usage_record=_usage_record(
+            generation_id=generation_id,
+            request_id=f"mmaudit-request-{index}",
+        ),
+    )
+
+
 def _usage_record(
     *,
     execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.REAL,
     certification: bool = True,
     actual_model: str = _CANONICAL_MODEL,
+    generation_id: str = _GENERATION_ID,
+    request_id: str = "mmaudit-request-123",
 ) -> UsageRecord:
     sha = "a" * 64
     routing = {
-        "generation_id": _GENERATION_ID,
+        "generation_id": generation_id,
         "provider": _PROVIDER_NAME,
         "selected_model": actual_model,
         "canonical_model": _CANONICAL_MODEL,
@@ -149,7 +185,7 @@ def _usage_record(
         "repair_request": False,
     }
     usage = UsageRecord(
-        request_id="mmaudit-request-123",
+        request_id=request_id,
         role="accounting",
         execution_evidence=execution_evidence,
         requested_model=_MODEL,
@@ -169,7 +205,7 @@ def _usage_record(
         validated_response_sha256=sha,
         request_body_sha256=sha,
         schema_sha256="c" * 64,
-        openrouter_generation_id=_GENERATION_ID,
+        openrouter_generation_id=generation_id,
         configured_provider_endpoints=[_PROVIDER_ENDPOINT],
         actual_provider_endpoint=_PROVIDER_ENDPOINT,
         started_at=_STARTED,
@@ -227,7 +263,8 @@ def _evidence(
 
 def _client(
     config: Any,
-    handler: Callable[[httpx.Request], httpx.Response],
+    handler: Callable[[httpx.Request], httpx.Response]
+    | Callable[[httpx.Request], Coroutine[None, None, httpx.Response]],
     *,
     api_key: str = "synthetic-key",
 ) -> tuple[OpenRouterClient, httpx.AsyncClient]:
@@ -557,6 +594,49 @@ def test_self_hash_cannot_upgrade_nonreal_or_noncertification_evidence(
         _reconcile(evidence, usage_record=usage)
 
 
+def test_generation_evidence_rejects_retrieval_attempts_above_fixed_maximum() -> None:
+    with pytest.raises(
+        GenerationEvidenceValidationError,
+        match="outside the bounded polling policy",
+    ):
+        validate_openrouter_generation_payload(
+            _generation_payload(),
+            requested_generation_id=_GENERATION_ID,
+            retrieved_at=datetime.now(UTC),
+            retrieval_attempts=8,
+            execution_evidence=ExecutionEvidenceKind.MOCK,
+        )
+
+
+def test_generation_reconciliation_expectation_binds_provider_and_route_class() -> None:
+    with pytest.raises(
+        GenerationEvidenceValidationError,
+        match="different model identity binding",
+    ):
+        GenerationReconciliationExpectation(
+            exact_model_id=_MODEL,
+            canonical_model_id=_CANONICAL_MODEL,
+            catalog_identity_binding_sha256=_catalog_identity_binding(),
+            discovery_evidence_sha256=_DISCOVERY_EVIDENCE_SHA256,
+            expected_provider_name="Other Provider",
+            require_certification=True,
+            usage_record=_usage_record(),
+        )
+    with pytest.raises(
+        GenerationEvidenceValidationError,
+        match="certification policy differs",
+    ):
+        GenerationReconciliationExpectation(
+            exact_model_id=_MODEL,
+            canonical_model_id=_CANONICAL_MODEL,
+            catalog_identity_binding_sha256=_catalog_identity_binding(),
+            discovery_evidence_sha256=_DISCOVERY_EVIDENCE_SHA256,
+            expected_provider_name=_PROVIDER_NAME,
+            require_certification=False,
+            usage_record=_usage_record(),
+        )
+
+
 @pytest.mark.asyncio
 async def test_client_uses_fixed_authenticated_bounded_generation_query(
     config_factory: Callable[..., Any],
@@ -602,7 +682,12 @@ async def test_generation_metadata_polls_until_same_generation_is_complete(
     async def no_wait(delay_seconds: float) -> None:
         waits.append(delay_seconds)
 
-    config = config_factory(execution={"max_model_retries": 0})
+    config = config_factory(
+        execution={
+            "request_timeout_seconds": 11,
+            "max_model_retries": 0,
+        }
+    )
     client, http_client = _client(config, handler)
     monkeypatch.setattr(
         client,
@@ -638,7 +723,12 @@ async def test_generation_metadata_poll_is_bounded_for_incomplete_same_generatio
     async def no_wait(delay_seconds: float) -> None:
         waits.append(delay_seconds)
 
-    config = config_factory(execution={"max_model_retries": 0})
+    config = config_factory(
+        execution={
+            "request_timeout_seconds": 11,
+            "max_model_retries": 0,
+        }
+    )
     client, http_client = _client(config, handler)
     monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
     try:
@@ -668,7 +758,12 @@ async def test_generation_metadata_does_not_poll_contradictory_generation_id(
     async def no_wait(delay_seconds: float) -> None:
         waits.append(delay_seconds)
 
-    config = config_factory(execution={"max_model_retries": 0})
+    config = config_factory(
+        execution={
+            "request_timeout_seconds": 11,
+            "max_model_retries": 0,
+        }
+    )
     client, http_client = _client(config, handler)
     monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
     try:
@@ -698,7 +793,12 @@ async def test_generation_metadata_not_ready_is_bounded_and_typed(
     async def no_wait(delay_seconds: float) -> None:
         waits.append(delay_seconds)
 
-    config = config_factory(execution={"max_model_retries": 0})
+    config = config_factory(
+        execution={
+            "request_timeout_seconds": 11,
+            "max_model_retries": 0,
+        }
+    )
     client, http_client = _client(config, handler)
     monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
     try:
@@ -710,6 +810,413 @@ async def test_generation_metadata_not_ready_is_bounded_and_typed(
 
     assert calls == 4
     assert waits == [1.0, 3.0, 7.0]
+
+
+@pytest.mark.asyncio
+async def test_generation_metadata_uses_late_readiness_window_when_timeout_allows(
+    config_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    waits: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls < 5:
+            return httpx.Response(404)
+        return httpx.Response(200, json=_generation_payload())
+
+    async def no_wait(delay_seconds: float) -> None:
+        waits.append(delay_seconds)
+
+    config = config_factory(
+        execution={
+            "request_timeout_seconds": 120,
+            "max_model_retries": 0,
+        }
+    )
+    client, http_client = _client(config, handler)
+    monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
+    try:
+        evidence = await client.get_generation_evidence(_GENERATION_ID)
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert evidence.retrieval_attempts == 5
+    assert calls == 5
+    assert waits == [1.0, 3.0, 7.0, 15.0]
+
+
+@pytest.mark.asyncio
+async def test_generation_metadata_late_readiness_window_remains_bounded(
+    config_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    waits: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(404)
+
+    async def no_wait(delay_seconds: float) -> None:
+        waits.append(delay_seconds)
+
+    config = config_factory(
+        execution={
+            "request_timeout_seconds": 120,
+            "max_model_retries": 0,
+        }
+    )
+    client, http_client = _client(config, handler)
+    monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
+    try:
+        with pytest.raises(OpenRouterGenerationMetadataNotReadyError):
+            await client.get_generation_evidence(_GENERATION_ID)
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert calls == 7
+    assert waits == [1.0, 3.0, 7.0, 15.0, 30.0, 60.0]
+
+
+@pytest.mark.asyncio
+async def test_generation_metadata_enforces_one_total_wall_clock_deadline(
+    config_factory: Callable[..., Any],
+) -> None:
+    calls = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.2)
+        return httpx.Response(200, json=_generation_payload())
+
+    config = config_factory(
+        execution={
+            "request_timeout_seconds": 0.02,
+            "max_model_retries": 0,
+        }
+    )
+    client, http_client = _client(config, handler)
+    started = asyncio.get_running_loop().time()
+    try:
+        with pytest.raises(OpenRouterGenerationMetadataNotReadyError, match="deadline"):
+            await client.get_generation_evidence(_GENERATION_ID)
+    finally:
+        elapsed = asyncio.get_running_loop().time() - started
+        await client.close()
+        await http_client.aclose()
+
+    assert calls == 1
+    assert elapsed < 0.5
+
+
+@pytest.mark.asyncio
+async def test_generation_request_semaphore_limits_only_active_metadata_gets(
+    config_factory: Callable[..., Any],
+) -> None:
+    active_requests = 0
+    maximum_active_requests = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal active_requests, maximum_active_requests
+        generation_id = request.url.params["id"]
+        active_requests += 1
+        maximum_active_requests = max(maximum_active_requests, active_requests)
+        await asyncio.sleep(0.02)
+        payload = _generation_payload()
+        payload["data"]["id"] = generation_id
+        payload["data"]["request_id"] = f"request-{generation_id}"
+        active_requests -= 1
+        return httpx.Response(200, json=payload)
+
+    config = config_factory(
+        execution={
+            "request_timeout_seconds": 1,
+            "max_model_retries": 0,
+        }
+    )
+    client, http_client = _client(config, handler)
+    semaphore = asyncio.Semaphore(2)
+    generation_ids = ("gen-concurrent-a", "gen-concurrent-b", "gen-concurrent-c")
+    try:
+        evidence = await asyncio.gather(
+            *(
+                client.get_generation_evidence(
+                    generation_id,
+                    _request_semaphore=semaphore,
+                )
+                for generation_id in generation_ids
+            )
+        )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert tuple(item.generation_id for item in evidence) == generation_ids
+    assert maximum_active_requests == 2
+
+
+@pytest.mark.asyncio
+async def test_waiting_generation_does_not_monopolize_request_semaphore(
+    config_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_wait_started = asyncio.Event()
+    never_release = asyncio.Event()
+    observed_ids: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        generation_id = request.url.params["id"]
+        observed_ids.append(generation_id)
+        if generation_id == "gen-waiting":
+            return httpx.Response(404)
+        payload = _generation_payload()
+        payload["data"]["id"] = generation_id
+        payload["data"]["request_id"] = f"request-{generation_id}"
+        return httpx.Response(200, json=payload)
+
+    async def wait_until_cancelled(_delay_seconds: float) -> None:
+        first_wait_started.set()
+        await never_release.wait()
+
+    config = config_factory(
+        execution={
+            "request_timeout_seconds": 1,
+            "max_model_retries": 0,
+        }
+    )
+    client, http_client = _client(config, handler)
+    monkeypatch.setattr(client, "_wait_for_generation_metadata", wait_until_cancelled)
+    semaphore = asyncio.Semaphore(1)
+    waiting = asyncio.create_task(
+        client.get_generation_evidence(
+            "gen-waiting",
+            _request_semaphore=semaphore,
+        )
+    )
+    try:
+        await asyncio.wait_for(first_wait_started.wait(), timeout=0.2)
+        ready = await asyncio.wait_for(
+            client.get_generation_evidence(
+                "gen-ready",
+                _request_semaphore=semaphore,
+            ),
+            timeout=0.2,
+        )
+    finally:
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+        await client.close()
+        await http_client.aclose()
+
+    assert ready.generation_id == "gen-ready"
+    assert observed_ids == ["gen-waiting", "gen-ready"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "mismatch_code"),
+    (
+        (
+            "model",
+            "other/unapproved-model",
+            GenerationReconciliationMismatchCode.GENERATION_MODEL,
+        ),
+        (
+            "provider_name",
+            "Other Provider",
+            GenerationReconciliationMismatchCode.PROVIDER,
+        ),
+        (
+            "finish_reason",
+            "error",
+            GenerationReconciliationMismatchCode.FINISH_REASON,
+        ),
+        (
+            "created_at",
+            "2025-01-01T00:00:00Z",
+            GenerationReconciliationMismatchCode.REQUEST_TIMESTAMP,
+        ),
+    ),
+)
+@pytest.mark.parametrize("include_generation_id", (True, False))
+@pytest.mark.asyncio
+async def test_partial_generation_metadata_rejects_explicit_decisive_contradiction(
+    config_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: str,
+    mismatch_code: GenerationReconciliationMismatchCode,
+    include_generation_id: bool,
+) -> None:
+    calls = 0
+    waits: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        payload = _generation_payload()
+        del payload["data"]["tokens_completion"]
+        if not include_generation_id:
+            del payload["data"]["id"]
+        payload["data"][field] = value
+        return httpx.Response(200, json=payload)
+
+    async def no_wait(delay_seconds: float) -> None:
+        waits.append(delay_seconds)
+
+    config = config_factory(
+        execution={
+            "request_timeout_seconds": 120,
+            "max_model_retries": 0,
+        }
+    )
+    client, http_client = _client(config, handler)
+    client.execution_evidence = ExecutionEvidenceKind.REAL
+    monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
+    try:
+        with pytest.raises(OpenRouterGenerationReconciliationError) as raised:
+            await client.get_generation_evidence(
+                _GENERATION_ID,
+                reconciliation_request=_reconciliation_expectation(),
+            )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert raised.value.mismatch_code is mismatch_code
+    assert raised.value.attempts == 1
+    assert not raised.value.exhausted
+    assert raised.value.last_evidence is None
+    assert calls == 1
+    assert waits == []
+    assert value not in str(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("include_generation_id", (True, False))
+async def test_partial_generation_metadata_rejects_internal_cost_contradiction(
+    config_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+    include_generation_id: bool,
+) -> None:
+    calls = 0
+    waits: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        payload = _generation_payload()
+        del payload["data"]["tokens_completion"]
+        if not include_generation_id:
+            del payload["data"]["id"]
+        payload["data"]["total_cost"] = 0.02
+        return httpx.Response(200, json=payload)
+
+    async def no_wait(delay_seconds: float) -> None:
+        waits.append(delay_seconds)
+
+    config = config_factory(
+        execution={
+            "request_timeout_seconds": 120,
+            "max_model_retries": 0,
+        }
+    )
+    client, http_client = _client(config, handler)
+    client.execution_evidence = ExecutionEvidenceKind.REAL
+    monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
+    try:
+        with pytest.raises(OpenRouterSchemaError, match="invalid"):
+            await client.get_generation_evidence(
+                _GENERATION_ID,
+                reconciliation_request=_reconciliation_expectation(),
+            )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert calls == 1
+    assert waits == []
+
+
+@pytest.mark.asyncio
+async def test_partial_generation_metadata_may_settle_only_eventual_usage_field(
+    config_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    waits: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        payload = _generation_payload()
+        if calls == 1:
+            del payload["data"]["tokens_completion"]
+            payload["data"]["tokens_prompt"] = 9
+        return httpx.Response(200, json=payload)
+
+    async def no_wait(delay_seconds: float) -> None:
+        waits.append(delay_seconds)
+
+    config = config_factory(
+        execution={
+            "request_timeout_seconds": 120,
+            "max_model_retries": 0,
+        }
+    )
+    client, http_client = _client(config, handler)
+    client.execution_evidence = ExecutionEvidenceKind.REAL
+    monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
+    try:
+        evidence = await client.get_generation_evidence(
+            _GENERATION_ID,
+            reconciliation_request=_reconciliation_expectation(),
+        )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert evidence.retrieval_attempts == 2
+    assert calls == 2
+    assert waits == [1.0]
+
+
+@pytest.mark.asyncio
+async def test_noncertification_generation_reconciliation_remains_supported(
+    config_factory: Callable[..., Any],
+) -> None:
+    config = config_factory(execution={"max_model_retries": 0})
+    client, http_client = _client(
+        config,
+        lambda _request: httpx.Response(200, json=_generation_payload()),
+    )
+    client.execution_evidence = ExecutionEvidenceKind.REAL
+    expectation = GenerationReconciliationExpectation(
+        exact_model_id=_MODEL,
+        canonical_model_id=_CANONICAL_MODEL,
+        catalog_identity_binding_sha256=_catalog_identity_binding(),
+        discovery_evidence_sha256=_DISCOVERY_EVIDENCE_SHA256,
+        expected_provider_name=_PROVIDER_NAME,
+        require_certification=False,
+        usage_record=_usage_record(certification=False),
+    )
+    try:
+        evidence = await client.get_generation_evidence(
+            _GENERATION_ID,
+            reconciliation_request=expectation,
+        )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert evidence.generation_id == _GENERATION_ID
 
 
 @pytest.mark.asyncio
@@ -731,7 +1238,12 @@ async def test_generation_verification_polls_eventual_usage_until_it_matches(
     async def no_wait(delay_seconds: float) -> None:
         waits.append(delay_seconds)
 
-    config = config_factory(execution={"max_model_retries": 0})
+    config = config_factory(
+        execution={
+            "request_timeout_seconds": 120,
+            "max_model_retries": 0,
+        }
+    )
     client, http_client = _client(config, handler)
     client.execution_evidence = ExecutionEvidenceKind.REAL
     monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
@@ -778,7 +1290,12 @@ async def test_generation_verification_exhaustion_preserves_typed_value_free_mis
     async def no_wait(delay_seconds: float) -> None:
         waits.append(delay_seconds)
 
-    config = config_factory(execution={"max_model_retries": 0})
+    config = config_factory(
+        execution={
+            "request_timeout_seconds": 11,
+            "max_model_retries": 0,
+        }
+    )
     client, http_client = _client(config, handler)
     client.execution_evidence = ExecutionEvidenceKind.REAL
     monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
@@ -831,7 +1348,12 @@ async def test_generation_verification_fails_decisive_provider_mismatch_immediat
     async def no_wait(delay_seconds: float) -> None:
         waits.append(delay_seconds)
 
-    config = config_factory(execution={"max_model_retries": 0})
+    config = config_factory(
+        execution={
+            "request_timeout_seconds": 120,
+            "max_model_retries": 0,
+        }
+    )
     client, http_client = _client(config, handler)
     client.execution_evidence = ExecutionEvidenceKind.REAL
     monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
@@ -884,7 +1406,12 @@ async def test_generation_verification_prioritizes_decisive_timestamp_over_event
     async def no_wait(delay_seconds: float) -> None:
         waits.append(delay_seconds)
 
-    config = config_factory(execution={"max_model_retries": 0})
+    config = config_factory(
+        execution={
+            "request_timeout_seconds": 120,
+            "max_model_retries": 0,
+        }
+    )
     client, http_client = _client(config, handler)
     client.execution_evidence = ExecutionEvidenceKind.REAL
     monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
@@ -1079,6 +1606,244 @@ def test_generation_evidence_does_not_retain_authorization_or_content() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generation_attestation_set_is_bounded_concurrent_and_ordered(
+    config_factory: Callable[..., Any],
+) -> None:
+    active_requests = 0
+    maximum_active_requests = 0
+    delays = {
+        "gen-ordered-a": 0.04,
+        "gen-ordered-b": 0.01,
+        "gen-ordered-c": 0.02,
+    }
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal active_requests, maximum_active_requests
+        if request.url.path.endswith("/key"):
+            return httpx.Response(200, json={"data": {}})
+        generation_id = request.url.params["id"]
+        active_requests += 1
+        maximum_active_requests = max(maximum_active_requests, active_requests)
+        await asyncio.sleep(delays[generation_id])
+        payload = _generation_payload()
+        payload["data"]["id"] = generation_id
+        payload["data"]["request_id"] = f"request-{generation_id}"
+        active_requests -= 1
+        return httpx.Response(200, json=payload)
+
+    config = config_factory(
+        execution={
+            "concurrency": 2,
+            "request_timeout_seconds": 1,
+            "max_model_retries": 0,
+        }
+    )
+    client, http_client = _client(config, handler)
+    client.execution_evidence = ExecutionEvidenceKind.REAL
+    generation_ids = tuple(delays)
+    requests = tuple(
+        _verification_request(generation_id, index=index)
+        for index, generation_id in enumerate(generation_ids)
+    )
+    try:
+        evidence = await OpenRouterClient._fetch_generation_attestations_with_deadline(
+            client,
+            requests,
+            generation_ids,
+        )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert tuple(item.generation_id for item in evidence) == generation_ids
+    assert maximum_active_requests == 2
+
+
+@pytest.mark.asyncio
+async def test_generation_attestation_set_deadline_includes_authentication(
+    config_factory: Callable[..., Any],
+) -> None:
+    observed_paths: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        observed_paths.append(request.url.path)
+        await asyncio.sleep(0.2)
+        return httpx.Response(200, json={"data": {}})
+
+    config = config_factory(
+        execution={
+            "request_timeout_seconds": 0.02,
+            "max_model_retries": 0,
+        }
+    )
+    client, http_client = _client(config, handler)
+    generation_ids = ("gen-auth-deadline",)
+    requests = (_verification_request(generation_ids[0], index=0),)
+    started = asyncio.get_running_loop().time()
+    try:
+        with pytest.raises(OpenRouterGenerationMetadataNotReadyError, match="deadline"):
+            await OpenRouterClient._fetch_generation_attestations_with_deadline(
+                client,
+                requests,
+                generation_ids,
+            )
+    finally:
+        elapsed = asyncio.get_running_loop().time() - started
+        await client.close()
+        await http_client.aclose()
+
+    assert observed_paths == ["/api/v1/key"]
+    assert elapsed < 0.5
+
+
+@pytest.mark.asyncio
+async def test_generation_attestation_set_selects_failure_by_request_order(
+    config_factory: Callable[..., Any],
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/key"):
+            return httpx.Response(200, json={"data": {}})
+        generation_id = request.url.params["id"]
+        payload = _generation_payload()
+        payload["data"]["id"] = generation_id
+        payload["data"]["request_id"] = f"request-{generation_id}"
+        if generation_id == "gen-failure-first":
+            await asyncio.sleep(0.03)
+            payload["data"]["provider_name"] = "Other Provider"
+        else:
+            payload["data"]["model"] = "other/unapproved-model"
+        return httpx.Response(200, json=payload)
+
+    config = config_factory(
+        execution={
+            "concurrency": 2,
+            "request_timeout_seconds": 1,
+            "max_model_retries": 0,
+        }
+    )
+    client, http_client = _client(config, handler)
+    client.execution_evidence = ExecutionEvidenceKind.REAL
+    generation_ids = ("gen-failure-first", "gen-failure-second")
+    requests = tuple(
+        _verification_request(generation_id, index=index)
+        for index, generation_id in enumerate(generation_ids)
+    )
+    try:
+        with pytest.raises(OpenRouterGenerationReconciliationError) as raised:
+            await OpenRouterClient._fetch_generation_attestations_with_deadline(
+                client,
+                requests,
+                generation_ids,
+            )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert raised.value.mismatch_code is GenerationReconciliationMismatchCode.PROVIDER
+
+
+@pytest.mark.asyncio
+async def test_generation_attestation_set_cancels_all_tasks_at_shared_deadline(
+    config_factory: Callable[..., Any],
+) -> None:
+    active_requests = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal active_requests
+        if request.url.path.endswith("/key"):
+            return httpx.Response(200, json={"data": {}})
+        active_requests += 1
+        try:
+            await asyncio.sleep(0.2)
+        finally:
+            active_requests -= 1
+        payload = _generation_payload()
+        payload["data"]["id"] = request.url.params["id"]
+        return httpx.Response(200, json=payload)
+
+    config = config_factory(
+        execution={
+            "concurrency": 2,
+            "request_timeout_seconds": 0.02,
+            "max_model_retries": 0,
+        }
+    )
+    client, http_client = _client(config, handler)
+    generation_ids = ("gen-shared-deadline-a", "gen-shared-deadline-b")
+    requests = tuple(
+        _verification_request(generation_id, index=index)
+        for index, generation_id in enumerate(generation_ids)
+    )
+    started = asyncio.get_running_loop().time()
+    try:
+        with pytest.raises(OpenRouterGenerationMetadataNotReadyError, match="deadline"):
+            await OpenRouterClient._fetch_generation_attestations_with_deadline(
+                client,
+                requests,
+                generation_ids,
+            )
+    finally:
+        elapsed = asyncio.get_running_loop().time() - started
+        await client.close()
+        await http_client.aclose()
+
+    assert active_requests == 0
+    assert elapsed < 0.5
+
+
+@pytest.mark.asyncio
+async def test_generation_attestation_set_cleans_children_on_caller_cancellation(
+    config_factory: Callable[..., Any],
+) -> None:
+    active_requests = 0
+    both_started = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal active_requests
+        if request.url.path.endswith("/key"):
+            return httpx.Response(200, json={"data": {}})
+        active_requests += 1
+        if active_requests == 2:
+            both_started.set()
+        try:
+            await asyncio.sleep(10)
+        finally:
+            active_requests -= 1
+        return httpx.Response(404)
+
+    config = config_factory(
+        execution={
+            "concurrency": 2,
+            "request_timeout_seconds": 1,
+            "max_model_retries": 0,
+        }
+    )
+    client, http_client = _client(config, handler)
+    generation_ids = ("gen-cancel-a", "gen-cancel-b")
+    requests = tuple(
+        _verification_request(generation_id, index=index)
+        for index, generation_id in enumerate(generation_ids)
+    )
+    operation = asyncio.create_task(
+        OpenRouterClient._fetch_generation_attestations_with_deadline(
+            client,
+            requests,
+            generation_ids,
+        )
+    )
+    try:
+        await asyncio.wait_for(both_started.wait(), timeout=0.2)
+        operation.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await operation
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert active_requests == 0
+
+
+@pytest.mark.asyncio
 async def test_mock_client_cannot_issue_trusted_generation_verification(
     config_factory: Callable[..., Any],
 ) -> None:
@@ -1138,6 +1903,38 @@ async def test_generation_verification_rejects_replayed_generation_before_transp
     finally:
         await client.close()
         await http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_generation_verification_rejects_oversized_set_before_transport(
+    config_factory: Callable[..., Any],
+) -> None:
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(200, request=request, json={"data": {}})
+
+    config = config_factory()
+    client, http_client = _client(config, handler)
+    request = GenerationVerificationRequest(
+        benchmark_report_sha256="1" * 64,
+        case_id="case-synthetic",
+        exact_model_id=_MODEL,
+        canonical_model_id=_CANONICAL_MODEL,
+        catalog_identity_binding_sha256=_catalog_identity_binding(),
+        discovery_evidence_sha256=_DISCOVERY_EVIDENCE_SHA256,
+        expected_provider_name=_PROVIDER_NAME,
+        usage_record=_usage_record(),
+    )
+    try:
+        with pytest.raises(OpenRouterRequestLimitError, match="request-set limit"):
+            await client.create_trusted_generation_verification((request,) * 513)
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert observed == []
 
 
 def test_generation_verification_request_rejects_missing_generation_identity() -> None:

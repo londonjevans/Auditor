@@ -1987,6 +1987,124 @@ async def test_actual_real_identity_binding_retains_metadata_fetch_failure(
 
 
 @pytest.mark.asyncio
+async def test_real_ordinary_provider_fallback_is_preserved_as_unbound(
+    config_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = config_factory(execution={"max_json_repair_attempts": 0})
+    manifest, evidence = _model_discovery_run(tmp_path)
+    mock_client, mock_http_client, _mock_usage = _client(
+        config,
+        lambda _request: _completion_response(
+            '{"answer":"ordinary-provider-fallback-canary"}',
+            provider="Approved Provider",
+        ),
+        provider_policy=OpenRouterProviderPolicy(
+            only=("approved-provider",),
+            allow_fallbacks=True,
+        ),
+    )
+    mock_client.register_model_discovery(evidence=evidence, manifest=manifest)
+    try:
+        provisional = await mock_client.complete_with_evidence(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="synthetic local input",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await mock_http_client.aclose()
+
+    routing = {
+        **provisional.usage_record.routing,
+        "selected_provider_endpoint": "fallback-provider",
+        "selected_provider_identity": "fallback-provider",
+        "selected_provider_name": "Fallback Provider",
+        "response_provider_identity": "Fallback Provider",
+        "router_strategy": "fallback",
+        "router_attempt": 2,
+        "router_attempt_count": 2,
+        "provider_fallback_used": True,
+    }
+    real_record = UsageRecord.model_validate(
+        {
+            **provisional.usage_record.model_dump(mode="json"),
+            "provider": "Fallback Provider",
+            "actual_provider_endpoint": "fallback-provider",
+            "fallback_used": True,
+            "execution_evidence": ExecutionEvidenceKind.REAL,
+            "routing": routing,
+        }
+    )
+    real_record = _attest_owned_real_usage_record(real_record)
+    real_usage = UsageLedger()
+    real_usage.add(real_record)
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "ordinary-provider-fallback-ledger.json",
+        cap_usd=Decimal("20"),
+    )
+    client = OpenRouterClient(
+        api_key="synthetic-key",
+        execution=config.execution,
+        privacy=config.privacy,
+        budget=BudgetManager(
+            total_usd=20,
+            max_output_tokens=config.execution.max_output_tokens_per_request,
+            conservative_usd_per_million_tokens=10,
+            max_requests_per_agent=2,
+            atomic_ledger=ledger,
+            require_endpoint_cost_bound=True,
+        ),
+        usage=real_usage,
+        base_url=OPENROUTER_DEFAULT_BASE_URL,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("approved-provider",),
+            allow_fallbacks=True,
+        ),
+    )
+    client.register_model_discovery(evidence=evidence, manifest=manifest)
+    client.provider_policy = OpenRouterProviderPolicy(
+        only=("approved-provider", "fallback-provider"),
+        allow_fallbacks=True,
+    )
+    client._authentication_validated = True
+    real_completion = StructuredCompletion(value=provisional.value, usage_record=real_record)
+
+    async def return_provisional(**_kwargs: Any) -> Any:
+        return real_completion
+
+    monkeypatch.setattr(client, "_complete_one", return_provisional)
+    await client._client.aclose()
+    try:
+        result = await client.complete_with_evidence(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="synthetic local input",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        client.clear_credentials()
+
+    assert result.value.answer == "ordinary-provider-fallback-canary"
+    assert result.usage_record.identity_strength is OpenRouterIdentityStrength.UNBOUND
+    assert result.usage_record.routing["identity_binding_status"] == ("generation_metadata_unbound")
+    assert result.usage_record.routing["identity_binding"]["diagnostic_codes"] == [
+        OpenRouterIdentityDiagnosticCode.ENDPOINT_VARIANT_MISMATCH.value,
+        OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_INTEGRITY_REJECTED.value,
+        OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_MISSING.value,
+        OpenRouterIdentityDiagnosticCode.PROVIDER_MISMATCH.value,
+        OpenRouterIdentityDiagnosticCode.UNAPPROVED_FALLBACK.value,
+    ]
+    assert not is_creditable_usage_record(result.usage_record, require_real=True)
+    assert client.retained_unbound_completions() == (result,)
+
+
+@pytest.mark.asyncio
 async def test_value_only_real_caller_retains_unbound_completion_in_safe_typed_error(
     config_factory,
     tmp_path: Path,

@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from mmaudit.models.generation_evidence import (
     EVENTUAL_GENERATION_USAGE_MISMATCH_CODES,
+    MAX_GENERATION_EVIDENCE_RETRIEVAL_ATTEMPTS,
     GenerationReconciliationMismatchCode,
     OpenRouterGenerationEvidence,
 )
@@ -640,7 +641,10 @@ class _RealProviderSmokeVerificationRejectionEvidenceBody(BaseModel):
     initial_generation_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
     verification_generation_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
     mismatch_code: GenerationReconciliationMismatchCode
-    reconciliation_attempts: int = Field(ge=1, le=4)
+    reconciliation_attempts: int = Field(
+        ge=1,
+        le=MAX_GENERATION_EVIDENCE_RETRIEVAL_ATTEMPTS,
+    )
     reconciliation_exhausted: bool
     usage_record: UsageRecord
     ledger_entry_request_id: str = Field(pattern=_SAFE_REQUEST_ID_PATTERN)

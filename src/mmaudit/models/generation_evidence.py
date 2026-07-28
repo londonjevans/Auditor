@@ -21,8 +21,10 @@ from mmaudit.models.identifiers import is_exact_openrouter_model_id
 from mmaudit.models.schemas import ExecutionEvidenceKind, UsageRecord
 from mmaudit.models.usage import (
     _is_structurally_generation_bindable_usage_record,
+    _is_structurally_generation_reconcilable_usage_record,
     _validated_usage_copy_preserving_owned_attestation,
     is_generation_bindable_usage_record,
+    is_generation_reconcilable_usage_record,
 )
 
 _MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
@@ -33,6 +35,7 @@ _SOURCE_API_IDENTITY = "openrouter:/api/v1/generation"
 _SCHEMA_VERSION = "1.0"
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _CASE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$")
+MAX_GENERATION_EVIDENCE_RETRIEVAL_ATTEMPTS = 7
 
 
 class GenerationEvidenceValidationError(ValueError):
@@ -93,6 +96,77 @@ class GenerationReconciliationMismatchError(GenerationEvidenceValidationError):
 
 
 @dataclass(frozen=True, slots=True)
+class GenerationReconciliationExpectation:
+    """Expected identity and usage for one eventual generation observation."""
+
+    exact_model_id: str
+    canonical_model_id: str
+    catalog_identity_binding_sha256: str
+    discovery_evidence_sha256: str
+    expected_provider_name: str
+    require_certification: bool
+    usage_record: UsageRecord
+
+    def __post_init__(self) -> None:
+        _require_exact_model_id(self.exact_model_id)
+        _require_exact_model_id(self.canonical_model_id)
+        if (
+            self.catalog_identity_binding_sha256
+            != _canonical_sha256(
+                {
+                    "canonical_slug": self.canonical_model_id,
+                    "id": self.exact_model_id,
+                }
+            )
+            or _SHA256_PATTERN.fullmatch(self.discovery_evidence_sha256) is None
+        ):
+            raise GenerationEvidenceValidationError(
+                "generation verification model identity binding is invalid"
+            )
+        _require_safe_text(self.expected_provider_name, "expected provider name")
+        if not isinstance(self.require_certification, bool):
+            raise GenerationEvidenceValidationError(
+                "generation reconciliation certification policy is invalid"
+            )
+        if not isinstance(self.usage_record, UsageRecord):
+            raise GenerationEvidenceValidationError(
+                "generation verification request usage is invalid"
+            )
+        try:
+            usage_record = _validated_usage_copy_preserving_owned_attestation(self.usage_record)
+        except ValidationError:
+            raise GenerationEvidenceValidationError(
+                "generation verification request usage is invalid"
+            ) from None
+        if usage_record.openrouter_generation_id is None:
+            raise GenerationEvidenceValidationError(
+                "generation verification request lacks a generation ID"
+            )
+        if (
+            usage_record.routing.get("certification_request") is True
+        ) is not self.require_certification:
+            raise GenerationEvidenceValidationError(
+                "generation reconciliation certification policy differs from usage"
+            )
+        if (
+            usage_record.requested_model != self.exact_model_id
+            or usage_record.returned_model not in {self.exact_model_id, self.canonical_model_id}
+            or usage_record.actual_model not in {self.exact_model_id, self.canonical_model_id}
+            or usage_record.routing.get("selected_model") != usage_record.actual_model
+            or usage_record.routing.get("canonical_model") != self.canonical_model_id
+            or usage_record.routing.get("catalog_identity_binding_sha256")
+            != self.catalog_identity_binding_sha256
+            or usage_record.routing.get("discovery_evidence_sha256")
+            != self.discovery_evidence_sha256
+            or usage_record.routing.get("selected_provider_name") != self.expected_provider_name
+        ):
+            raise GenerationEvidenceValidationError(
+                "generation verification usage has a different model identity binding"
+            )
+        object.__setattr__(self, "usage_record", usage_record)
+
+
+@dataclass(frozen=True, slots=True)
 class GenerationVerificationRequest:
     """One exact report case whose provider generation must be re-fetched."""
 
@@ -110,51 +184,21 @@ class GenerationVerificationRequest:
             raise GenerationEvidenceValidationError("benchmark report hash is invalid")
         if _CASE_ID_PATTERN.fullmatch(self.case_id) is None:
             raise GenerationEvidenceValidationError("benchmark case ID is invalid")
-        _require_exact_model_id(self.exact_model_id)
-        _require_exact_model_id(self.canonical_model_id)
-        if (
-            self.catalog_identity_binding_sha256
-            != _canonical_sha256(
-                {
-                    "canonical_slug": self.canonical_model_id,
-                    "id": self.exact_model_id,
-                }
-            )
-            or _SHA256_PATTERN.fullmatch(self.discovery_evidence_sha256) is None
-        ):
-            raise GenerationEvidenceValidationError(
-                "generation verification model identity binding is invalid"
-            )
-        _require_safe_text(self.expected_provider_name, "expected provider name")
-        if not isinstance(self.usage_record, UsageRecord):
-            raise GenerationEvidenceValidationError(
-                "generation verification request usage is invalid"
-            )
-        try:
-            usage_record = _validated_usage_copy_preserving_owned_attestation(self.usage_record)
-        except ValidationError:
-            raise GenerationEvidenceValidationError(
-                "generation verification request usage is invalid"
-            ) from None
-        if usage_record.openrouter_generation_id is None:
-            raise GenerationEvidenceValidationError(
-                "generation verification request lacks a generation ID"
-            )
-        if (
-            usage_record.requested_model != self.exact_model_id
-            or usage_record.returned_model not in {self.exact_model_id, self.canonical_model_id}
-            or usage_record.actual_model not in {self.exact_model_id, self.canonical_model_id}
-            or usage_record.routing.get("selected_model") != usage_record.actual_model
-            or usage_record.routing.get("canonical_model") != self.canonical_model_id
-            or usage_record.routing.get("catalog_identity_binding_sha256")
-            != self.catalog_identity_binding_sha256
-            or usage_record.routing.get("discovery_evidence_sha256")
-            != self.discovery_evidence_sha256
-        ):
-            raise GenerationEvidenceValidationError(
-                "generation verification usage has a different model identity binding"
-            )
-        object.__setattr__(self, "usage_record", usage_record)
+        expectation = self.reconciliation_expectation()
+        object.__setattr__(self, "usage_record", expectation.usage_record)
+
+    def reconciliation_expectation(self) -> GenerationReconciliationExpectation:
+        """Return the core provider observation expected by this report case."""
+
+        return GenerationReconciliationExpectation(
+            exact_model_id=self.exact_model_id,
+            canonical_model_id=self.canonical_model_id,
+            catalog_identity_binding_sha256=self.catalog_identity_binding_sha256,
+            discovery_evidence_sha256=self.discovery_evidence_sha256,
+            expected_provider_name=self.expected_provider_name,
+            require_certification=True,
+            usage_record=self.usage_record,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -356,7 +400,10 @@ class OpenRouterGenerationEvidence(BaseModel):
     latency_ms: str | None = None
     generation_time_ms: str | None = None
     retrieved_at: datetime
-    retrieval_attempts: int = Field(ge=1, le=4)
+    retrieval_attempts: int = Field(
+        ge=1,
+        le=MAX_GENERATION_EVIDENCE_RETRIEVAL_ATTEMPTS,
+    )
     execution_evidence: ExecutionEvidenceKind
     evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
@@ -435,7 +482,7 @@ def validate_openrouter_generation_payload(
     if (
         not isinstance(retrieval_attempts, int)
         or isinstance(retrieval_attempts, bool)
-        or not 1 <= retrieval_attempts <= 4
+        or not 1 <= retrieval_attempts <= MAX_GENERATION_EVIDENCE_RETRIEVAL_ATTEMPTS
     ):
         raise GenerationEvidenceValidationError(
             "generation retrieval attempts are outside the bounded polling policy"
@@ -579,6 +626,7 @@ def _reconcile_generation_evidence_structural(
     expected_catalog_identity_binding_sha256: str,
     expected_discovery_evidence_sha256: str,
     expected_provider_name: str,
+    require_certification: bool = True,
 ) -> OpenRouterGenerationEvidence:
     """Validate a serialized join without minting owned runtime provenance."""
 
@@ -591,6 +639,7 @@ def _reconcile_generation_evidence_structural(
         expected_discovery_evidence_sha256=expected_discovery_evidence_sha256,
         expected_provider_name=expected_provider_name,
         require_runtime_attestation=False,
+        require_certification=require_certification,
     )
 
 
@@ -604,6 +653,7 @@ def _reconcile_generation_evidence(
     expected_discovery_evidence_sha256: str,
     expected_provider_name: str,
     require_runtime_attestation: bool,
+    require_certification: bool = True,
 ) -> OpenRouterGenerationEvidence:
     """Reconcile exact fields under an explicit runtime-provenance policy."""
 
@@ -639,9 +689,23 @@ def _reconcile_generation_evidence(
             "non-real generation metadata cannot attest a production request"
         )
     usage_is_bindable = (
-        is_generation_bindable_usage_record(usage_record)
+        (
+            is_generation_bindable_usage_record(usage_record)
+            if require_certification
+            else is_generation_reconcilable_usage_record(
+                usage_record,
+                require_certification=False,
+            )
+        )
         if require_runtime_attestation
-        else _is_structurally_generation_bindable_usage_record(usage_record)
+        else (
+            _is_structurally_generation_bindable_usage_record(usage_record)
+            if require_certification
+            else _is_structurally_generation_reconcilable_usage_record(
+                usage_record,
+                require_certification=False,
+            )
+        )
     )
     if not usage_is_bindable:
         raise GenerationEvidenceValidationError(

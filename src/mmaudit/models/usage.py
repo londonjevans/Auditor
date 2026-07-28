@@ -61,10 +61,25 @@ def is_creditable_usage_record(
 def is_generation_bindable_usage_record(record: UsageRecord) -> bool:
     """Return whether REAL certification transport evidence may fetch generation metadata."""
 
+    return is_generation_reconcilable_usage_record(
+        record,
+        require_certification=True,
+    )
+
+
+def is_generation_reconcilable_usage_record(
+    record: UsageRecord,
+    *,
+    require_certification: bool,
+) -> bool:
+    """Return whether owned REAL transport evidence may be reconciled."""
+
+    if not isinstance(require_certification, bool):
+        return False
     return _is_strict_usage_record(
         record,
         require_real=True,
-        require_certification=True,
+        require_certification=require_certification,
         allow_unbound_real=True,
     )
 
@@ -296,10 +311,25 @@ def _validated_usage_copy_preserving_owned_attestation(
 def _is_structurally_generation_bindable_usage_record(record: UsageRecord) -> bool:
     """Validate serialized transport shape without granting REAL runtime credit."""
 
+    return _is_structurally_generation_reconcilable_usage_record(
+        record,
+        require_certification=True,
+    )
+
+
+def _is_structurally_generation_reconcilable_usage_record(
+    record: UsageRecord,
+    *,
+    require_certification: bool,
+) -> bool:
+    """Validate serialized generation-reconciliation shape without runtime credit."""
+
+    if not isinstance(require_certification, bool):
+        return False
     return _is_strict_usage_record(
         record,
         require_real=True,
-        require_certification=True,
+        require_certification=require_certification,
         allow_unbound_real=True,
         require_runtime_attestation=False,
     )

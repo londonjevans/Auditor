@@ -8,9 +8,9 @@ AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: Reproduce late generation readiness locally, extend same-generation polling within a fixed request-aware bound, keep every contradiction immediate, and complete independent plus full local validation before any changed provider retry.
-LAST_COMMAND: MMAUDIT_SECRETS_ENV_FILE=<operator-control-plane-file> <typed metadata-only re-fetch and private evidence write for the already-paid attempt-8 generation>
-LAST_RESULT: PASS; the existing generation later returned exact canonical Qwen/AkashML metadata with finish=stop. A private self-hashed content-free artifact was written with evidence afc99ea2271411c36590dcede73b61cf71f48c54f74a2df2a5aa2639878d92de and file SHA-256 ee04bbd5e703a19240c8261dce135a688d428f4f485487d774fc5948d6f8b44a. No completion was requested, no source was sent, and the ledger remained unchanged at 0.0032118825 USD spent.
+NEXT_ACTION: Complete final diff and artifact/secret-exclusion review, record independent acceptance, create and push the clean checkpoint over SSH, and pause before provider preflight.
+LAST_COMMAND: .venv/bin/pytest -q
+LAST_RESULT: PASS; 1938 tests passed and 10 explicitly gated external/provider/isolation prerequisites skipped in 229.76s. The paid provider test remained disabled, and no secret file, network, metadata endpoint, or completion endpoint was accessed.
 REAL_MODEL_CALLS_ATTEMPTED: 8
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 8
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9967881175
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; Qwen/AkashML generation metadata appeared only after the current readiness window and requires a bounded local polling correction before retry; no successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: a6ef7bb04cdc58a1b01b06f94a8aa69461e5e44d
+LAST_CHECKPOINT_COMMIT: c7f08a7b81f2993f41dc7b2d2a64681a10fff837
 
 ## 2026-07-28 — V3-SMOKE-001
 
@@ -867,3 +867,76 @@ LAST_CHECKPOINT_COMMIT: a6ef7bb04cdc58a1b01b06f94a8aa69461e5e44d
   exact metadata isolates the remaining failure to the current readiness window.
   The next local slice must add a late-readiness regression and a fixed,
   request-aware longer window while preserving immediate contradiction failure.
+- **Late-readiness regression:** The same-generation observation schedule now
+  extends deterministically to at most seven observations at cumulative
+  `0/1/4/11/26/56/116` second offsets when the configured request horizon permits.
+  The configured horizon selects fewer observations rather than silently applying
+  a longer minimum. Every single-generation operation has one hard wall-clock
+  deadline, including all HTTP work and waits.
+- **Explicit partial-field reconciliation:** A typed core expectation binds the
+  provisional usage record, exact/canonical model pair, discovery and catalog
+  hashes, frozen provider, and certification route class. Every explicit field in
+  an incomplete response is validated using an ephemeral fill-only projection.
+  Decisive model, provider, finish, timestamp, generation-ID, cancellation, and
+  internal cost contradictions fail on the first observation; only usage/cost
+  fields already classified as eventual may settle. The ephemeral projection is
+  never returned, serialized, or credited.
+- **Initial identity correction:** Owned REAL completion identity binding now passes
+  the same typed reconciliation expectation. Complete metadata with a mismatched
+  finish reason, timestamp, token count, or cost can no longer receive bound
+  identity. Ordinary non-certification routes remain structurally reconcilable,
+  while benchmark verification continues requiring certification evidence.
+- **Set-level bound:** Trusted multi-generation verification includes
+  authentication and all generation reads under one shared deadline, caps the set
+  at `512`, preserves input ordering, deterministically selects the first
+  input-ordered failure, limits only active metadata GETs with the configured
+  semaphore, and cancels plus awaits every child on internal timeout or caller
+  cancellation.
+- **Regression evidence:** The pre-fix test file first failed collection because
+  the core expectation did not exist. After implementation, the generation suite
+  passed `87` tests. Its matrix includes late readiness, seven-attempt exhaustion,
+  total wall time, matching-ID and absent-ID partial contradictions, eventual-only
+  settlement, non-certification compatibility, bounded concurrency, non-starving
+  waits, ordered set results, deterministic error selection, auth-inclusive
+  timeout, shared cancellation cleanup, and fixed cardinality. The expanded
+  provider, identity, usage, cost, harness, qualification, candidate, and release
+  subset passed `521` tests with the one paid test explicitly skipped. Affected
+  Ruff and strict mypy passed; release schema generation produced no drift.
+- **Provider state:** No secret file was opened and no network or provider request
+  ran during this correction. Recorded runtime counters and ledger values remain
+  `8` attempted, `0` succeeded, `8` rejected, `0.0032118825 USD` spent, zero
+  reserved, and `249.9967881175 USD` remaining.
+- **Current gate:** Independent review is rechecking the final cancellation and
+  absent-ID corrections. Full repository validation and a clean checkpoint remain
+  mandatory before a fresh no-network preflight.
+- **Final review correction:** Constructing the reconciliation expectation could
+  itself reject an ordinary provider-fallback route after a valid paid completion,
+  before the existing unbound-preservation path. That constructor rejection now
+  concludes the response as typed, non-creditable `UNBOUND` evidence with bounded
+  route diagnostics and without querying generation metadata. The negative
+  regression preserves the completed value, records provider/endpoint/fallback
+  disagreement, and prevents automatic host-model fallback. The focused
+  generation and fallback slice passed `88` tests; affected Ruff and production
+  mypy passed.
+- **Independent final review:** A read-only reviewer found no material blocker.
+  It verified ordinary fallback preservation and non-creditability, no subsequent
+  generation query or host fallback, deterministic request-order timeout
+  selection, and child-task cleanup. Its independent slice passed `266` tests;
+  Ruff, configured mypy over `129` source files, release-schema verification, and
+  diff checks passed without network, provider, secret-file, or credential access.
+- **Expanded local gate:** The generation, OpenRouter, model-identity, usage,
+  cost-ledger, real-provider harness, qualification, candidate benchmark, release,
+  and explicitly gated provider-integration slice passed `709` tests with one
+  paid-provider skip in `37.87s`. No provider access occurred.
+- **Complete local gate:** `.venv/bin/ruff format .` left `297` files unchanged,
+  Ruff check passed, configured mypy passed `129` source files, release-schema
+  verification produced no drift, and `.venv/bin/pytest -q` passed `1938` tests
+  with `10` explicit external-engine, provider, isolation, and loopback skips in
+  `229.76s`. The paid provider test remained disabled. No secret file, network,
+  metadata endpoint, or completion endpoint was accessed.
+- **Final checkpoint review:** A separate read-only reviewer found no material
+  blocker in the complete diff. Its focused regression slice passed `299` tests;
+  affected Ruff, strict mypy, and diff checks passed. It confirmed fail-closed
+  deadlines, partial-field contradiction handling, reconciliation, cancellation
+  cleanup, and ordinary-fallback preservation, with no untracked secret, runtime,
+  or generated artifact in scope.

@@ -124,10 +124,17 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `finish=stop` evidence without another completion or ledger change. This
   isolates the remaining cause as a too-short readiness window rather than a
   model/provider identity contradiction.
-- **Current next action:** Add a failing late-readiness regression and extend the
-  same-generation polling window within a fixed request-aware bound. Preserve
-  immediate failure for contradictions and do not retry Qwen/AkashML unchanged
-  until the local correction passes independent and complete validation.
+- **Local readiness correction:** The request-aware schedule now permits seven
+  observations through a cumulative `116`-second readiness horizon and enforces
+  one total wall deadline. Typed reconciliation validates every explicit field in
+  partial or complete metadata, including observations whose generation ID has not
+  materialized yet. Initial identity binding uses the same expectation, and
+  multi-generation verification shares an auth-inclusive deadline with bounded,
+  non-starving GET concurrency and cancellation cleanup.
+- **Current next action:** Complete final diff/hygiene review, checkpoint and push
+  the fully validated correction, then pause at the operator-requested clean
+  boundary before a fresh no-network Qwen/AkashML preflight. Do not retry the
+  route until all local gates pass from the checkpoint.
 
 ## V3-PRIVACY-001 — Explicit privacy and retention profiles
 
