@@ -4,22 +4,22 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: ACTIVE
+AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: Complete independent read-only pre-spend review, checkpoint the active preflight evidence, then run at most one exact Mistral/Venice STRICT_ZDR synthetic smoke from the clean synchronized checkpoint.
-LAST_COMMAND: MMAUDIT_RUN_REAL_PROVIDER_TESTS=1 with exact Mistral/Venice allowlists and the existing operator ledger; .venv/bin/python -c '<typed local smoke preflight without secret loading or network access>'
-LAST_RESULT: PASS_PREFLIGHT; typed discovery and local smoke preflight validate the exact mistralai/mistral-small-2603 and venice/fp8 route, pinned fixture, fresh evidence destination, and ledger at cap 250.00, spent 0.00186398, reserved 0, remaining 249.99813602, five terminal entries, no over-cap state, and no reservation overrun. The secret file was not opened and no network request ran.
-REAL_MODEL_CALLS_ATTEMPTED: 5
+NEXT_ACTION: On operator resume, independently review and run final local validation of the typed bounded reconciliation and durable post-bind rejection change before considering one materially changed provider retry.
+LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_generation_evidence.py tests/unit/test_openrouter.py tests/unit/test_model_identity.py tests/unit/test_usage.py tests/unit/test_real_provider_harness.py tests/unit/test_cost_ledger.py tests/integration/test_real_openrouter_provider.py
+LAST_RESULT: PASS; 319 passed and the explicitly disabled paid provider integration skipped. Affected Ruff and strict targeted mypy also passed. No provider or network request ran.
+REAL_MODEL_CALLS_ATTEMPTED: 6
 REAL_MODEL_CALLS_SUCCEEDED: 0
-REAL_MODEL_CALLS_REJECTED: 5
-OPENROUTER_COST_USED_USD: 0.00186398
+REAL_MODEL_CALLS_REJECTED: 6
+OPENROUTER_COST_USED_USD: 0.0019275425
 OPENROUTER_COST_RESERVED_USD: 0.00
-OPENROUTER_BUDGET_REMAINING_USD: 249.99813602
+OPENROUTER_BUDGET_REMAINING_USD: 249.9980724575
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: No successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 982abd71862c543759c944c3f6cdcf67817d0ecc
+LAST_CHECKPOINT_COMMIT: dd871cc1179fb4af67bd6af84e03aff43af1a2b4
 
 ## 2026-07-28 — V3-SMOKE-001
 
@@ -729,3 +729,45 @@ LAST_CHECKPOINT_COMMIT: 982abd71862c543759c944c3f6cdcf67817d0ecc
   reservation-free ledger, live optional-reasoning metadata, and current matching
   route evidence. The older candidate-registry discovery hash is not reused as
   qualification credit; the smoke binds a fresh runtime discovery record.
+- **Sixth real attempt:** From clean synchronized commit
+  `dd871cc1179fb4af67bd6af84e03aff43af1a2b4`, the exact
+  Mistral/Venice request passed authentication, live metadata, optional-reasoning,
+  privacy, routing, schema, and initial identity gates. The response completed
+  with `stop`, was non-truncated, schema-valid, and initially reached
+  `CANONICAL_MODEL_AND_ENDPOINT_BOUND`. The mandatory separately authenticated
+  generation re-fetch then failed deterministic usage reconciliation. The test
+  therefore failed closed; no success artifact or release credit exists.
+- **Attempt accounting:** The attempt-qualified ledger entry
+  `351a6f77-d541-4b87-9e0f-9e6825bca857:attempt:1` is `reconciled` with
+  actual/accounted cost `0.0000635625` against reservation `0.0012195`.
+  Cumulative state is cap `250.00`, spent `0.0019275425`, zero reserved,
+  remaining `249.9980724575`, six terminal entries, no over-cap state, and no
+  reservation overrun.
+- **No-progress control:** The provider request will not be repeated unchanged.
+  The generic outer error discarded the exact locally generated mismatch label
+  and the bound-but-unverified branch has no durable rejection sink. The next
+  local regression must reproduce eventual same-generation usage metadata,
+  preserve a typed non-secret diagnostic, and retry only potentially eventual
+  fields within a fixed bound while contradictions still fail immediately.
+- **Typed reconciliation correction:** Every deterministic generation
+  reconciliation mismatch now has a value-free typed code. Prompt, completion,
+  reasoning, cached-token, and reported-cost mismatches alone may use the fixed
+  four-observation same-generation window. Model, endpoint/provider, generation,
+  finish, timestamp, cancellation, and internally inconsistent metadata remain
+  immediate fail-closed outcomes.
+- **Durable post-bind rejection:** A separately typed, private, self-hashed
+  rejection artifact now records the process-attested bound response, exact
+  mismatch code, bounded observation count, identity/evidence hashes, and
+  attempt-qualified terminal ledger facts without persisting the compared values,
+  raw prompt, source, completion, secret, or secret path. It cannot parse as
+  success or as the earlier unbound-rejection artifact and grants no review or
+  release credit.
+- **Focused validation:** The generation, OpenRouter, identity, usage, cost-ledger,
+  real-provider harness, and disabled paid-integration subset passed `319` tests
+  with one explicit paid-test skip. Affected Ruff and strict targeted mypy passed;
+  `git diff --check` passed. No provider or network request ran during this local
+  correction.
+- **Pause state:** `PAUSED_BY_OPERATOR` at a safe local-validation boundary. No
+  seventh paid call was made. `V3-SMOKE-001` remains `IN_PROGRESS`; the next
+  action on resume is independent review and final local validation before any
+  materially changed provider retry.

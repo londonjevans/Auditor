@@ -15,9 +15,21 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from mmaudit.models.generation_evidence import OpenRouterGenerationEvidence
-from mmaudit.models.identity import OpenRouterIdentityDiagnosticCode
-from mmaudit.models.schemas import ExecutionEvidenceKind, ModelIdentityStrength
+from mmaudit.models.generation_evidence import (
+    EVENTUAL_GENERATION_USAGE_MISMATCH_CODES,
+    GenerationReconciliationMismatchCode,
+    OpenRouterGenerationEvidence,
+)
+from mmaudit.models.identity import (
+    OpenRouterIdentityBindingResult,
+    OpenRouterIdentityDiagnosticCode,
+)
+from mmaudit.models.schemas import (
+    ExecutionEvidenceKind,
+    ModelIdentityStrength,
+    ModelRequestValidationStatus,
+    UsageRecord,
+)
 from mmaudit.orchestration.cost_ledger import CostEntryStatus
 from mmaudit.orchestration.manifest import ManifestFileBinding, canonical_sha256
 from mmaudit.release_io import read_file_evidence, write_json_evidence
@@ -609,6 +621,241 @@ class RealProviderSmokeRejectionEvidence(_RealProviderSmokeRejectionEvidenceBody
         return self
 
 
+class _RealProviderSmokeVerificationRejectionEvidenceBody(BaseModel):
+    """Non-creditable evidence for a bound response rejected by fresh verification."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"]
+    ticket_id: Literal["V3-SMOKE-001"]
+    evidence_kind: Literal["real_openrouter_synthetic_smoke_verification_rejection"]
+    status: Literal["REJECTED_GENERATION_VERIFICATION"]
+    creditable: Literal[False]
+    fixture_path: Literal["tests/fixtures/solidity/provider_smoke/src/ProviderSmoke.sol"]
+    fixture_sha256: str = Field(pattern=_SHA256_PATTERN)
+    canonical_model_id: str
+    approved_provider_endpoint: str
+    verification_subject_sha256: str = Field(pattern=_SHA256_PATTERN)
+    identity_binding_sha256: str = Field(pattern=_SHA256_PATTERN)
+    initial_generation_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+    verification_generation_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+    mismatch_code: GenerationReconciliationMismatchCode
+    reconciliation_attempts: int = Field(ge=1, le=4)
+    reconciliation_exhausted: bool
+    usage_record: UsageRecord
+    ledger_entry_request_id: str = Field(pattern=_SAFE_REQUEST_ID_PATTERN)
+    ledger_entry_status: CostEntryStatus
+    reserved_cost_usd: str
+    actual_cost_usd: str | None
+    accounted_cost_usd: str
+    cost_reconciled: bool
+    ledger_cap_usd: str
+    ledger_spent_before_usd: str
+    ledger_spent_usd: str
+    smoke_spend_delta_usd: str
+    ledger_delta_reconciled: bool
+    ledger_prior_entries_sha256_before: str = Field(pattern=_SHA256_PATTERN)
+    ledger_prior_entries_sha256_after: str = Field(pattern=_SHA256_PATTERN)
+    ledger_prior_entries_unchanged: bool
+    ledger_active_reserved_usd: str
+    ledger_reservations_closed: bool
+    ledger_over_cap: bool
+    ledger_has_reservation_overrun: bool
+    ledger_remaining_usd: str
+    stage_cost_control_satisfied: bool
+    privacy_profile: Literal["STRICT_ZDR"]
+    require_zdr: Literal[True]
+    data_collection: Literal["deny"]
+    allow_fallbacks: Literal[False]
+    raw_prompts_stored: Literal[False]
+    raw_responses_stored: Literal[False]
+    validated_output: SyntheticProviderSmokeResponse
+
+    @field_validator("canonical_model_id")
+    @classmethod
+    def verification_rejection_model_is_exact(cls, value: str) -> str:
+        if _MODEL_PATTERN.fullmatch(value) is None:
+            raise ValueError("verification rejection model ID must be exact")
+        return value
+
+    @field_validator("approved_provider_endpoint")
+    @classmethod
+    def verification_rejection_endpoint_is_safe(cls, value: str) -> str:
+        if _PROVIDER_PATTERN.fullmatch(value) is None:
+            raise ValueError("verification rejection endpoint is invalid")
+        return value
+
+    @field_validator(
+        "reserved_cost_usd",
+        "accounted_cost_usd",
+        "ledger_cap_usd",
+        "ledger_spent_before_usd",
+        "ledger_spent_usd",
+        "smoke_spend_delta_usd",
+        "ledger_active_reserved_usd",
+        "ledger_remaining_usd",
+    )
+    @classmethod
+    def verification_rejection_money_is_canonical(cls, value: str) -> str:
+        if _canonical_nonnegative_decimal(value) != value:
+            raise ValueError("verification rejection cost must be canonical")
+        return value
+
+    @field_validator("actual_cost_usd")
+    @classmethod
+    def optional_verification_rejection_money_is_canonical(
+        cls,
+        value: str | None,
+    ) -> str | None:
+        if value is not None and _canonical_nonnegative_decimal(value) != value:
+            raise ValueError("optional verification rejection cost must be canonical")
+        return value
+
+    @model_validator(mode="after")
+    def verification_rejection_is_coherent(self) -> Self:
+        if self.fixture_sha256 != SMOKE_FIXTURE_SHA256:
+            raise ValueError("verification rejection fixture differs from the pinned fixture")
+        record = self.usage_record
+        aliases = {record.requested_model, self.canonical_model_id}
+        if (
+            record.requested_model.split("/", 1)[0]
+            != self.canonical_model_id.split("/", 1)[0]
+            or record.returned_model not in aliases
+            or record.actual_model not in aliases
+        ):
+            raise ValueError("verification rejection model identity is inconsistent")
+        if (
+            record.execution_evidence is not ExecutionEvidenceKind.REAL
+            or record.validation_status is not ModelRequestValidationStatus.VALID
+            or record.status != "success"
+            or record.identity_strength
+            not in {
+                ModelIdentityStrength.IMMUTABLE_VERSION_BOUND,
+                ModelIdentityStrength.CANONICAL_MODEL_AND_ENDPOINT_BOUND,
+            }
+            or record.routing.get("identity_binding_status") != "generation_metadata_bound"
+            or record.actual_provider_endpoint != self.approved_provider_endpoint
+            or record.fallback_used
+            or record.substitution_detected
+            or record.finish_reason != "stop"
+        ):
+            raise ValueError("verification rejection requires one bound valid REAL response")
+        raw_binding = record.routing.get("identity_binding")
+        try:
+            binding = OpenRouterIdentityBindingResult.model_validate(raw_binding)
+        except (AttributeError, ValueError):
+            raise ValueError("verification rejection identity binding is invalid") from None
+        if (
+            binding.binding_sha256 != self.identity_binding_sha256
+            or binding.strength is not record.identity_strength
+            or binding.generation is None
+            or binding.generation.generation_id != record.openrouter_generation_id
+            or binding.generation.generation_evidence_sha256
+            != self.initial_generation_evidence_sha256
+        ):
+            raise ValueError("verification rejection identity evidence is inconsistent")
+        endpoint_snapshot_sha256 = _required_usage_routing_sha256(
+            record,
+            "endpoint_snapshot_sha256",
+        )
+        discovery_evidence_sha256 = _required_usage_routing_sha256(
+            record,
+            "discovery_evidence_sha256",
+        )
+        if (
+            record.openrouter_generation_id is None
+            or record.validated_response_sha256 is None
+            or record.schema_sha256 is None
+            or self.verification_subject_sha256
+            != real_provider_smoke_verification_subject_sha256(
+                fixture_sha256=self.fixture_sha256,
+                internal_request_id=record.request_id,
+                openrouter_generation_id=record.openrouter_generation_id,
+                requested_model_id=record.requested_model,
+                canonical_model_id=self.canonical_model_id,
+                validated_response_sha256=record.validated_response_sha256,
+                prompt_sha256=record.prompt_sha256,
+                schema_sha256=record.schema_sha256,
+                endpoint_snapshot_sha256=endpoint_snapshot_sha256,
+                discovery_evidence_sha256=discovery_evidence_sha256,
+            )
+        ):
+            raise ValueError("verification rejection subject is inconsistent")
+        if self.reconciliation_exhausted is not (
+            self.mismatch_code in EVENTUAL_GENERATION_USAGE_MISMATCH_CODES
+        ):
+            raise ValueError("verification rejection exhaustion status is inconsistent")
+        if self.ledger_entry_request_id != f"{record.request_id}:attempt:1":
+            raise ValueError("verification rejection ledger request ID is not attempt-bound")
+        if record.reasoning_tokens != 0 or record.completion_tokens > SMOKE_MAX_OUTPUT_TOKENS:
+            raise ValueError("verification rejection request controls are inconsistent")
+        if record.cached_tokens > record.prompt_tokens:
+            raise ValueError("verification rejection cached tokens exceed prompt tokens")
+        reserved = Decimal(self.reserved_cost_usd)
+        actual = None if self.actual_cost_usd is None else Decimal(self.actual_cost_usd)
+        accounted = Decimal(self.accounted_cost_usd)
+        cap = Decimal(self.ledger_cap_usd)
+        spent_before = Decimal(self.ledger_spent_before_usd)
+        spent = Decimal(self.ledger_spent_usd)
+        spend_delta = Decimal(self.smoke_spend_delta_usd)
+        active_reserved = Decimal(self.ledger_active_reserved_usd)
+        remaining = Decimal(self.ledger_remaining_usd)
+        if self.ledger_entry_status is CostEntryStatus.RECONCILED:
+            cost_status_valid = (
+                actual is not None
+                and record.reported_cost_usd is not None
+                and Decimal(str(record.reported_cost_usd)) == actual
+                and accounted == actual
+                and actual <= reserved
+                and self.cost_reconciled
+            )
+        elif self.ledger_entry_status is CostEntryStatus.RESERVATION_OVERRUN:
+            cost_status_valid = (
+                actual is not None
+                and record.reported_cost_usd is not None
+                and Decimal(str(record.reported_cost_usd)) == actual
+                and accounted == actual
+                and actual > reserved
+                and not self.cost_reconciled
+            )
+        else:
+            cost_status_valid = False
+        if not cost_status_valid:
+            raise ValueError("verification rejection cost lifecycle is inconsistent")
+        if (
+            spent_before + spend_delta != spent
+            or self.ledger_delta_reconciled is not (spend_delta == accounted)
+            or self.ledger_prior_entries_unchanged
+            is not (
+                self.ledger_prior_entries_sha256_before
+                == self.ledger_prior_entries_sha256_after
+            )
+            or self.ledger_reservations_closed is not (active_reserved == 0)
+            or self.ledger_over_cap is not (cap - spent - active_reserved < 0)
+            or self.ledger_has_reservation_overrun
+            is not (self.ledger_entry_status is CostEntryStatus.RESERVATION_OVERRUN)
+            or self.stage_cost_control_satisfied is not (accounted <= Decimal("5"))
+            or remaining != max(Decimal(0), cap - spent - active_reserved)
+        ):
+            raise ValueError("verification rejection ledger evidence is inconsistent")
+        return self
+
+
+class RealProviderSmokeVerificationRejectionEvidence(
+    _RealProviderSmokeVerificationRejectionEvidenceBody
+):
+    """Self-hashed non-creditable post-bind verification rejection."""
+
+    evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @model_validator(mode="after")
+    def verification_rejection_is_self_hashed(self) -> Self:
+        expected = canonical_sha256(self.model_dump(mode="json", exclude={"evidence_sha256"}))
+        if self.evidence_sha256 != expected:
+            raise ValueError("verification rejection self-hash is inconsistent")
+        return self
+
+
 def real_provider_tests_enabled(environ: Mapping[str, str]) -> bool:
     """Require the exact opt-in sentinel; truthy alternatives are rejected."""
 
@@ -807,6 +1054,23 @@ def seal_real_provider_smoke_rejection_evidence(
     )
 
 
+def seal_real_provider_smoke_verification_rejection_evidence(
+    value: Mapping[str, Any],
+) -> RealProviderSmokeVerificationRejectionEvidence:
+    """Validate and self-hash one post-bind verification rejection."""
+
+    if "evidence_sha256" in value:
+        raise ValueError("verification rejection evidence must be sealed exactly once")
+    body = _RealProviderSmokeVerificationRejectionEvidenceBody.model_validate(dict(value))
+    payload = body.model_dump(mode="json")
+    return RealProviderSmokeVerificationRejectionEvidence.model_validate(
+        {
+            **payload,
+            "evidence_sha256": canonical_sha256(payload),
+        }
+    )
+
+
 def preflight_real_provider_smoke_output(
     *,
     output_path: Path,
@@ -889,6 +1153,33 @@ def real_provider_smoke_rejection_output_path(
     return rejection_output
 
 
+def real_provider_smoke_verification_rejection_output_path(
+    *,
+    success_output: Path,
+    internal_request_id: str,
+) -> Path:
+    """Derive a value-free sibling path for one post-bind verification rejection."""
+
+    preflight_real_provider_smoke_output(
+        output_path=success_output,
+        forbidden_paths=(),
+    )
+    if re.fullmatch(_SAFE_REQUEST_ID_PATTERN, internal_request_id) is None:
+        raise ValueError("verification rejection request ID is invalid")
+    request_digest = hashlib.sha256(
+        f"{success_output.name}\0verification\0{internal_request_id}".encode()
+    ).hexdigest()[:24]
+    bounded_stem = success_output.stem[:72]
+    rejection_output = success_output.with_name(
+        f"{bounded_stem}.rejected-generation-verification-{request_digest}.json"
+    )
+    preflight_real_provider_smoke_output(
+        output_path=rejection_output,
+        forbidden_paths=(success_output,),
+    )
+    return rejection_output
+
+
 def write_real_provider_smoke_evidence(
     *,
     output_path: Path,
@@ -939,6 +1230,43 @@ def write_real_provider_smoke_rejection_evidence(
         value=evidence,
         max_bytes=64_000,
     )
+
+
+def write_real_provider_smoke_verification_rejection_evidence(
+    *,
+    success_output: Path,
+    evidence: RealProviderSmokeVerificationRejectionEvidence,
+    forbidden_values: tuple[str, ...],
+) -> ManifestFileBinding:
+    """Write one fresh private post-bind rejection after a final canary scan."""
+
+    rejection_output = real_provider_smoke_verification_rejection_output_path(
+        success_output=success_output,
+        internal_request_id=evidence.usage_record.request_id,
+    )
+    serialized = stable_json(evidence)
+    lowered = serialized.casefold()
+    if "authorization" in lowered or "bearer " in lowered:
+        raise ValueError("verification rejection contains a forbidden authorization surface")
+    if any(value and value in serialized for value in forbidden_values):
+        raise ValueError("verification rejection contains a forbidden value")
+    return write_json_evidence(
+        evidence_root=rejection_output.parent,
+        relative_path=rejection_output.name,
+        value=evidence,
+        max_bytes=96_000,
+    )
+
+
+def _required_usage_routing_sha256(record: UsageRecord, key: str) -> str:
+    value = record.routing.get(key)
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"verification rejection usage omitted {key}")
+    return value
 
 
 def _required_value(environ: Mapping[str, str], name: str) -> str:

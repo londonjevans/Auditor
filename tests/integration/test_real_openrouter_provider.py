@@ -21,12 +21,16 @@ from mmaudit.models.discovery import (
 )
 from mmaudit.models.endpoint_snapshots import validate_openrouter_endpoint_snapshot
 from mmaudit.models.generation_evidence import (
+    GenerationEvidenceValidationError,
+    GenerationReconciliationMismatchError,
     GenerationVerificationRequest,
     OpenRouterGenerationEvidence,
+    _reconcile_generation_evidence_structural,
 )
 from mmaudit.models.identity import OpenRouterIdentityBindingResult
 from mmaudit.models.openrouter import (
     OpenRouterClient,
+    OpenRouterGenerationReconciliationError,
     OpenRouterProviderPolicy,
     OpenRouterReasoning,
 )
@@ -60,19 +64,23 @@ from tests.real_provider_harness import (
     SMOKE_REASONING_EFFORT,
     RealProviderSmokeEvidence,
     RealProviderSmokeRejectionEvidence,
+    RealProviderSmokeVerificationRejectionEvidence,
     RealProviderTestSettings,
     SyntheticProviderSmokeResponse,
     load_pinned_synthetic_smoke_fixture,
     load_real_provider_test_settings,
     preflight_real_provider_smoke_output,
     real_provider_smoke_rejection_output_path,
+    real_provider_smoke_verification_rejection_output_path,
     real_provider_smoke_verification_subject_sha256,
     real_provider_tests_enabled,
     seal_real_provider_smoke_evidence,
     seal_real_provider_smoke_rejection_evidence,
+    seal_real_provider_smoke_verification_rejection_evidence,
     validate_smoke_reasoning_off_preflight,
     write_real_provider_smoke_evidence,
     write_real_provider_smoke_rejection_evidence,
+    write_real_provider_smoke_verification_rejection_evidence,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -322,26 +330,58 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     endpoint_snapshot_sha256=endpoint_snapshot.snapshot_sha256,
                     discovery_evidence_sha256=(discovery_evidence[0].discovery_evidence_sha256),
                 )
-                trusted_generation_verification = (
-                    await client.create_trusted_generation_verification(
-                        (
-                            GenerationVerificationRequest(
-                                benchmark_report_sha256=verification_subject_sha256,
-                                case_id="synthetic-provider-smoke",
-                                exact_model_id=settings.model_id,
-                                canonical_model_id=discovery_payload.canonical_slug,
-                                catalog_identity_binding_sha256=(
-                                    discovery_payload.catalog_identity_binding_sha256
-                                ),
-                                discovery_evidence_sha256=(
-                                    discovery_evidence[0].discovery_evidence_sha256
-                                ),
-                                expected_provider_name=selected_provider_name,
-                                usage_record=record,
-                            ),
+                verification_request = GenerationVerificationRequest(
+                    benchmark_report_sha256=verification_subject_sha256,
+                    case_id="synthetic-provider-smoke",
+                    exact_model_id=settings.model_id,
+                    canonical_model_id=discovery_payload.canonical_slug,
+                    catalog_identity_binding_sha256=(
+                        discovery_payload.catalog_identity_binding_sha256
+                    ),
+                    discovery_evidence_sha256=(
+                        discovery_evidence[0].discovery_evidence_sha256
+                    ),
+                    expected_provider_name=selected_provider_name,
+                    usage_record=record,
+                )
+                try:
+                    trusted_generation_verification = (
+                        await client.create_trusted_generation_verification(
+                            (verification_request,)
                         )
                     )
-                )
+                except OpenRouterGenerationReconciliationError as exc:
+                    snapshot = atomic_ledger.snapshot()
+                    ledger_evidence = _terminal_smoke_ledger_evidence(
+                        snapshot=snapshot,
+                        ledger_before=ledger_before,
+                        record=record,
+                    )
+                    rejection_output, verification_rejection = (
+                        _write_generation_verification_smoke_rejection(
+                            settings=settings,
+                            fixture_source=fixture_source,
+                            fixture_sha256=fixture_sha256,
+                            user_prompt=user_prompt,
+                            canonical_model_id=discovery_payload.canonical_slug,
+                            verification_subject_sha256=verification_subject_sha256,
+                            record=record,
+                            response=response,
+                            verification_request=verification_request,
+                            error=exc,
+                            ledger_before=ledger_before,
+                            snapshot=snapshot,
+                            ledger_evidence=ledger_evidence,
+                            api_key=api_key,
+                        )
+                    )
+                    client.clear_retained_unbound_completions()
+                    raise AssertionError(
+                        "provider smoke generation verification was rejected; "
+                        f"mismatch_code={verification_rejection.mismatch_code.name}; "
+                        f"attempts={verification_rejection.reconciliation_attempts}; "
+                        f"rejection_artifact={rejection_output.name}"
+                    ) from None
                 refetched_generation = trusted_generation_verification.attestation_for(
                     benchmark_report_sha256=verification_subject_sha256,
                     case_id="synthetic-provider-smoke",
@@ -829,6 +869,187 @@ def _write_unbound_smoke_rejection(
         or settings.evidence_output.exists()
     ):
         raise AssertionError("provider rejection artifact did not round-trip safely")
+    return rejection_output, rejection
+
+
+def _write_generation_verification_smoke_rejection(
+    *,
+    settings: RealProviderTestSettings,
+    fixture_source: str,
+    fixture_sha256: str,
+    user_prompt: str,
+    canonical_model_id: str,
+    verification_subject_sha256: str,
+    record: UsageRecord,
+    response: SyntheticProviderSmokeResponse,
+    verification_request: GenerationVerificationRequest,
+    error: OpenRouterGenerationReconciliationError,
+    ledger_before: CostLedgerSnapshot,
+    snapshot: CostLedgerSnapshot,
+    ledger_evidence: _SmokeLedgerEvidence,
+    api_key: str,
+) -> tuple[Path, RealProviderSmokeVerificationRejectionEvidence]:
+    """Persist a bound response that failed mandatory fresh generation verification."""
+
+    ledger_entry = ledger_evidence.entry
+    last_evidence = error.last_evidence
+    raw_binding = record.routing.get("identity_binding")
+    if (
+        not _has_owned_real_usage_attestation(record)
+        or not is_generation_bindable_usage_record(record)
+        or not is_creditable_usage_record(
+            record,
+            require_real=True,
+            require_certification=True,
+        )
+        or record.identity_strength
+        not in {
+            ModelIdentityStrength.IMMUTABLE_VERSION_BOUND,
+            ModelIdentityStrength.CANONICAL_MODEL_AND_ENDPOINT_BOUND,
+        }
+        or record.routing.get("identity_binding_status") != "generation_metadata_bound"
+        or not isinstance(raw_binding, dict)
+        or last_evidence is None
+        or error.attempts != last_evidence.retrieval_attempts
+        or verification_request.usage_record != record
+        or not _has_owned_real_usage_attestation(verification_request.usage_record)
+    ):
+        raise AssertionError(
+            "verification rejection sink requires one owned bound REAL response"
+        )
+    identity_binding = OpenRouterIdentityBindingResult.model_validate(raw_binding)
+    if (
+        identity_binding.strength is not record.identity_strength
+        or identity_binding.generation is None
+        or identity_binding.binding_sha256
+        != record.routing.get("identity_binding_sha256")
+    ):
+        raise AssertionError("verification rejection identity binding is inconsistent")
+    try:
+        _reconcile_generation_evidence_structural(
+            last_evidence,
+            usage_record=record,
+            expected_exact_model=verification_request.exact_model_id,
+            expected_canonical_model=verification_request.canonical_model_id,
+            expected_catalog_identity_binding_sha256=(
+                verification_request.catalog_identity_binding_sha256
+            ),
+            expected_discovery_evidence_sha256=(
+                verification_request.discovery_evidence_sha256
+            ),
+            expected_provider_name=verification_request.expected_provider_name,
+        )
+    except GenerationReconciliationMismatchError as mismatch:
+        if mismatch.code is not error.mismatch_code:
+            raise AssertionError(
+                "verification rejection mismatch code differs from its evidence"
+            ) from None
+    except GenerationEvidenceValidationError:
+        raise AssertionError(
+            "verification rejection evidence failed structural validation"
+        ) from None
+    else:
+        raise AssertionError("verification rejection evidence unexpectedly reconciled")
+    actual_cost_usd = ledger_entry.actual_cost_usd
+    rejection = seal_real_provider_smoke_verification_rejection_evidence(
+        {
+            "schema_version": "1.0",
+            "ticket_id": "V3-SMOKE-001",
+            "evidence_kind": (
+                "real_openrouter_synthetic_smoke_verification_rejection"
+            ),
+            "status": "REJECTED_GENERATION_VERIFICATION",
+            "creditable": False,
+            "fixture_path": SMOKE_FIXTURE_PATH,
+            "fixture_sha256": fixture_sha256,
+            "canonical_model_id": canonical_model_id,
+            "approved_provider_endpoint": settings.provider_endpoint_allowlist[0],
+            "verification_subject_sha256": verification_subject_sha256,
+            "identity_binding_sha256": identity_binding.binding_sha256,
+            "initial_generation_evidence_sha256": (
+                identity_binding.generation.generation_evidence_sha256
+            ),
+            "verification_generation_evidence_sha256": (
+                last_evidence.evidence_sha256
+            ),
+            "mismatch_code": error.mismatch_code.value,
+            "reconciliation_attempts": error.attempts,
+            "reconciliation_exhausted": error.exhausted,
+            "usage_record": record.model_dump(mode="json"),
+            "ledger_entry_request_id": ledger_entry.request_id,
+            "ledger_entry_status": ledger_entry.status.value,
+            "reserved_cost_usd": _canonical_money(ledger_entry.reserved_usd),
+            "actual_cost_usd": (
+                None if actual_cost_usd is None else _canonical_money(actual_cost_usd)
+            ),
+            "accounted_cost_usd": _canonical_money(ledger_entry.accounted_cost_usd),
+            "cost_reconciled": ledger_entry.status is CostEntryStatus.RECONCILED,
+            "ledger_cap_usd": _canonical_money(snapshot.cap_usd),
+            "ledger_spent_before_usd": _canonical_money(ledger_before.spent_usd),
+            "ledger_spent_usd": _canonical_money(snapshot.spent_usd),
+            "smoke_spend_delta_usd": _canonical_money(
+                ledger_evidence.spend_delta_usd
+            ),
+            "ledger_delta_reconciled": ledger_evidence.delta_reconciled,
+            "ledger_prior_entries_sha256_before": (
+                ledger_evidence.prior_entries_sha256_before
+            ),
+            "ledger_prior_entries_sha256_after": (
+                ledger_evidence.prior_entries_sha256_after
+            ),
+            "ledger_prior_entries_unchanged": (
+                ledger_evidence.prior_entries_unchanged
+            ),
+            "ledger_active_reserved_usd": _canonical_money(
+                snapshot.active_reserved_usd
+            ),
+            "ledger_reservations_closed": snapshot.active_reserved_usd == 0,
+            "ledger_over_cap": snapshot.over_cap,
+            "ledger_has_reservation_overrun": snapshot.has_reservation_overrun,
+            "ledger_remaining_usd": _canonical_money(snapshot.remaining_usd),
+            "stage_cost_control_satisfied": (
+                ledger_entry.accounted_cost_usd <= _SMOKE_STAGE_CAP_USD
+            ),
+            "privacy_profile": settings.privacy_profile,
+            "require_zdr": True,
+            "data_collection": "deny",
+            "allow_fallbacks": False,
+            "raw_prompts_stored": False,
+            "raw_responses_stored": False,
+            "validated_output": response.model_dump(mode="json"),
+        }
+    )
+    rejection_output = real_provider_smoke_verification_rejection_output_path(
+        success_output=settings.evidence_output,
+        internal_request_id=record.request_id,
+    )
+    file_binding = write_real_provider_smoke_verification_rejection_evidence(
+        success_output=settings.evidence_output,
+        evidence=rejection,
+        forbidden_values=(
+            api_key,
+            str(settings.secret_file),
+            fixture_source,
+            _SYSTEM_PROMPT,
+            user_prompt,
+        ),
+    )
+    observed = read_json_evidence(
+        evidence_root=rejection_output.parent,
+        relative_path=rejection_output.name,
+        max_bytes=96_000,
+    )
+    if (
+        observed.binding != file_binding
+        or RealProviderSmokeVerificationRejectionEvidence.model_validate(
+            observed.value
+        )
+        != rejection
+        or settings.evidence_output.exists()
+    ):
+        raise AssertionError(
+            "verification rejection artifact did not round-trip safely"
+        )
     return rejection_output, rejection
 
 

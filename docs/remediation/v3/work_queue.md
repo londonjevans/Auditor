@@ -80,10 +80,25 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   same-ID incomplete response, while authentication failures, identity
   contradictions, and exhaustion remain fail-closed. Focused validation passed
   `235` tests, affected Ruff, and strict mypy.
-- **Current next action:** Resumed from clean synchronized checkpoint
-  `ff538c2500b2bcd9dff8ffcf7bd3bb3aeb049091`. Validate the typed
-  Mistral/Venice discovery evidence and the clean preflight before any paid
-  completion. Do not retry the rejected Qwen/AkashML request unchanged.
+- **Sixth runtime attempt:** From clean synchronized checkpoint `dd871cc`, the
+  exact Mistral/Venice response was structured, non-truncated, and canonically
+  bound. The mandatory independent generation re-fetch then failed usage
+  reconciliation, so no success credit or artifact was issued. The exact attempt
+  reconciled `0.0000635625 USD`; cumulative spend is `0.0019275425 USD` with no
+  active reservation.
+- **Local reconciliation correction:** Post-bind mismatches now retain a typed,
+  value-free diagnostic. Only usage and cost fields receive the existing bounded
+  same-generation polling window; identity, provider, finish, timestamp, and
+  internally inconsistent metadata fail immediately. A separate private,
+  self-hashed rejection artifact preserves the bound-but-unverified result
+  without granting success credit.
+- **Pause state:** `PAUSED_BY_OPERATOR` after `319` focused tests, one explicit
+  paid-test skip, affected Ruff, strict targeted mypy, and diff checks passed.
+  No seventh provider request ran.
+- **Current next action:** On operator resume, independently review and run final
+  local validation of the bounded reconciliation change before considering one
+  materially changed provider retry. Do not repeat the prior implementation
+  unchanged.
 
 ## V3-PRIVACY-001 — Explicit privacy and retention profiles
 

@@ -12,6 +12,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from enum import StrEnum
 from typing import Any, Literal, Never, SupportsIndex
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -36,6 +37,59 @@ _CASE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$")
 
 class GenerationEvidenceValidationError(ValueError):
     """Raised when generation metadata cannot support a bounded attestation."""
+
+
+class GenerationReconciliationMismatchCode(StrEnum):
+    """Non-secret field identity for one exact generation/usage contradiction."""
+
+    ACTUAL_MODEL = "actual model"
+    RETURNED_MODEL = "returned model"
+    GENERATION_MODEL = "generation model"
+    GENERATION_ID = "generation ID"
+    ROUTING_GENERATION_ID = "routing generation ID"
+    REQUESTED_MODEL = "requested exact model"
+    ROUTED_MODEL = "routed actual model"
+    ROUTED_CANONICAL_MODEL = "routed canonical model"
+    CATALOG_IDENTITY_BINDING = "catalog identity binding"
+    DISCOVERY_EVIDENCE_BINDING = "discovery evidence binding"
+    PROVIDER = "expected provider"
+    ROUTED_PROVIDER = "routed provider"
+    FINISH_REASON = "finish reason"
+    ROUTED_FINISH_REASON = "routing finish reason"
+    NATIVE_FINISH_REASON = "native finish reason"
+    PROMPT_TOKENS = "prompt tokens"
+    COMPLETION_TOKENS = "completion tokens"
+    REASONING_TOKENS = "reasoning tokens"
+    CACHED_TOKENS = "cached tokens"
+    REPORTED_COST = "reported cost"
+    REQUEST_TIMESTAMP = "request timestamp"
+
+
+EVENTUAL_GENERATION_USAGE_MISMATCH_CODES = frozenset(
+    {
+        GenerationReconciliationMismatchCode.PROMPT_TOKENS,
+        GenerationReconciliationMismatchCode.COMPLETION_TOKENS,
+        GenerationReconciliationMismatchCode.REASONING_TOKENS,
+        GenerationReconciliationMismatchCode.CACHED_TOKENS,
+        GenerationReconciliationMismatchCode.REPORTED_COST,
+    }
+)
+
+
+class GenerationReconciliationMismatchError(GenerationEvidenceValidationError):
+    """Exact non-secret mismatch whose retry policy is determined by its code."""
+
+    def __init__(self, code: GenerationReconciliationMismatchCode) -> None:
+        if not isinstance(code, GenerationReconciliationMismatchCode):
+            raise TypeError("generation reconciliation mismatch code is invalid")
+        self.code = code
+        super().__init__(f"generation evidence does not reconcile {code.value}")
+
+    @property
+    def is_eventual_usage_field(self) -> bool:
+        """Return whether the same generation may still publish a settled value."""
+
+        return self.code in EVENTUAL_GENERATION_USAGE_MISMATCH_CODES
 
 
 @dataclass(frozen=True, slots=True)
@@ -596,85 +650,121 @@ def _reconcile_generation_evidence(
     routing = usage_record.routing
     actual_model = usage_record.actual_model
     if actual_model not in {expected_exact_model, expected_canonical_model}:
-        raise GenerationEvidenceValidationError(
-            "generation evidence does not reconcile approved actual model"
+        raise GenerationReconciliationMismatchError(
+            GenerationReconciliationMismatchCode.ACTUAL_MODEL
         )
     if usage_record.returned_model not in {
         expected_exact_model,
         expected_canonical_model,
     }:
-        raise GenerationEvidenceValidationError(
-            "generation evidence does not reconcile approved returned model"
+        raise GenerationReconciliationMismatchError(
+            GenerationReconciliationMismatchCode.RETURNED_MODEL
         )
     if evidence.exact_model_id not in {
         expected_exact_model,
         expected_canonical_model,
     }:
-        raise GenerationEvidenceValidationError(
-            "generation evidence does not reconcile frozen model identity"
+        raise GenerationReconciliationMismatchError(
+            GenerationReconciliationMismatchCode.GENERATION_MODEL
         )
     comparisons = (
         (
             evidence.generation_id,
             usage_record.openrouter_generation_id,
-            "generation ID",
+            GenerationReconciliationMismatchCode.GENERATION_ID,
         ),
-        (evidence.generation_id, routing.get("generation_id"), "routing generation ID"),
-        (usage_record.requested_model, expected_exact_model, "requested exact model"),
-        (routing.get("selected_model"), actual_model, "routed actual model"),
-        (routing.get("canonical_model"), expected_canonical_model, "routed canonical model"),
+        (
+            evidence.generation_id,
+            routing.get("generation_id"),
+            GenerationReconciliationMismatchCode.ROUTING_GENERATION_ID,
+        ),
+        (
+            usage_record.requested_model,
+            expected_exact_model,
+            GenerationReconciliationMismatchCode.REQUESTED_MODEL,
+        ),
+        (
+            routing.get("selected_model"),
+            actual_model,
+            GenerationReconciliationMismatchCode.ROUTED_MODEL,
+        ),
+        (
+            routing.get("canonical_model"),
+            expected_canonical_model,
+            GenerationReconciliationMismatchCode.ROUTED_CANONICAL_MODEL,
+        ),
         (
             routing.get("catalog_identity_binding_sha256"),
             expected_catalog_identity_binding_sha256,
-            "catalog identity binding",
+            GenerationReconciliationMismatchCode.CATALOG_IDENTITY_BINDING,
         ),
         (
             routing.get("discovery_evidence_sha256"),
             expected_discovery_evidence_sha256,
-            "discovery evidence binding",
+            GenerationReconciliationMismatchCode.DISCOVERY_EVIDENCE_BINDING,
         ),
-        (evidence.provider_name, expected_provider_name, "expected provider"),
+        (
+            evidence.provider_name,
+            expected_provider_name,
+            GenerationReconciliationMismatchCode.PROVIDER,
+        ),
         (
             routing.get("selected_provider_name"),
             expected_provider_name,
-            "routed provider",
+            GenerationReconciliationMismatchCode.ROUTED_PROVIDER,
         ),
-        (evidence.finish_reason, usage_record.finish_reason, "finish reason"),
-        (evidence.finish_reason, routing.get("finish_reason"), "routing finish reason"),
+        (
+            evidence.finish_reason,
+            usage_record.finish_reason,
+            GenerationReconciliationMismatchCode.FINISH_REASON,
+        ),
+        (
+            evidence.finish_reason,
+            routing.get("finish_reason"),
+            GenerationReconciliationMismatchCode.ROUTED_FINISH_REASON,
+        ),
         (
             evidence.native_finish_reason,
             routing.get("native_finish_reason"),
-            "native finish reason",
+            GenerationReconciliationMismatchCode.NATIVE_FINISH_REASON,
         ),
-        (evidence.prompt_tokens, usage_record.prompt_tokens, "prompt tokens"),
+        (
+            evidence.prompt_tokens,
+            usage_record.prompt_tokens,
+            GenerationReconciliationMismatchCode.PROMPT_TOKENS,
+        ),
         (
             evidence.completion_tokens,
             usage_record.completion_tokens,
-            "completion tokens",
+            GenerationReconciliationMismatchCode.COMPLETION_TOKENS,
         ),
     )
-    for observed, expected, label in comparisons:
+    for observed, expected, code in comparisons:
         if observed != expected:
-            raise GenerationEvidenceValidationError(
-                f"generation evidence does not reconcile {label}"
-            )
+            raise GenerationReconciliationMismatchError(code)
     optional_token_comparisons = (
-        (evidence.reasoning_tokens, usage_record.reasoning_tokens, "reasoning tokens"),
-        (evidence.cached_tokens, usage_record.cached_tokens, "cached tokens"),
+        (
+            evidence.reasoning_tokens,
+            usage_record.reasoning_tokens,
+            GenerationReconciliationMismatchCode.REASONING_TOKENS,
+        ),
+        (
+            evidence.cached_tokens,
+            usage_record.cached_tokens,
+            GenerationReconciliationMismatchCode.CACHED_TOKENS,
+        ),
     )
-    for observed, expected, label in optional_token_comparisons:
+    for observed, expected, code in optional_token_comparisons:
         if observed is not None and observed != expected:
-            raise GenerationEvidenceValidationError(
-                f"generation evidence does not reconcile {label}"
-            )
+            raise GenerationReconciliationMismatchError(code)
     assert usage_record.reported_cost_usd is not None
     usage_cost = _canonical_nonnegative_decimal(
         usage_record.reported_cost_usd,
         "usage-record cost",
     )
     if evidence.total_cost_usd != usage_cost:
-        raise GenerationEvidenceValidationError(
-            "generation evidence does not reconcile reported cost"
+        raise GenerationReconciliationMismatchError(
+            GenerationReconciliationMismatchCode.REPORTED_COST
         )
     if evidence.created_at is not None:
         assert usage_record.started_at is not None
@@ -685,8 +775,8 @@ def _reconcile_generation_evidence(
             <= created_at
             <= usage_record.ended_at.astimezone(UTC) + timedelta(minutes=5)
         ):
-            raise GenerationEvidenceValidationError(
-                "generation evidence does not reconcile request timestamp"
+            raise GenerationReconciliationMismatchError(
+                GenerationReconciliationMismatchCode.REQUEST_TIMESTAMP
             )
     return evidence
 
