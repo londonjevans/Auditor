@@ -51,9 +51,10 @@
       "status": "IN_PROGRESS",
       "current_evidence_class": "HISTORICAL_REJECTED",
       "evidence": [
-        "Seven bounded paid attempts, zero successful or credited calls, cumulative accounted cost 0.0031470425 USD.",
+        "Eight bounded paid attempts, zero successful or credited calls, cumulative accounted cost 0.0032118825 USD.",
         "The sixth response was schema-valid, non-truncated, and canonically bound before fresh generation-usage reconciliation rejected it.",
-        "The seventh exact Mistral/Venice route returned HTTP 429 before any completion; no model output or artifact was credited."
+        "The seventh exact Mistral/Venice route returned HTTP 429 before any completion; no model output or artifact was credited.",
+        "The eighth exact Qwen/AkashML response was structured and non-truncated but remained unbound because generation metadata appeared only after the fixed readiness window; the response and later metadata are retained as separate non-creditable private evidence."
       ],
       "remaining_proof": "One identity-bound, non-truncated, schema-valid synthetic completion with exact endpoint and reconciled cost."
     },

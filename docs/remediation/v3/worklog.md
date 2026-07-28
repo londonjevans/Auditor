@@ -8,17 +8,17 @@ AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: From a clean synchronized checkpoint, execute at most one exact Qwen/AkashML STRICT_ZDR smoke against the pinned fixture and fresh attempt-8 namespace; validate either qualifying success or the durable typed rejection.
-LAST_COMMAND: MMAUDIT_RUN_REAL_PROVIDER_TESTS=1 MMAUDIT_SECRETS_ENV_FILE=<operator-control-plane-file> MMAUDIT_REAL_PROVIDER_COST_CAP_USD=250.00 MMAUDIT_OPENROUTER_COST_LEDGER=<existing-ledger> MMAUDIT_REAL_PROVIDER_MODEL_ID=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_MODEL_ALLOWLIST=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_ENDPOINT_ALLOWLIST=akashml/fp8 MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=STRICT_ZDR MMAUDIT_REAL_PROVIDER_EVIDENCE_OUTPUT=<fresh-private-attempt-8-output> <no-network-typed-preflight>
-LAST_RESULT: PASS; typed authenticated metadata-only discovery bound exact Qwen/AkashML with strict ZDR, data denial, structured output, optional reasoning, context/output 262144, discovery evidence afd7e1b6d657cd5ef8d5a543b68c6d90e01dcb9883757b742cc4fec0e0c3e784, and manifest 8ec7e176e308c5806c52534467db27202eb026423cc9d47c8417e39b2dd07347. The pinned fixture and fresh attempt-8 namespace passed local preflight; ledger spend remained 0.0031470425 with zero reserved. No completion was requested.
-REAL_MODEL_CALLS_ATTEMPTED: 7
+NEXT_ACTION: Reproduce late generation readiness locally, extend same-generation polling within a fixed request-aware bound, keep every contradiction immediate, and complete independent plus full local validation before any changed provider retry.
+LAST_COMMAND: MMAUDIT_SECRETS_ENV_FILE=<operator-control-plane-file> <typed metadata-only re-fetch and private evidence write for the already-paid attempt-8 generation>
+LAST_RESULT: PASS; the existing generation later returned exact canonical Qwen/AkashML metadata with finish=stop. A private self-hashed content-free artifact was written with evidence afc99ea2271411c36590dcede73b61cf71f48c54f74a2df2a5aa2639878d92de and file SHA-256 ee04bbd5e703a19240c8261dce135a688d428f4f485487d774fc5948d6f8b44a. No completion was requested, no source was sent, and the ledger remained unchanged at 0.0032118825 USD spent.
+REAL_MODEL_CALLS_ATTEMPTED: 8
 REAL_MODEL_CALLS_SUCCEEDED: 0
-REAL_MODEL_CALLS_REJECTED: 7
-OPENROUTER_COST_USED_USD: 0.0031470425
+REAL_MODEL_CALLS_REJECTED: 8
+OPENROUTER_COST_USED_USD: 0.0032118825
 OPENROUTER_COST_RESERVED_USD: 0.00
-OPENROUTER_BUDGET_REMAINING_USD: 249.9968529575
+OPENROUTER_BUDGET_REMAINING_USD: 249.9967881175
 COMPLETED_REAL_AUDITS: 0
-BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
+BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; Qwen/AkashML generation metadata appeared only after the current readiness window and requires a bounded local polling correction before retry; no successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
 LAST_CHECKPOINT_COMMIT: a6ef7bb04cdc58a1b01b06f94a8aa69461e5e44d
 
 ## 2026-07-28 — V3-SMOKE-001
@@ -841,3 +841,29 @@ LAST_CHECKPOINT_COMMIT: a6ef7bb04cdc58a1b01b06f94a8aa69461e5e44d
   and the seven-entry atomic ledger validated. Spend remains
   `0.0031470425 USD`, active reservation is zero, remaining budget is
   `249.9968529575 USD`, and there is no over-cap state or reservation overrun.
+- **Eighth real attempt:** From clean synchronized checkpoint `129c4ac`, the
+  exact Qwen/AkashML response was structured, schema-valid, non-truncated, and
+  provider-consistent, but generation metadata remained unavailable throughout
+  the fixed `0/1/3/7` observation window. Identity therefore concluded
+  `UNBOUND` with `GENERATION_METADATA_MISSING` and
+  `GENERATION_METADATA_NOT_READY`; no success or review credit was granted.
+- **Durable attempt-eight evidence:** Private rejection SHA-256
+  `b5c3e21c094edd372806b00c8041e487293720c48084f5766e8645fe600a3e5a`
+  is self-hashed, non-creditable, typed, source/prompt/credential-canary-free,
+  and round-trips while the success artifact remains absent. Its exact ledger
+  entry reconciled `0.00006484 USD` against a `0.00135972 USD` reservation.
+  Cumulative spend is `0.0032118825 USD`, reserved is zero, and remaining is
+  `249.9967881175 USD`.
+- **Late generation diagnostic:** A later authenticated metadata-only re-fetch
+  of the same already-paid generation returned canonical
+  `qwen/qwen3.6-35b-a3b-20260415`, provider `AkashML`, and `finish=stop`.
+  Content-free generation evidence SHA-256 is
+  `afc99ea2271411c36590dcede73b61cf71f48c54f74a2df2a5aa2639878d92de`;
+  its private artifact file SHA-256 is
+  `ee04bbd5e703a19240c8261dce135a688d428f4f485487d774fc5948d6f8b44a`.
+  No completion was requested, no source was sent, and ledger state did not
+  change.
+- **No-progress control:** Qwen/AkashML will not be retried unchanged. The late
+  exact metadata isolates the remaining failure to the current readiness window.
+  The next local slice must add a late-readiness regression and a fixed,
+  request-aware longer window while preserving immediate contradiction failure.

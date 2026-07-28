@@ -113,10 +113,21 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   metadata-only discovery with typed `STRICT_ZDR`, data-denial, native structured
   output, optional reasoning, and exact endpoint evidence. No completion ran and
   ledger cost did not change.
-- **Current next action:** From a clean synchronized checkpoint, execute at most
-  one bounded Qwen/AkashML attempt against the pinned fixture and fresh attempt-8
-  namespace. Validate either qualifying success or durable typed rejection; do
-  not retry either blocked route unchanged.
+- **Eighth runtime attempt:** From clean synchronized checkpoint `129c4ac`, the
+  exact Qwen/AkashML response was structured and non-truncated but remained
+  `UNBOUND` because generation metadata was not ready within the fixed
+  `0/1/3/7` window. The durable private rejection artifact is self-hashed,
+  non-creditable, canary-free, and joined to a reconciled `0.00006484 USD`
+  attempt; cumulative spend is `0.0032118825 USD`.
+- **Late-evidence diagnostic:** An authenticated metadata-only re-fetch of the
+  already-paid generation later produced exact canonical Qwen/AkashML,
+  `finish=stop` evidence without another completion or ledger change. This
+  isolates the remaining cause as a too-short readiness window rather than a
+  model/provider identity contradiction.
+- **Current next action:** Add a failing late-readiness regression and extend the
+  same-generation polling window within a fixed request-aware bound. Preserve
+  immediate failure for contradictions and do not retry Qwen/AkashML unchanged
+  until the local correction passes independent and complete validation.
 
 ## V3-PRIVACY-001 — Explicit privacy and retention profiles
 
