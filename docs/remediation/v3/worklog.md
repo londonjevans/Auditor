@@ -8,9 +8,9 @@ AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: Complete independent diff review, commit and push the exact-ID metadata correction, verify the clean checkpoint and fresh artifact path, then execute at most one materially changed gated synthetic provider attempt.
-LAST_COMMAND: .venv/bin/ruff format . && .venv/bin/ruff check . && .venv/bin/mypy
-LAST_RESULT: PASS; full pytest passed 1872 tests with 10 explicit external/provider/isolation skips in 252.25s, full Ruff left 297 files unchanged and passed, strict mypy passed 129 source files, the artifact remains absent, and the ledger is unchanged.
+NEXT_ACTION: Push the exact-ID checkpoint via SSH, verify the synchronized clean tree, fresh artifact path, unchanged atomic budget, and explicit privacy/secret gates, then execute at most one materially changed synthetic provider attempt.
+LAST_COMMAND: git commit -m 'Query OpenRouter metadata by exact model ID'
+LAST_RESULT: PASS; isolated source, regression, and evidence changes committed as 8004dd7662ca521565db1d87cd3e76d8678cf44b after complete validation.
 REAL_MODEL_CALLS_ATTEMPTED: 2
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 2
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.99881326
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: No successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: d2a54d9d3d57b89f6abeb567caaad7719eb74f96
+LAST_CHECKPOINT_COMMIT: 8004dd7662ca521565db1d87cd3e76d8678cf44b
 
 ## 2026-07-28 — V3-SMOKE-001
 
@@ -136,6 +136,8 @@ LAST_CHECKPOINT_COMMIT: d2a54d9d3d57b89f6abeb567caaad7719eb74f96
   Provenance independently binds the returned canonical slug. The reviewer
   passed the three focused route regressions in `0.35s` and made no edit,
   network request, secret access, or paid call.
+- **Corrected source checkpoint:**
+  `8004dd7662ca521565db1d87cd3e76d8678cf44b`.
 
 ## 2026-07-28 — V3-BASELINE-001
 
