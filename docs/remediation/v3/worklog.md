@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9980724575
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: No successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: f7ec46d72a192fe4457f87a17abec95d60d422c5
+LAST_CHECKPOINT_COMMIT: a6ef7bb04cdc58a1b01b06f94a8aa69461e5e44d
 
 ## 2026-07-28 — V3-SMOKE-001
 
@@ -797,3 +797,7 @@ LAST_CHECKPOINT_COMMIT: f7ec46d72a192fe4457f87a17abec95d60d422c5
   drift; the focused slice passed `320` tests with one paid-provider skip; and
   the complete suite passed `1912` tests with `10` explicit external,
   provider, and isolation skips in `229.55s`. No provider or network request ran.
+- **Clean implementation checkpoint:** Commit
+  `a6ef7bb04cdc58a1b01b06f94a8aa69461e5e44d` contains the independently
+  reviewed reconciliation ordering fix and is synchronized to the SSH origin.
+  No successful model response or release credit is claimed.
