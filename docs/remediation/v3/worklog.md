@@ -4,22 +4,22 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: ACTIVE
+AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: Execute exactly one materially changed, explicitly gated synthetic smoke with reasoning disabled and a 1024-token ceiling; stop and record the first outcome without an unchanged retry.
+NEXT_ACTION: On operator resume, diagnose the concluded UNBOUND identity result without another paid completion; preserve bounded rejection diagnostics, reproduce the confirmed cause locally, and re-run gates before any materially different request.
 LAST_COMMAND: MMAUDIT_RUN_REAL_PROVIDER_TESTS=1 MMAUDIT_SECRETS_ENV_FILE=<operator-controlled Auditor .env> MMAUDIT_REAL_PROVIDER_COST_CAP_USD=250.00 MMAUDIT_OPENROUTER_COST_LEDGER=<Auditor cumulative ledger> MMAUDIT_REAL_PROVIDER_MODEL_ID=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_MODEL_ALLOWLIST=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_ENDPOINT_ALLOWLIST=akashml/fp8 MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=STRICT_ZDR MMAUDIT_REAL_PROVIDER_EVIDENCE_OUTPUT=<fresh v3 runtime artifact> .venv/bin/pytest -q tests/integration/test_real_openrouter_provider.py
-LAST_RESULT: PENDING; the reasoning-off source checkpoint is synchronized, full local gates pass, exact model and endpoint metadata return HTTP 200, reasoning remains optional and default-enabled, the artifact path is fresh, and 249.99826570 USD remains with no reservation.
-REAL_MODEL_CALLS_ATTEMPTED: 3
+LAST_RESULT: FAIL_CLOSED; the materially changed reasoning-disabled response passed structured-output validation but post-generation identity binding concluded UNBOUND. No review or success credit was granted, no success artifact was emitted, and cost reconciled to 0.00006484 USD.
+REAL_MODEL_CALLS_ATTEMPTED: 4
 REAL_MODEL_CALLS_SUCCEEDED: 0
-REAL_MODEL_CALLS_REJECTED: 3
-OPENROUTER_COST_USED_USD: 0.00173430
+REAL_MODEL_CALLS_REJECTED: 4
+OPENROUTER_COST_USED_USD: 0.00179914
 OPENROUTER_COST_RESERVED_USD: 0.00
-OPENROUTER_BUDGET_REMAINING_USD: 249.99826570
+OPENROUTER_BUDGET_REMAINING_USD: 249.99820086
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: No successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 432cfd0c0b976939c05abe2df1fe8eb8673fb107
+LAST_CHECKPOINT_COMMIT: fa0dcf6e38a963962f780230359f3ac28ce9050a
 
 ## 2026-07-28 — V3-SMOKE-001
 
@@ -215,6 +215,26 @@ LAST_CHECKPOINT_COMMIT: 432cfd0c0b976939c05abe2df1fe8eb8673fb107
   `mandatory=false`, `default_enabled=true`; ledger remains
   `spent=0.00173430`, `reserved=0`, `remaining=249.99826570`, three entries,
   no over-cap or reservation-overrun state.
+- **Third launch outcome:** Exactly one materially changed completion POST ran
+  from synchronized checkpoint
+  `fa0dcf6e38a963962f780230359f3ac28ce9050a`, with reasoning explicitly disabled
+  and a `1024`-token output ceiling. The provider returned schema-valid structured
+  output, but post-generation identity binding concluded `UNBOUND`. The
+  compatibility wrapper raised `OpenRouterUnboundIdentityError`; no review,
+  identity, certification, or success credit was granted and no success artifact
+  was emitted.
+- **Cost reconciliation:** The fourth ledger entry,
+  `c93f28a5-49b4-40ab-8c9b-531a4b70af6b:attempt:1`, is `RECONCILED` with
+  `reserved=0.00135972 USD`, `actual=0.00006484 USD`, and
+  `accounted=0.00006484 USD`. Aggregate spend is `0.00179914 USD`, active
+  reservation is zero, remaining budget is `249.99820086 USD`, and no over-cap
+  or reservation-overrun state exists.
+- **Pause boundary:** Autorun is paused at the operator's request. Git was clean
+  and synchronized before this state-only update; the expected success artifact
+  remains absent and no process or reservation is active. The rejected completion
+  must not be retried unchanged. On resume, first make unbound completion
+  diagnostics durably available without granting credit, then isolate and
+  reproduce the identity mismatch locally before another provider request.
 
 ## 2026-07-28 — V3-BASELINE-001
 

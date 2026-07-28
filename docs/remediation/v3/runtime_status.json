@@ -1,21 +1,21 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-07-28T16:56:23Z",
-  "candidate_commit": "432cfd0c0b976939c05abe2df1fe8eb8673fb107",
-  "autorun_status": "ACTIVE",
+  "updated_at": "2026-07-28T17:00:07Z",
+  "candidate_commit": "fa0dcf6e38a963962f780230359f3ac28ce9050a",
+  "autorun_status": "PAUSED_BY_OPERATOR",
   "current_milestone": "real_provider_smoke",
   "current_ticket": "V3-SMOKE-001",
-  "last_checkpoint_commit": "432cfd0c0b976939c05abe2df1fe8eb8673fb107",
+  "last_checkpoint_commit": "fa0dcf6e38a963962f780230359f3ac28ce9050a",
   "real_model_calls": {
-    "attempted": 3,
+    "attempted": 4,
     "succeeded": 0,
-    "rejected": 3
+    "rejected": 4
   },
   "openrouter_budget_usd": {
     "cap": "250.00000000",
-    "used": "0.00173430",
+    "used": "0.00179914",
     "reserved": "0.00000000",
-    "remaining": "249.99826570"
+    "remaining": "249.99820086"
   },
   "completed_real_audits": 0,
   "release_status": "INCOMPLETE",

@@ -51,12 +51,15 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Pause evidence:** The first v3 launch stopped before a completion POST when
   single-model metadata lookup returned HTTP `404`; no artifact, spend, or
   reservation was added.
-- **Runtime evidence:** Exact-ID metadata now succeeds, but the next single POST
-  was rejected fail-closed with `finish_reason=length`, no content, no artifact,
-  and reconciled actual cost `0.00054756 USD`.
-- **Next action:** Add a local output-budget/reasoning regression and make a
-  bounded materially different request configuration that reserves sufficient
-  schema-answer space; do not retry the truncated request unchanged.
+- **Runtime evidence:** Exact-ID metadata succeeds. One response was rejected
+  fail-closed as truncated after spending `0.00054756 USD`; a materially changed
+  reasoning-disabled response was schema-valid but rejected as identity
+  `UNBOUND` after spending `0.00006484 USD`. Neither response received review
+  credit and no success artifact exists.
+- **Next action:** On operator resume, preserve bounded diagnostics for an
+  unbound completion, diagnose the identity-binding mismatch without repeating
+  the paid request, add a local regression for the confirmed cause, and re-run
+  local gates before considering a materially different provider request.
 
 ## V3-PRIVACY-001 — Explicit privacy and retention profiles
 
