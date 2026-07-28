@@ -58,17 +58,17 @@
       "id": "EVAL-DEFECT-006",
       "summary": "Model quality hashes are not resolved against passing benchmark artifacts.",
       "baseline_path": "src/mmaudit/config.py",
-      "status": "IN_PROGRESS",
-      "regression_test": null,
-      "runtime_artifact": null,
-      "acceptance_command": null,
-      "completion_commit": null
+      "status": "COMPLETE",
+      "regression_test": "tests/unit/test_model_registry.py::test_maximum_assurance_rejects_shape_only_quality_hashes",
+      "runtime_artifact": "docs/remediation/runtime/eval_defect_006.json",
+      "acceptance_command": ".venv/bin/pytest -q tests/unit/test_model_review_evidence.py tests/unit/test_model_coverage.py tests/unit/test_openrouter.py tests/unit/test_model_qualification_schema.py tests/unit/test_model_surface_review_schema.py tests/integration/test_pipeline.py",
+      "completion_commit": "6ad4e4ac786d2f8fa06af2d8aa0fd117110e9298"
     },
     {
       "id": "EVAL-DEFECT-007",
       "summary": "verify-run cannot reproduce effective CLI profile overrides.",
       "baseline_path": "src/mmaudit/cli.py",
-      "status": "QUEUED",
+      "status": "IN_PROGRESS",
       "regression_test": null,
       "runtime_artifact": null,
       "acceptance_command": null,

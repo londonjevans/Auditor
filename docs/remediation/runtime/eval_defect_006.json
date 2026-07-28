@@ -1,0 +1,159 @@
+{
+  "schema_version": "1.0",
+  "ticket_id": "EVAL-DEFECT-006",
+  "baseline_commit": "e304807cf942542706b88544fa216516f8f95cad",
+  "implementation_commit": "6ad4e4ac786d2f8fa06af2d8aa0fd117110e9298",
+  "executed_at": "2026-07-28T04:36:27Z",
+  "implementation": [
+    {
+      "path": "config/models.maximum-assurance.toml",
+      "sha256": "196ff6386da9e27d231afb19cc1cf4981b28db405491e7d34c91b4eda485a374"
+    },
+    {
+      "path": "schemas/model_qualification.schema.json",
+      "sha256": "bc008f1b9a24ef284b810da314f14c0f2ed09448129ddf00d34d90cd3e2ec9ad"
+    },
+    {
+      "path": "src/mmaudit/config.py",
+      "sha256": "39605d3ec2208562f7e1ce2fc1740736937086f56d18ae93ec86c1680d1b6174"
+    },
+    {
+      "path": "src/mmaudit/cli.py",
+      "sha256": "083a57cce5d7df35944de66c73934569fe75d3ff7c47cae54785658139c6e8ad"
+    },
+    {
+      "path": "src/mmaudit/models/openrouter.py",
+      "sha256": "988edf16020f9b854fc27de85ce3a42d9fe34215b45d15b89518596f12509ba0"
+    },
+    {
+      "path": "src/mmaudit/models/qualification.py",
+      "sha256": "7da18808acabde4a9ac910ad7747c9c657bb89da461766cdebe6ebcd25a52c6d"
+    },
+    {
+      "path": "src/mmaudit/models/qualification_workflow.py",
+      "sha256": "68c0bdb736e2ccc3393a40240fde33ef0ec890aa161ab1d7b982e4c56aa324f3"
+    },
+    {
+      "path": "src/mmaudit/models/registry.py",
+      "sha256": "da43f6382db325a812041529aa3b33b0e55fcd655fc24dde9d234fdaf509e277"
+    },
+    {
+      "path": "src/mmaudit/models/release_attestation.py",
+      "sha256": "1d22833555f92b1cd7e37ccfd348bc3808b735d172bea0a0c9ec08fadb5cf318"
+    },
+    {
+      "path": "src/mmaudit/models/schemas.py",
+      "sha256": "2b0dacb15bdf45bb5fd7c0974de0976815963b0d05b748c1ed65d2faa6086fed"
+    },
+    {
+      "path": "src/mmaudit/models/usage.py",
+      "sha256": "d604e4bf401a1d31489ecab908c897c1d930a5a25d263ad2a1db4e3fd3a61b45"
+    },
+    {
+      "path": "src/mmaudit/orchestration/assurance.py",
+      "sha256": "ff2bc7ee98607010181ee73c4b8375afd5ddd1634f7b882cebcb3b8414dca67f"
+    },
+    {
+      "path": "src/mmaudit/orchestration/manifest.py",
+      "sha256": "e2bf47b8c2232662f2b9ed4a6a2713bb2b3cd6849bb88a64f083554d2e001c84"
+    },
+    {
+      "path": "src/mmaudit/orchestration/model_coverage.py",
+      "sha256": "13c8cec892b62af5c54ae42156d2c342252938b8fe3c3627a7019120f3e038f2"
+    },
+    {
+      "path": "src/mmaudit/orchestration/model_review_evidence.py",
+      "sha256": "187114557507f94431e242dbb1adcbf36febb84785d1707caa8b28e8c253c949"
+    },
+    {
+      "path": "src/mmaudit/orchestration/pipeline.py",
+      "sha256": "99bd27c070ef4469a2338eb7c823c4e19a195e712dec06c3f22d2a258ba486a5"
+    },
+    {
+      "path": "src/mmaudit/traceability.py",
+      "sha256": "8733818d414a8df793eb1e3c054562298681f4618c6e2a5c7044a563cb87226a"
+    }
+  ],
+  "regression": {
+    "primary_test": "tests/unit/test_model_registry.py::test_maximum_assurance_rejects_shape_only_quality_hashes",
+    "context_binding_test": "tests/unit/test_model_coverage.py::test_post_hoc_context_substitution_cannot_authorize_coverage",
+    "focused_commands": [
+      {
+        "command": ".venv/bin/pytest -q tests/unit/test_model_review_evidence.py tests/unit/test_model_coverage.py tests/unit/test_openrouter.py",
+        "result": "PASS",
+        "tests_passed": 147,
+        "duration_seconds": 0.76
+      },
+      {
+        "command": ".venv/bin/pytest -q tests/unit/test_model_qualification_schema.py tests/unit/test_model_surface_review_schema.py",
+        "result": "PASS",
+        "tests_passed": 27,
+        "duration_seconds": 0.23
+      },
+      {
+        "command": ".venv/bin/pytest -q tests/integration/test_pipeline.py",
+        "result": "PASS",
+        "tests_passed": 44,
+        "duration_seconds": 52.98
+      }
+    ],
+    "full_commands": [
+      {
+        "command": ".venv/bin/ruff format --check .",
+        "result": "PASS",
+        "files_formatted": 261
+      },
+      {
+        "command": ".venv/bin/ruff check .",
+        "result": "PASS"
+      },
+      {
+        "command": ".venv/bin/mypy",
+        "result": "PASS",
+        "source_files": 116
+      },
+      {
+        "command": ".venv/bin/pytest -q",
+        "result": "PASS",
+        "tests_passed": 1515,
+        "tests_skipped": 10,
+        "duration_seconds": 190.34
+      }
+    ]
+  },
+  "negative_assays": {
+    "shape_only_quality_hash_authorized": false,
+    "stale_qualification_authorized": false,
+    "empty_benchmark_authorized": false,
+    "failed_threshold_authorized": false,
+    "wrong_source_authorized": false,
+    "wrong_effective_config_authorized": false,
+    "wrong_prompt_or_schema_authorized": false,
+    "wrong_model_or_provider_authorized": false,
+    "wrong_toolchain_or_isolation_authorized": false,
+    "alias_inherited_qualification": false,
+    "cross_artifact_verification_splice_authorized": false,
+    "serialized_bundle_minted_runtime_capability": false,
+    "post_hoc_context_substitution_credited": false
+  },
+  "release_binding": {
+    "qualification_capability_opaque": true,
+    "qualification_expiry_enforced": true,
+    "benchmark_cases_non_empty": true,
+    "dimension_thresholds_enforced": true,
+    "exact_production_selection_bound": true,
+    "exact_head_source_inventory_bound": true,
+    "committed_source_bytes_verified": true,
+    "current_provider_metadata_refetched": true,
+    "current_provider_generation_refetched": true,
+    "trusted_toolchain_and_isolation_observed": true,
+    "request_context_bound_without_raw_prompt_persistence": true
+  },
+  "real_integration_boundary": {
+    "status": "INCONCLUSIVE",
+    "reason": "The qualification and production-selection boundary is complete and fail-closed, but no exact production model has a successful current real benchmark qualification. Two bounded real provider completion attempts remain invalid and uncredited; no further paid call was made.",
+    "tracking_ticket": "REM-MODELS-001",
+    "openrouter_cost_used_usd_exact": "0.00118674",
+    "qualified_production_models": []
+  }
+}

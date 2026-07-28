@@ -149,9 +149,12 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Acceptance criteria:** Shape-only hashes fail; source/config/prompt/schema/model/
   tool/isolation bindings, expiry, non-empty cases, and thresholds verify.
 - **Dependencies:** `EVAL-DEFECT-005`.
-- **Status:** `IN_PROGRESS`
-- **Next action:** Replace shape-only quality labels with verified, current,
-  non-empty qualification capabilities bound to the exact production selection.
+- **Status:** `COMPLETE`
+- **Evidence:** `docs/remediation/runtime/eval_defect_006.json`; implementation
+  checkpoint `6ad4e4ac786d2f8fa06af2d8aa0fd117110e9298`; full validation
+  `1515 passed, 10 skipped`.
+- **Next action:** Preserve verified qualification and request-context bindings
+  while making effective CLI overrides self-reproducing.
 
 ## EVAL-DEFECT-007 — verify-run loses effective CLI overrides
 
@@ -159,7 +162,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Acceptance criteria:** A profile-overridden run verifies without operator
   recollection; effective configuration and CLI override hashes reconcile.
 - **Dependencies:** `EVAL-DEFECT-006`.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
+- **Next action:** Trace configuration loading, profile application, CLI override
+  canonicalization, manifest emission, and `verify-run` reconstruction.
 
 ## EVAL-DEFECT-008 — Empty benchmark gates pass vacuously
 

@@ -4,16 +4,16 @@ The seven files under `docs/evaluation/` are immutable baseline evidence from
 commit `e304807cf942542706b88544fa216516f8f95cad`.
 
 AUTORUN_STATUS: IN_PROGRESS
-CURRENT_TICKET: EVAL-DEFECT-006
-LAST_COMPLETED_TICKET: EVAL-DEFECT-005
-NEXT_ACTION: Resolve every production model quality designation against a current, passing, non-empty qualification artifact and fail shape-only hashes closed.
-LAST_COMMAND: .venv/bin/ruff format --check . && .venv/bin/ruff check . && .venv/bin/mypy && .venv/bin/pytest -q
-LAST_RESULT: PASS — 258 files were formatted, Ruff passed, strict mypy passed for 115 source files, and pytest passed 1370 tests with 10 explicit environment-bound skips in 173.11s.
-REMAINING_CODE_DEFECTS: 8
+CURRENT_TICKET: EVAL-DEFECT-007
+LAST_COMPLETED_TICKET: EVAL-DEFECT-006
+NEXT_ACTION: Trace effective configuration and CLI override canonicalization from audit invocation through manifest emission and verify-run reconstruction.
+LAST_COMMAND: git commit -m "Bind production models to verified qualifications"
+LAST_RESULT: PASS — created isolated implementation checkpoint 6ad4e4ac786d2f8fa06af2d8aa0fd117110e9298 after the complete validation gate passed.
+REMAINING_CODE_DEFECTS: 7
 REMAINING_REAL_INTEGRATIONS: OpenRouter exact-model smoke/qualification/specialist review; certified-isolation Foundry and Slither; Echidna; Medusa; Halmos; formal proof engine; rootless isolation; isolated replay; product benchmark reports
 BLOCKED_EXTERNAL_PREREQUISITES: Operator-reviewed production model lineage mapping; Echidna; Medusa; Kontrol; Certora; rootless runtime/image; private holdout; and independently adjudicated expert comparison are not yet evidenced as available
 OPENROUTER_COST_USED_USD: 0.00118674
-LAST_CHECKPOINT_COMMIT: 6da9cec718a43e2ead4790f3e2b7f40f43f63bca
+LAST_CHECKPOINT_COMMIT: 6ad4e4ac786d2f8fa06af2d8aa0fd117110e9298
 
 ## Immutable baseline
 
@@ -693,10 +693,53 @@ LAST_CHECKPOINT_COMMIT: 6da9cec718a43e2ead4790f3e2b7f40f43f63bca
 
 ## 2026-07-27 — EVAL-DEFECT-006
 
-- **Status:** `IN_PROGRESS`
+- **Status:** `COMPLETE`
 - **Defensive objective:** Prevent SHA-256-shaped quality labels or stale,
   unrelated benchmark documents from authorizing production model execution.
-- **Exact next safe action:** Trace the private qualification bundle, selection
-  policy, effective configuration, runtime usage, assurance clause, and manifest;
-  then introduce an opaque verified-qualification capability with negative
-  regressions for shape-only, stale, empty, and binding-mismatched artifacts.
+- **Completed changes:** Replaced self-asserted quality hashes with opaque,
+  process-local verified qualification capabilities. Production selection now
+  resolves exact non-empty passing benchmark reports and binds source, effective
+  configuration, prompts, schemas, exact models, provider metadata, toolchain,
+  isolation, expiry, and the frozen all-eligible selection. Runtime requests,
+  usage, assurance, traceability, and manifests retain the verified evidence
+  hashes without persisting raw prompts or source context.
+- **Release observation:** Added a trusted release observation that measures the
+  executing package root, exact committed `HEAD` inventory and bytes, fixed
+  Python/dependency/toolchain state, and sealed real-isolation evidence. Alternate
+  repositories, staged-only content, skip-worktree drift, copied/serialized
+  capabilities, post-issuance mutation, and caller-controlled time fail closed.
+- **Substantive review hardening:** Bound each credited model surface artifact to
+  the exact rendered context bytes dispatched to the provider. Base and specialist
+  agents deep-snapshot before the awaited request; success, failure, and fallback
+  usage records carry the same digest; coverage independently re-renders and joins
+  context, usage, artifact, exact source excerpts, symbols, and graph paths.
+- **Negative assays:** Shape-only, stale, empty, failed-threshold, wrong-source,
+  wrong-config, wrong-prompt/schema/model/tool/isolation, alias-inherited,
+  cross-artifact-spliced, serialized-capability, and post-hoc-context evidence all
+  remain uncredited. An independent read-only recheck reproduced the original
+  post-hoc substitution assay and observed the corrected implementation reject it.
+- **Focused commands:**
+  - `.venv/bin/pytest -q tests/unit/test_model_review_evidence.py tests/unit/test_model_coverage.py tests/unit/test_openrouter.py`
+    — PASS, `147 passed in 0.76s`.
+  - `.venv/bin/pytest -q tests/unit/test_model_qualification_schema.py tests/unit/test_model_surface_review_schema.py`
+    — PASS, `27 passed in 0.23s`.
+  - `.venv/bin/pytest -q tests/integration/test_pipeline.py`
+    — PASS, `44 passed in 52.98s`.
+- **Complete validation:**
+  - `.venv/bin/ruff format --check .` — PASS, `261 files already formatted`
+    after Ruff formatted the three final context-binding files.
+  - `.venv/bin/ruff check .` — PASS.
+  - `.venv/bin/mypy` — PASS, `116 source files`.
+  - `.venv/bin/pytest -q` — PASS,
+    `1515 passed, 10 skipped in 190.34s`.
+- **Integrity review:** `git diff --check` passed; all seven immutable baseline
+  artifact hashes still match; no evaluation file changed; no credential,
+  private-key, mnemonic, or seed pattern appeared in the implementation diff.
+- **Runtime evidence:** `docs/remediation/runtime/eval_defect_006.json`.
+- **Result:** `COMPLETE` at implementation checkpoint
+  `6ad4e4ac786d2f8fa06af2d8aa0fd117110e9298`. Real paid model qualification
+  remains independently `INCONCLUSIVE`: no exact production model has a current
+  passing real benchmark, and the two prior bounded invalid provider responses
+  remain uncredited at total cost `$0.00118674`.
+- **Next action:** Begin `EVAL-DEFECT-007` by proving that effective CLI profile
+  overrides can be reconstructed and verified from the emitted run alone.
