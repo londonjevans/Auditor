@@ -6,6 +6,7 @@ import json
 import os
 import uuid
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -37,6 +38,8 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.models.usage import (
     UsageLedger,
+    _has_owned_real_usage_attestation,
+    _is_strict_usage_record,
     is_creditable_usage_record,
     is_generation_bindable_usage_record,
 )
@@ -48,6 +51,7 @@ from mmaudit.orchestration.cost_ledger import (
     CostEntryStatus,
     CostLedgerSnapshot,
 )
+from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.release_io import read_json_evidence
 from tests.real_provider_harness import (
     REAL_PROVIDER_OPT_IN,
@@ -84,6 +88,18 @@ _SYSTEM_PROMPT = (
     "This is a synthetic transport validation with no repository or target data. "
     "Return only the strict response schema and do not use tools or external data."
 )
+
+
+@dataclass(frozen=True)
+class _SmokeLedgerEvidence:
+    """One attempt-qualified terminal transition and its prior-state integrity facts."""
+
+    entry: CostEntry
+    spend_delta_usd: Decimal
+    prior_entries_sha256_before: str
+    prior_entries_sha256_after: str
+    prior_entries_unchanged: bool
+    delta_reconciled: bool
 
 
 @pytest.mark.asyncio
@@ -250,7 +266,7 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                 assert usage.records == [record]
                 if record.identity_strength is ModelIdentityStrength.UNBOUND:
                     snapshot = atomic_ledger.snapshot()
-                    ledger_entry, smoke_spend_delta = _reconciled_smoke_ledger_entry(
+                    ledger_evidence = _terminal_smoke_ledger_evidence(
                         snapshot=snapshot,
                         ledger_before=ledger_before,
                         record=record,
@@ -273,8 +289,7 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                         response=response,
                         ledger_before=ledger_before,
                         snapshot=snapshot,
-                        ledger_entry=ledger_entry,
-                        smoke_spend_delta=smoke_spend_delta,
+                        ledger_evidence=ledger_evidence,
                         api_key=api_key,
                     )
                     client.clear_retained_unbound_completions()
@@ -407,20 +422,23 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
             assert not record.substitution_detected
 
             snapshot = atomic_ledger.snapshot()
-            assert snapshot.active_reserved_usd == 0
-            assert not snapshot.over_cap
-            assert not snapshot.has_reservation_overrun
-            assert snapshot.spent_usd <= settings.cost_cap_usd
-            matching_entries = [
-                entry for entry in snapshot.entries if entry.request_id == record.request_id
-            ]
-            assert len(matching_entries) == 1
-            ledger_entry = matching_entries[0]
+            ledger_evidence = _terminal_smoke_ledger_evidence(
+                snapshot=snapshot,
+                ledger_before=ledger_before,
+                record=record,
+            )
+            ledger_entry = ledger_evidence.entry
             assert ledger_entry.status is CostEntryStatus.RECONCILED
             assert ledger_entry.actual_cost_usd is not None
             assert ledger_entry.actual_cost_usd == Decimal(str(record.reported_cost_usd))
             assert ledger_entry.accounted_cost_usd == Decimal(str(record.accounted_cost_usd))
-            smoke_spend_delta = snapshot.spent_usd - ledger_before.spent_usd
+            smoke_spend_delta = ledger_evidence.spend_delta_usd
+            assert ledger_evidence.prior_entries_unchanged
+            assert ledger_evidence.delta_reconciled
+            assert snapshot.active_reserved_usd == 0
+            assert not snapshot.over_cap
+            assert not snapshot.has_reservation_overrun
+            assert snapshot.spent_usd <= settings.cost_cap_usd
             assert smoke_spend_delta == ledger_entry.accounted_cost_usd
             assert smoke_spend_delta <= _SMOKE_STAGE_CAP_USD
 
@@ -524,37 +542,78 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
         api_key = None
 
 
-def _reconciled_smoke_ledger_entry(
+def _terminal_smoke_ledger_evidence(
     *,
     snapshot: CostLedgerSnapshot,
     ledger_before: CostLedgerSnapshot,
     record: UsageRecord,
-) -> tuple[CostEntry, Decimal]:
-    if (
-        snapshot.active_reserved_usd != 0
-        or snapshot.over_cap
-        or snapshot.has_reservation_overrun
-        or snapshot.spent_usd > snapshot.cap_usd
-    ):
-        raise AssertionError("provider smoke ledger is not safely reconciled")
+) -> _SmokeLedgerEvidence:
+    attempt_request_id = f"{record.request_id}:attempt:1"
+    if any(entry.request_id == attempt_request_id for entry in ledger_before.entries):
+        raise AssertionError("provider smoke attempt already existed before the request")
     matching_entries = [
-        entry for entry in snapshot.entries if entry.request_id == record.request_id
+        entry for entry in snapshot.entries if entry.request_id == attempt_request_id
     ]
     if len(matching_entries) != 1:
-        raise AssertionError("provider smoke ledger lacks one exact request entry")
+        raise AssertionError("provider smoke ledger lacks one exact attempt-qualified entry")
     ledger_entry = matching_entries[0]
-    if (
-        ledger_entry.status is not CostEntryStatus.RECONCILED
-        or ledger_entry.actual_cost_usd is None
-        or record.reported_cost_usd is None
-        or ledger_entry.actual_cost_usd != Decimal(str(record.reported_cost_usd))
-        or ledger_entry.accounted_cost_usd != Decimal(str(record.accounted_cost_usd))
+    if ledger_entry.status not in {
+        CostEntryStatus.RECONCILED,
+        CostEntryStatus.UNCERTAIN_ACCOUNTED,
+        CostEntryStatus.RESERVATION_OVERRUN,
+    }:
+        raise AssertionError("provider smoke ledger attempt is not terminal")
+    if ledger_entry.accounted_cost_usd != Decimal(str(record.accounted_cost_usd)):
+        raise AssertionError("provider smoke ledger does not match accounted runtime usage")
+    if record.reported_cost_usd is None:
+        if (
+            ledger_entry.status is not CostEntryStatus.UNCERTAIN_ACCOUNTED
+            or ledger_entry.actual_cost_usd is not None
+        ):
+            raise AssertionError("provider smoke unknown cost lacks conservative accounting")
+    elif (
+        ledger_entry.actual_cost_usd != Decimal(str(record.reported_cost_usd))
+        or ledger_entry.status is CostEntryStatus.UNCERTAIN_ACCOUNTED
     ):
-        raise AssertionError("provider smoke ledger entry does not reconcile runtime usage")
+        raise AssertionError("provider smoke reported cost does not match its ledger attempt")
+
     smoke_spend_delta = snapshot.spent_usd - ledger_before.spent_usd
-    if smoke_spend_delta != ledger_entry.accounted_cost_usd:
-        raise AssertionError("provider smoke spend delta is invalid")
-    return ledger_entry, smoke_spend_delta
+    if smoke_spend_delta < 0:
+        raise AssertionError("provider smoke ledger spend decreased across the request")
+    prior_before = _ledger_entries_sha256(ledger_before.entries)
+    prior_after = _ledger_entries_sha256(
+        tuple(entry for entry in snapshot.entries if entry.request_id != attempt_request_id)
+    )
+    return _SmokeLedgerEvidence(
+        entry=ledger_entry,
+        spend_delta_usd=smoke_spend_delta,
+        prior_entries_sha256_before=prior_before,
+        prior_entries_sha256_after=prior_after,
+        prior_entries_unchanged=prior_before == prior_after,
+        delta_reconciled=smoke_spend_delta == ledger_entry.accounted_cost_usd,
+    )
+
+
+def _ledger_entries_sha256(entries: tuple[CostEntry, ...]) -> str:
+    projection = [
+        {
+            "request_id": entry.request_id,
+            "reservation_id": entry.reservation_id,
+            "status": entry.status.value,
+            "reserved_usd": _canonical_money(entry.reserved_usd),
+            "actual_cost_usd": (
+                None if entry.actual_cost_usd is None else _canonical_money(entry.actual_cost_usd)
+            ),
+            "accounted_cost_usd": _canonical_money(entry.accounted_cost_usd),
+            "release_reason": (
+                None if entry.release_reason is None else entry.release_reason.value
+            ),
+            "created_at": entry.created_at.astimezone(UTC).isoformat(),
+            "updated_at": entry.updated_at.astimezone(UTC).isoformat(),
+        }
+        for entry in sorted(entries, key=lambda item: item.request_id)
+    ]
+    return canonical_sha256(projection)
 
 
 def _write_unbound_smoke_rejection(
@@ -572,14 +631,15 @@ def _write_unbound_smoke_rejection(
     response: SyntheticProviderSmokeResponse,
     ledger_before: CostLedgerSnapshot,
     snapshot: CostLedgerSnapshot,
-    ledger_entry: CostEntry,
-    smoke_spend_delta: Decimal,
+    ledger_evidence: _SmokeLedgerEvidence,
     api_key: str,
 ) -> tuple[Path, RealProviderSmokeRejectionEvidence]:
+    ledger_entry = ledger_evidence.entry
+    smoke_spend_delta = ledger_evidence.spend_delta_usd
     if (
         record.identity_strength is not ModelIdentityStrength.UNBOUND
         or record.routing.get("identity_binding_status") != "generation_metadata_unbound"
-        or not is_generation_bindable_usage_record(record)
+        or not _is_rejection_transport_usage_record(record, ledger_entry=ledger_entry)
         or is_creditable_usage_record(
             record,
             require_real=True,
@@ -588,8 +648,6 @@ def _write_unbound_smoke_rejection(
     ):
         raise AssertionError("provider rejection sink requires one concluded unbound response")
     actual_cost_usd = ledger_entry.actual_cost_usd
-    if actual_cost_usd is None:
-        raise AssertionError("provider rejection lacks reconciled actual cost")
     raw_binding = record.routing.get("identity_binding")
     if not isinstance(raw_binding, dict):
         raise AssertionError("provider rejection omitted typed identity binding evidence")
@@ -703,15 +761,35 @@ def _write_unbound_smoke_rejection(
             "requested_reasoning_excluded": True,
             "reasoning_control_satisfied": record.reasoning_tokens == 0,
             "output_control_satisfied": (record.completion_tokens <= SMOKE_MAX_OUTPUT_TOKENS),
-            "actual_cost_usd": _canonical_money(actual_cost_usd),
+            "ledger_entry_request_id": ledger_entry.request_id,
+            "ledger_entry_status": ledger_entry.status.value,
+            "reserved_cost_usd": _canonical_money(ledger_entry.reserved_usd),
+            "provider_reported_cost_usd": (
+                None
+                if record.reported_cost_usd is None
+                else _canonical_money(Decimal(str(record.reported_cost_usd)))
+            ),
+            "actual_cost_usd": (
+                None if actual_cost_usd is None else _canonical_money(actual_cost_usd)
+            ),
             "accounted_cost_usd": _canonical_money(ledger_entry.accounted_cost_usd),
+            "cost_reconciled": ledger_entry.status is CostEntryStatus.RECONCILED,
             "ledger_cap_usd": _canonical_money(snapshot.cap_usd),
             "ledger_spent_before_usd": _canonical_money(ledger_before.spent_usd),
             "ledger_spent_usd": _canonical_money(snapshot.spent_usd),
             "smoke_spend_delta_usd": _canonical_money(smoke_spend_delta),
-            "ledger_active_reserved_usd": "0",
+            "ledger_delta_reconciled": ledger_evidence.delta_reconciled,
+            "ledger_prior_entries_sha256_before": (ledger_evidence.prior_entries_sha256_before),
+            "ledger_prior_entries_sha256_after": ledger_evidence.prior_entries_sha256_after,
+            "ledger_prior_entries_unchanged": ledger_evidence.prior_entries_unchanged,
+            "ledger_active_reserved_usd": _canonical_money(snapshot.active_reserved_usd),
+            "ledger_reservations_closed": snapshot.active_reserved_usd == 0,
+            "ledger_over_cap": snapshot.over_cap,
+            "ledger_has_reservation_overrun": snapshot.has_reservation_overrun,
             "ledger_remaining_usd": _canonical_money(snapshot.remaining_usd),
-            "stage_cost_control_satisfied": smoke_spend_delta <= _SMOKE_STAGE_CAP_USD,
+            "stage_cost_control_satisfied": (
+                ledger_entry.accounted_cost_usd <= _SMOKE_STAGE_CAP_USD
+            ),
             "validation_status": record.validation_status.value,
             "identity_strength": record.identity_strength.value,
             "privacy_profile": settings.privacy_profile,
@@ -752,6 +830,38 @@ def _write_unbound_smoke_rejection(
     ):
         raise AssertionError("provider rejection artifact did not round-trip safely")
     return rejection_output, rejection
+
+
+def _is_rejection_transport_usage_record(
+    record: UsageRecord,
+    *,
+    ledger_entry: CostEntry,
+) -> bool:
+    """Preserve strict REAL transport checks while allowing only unknown terminal cost."""
+
+    if not _has_owned_real_usage_attestation(record):
+        return False
+    if is_generation_bindable_usage_record(record):
+        return True
+    if (
+        record.reported_cost_usd is not None
+        or ledger_entry.status is not CostEntryStatus.UNCERTAIN_ACCOUNTED
+        or ledger_entry.actual_cost_usd is not None
+    ):
+        return False
+    normalized = UsageRecord.model_validate(
+        {
+            **record.model_dump(mode="json"),
+            "reported_cost_usd": record.accounted_cost_usd,
+        }
+    )
+    return _is_strict_usage_record(
+        normalized,
+        require_real=True,
+        require_certification=True,
+        allow_unbound_real=True,
+        require_runtime_attestation=False,
+    )
 
 
 def _assert_private_exact_request(

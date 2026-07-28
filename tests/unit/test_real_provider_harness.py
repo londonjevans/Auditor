@@ -33,7 +33,7 @@ from tests.identity_fixtures import (
     reattest_synthetic_real_usage,
 )
 from tests.integration.test_real_openrouter_provider import (
-    _reconciled_smoke_ledger_entry,
+    _terminal_smoke_ledger_evidence,
     _write_unbound_smoke_rejection,
 )
 from tests.real_provider_harness import (
@@ -481,13 +481,25 @@ def _valid_smoke_rejection_payload() -> dict[str, object]:
         "requested_reasoning_excluded": success["requested_reasoning_excluded"],
         "reasoning_control_satisfied": True,
         "output_control_satisfied": True,
+        "ledger_entry_request_id": f"{success['internal_request_id']}:attempt:1",
+        "ledger_entry_status": CostEntryStatus.RECONCILED.value,
+        "reserved_cost_usd": "0.001",
+        "provider_reported_cost_usd": success["actual_cost_usd"],
         "actual_cost_usd": success["actual_cost_usd"],
         "accounted_cost_usd": success["accounted_cost_usd"],
+        "cost_reconciled": True,
         "ledger_cap_usd": success["ledger_cap_usd"],
         "ledger_spent_before_usd": success["ledger_spent_before_usd"],
         "ledger_spent_usd": success["ledger_spent_usd"],
         "smoke_spend_delta_usd": success["smoke_spend_delta_usd"],
+        "ledger_delta_reconciled": True,
+        "ledger_prior_entries_sha256_before": "0" * 64,
+        "ledger_prior_entries_sha256_after": "0" * 64,
+        "ledger_prior_entries_unchanged": True,
         "ledger_active_reserved_usd": success["ledger_active_reserved_usd"],
+        "ledger_reservations_closed": True,
+        "ledger_over_cap": False,
+        "ledger_has_reservation_overrun": False,
         "ledger_remaining_usd": success["ledger_remaining_usd"],
         "stage_cost_control_satisfied": True,
         "validation_status": success["validation_status"],
@@ -770,6 +782,31 @@ def test_real_provider_smoke_rejection_preserves_missing_generation_diagnostics(
     )
 
 
+def test_real_provider_smoke_rejection_preserves_uncertain_attempt_cost() -> None:
+    payload = _valid_smoke_rejection_payload()
+    payload.update(
+        {
+            "ledger_entry_status": CostEntryStatus.UNCERTAIN_ACCOUNTED.value,
+            "reserved_cost_usd": "0.00072452",
+            "provider_reported_cost_usd": None,
+            "actual_cost_usd": None,
+            "accounted_cost_usd": "0.00072452",
+            "cost_reconciled": False,
+            "ledger_spent_before_usd": "0.00113946",
+            "ledger_spent_usd": "0.00186398",
+            "smoke_spend_delta_usd": "0.00072452",
+            "ledger_remaining_usd": "249.99813602",
+        }
+    )
+
+    rejection = seal_real_provider_smoke_rejection_evidence(payload)
+
+    assert rejection.ledger_entry_request_id.endswith(":attempt:1")
+    assert rejection.ledger_entry_status is CostEntryStatus.UNCERTAIN_ACCOUNTED
+    assert rejection.actual_cost_usd is None
+    assert rejection.cost_reconciled is False
+
+
 @pytest.mark.parametrize(
     "diagnostics",
     [
@@ -855,8 +892,16 @@ def test_real_provider_smoke_rejection_writer_rejects_forbidden_value(
 def test_unbound_smoke_integration_branch_requires_live_real_evidence_and_writes_rejection(
     tmp_path: Path,
 ) -> None:
-    record = _synthetic_unbound_real_smoke_record()
-    assert is_generation_bindable_usage_record(record)
+    original_record = _synthetic_unbound_real_smoke_record()
+    record = reattest_synthetic_real_usage(
+        UsageRecord.model_validate(
+            {
+                **original_record.model_dump(mode="json"),
+                "reported_cost_usd": None,
+                "accounted_cost_usd": 0.00072452,
+            }
+        )
+    )
     settings = RealProviderTestSettings(
         secret_file=tmp_path / "operator-control.env",
         cost_ledger=tmp_path / "cost-ledger.json",
@@ -868,35 +913,57 @@ def test_unbound_smoke_integration_branch_requires_live_real_evidence_and_writes
         evidence_output=tmp_path / "provider-smoke.json",
     )
     entry = CostEntry(
-        request_id=record.request_id,
+        request_id=f"{record.request_id}:attempt:1",
         reservation_id="reservation-smoke-1",
-        status=CostEntryStatus.RECONCILED,
-        reserved_usd=Decimal("0.001"),
-        actual_cost_usd=Decimal("0.0002"),
-        accounted_cost_usd=Decimal("0.0002"),
+        status=CostEntryStatus.UNCERTAIN_ACCOUNTED,
+        reserved_usd=Decimal("0.00072452"),
+        actual_cost_usd=None,
+        accounted_cost_usd=Decimal("0.00072452"),
         release_reason=None,
         created_at=record.started_at or datetime(2026, 7, 28, 12, 0, tzinfo=UTC),
         updated_at=record.ended_at or datetime(2026, 7, 28, 12, 0, 1, tzinfo=UTC),
     )
+    prior_before = CostEntry(
+        request_id="prior:attempt:1",
+        reservation_id="reservation-prior-1",
+        status=CostEntryStatus.RECONCILED,
+        reserved_usd=Decimal("0.002"),
+        actual_cost_usd=Decimal("0.00179914"),
+        accounted_cost_usd=Decimal("0.00179914"),
+        release_reason=None,
+        created_at=datetime(2026, 7, 28, 11, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 7, 28, 11, 0, 1, tzinfo=UTC),
+    )
+    prior_after = CostEntry(
+        request_id=prior_before.request_id,
+        reservation_id=prior_before.reservation_id,
+        status=prior_before.status,
+        reserved_usd=prior_before.reserved_usd,
+        actual_cost_usd=Decimal("0.00113946"),
+        accounted_cost_usd=Decimal("0.00113946"),
+        release_reason=None,
+        created_at=prior_before.created_at,
+        updated_at=datetime(2026, 7, 28, 11, 0, 2, tzinfo=UTC),
+    )
     ledger_before = CostLedgerSnapshot(
         cap_usd=Decimal("250"),
-        spent_usd=Decimal("0.00118674"),
+        spent_usd=Decimal("0.00179914"),
         active_reserved_usd=Decimal("0"),
-        remaining_usd=Decimal("249.99881326"),
+        remaining_usd=Decimal("249.99820086"),
         over_cap=False,
         has_reservation_overrun=False,
-        entries=(),
+        entries=(prior_before,),
     )
     snapshot = CostLedgerSnapshot(
         cap_usd=Decimal("250"),
-        spent_usd=Decimal("0.00138674"),
+        spent_usd=Decimal("0.00186398"),
         active_reserved_usd=Decimal("0"),
-        remaining_usd=Decimal("249.99861326"),
+        remaining_usd=Decimal("249.99813602"),
         over_cap=False,
         has_reservation_overrun=False,
-        entries=(entry,),
+        entries=(prior_after, entry),
     )
-    ledger_entry, spend_delta = _reconciled_smoke_ledger_entry(
+    ledger_evidence = _terminal_smoke_ledger_evidence(
         snapshot=snapshot,
         ledger_before=ledger_before,
         record=record,
@@ -923,19 +990,54 @@ def test_unbound_smoke_integration_branch_requires_live_real_evidence_and_writes
         ),
         ledger_before=ledger_before,
         snapshot=snapshot,
-        ledger_entry=ledger_entry,
-        smoke_spend_delta=spend_delta,
+        ledger_evidence=ledger_evidence,
         api_key="synthetic-api-key-canary",
     )
 
     assert rejection.status == "REJECTED_IDENTITY_UNBOUND"
     assert rejection.creditable is False
+    assert rejection.ledger_entry_status is CostEntryStatus.UNCERTAIN_ACCOUNTED
+    assert rejection.actual_cost_usd is None
+    assert rejection.accounted_cost_usd == "0.00072452"
+    assert rejection.smoke_spend_delta_usd == "0.00006484"
+    assert not rejection.ledger_delta_reconciled
+    assert not rejection.ledger_prior_entries_unchanged
     assert rejection_output.exists()
     assert not settings.evidence_output.exists()
     serialized = rejection_output.read_text(encoding="utf-8")
     assert "synthetic-api-key-canary" not in serialized
     assert fixture_source not in serialized
     assert user_prompt not in serialized
+
+    errored = reattest_synthetic_real_usage(
+        UsageRecord.model_validate(
+            {
+                **record.model_dump(mode="json"),
+                "provider_error_classification": "synthetic_transport_error",
+            }
+        )
+    )
+    with pytest.raises(AssertionError, match="concluded unbound"):
+        _write_unbound_smoke_rejection(
+            settings=settings,
+            fixture_source=fixture_source,
+            fixture_sha256=fixture_sha256,
+            user_prompt=user_prompt,
+            canonical_model_id=binding.snapshot.canonical_slug,
+            endpoint_snapshot_sha256=binding.snapshot.endpoint_snapshot_sha256,
+            model_metadata_snapshot_sha256=(binding.snapshot.model_metadata_snapshot_sha256),
+            discovery_provenance_sha256=(binding.snapshot.discovery_provenance_sha256),
+            discovery_evidence_sha256=binding.snapshot.discovery_evidence_sha256,
+            record=errored,
+            response=SyntheticProviderSmokeResponse(
+                status="OK",
+                marker="mmaudit-synthetic-provider-smoke-v1",
+            ),
+            ledger_before=ledger_before,
+            snapshot=snapshot,
+            ledger_evidence=ledger_evidence,
+            api_key="synthetic-api-key-canary",
+        )
 
     unattested = UsageRecord.model_validate(record.model_dump(mode="json"))
     assert not is_generation_bindable_usage_record(unattested)
@@ -957,7 +1059,6 @@ def test_unbound_smoke_integration_branch_requires_live_real_evidence_and_writes
             ),
             ledger_before=ledger_before,
             snapshot=snapshot,
-            ledger_entry=ledger_entry,
-            smoke_spend_delta=spend_delta,
+            ledger_evidence=ledger_evidence,
             api_key="synthetic-api-key-canary",
         )

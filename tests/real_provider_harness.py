@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from mmaudit.models.generation_evidence import OpenRouterGenerationEvidence
 from mmaudit.models.identity import OpenRouterIdentityDiagnosticCode
 from mmaudit.models.schemas import ExecutionEvidenceKind, ModelIdentityStrength
+from mmaudit.orchestration.cost_ledger import CostEntryStatus
 from mmaudit.orchestration.manifest import ManifestFileBinding, canonical_sha256
 from mmaudit.release_io import read_file_evidence, write_json_evidence
 from mmaudit.reporting.json_report import stable_json
@@ -385,13 +386,25 @@ class _RealProviderSmokeRejectionEvidenceBody(BaseModel):
     requested_reasoning_excluded: Literal[True]
     reasoning_control_satisfied: bool
     output_control_satisfied: bool
-    actual_cost_usd: str
+    ledger_entry_request_id: str = Field(pattern=_SAFE_REQUEST_ID_PATTERN)
+    ledger_entry_status: CostEntryStatus
+    reserved_cost_usd: str
+    provider_reported_cost_usd: str | None
+    actual_cost_usd: str | None
     accounted_cost_usd: str
+    cost_reconciled: bool
     ledger_cap_usd: str
     ledger_spent_before_usd: str
     ledger_spent_usd: str
     smoke_spend_delta_usd: str
-    ledger_active_reserved_usd: Literal["0"]
+    ledger_delta_reconciled: bool
+    ledger_prior_entries_sha256_before: str = Field(pattern=_SHA256_PATTERN)
+    ledger_prior_entries_sha256_after: str = Field(pattern=_SHA256_PATTERN)
+    ledger_prior_entries_unchanged: bool
+    ledger_active_reserved_usd: str
+    ledger_reservations_closed: bool
+    ledger_over_cap: bool
+    ledger_has_reservation_overrun: bool
     ledger_remaining_usd: str
     stage_cost_control_satisfied: bool
     validation_status: Literal["valid"]
@@ -450,7 +463,7 @@ class _RealProviderSmokeRejectionEvidenceBody(BaseModel):
         return value
 
     @field_validator(
-        "actual_cost_usd",
+        "reserved_cost_usd",
         "accounted_cost_usd",
         "ledger_cap_usd",
         "ledger_spent_before_usd",
@@ -463,6 +476,13 @@ class _RealProviderSmokeRejectionEvidenceBody(BaseModel):
     def rejection_money_is_canonical(cls, value: str) -> str:
         if _canonical_nonnegative_decimal(value) != value:
             raise ValueError("smoke rejection cost must be a canonical non-negative decimal")
+        return value
+
+    @field_validator("provider_reported_cost_usd", "actual_cost_usd")
+    @classmethod
+    def optional_rejection_money_is_canonical(cls, value: str | None) -> str | None:
+        if value is not None and _canonical_nonnegative_decimal(value) != value:
+            raise ValueError("optional smoke rejection cost must be canonical")
         return value
 
     @model_validator(mode="after")
@@ -506,22 +526,72 @@ class _RealProviderSmokeRejectionEvidenceBody(BaseModel):
             or self.generation_observation.generation_id != self.openrouter_generation_id
         ):
             raise ValueError("smoke rejection generation observation is not request-bound REAL")
-        actual = Decimal(self.actual_cost_usd)
+        if self.ledger_entry_request_id != f"{self.internal_request_id}:attempt:1":
+            raise ValueError("smoke rejection ledger request ID is not attempt-bound")
+        reserved = Decimal(self.reserved_cost_usd)
+        provider_reported = (
+            None
+            if self.provider_reported_cost_usd is None
+            else Decimal(self.provider_reported_cost_usd)
+        )
+        actual = None if self.actual_cost_usd is None else Decimal(self.actual_cost_usd)
         accounted = Decimal(self.accounted_cost_usd)
         cap = Decimal(self.ledger_cap_usd)
         spent_before = Decimal(self.ledger_spent_before_usd)
         spent = Decimal(self.ledger_spent_usd)
         spend_delta = Decimal(self.smoke_spend_delta_usd)
         remaining = Decimal(self.ledger_remaining_usd)
-        if accounted < actual:
-            raise ValueError("smoke rejection accounted cost is below actual cost")
+        if self.ledger_entry_status is CostEntryStatus.RECONCILED:
+            cost_status_valid = (
+                actual is not None
+                and provider_reported == actual
+                and actual <= reserved
+                and accounted == actual
+                and self.cost_reconciled
+            )
+        elif self.ledger_entry_status is CostEntryStatus.UNCERTAIN_ACCOUNTED:
+            cost_status_valid = (
+                actual is None
+                and provider_reported is None
+                and accounted == reserved
+                and not self.cost_reconciled
+            )
+        elif self.ledger_entry_status is CostEntryStatus.RESERVATION_OVERRUN:
+            cost_status_valid = (
+                actual is not None
+                and provider_reported == actual
+                and actual > reserved
+                and accounted == actual
+                and not self.cost_reconciled
+            )
+        else:
+            cost_status_valid = False
+        if not cost_status_valid:
+            raise ValueError("smoke rejection cost lifecycle is inconsistent")
         if spent < accounted:
             raise ValueError("ledger spent total is below the rejection accounted cost")
-        if spent_before + spend_delta != spent or spend_delta != accounted:
-            raise ValueError("smoke rejection ledger spend delta does not reconcile")
-        if self.stage_cost_control_satisfied is not (spend_delta <= Decimal("5")):
+        if spent_before + spend_delta != spent:
+            raise ValueError("smoke rejection ledger spend change is inconsistent")
+        if self.ledger_delta_reconciled is not (spend_delta == accounted):
+            raise ValueError("smoke rejection ledger-delta status is inconsistent")
+        if self.ledger_prior_entries_unchanged is not (
+            self.ledger_prior_entries_sha256_before == self.ledger_prior_entries_sha256_after
+        ):
+            raise ValueError("smoke rejection prior-ledger status is inconsistent")
+        if self.ledger_reservations_closed is not (Decimal(self.ledger_active_reserved_usd) == 0):
+            raise ValueError("smoke rejection reservation status is inconsistent")
+        if self.ledger_over_cap is not (cap - spent - Decimal(self.ledger_active_reserved_usd) < 0):
+            raise ValueError("smoke rejection over-cap status is inconsistent")
+        if self.ledger_has_reservation_overrun is not (
+            self.ledger_entry_status is CostEntryStatus.RESERVATION_OVERRUN
+        ):
+            raise ValueError("smoke rejection overrun status is inconsistent")
+        if self.stage_cost_control_satisfied is not (accounted <= Decimal("5")):
             raise ValueError("smoke rejection stage-cost status is inconsistent")
-        if remaining != max(Decimal(0), cap - spent):
+        if remaining != max(
+            Decimal(0),
+            cap - spent - Decimal(self.ledger_active_reserved_usd),
+        ):
             raise ValueError("smoke rejection ledger totals do not reconcile")
         return self
 

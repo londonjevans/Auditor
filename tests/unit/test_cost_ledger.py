@@ -122,6 +122,24 @@ def test_unfinished_reservation_survives_restart_and_is_conservatively_accounted
     assert recovered_process.snapshot().active_reserved_usd == 0
 
 
+def test_new_uncertain_attempt_preserves_all_terminal_prior_entries(tmp_path: Path) -> None:
+    ledger = AtomicCostLedger.initialize(tmp_path / "costs.json", cap_usd=Decimal("2.00"))
+    prior_reservation = ledger.reserve("prior:attempt:1", Decimal("0.40"))
+    ledger.reconcile(prior_reservation, Decimal("0.15"))
+    before = ledger.snapshot()
+
+    current_reservation = ledger.reserve("current:attempt:1", Decimal("0.70"))
+    current = ledger.reconcile(current_reservation, None)
+    after = ledger.snapshot()
+
+    assert current.status is CostEntryStatus.UNCERTAIN_ACCOUNTED
+    assert current.accounted_cost_usd == Decimal("0.70")
+    assert after.spent_usd - before.spent_usd == current.accounted_cost_usd
+    assert {
+        entry.request_id: entry for entry in after.entries if entry.request_id != current.request_id
+    } == {entry.request_id: entry for entry in before.entries}
+
+
 def test_proven_pre_send_failure_releases_capacity_and_records_closed_reason(
     tmp_path: Path,
 ) -> None:
