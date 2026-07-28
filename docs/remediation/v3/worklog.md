@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_OPERATOR_REQUEST
+AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: On operator resume, validate the typed Mistral/Venice discovery evidence and clean preflight from checkpoint 982abd71862c543759c944c3f6cdcf67817d0ecc before authorizing any paid completion.
-LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_generation_evidence.py tests/unit/test_openrouter.py tests/unit/test_model_identity.py tests/unit/test_usage.py tests/unit/test_openrouter_qualification_config.py
-LAST_RESULT: PASS_AND_PAUSED; 235 focused tests passed. The affected generation-evidence file separately passed 51 tests, affected Ruff passed, and strict mypy passed for the three changed source files. No paid completion ran.
+NEXT_ACTION: Complete independent read-only pre-spend review, checkpoint the active preflight evidence, then run at most one exact Mistral/Venice STRICT_ZDR synthetic smoke from the clean synchronized checkpoint.
+LAST_COMMAND: MMAUDIT_RUN_REAL_PROVIDER_TESTS=1 with exact Mistral/Venice allowlists and the existing operator ledger; .venv/bin/python -c '<typed local smoke preflight without secret loading or network access>'
+LAST_RESULT: PASS_PREFLIGHT; typed discovery and local smoke preflight validate the exact mistralai/mistral-small-2603 and venice/fp8 route, pinned fixture, fresh evidence destination, and ledger at cap 250.00, spent 0.00186398, reserved 0, remaining 249.99813602, five terminal entries, no over-cap state, and no reservation overrun. The secret file was not opened and no network request ran.
 REAL_MODEL_CALLS_ATTEMPTED: 5
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 5
@@ -702,3 +702,30 @@ LAST_CHECKPOINT_COMMIT: 982abd71862c543759c944c3f6cdcf67817d0ecc
   generation-metadata correction. `V3-SMOKE-001` remains `IN_PROGRESS`; zero real
   model calls have succeeded, no successful smoke artifact exists, and the
   release remains incomplete.
+- **Goal continuation:** Reloaded the complete objective and authoritative
+  repository state from clean synchronized checkpoint
+  `ff538c2500b2bcd9dff8ffcf7bd3bb3aeb049091`. The current bounded action is
+  typed validation of the Mistral/Venice discovery evidence and clean smoke
+  preflight; no unchanged rejected route will be retried.
+- **Typed route validation:** Descriptor-safe typed loading validated one complete
+  discovery set for exact model `mistralai/mistral-small-2603`, canonical slug
+  `mistralai/mistral-small-2603`, approved endpoint `venice/fp8`, provider
+  `Venice`, strict-ZDR and data-collection-denial eligibility, `256000` context,
+  `65536` output capacity, native structured-output parameters, and optional
+  reasoning controls. The manifest hash is
+  `d3359317d4069ba704ff09246c242c72e7dcf9bcc59b7c5715aebc755ad750c2`;
+  endpoint and model snapshot hashes match the committed candidate facts.
+- **No-network smoke preflight:** Validated the exact allowlists, explicit
+  `STRICT_ZDR` profile, pinned fixture hash
+  `bbb0127919f734caedffb6f9143a634b6925ff4451985d1410a47e1637f1517b`,
+  fresh private success destination, and existing atomic ledger. The ledger has
+  cap `250.00`, spent `0.00186398`, zero reserved, remaining `249.99813602`,
+  five terminal entries, no over-cap state, and no reservation overrun. This
+  check did not open the secret file and made no provider or network request.
+- **Independent pre-spend review:** Read-only review found no material code
+  blocker for one Mistral/Venice smoke and independently passed `137` local tests
+  with only the explicitly disabled paid integration skipped. Runtime preconditions
+  must still revalidate immediately before the POST: fresh output, healthy
+  reservation-free ledger, live optional-reasoning metadata, and current matching
+  route evidence. The older candidate-registry discovery hash is not reused as
+  qualification credit; the smoke binds a fresh runtime discovery record.

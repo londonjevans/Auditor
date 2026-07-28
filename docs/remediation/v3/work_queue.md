@@ -80,10 +80,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   same-ID incomplete response, while authentication failures, identity
   contradictions, and exhaustion remain fail-closed. Focused validation passed
   `235` tests, affected Ruff, and strict mypy.
-- **Current next action:** Paused at operator request after implementation
-  checkpoint `982abd71862c543759c944c3f6cdcf67817d0ecc`. On resume, validate
-  the typed Mistral/Venice discovery evidence and the clean preflight before any
-  paid completion. Do not retry the rejected Qwen/AkashML request unchanged.
+- **Current next action:** Resumed from clean synchronized checkpoint
+  `ff538c2500b2bcd9dff8ffcf7bd3bb3aeb049091`. Validate the typed
+  Mistral/Venice discovery evidence and the clean preflight before any paid
+  completion. Do not retry the rejected Qwen/AkashML request unchanged.
 
 ## V3-PRIVACY-001 — Explicit privacy and retention profiles
 
