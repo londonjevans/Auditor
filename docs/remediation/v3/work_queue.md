@@ -73,10 +73,17 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Local validation:** Independent re-review found no remaining blocker. Ruff,
   strict mypy, and the full suite passed, ending with `1892 passed, 10 skipped in
   240.48s`; the paid provider test remained explicitly disabled.
-- **Current next action:** Paused at operator request after checkpoint
-  `ae5911933d47fd49671730280611cef21185b001`. On resume, reassess a materially
-  changed identity-bound smoke strategy; do not retry the rejected provider
-  request unchanged.
+- **Metadata readiness correction:** Authenticated metadata-only discovery
+  identified exact route `mistralai/mistral-small-2603` at `venice/fp8`; no
+  completion was requested and cost state did not change. Generation evidence now
+  polls the same generation at fixed bounded delays for a transient `404` or
+  same-ID incomplete response, while authentication failures, identity
+  contradictions, and exhaustion remain fail-closed. Focused validation passed
+  `235` tests, affected Ruff, and strict mypy.
+- **Current next action:** Paused at operator request after implementation
+  checkpoint `982abd71862c543759c944c3f6cdcf67817d0ecc`. On resume, validate
+  the typed Mistral/Venice discovery evidence and the clean preflight before any
+  paid completion. Do not retry the rejected Qwen/AkashML request unchanged.
 
 ## V3-PRIVACY-001 — Explicit privacy and retention profiles
 

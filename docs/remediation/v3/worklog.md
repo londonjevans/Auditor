@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED_OPERATOR_REQUEST
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: On operator resume, begin from checkpoint ae5911933d47fd49671730280611cef21185b001; reassess a materially changed identity-bound smoke strategy without repeating the rejected provider request unchanged.
-LAST_COMMAND: .venv/bin/ruff format tests/integration/test_real_openrouter_provider.py tests/unit/test_real_provider_harness.py && .venv/bin/ruff check tests/real_provider_harness.py tests/integration/test_real_openrouter_provider.py tests/unit/test_real_provider_harness.py tests/unit/test_cost_ledger.py && .venv/bin/pytest -q tests/unit/test_real_provider_harness.py tests/unit/test_cost_ledger.py tests/unit/test_usage.py tests/integration/test_real_openrouter_provider.py && .venv/bin/mypy
-LAST_RESULT: PASS_AND_PAUSED; affected Ruff passed, 109 focused tests passed with the one paid provider test explicitly skipped, strict project mypy passed for 129 source files, and independent re-review found no blocker. No provider or network call ran.
+NEXT_ACTION: On operator resume, validate the typed Mistral/Venice discovery evidence and clean preflight from checkpoint 982abd71862c543759c944c3f6cdcf67817d0ecc before authorizing any paid completion.
+LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_generation_evidence.py tests/unit/test_openrouter.py tests/unit/test_model_identity.py tests/unit/test_usage.py tests/unit/test_openrouter_qualification_config.py
+LAST_RESULT: PASS_AND_PAUSED; 235 focused tests passed. The affected generation-evidence file separately passed 51 tests, affected Ruff passed, and strict mypy passed for the three changed source files. No paid completion ran.
 REAL_MODEL_CALLS_ATTEMPTED: 5
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 5
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.99813602
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: No successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: ae5911933d47fd49671730280611cef21185b001
+LAST_CHECKPOINT_COMMIT: 982abd71862c543759c944c3f6cdcf67817d0ecc
 
 ## 2026-07-28 — V3-SMOKE-001
 
@@ -668,3 +668,37 @@ LAST_CHECKPOINT_COMMIT: ae5911933d47fd49671730280611cef21185b001
   `ae5911933d47fd49671730280611cef21185b001` contains the validated terminal
   accounting and rejection-evidence correction. `V3-SMOKE-001` remains
   `IN_PROGRESS`; no successful model response or release credit is claimed.
+- **Autorun resume:** Reloaded the complete objective and repository state from
+  clean synchronized commit `bbd928f9b74dd61a9c90c56886e2308afa07442a`.
+  The next bounded action is metadata-only discovery of materially different
+  exact `STRICT_ZDR` routes. The rejected Qwen/AkashML completion will not be
+  repeated unchanged.
+- **Metadata-only route discovery:** An initial command using the absent
+  `mmaudit.toml` path failed locally before secret loading or network access. A
+  corrected multi-candidate discovery failed closed because a candidate differed
+  from the frozen catalog projection. Isolated authenticated discovery succeeded
+  for exact model `mistralai/mistral-small-2603` and endpoint `venice/fp8`, with
+  discovery-evidence SHA-256
+  `b01018a5aa5b7ed857aa868992a643d3db009e548f0dc5b209b2abb99883cdc2`
+  and manifest SHA-256
+  `d3359317d4069ba704ff09246c242c72e7dcf9bcc59b7c5715aebc755ad750c2`.
+  This was metadata only: no completion was requested, provider cost did not
+  change, and no review credit was granted.
+- **Generation metadata readiness regression:** A pre-fix regression reproduced
+  the immediate post-completion `404` failure with model retries disabled.
+  Generation evidence now performs at most four same-generation observations at
+  fixed `0/1/3/7` second offsets. Only transient retrieval failures and absent or
+  same-ID incomplete metadata are retried; authentication failure, contradictory
+  generation identity, cancellation, invalid metadata, and exhaustion remain
+  typed fail-closed outcomes. The self-hashed evidence records the bounded
+  retrieval-attempt count.
+- **Pause validation:** `.venv/bin/pytest -q
+  tests/unit/test_generation_evidence.py` passed `51` tests; affected Ruff passed;
+  strict mypy passed for the three changed source files; and the broader
+  generation, OpenRouter, identity, usage, and qualification-config subset passed
+  `235` tests. No provider completion or cost-bearing request ran.
+- **Pause checkpoint:** Implementation commit
+  `982abd71862c543759c944c3f6cdcf67817d0ecc` preserves the bounded
+  generation-metadata correction. `V3-SMOKE-001` remains `IN_PROGRESS`; zero real
+  model calls have succeeded, no successful smoke artifact exists, and the
+  release remains incomplete.
