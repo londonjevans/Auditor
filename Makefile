@@ -1,6 +1,7 @@
 .PHONY: install format lint type test check release-evidence release-local
 
 PYTHON ?= python
+RELEASE_RUN_DIR ?=
 
 install:
 	$(PYTHON) -m pip install -e ".[dev]"
@@ -22,6 +23,6 @@ test:
 check: lint type test
 
 release-evidence:
-	$(PYTHON) scripts/validate_release_evidence.py
+	$(PYTHON) scripts/validate_release_evidence.py --run-dir "$(RELEASE_RUN_DIR)"
 
 release-local: check release-evidence

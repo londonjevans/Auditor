@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import argparse
 import json
+import os
 from pathlib import Path
 
 from mmaudit.adversarial_acceptance import load_adversarial_acceptance_manifest
@@ -11,23 +13,38 @@ from mmaudit.benchmark.models import load_model_benchmark_corpus
 from mmaudit.economic_acceptance import load_economic_acceptance_manifest
 from mmaudit.full_protocol_acceptance import load_full_protocol_acceptance_manifest
 from mmaudit.release import ReleaseStatus, load_release_gate_report
+from mmaudit.release_artifacts import (
+    observe_release_artifacts,
+    write_release_artifact_evidence,
+)
 from mmaudit.snapshots.compare import (
     SnapshotComparisonStatus,
     compare_deployment_snapshot,
     load_compiler_contract_artifacts,
 )
 from mmaudit.snapshots.schema import load_deployment_snapshot
-from mmaudit.traceability import (
-    ImplementationStatus,
-    build_traceability_matrix,
-    validate_traceability_evidence,
-)
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     """Validate schemas, manifests, artifacts, and the non-overstated release report."""
+
+    parser = argparse.ArgumentParser(
+        description="Validate local release evidence against an emitted mmaudit run."
+    )
+    parser.add_argument(
+        "--run-dir",
+        type=Path,
+        required=True,
+        help="Exact emitted run directory containing run-evidence-manifest.json.",
+    )
+    parser.add_argument(
+        "--artifact-evidence-output",
+        type=Path,
+        help="Optional destination for the sealed observed artifact evidence.",
+    )
+    arguments = parser.parse_args(argv)
 
     schema_paths = sorted((ROOT / "schemas").glob("*.json"))
     if not schema_paths:
@@ -77,22 +94,25 @@ def main() -> None:
     if not isinstance(foundry_payload.get("ast"), dict):
         raise ValueError("release compiler AST fixture has no normalized AST")
 
-    traceability = build_traceability_matrix("UNCOMMITTED-WORKTREE")
-    runtime_artifacts = {
-        artifact
-        for requirement in traceability.requirements
-        if requirement.implementation_status is ImplementationStatus.IMPLEMENTED
-        for artifact in requirement.runtime_artifacts
-    }
-    validate_traceability_evidence(
-        traceability,
+    artifact_evidence = observe_release_artifacts(
+        run_dir=arguments.run_dir,
         repository_root=ROOT,
-        runtime_artifacts=runtime_artifacts,
     )
 
     release = load_release_gate_report(ROOT / "docs" / "release_gate_report.json")
     if release.status is ReleaseStatus.FAILED or not release.safe_local_gates_complete:
         raise ValueError("safe local release gates are not complete")
+    if arguments.artifact_evidence_output is not None:
+        absolute_output = Path(os.path.abspath(arguments.artifact_evidence_output))
+        if _directory_contains_output(
+            directory=Path(os.path.abspath(arguments.run_dir)),
+            output=absolute_output,
+        ):
+            raise ValueError("release artifact evidence output must be outside the emitted run")
+        write_release_artifact_evidence(
+            absolute_output,
+            artifact_evidence,
+        )
     print(
         "release evidence valid: "
         f"schemas={len(schema_paths)} "
@@ -103,6 +123,23 @@ def main() -> None:
         f"full_protocol_files={len(full_protocol.fixture_files)} "
         f"release_status={release.status.value}"
     )
+
+
+def _directory_contains_output(*, directory: Path, output: Path) -> bool:
+    """Compare ancestor identities so case aliases cannot bypass containment."""
+
+    try:
+        directory_metadata = directory.stat()
+        current = output.parent.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("release artifact evidence paths are unavailable") from exc
+    while True:
+        if os.path.samestat(current.stat(), directory_metadata):
+            return True
+        parent = current.parent
+        if parent == current:
+            return False
+        current = parent
 
 
 if __name__ == "__main__":

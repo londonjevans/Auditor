@@ -1,0 +1,575 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import pytest
+from pydantic import ValidationError
+
+import mmaudit.release_artifacts as release_artifact_module
+from mmaudit.config import (
+    AuditConfig,
+    AuditConfigOverrides,
+    AuditRunOptions,
+    canonical_audit_config_json,
+)
+from mmaudit.models.schemas import AuditProfile
+from mmaudit.orchestration.manifest import (
+    ManifestBindingSet,
+    ManifestHashBinding,
+    RunConfigurationBinding,
+    RunEvidenceManifest,
+    canonical_sha256,
+    collect_run_artifacts,
+    seal_run_evidence_manifest,
+    write_run_evidence_manifest,
+)
+from mmaudit.release_artifacts import (
+    ReleaseArtifactEvidence,
+    load_release_artifact_evidence,
+    observe_release_artifacts,
+    write_release_artifact_evidence,
+)
+from mmaudit.traceability import (
+    ImplementationStatus,
+    build_traceability_matrix,
+    write_traceability_artifact,
+)
+
+ROOT = Path(__file__).resolve().parents[2]
+SCHEMA_PATH = ROOT / "schemas" / "release_artifact_evidence.schema.json"
+SCHEMA_URI = "https://mmaudit.local/schemas/release_artifact_evidence.schema.json"
+COMMIT = "a" * 40
+RUN_ID = "release-artifact-test"
+
+
+def _sha(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def _bindings() -> ManifestBindingSet:
+    values: dict[str, list[ManifestHashBinding]] = {}
+    for name in ManifestBindingSet.model_fields:
+        values[name] = [
+            ManifestHashBinding(
+                identifier=f"{name}/synthetic",
+                sha256=_sha(name),
+                details={"kind": "synthetic"},
+            )
+        ]
+    return ManifestBindingSet.model_validate(values)
+
+
+def _run_configuration(config: AuditConfig) -> RunConfigurationBinding:
+    effective = config.effective()
+    environment = AuditConfigOverrides()
+    cli = AuditConfigOverrides()
+    options = AuditRunOptions()
+    invocation = {
+        "environment_overrides_sha256": environment.stable_hash(),
+        "cli_overrides_sha256": cli.stable_hash(),
+        "run_options_sha256": options.stable_hash(),
+        "effective_config_sha256": effective.stable_hash(),
+        "requested_profile": effective.profile.value,
+        "achieved_profile": None,
+    }
+    return RunConfigurationBinding(
+        file_configuration_json=canonical_audit_config_json(config),
+        file_config_sha256=config.stable_hash(),
+        environment_overrides=environment,
+        environment_overrides_sha256=environment.stable_hash(),
+        cli_overrides=cli,
+        cli_overrides_sha256=cli.stable_hash(),
+        run_options=options,
+        run_options_sha256=options.stable_hash(),
+        effective_configuration_json=canonical_audit_config_json(effective),
+        effective_config_sha256=effective.stable_hash(),
+        model_config_sha256=effective.model_hash(),
+        invocation_sha256=canonical_sha256(invocation),
+        requested_profile=effective.profile,
+        achieved_profile=None,
+    )
+
+
+def _seal_manifest(
+    run_dir: Path,
+    config: AuditConfig,
+    *,
+    commit: str = COMMIT,
+) -> RunEvidenceManifest:
+    manifest = seal_run_evidence_manifest(
+        run_id=RUN_ID,
+        repository_root_name="synthetic-release-repository",
+        git_commit=commit,
+        sources=[],
+        run_configuration=_run_configuration(config),
+        bindings=_bindings(),
+        artifacts=collect_run_artifacts(run_dir),
+        tool_version="test",
+    )
+    write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", manifest)
+    return manifest
+
+
+def _write_run(run_dir: Path, config: AuditConfig) -> RunEvidenceManifest:
+    run_dir.mkdir(parents=True)
+    traceability = build_traceability_matrix(COMMIT)
+    write_traceability_artifact(
+        run_dir / "maximum_assurance_traceability.json",
+        traceability,
+    )
+    required_artifacts = {
+        artifact
+        for requirement in traceability.requirements
+        if requirement.implementation_status is ImplementationStatus.IMPLEMENTED
+        for artifact in requirement.runtime_artifacts
+    }
+    required_artifacts.discard("run-evidence-manifest.json")
+    required_artifacts.discard("maximum_assurance_traceability.json")
+    for name in sorted(required_artifacts):
+        (run_dir / name).write_text('{"synthetic":true}\n', encoding="utf-8")
+    return _seal_manifest(run_dir, config)
+
+
+def _generated_schema() -> dict[str, Any]:
+    schema = ReleaseArtifactEvidence.model_json_schema()
+    schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+    schema["$id"] = SCHEMA_URI
+    schema["title"] = "mmaudit observed release artifact evidence"
+    return schema
+
+
+def test_observer_binds_actual_manifest_inventory_and_traceability(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    run_dir = tmp_path / "run"
+    manifest = _write_run(run_dir, config_factory(profile=AuditProfile.MAXIMUM_ASSURANCE))
+
+    evidence = observe_release_artifacts(run_dir, ROOT)
+
+    assert evidence.run_id == manifest.run_id
+    assert evidence.manifest_sha256 == manifest.manifest_sha256
+    assert (
+        evidence.manifest_file_sha256
+        == hashlib.sha256((run_dir / "run-evidence-manifest.json").read_bytes()).hexdigest()
+    )
+    assert evidence.artifacts == manifest.artifacts
+    assert evidence.artifact_count == len(manifest.artifacts)
+    assert evidence.artifact_inventory_sha256 == canonical_sha256(
+        [binding.model_dump(mode="json") for binding in manifest.artifacts]
+    )
+    assert evidence.evidence_sha256 == canonical_sha256(
+        evidence.model_dump(mode="json", exclude={"evidence_sha256"})
+    )
+
+    output = tmp_path / "release-artifact-evidence.json"
+    write_release_artifact_evidence(output, evidence)
+    assert load_release_artifact_evidence(output) == evidence
+    assert oct(output.stat().st_mode & 0o777) == "0o600"
+
+
+def test_observer_parses_the_exact_safely_read_manifest_bytes(
+    tmp_path: Path,
+    config_factory,
+    monkeypatch,
+) -> None:
+    run_dir = tmp_path / "run"
+    manifest = _write_run(run_dir, config_factory())
+    wrong_payload = manifest.model_dump(mode="json", exclude={"manifest_sha256"})
+    wrong_payload["run_id"] = "transient-wrong-manifest"
+    wrong_manifest = RunEvidenceManifest.model_validate(
+        {
+            **wrong_payload,
+            "manifest_sha256": canonical_sha256(wrong_payload),
+        }
+    )
+    monkeypatch.setattr(
+        release_artifact_module,
+        "load_run_evidence_manifest",
+        lambda _path: wrong_manifest,
+        raising=False,
+    )
+
+    evidence = observe_release_artifacts(run_dir, ROOT)
+
+    assert evidence.run_id == manifest.run_id
+    assert evidence.manifest_sha256 == manifest.manifest_sha256
+
+
+def test_observer_requires_fixed_manifest_in_the_explicit_run_directory(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    run_dir = tmp_path / "run"
+    _write_run(run_dir, config_factory())
+    manifest = run_dir / "run-evidence-manifest.json"
+    sibling = tmp_path / "same-name-elsewhere" / manifest.name
+    sibling.parent.mkdir()
+    sibling.write_bytes(manifest.read_bytes())
+    manifest.unlink()
+
+    with pytest.raises(ValueError, match="manifest is missing"):
+        observe_release_artifacts(run_dir, ROOT)
+
+
+@pytest.mark.parametrize("ancestor_link", [False, True])
+def test_observer_rejects_linked_run_root_or_ancestor(
+    tmp_path: Path,
+    config_factory,
+    ancestor_link: bool,
+) -> None:
+    real_parent = tmp_path / "real-parent"
+    run_dir = real_parent / "run"
+    _write_run(run_dir, config_factory())
+    if ancestor_link:
+        linked_parent = tmp_path / "linked-parent"
+        linked_parent.symlink_to(real_parent, target_is_directory=True)
+        observed_path = linked_parent / "run"
+    else:
+        observed_path = tmp_path / "linked-run"
+        observed_path.symlink_to(run_dir, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="may not traverse a link"):
+        observe_release_artifacts(observed_path, ROOT)
+
+
+def test_observer_rejects_linked_and_hardlinked_artifacts(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    symlink_run = tmp_path / "symlink-run"
+    _write_run(symlink_run, config_factory())
+    artifact = symlink_run / "final-findings.json"
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(artifact.read_bytes())
+    artifact.unlink()
+    artifact.symlink_to(outside)
+    with pytest.raises(ValueError, match="links"):
+        observe_release_artifacts(symlink_run, ROOT)
+
+    hardlink_run = tmp_path / "hardlink-run"
+    _write_run(hardlink_run, config_factory())
+    artifact = hardlink_run / "final-findings.json"
+    outside_hardlink = tmp_path / "outside-hardlink.json"
+    outside_hardlink.write_bytes(artifact.read_bytes())
+    artifact.unlink()
+    os.link(outside_hardlink, artifact)
+    with pytest.raises(ValueError, match="unique regular files"):
+        observe_release_artifacts(hardlink_run, ROOT)
+
+
+def test_observer_rejects_missing_undeclared_and_hash_changed_artifacts(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    missing_run = tmp_path / "missing-run"
+    _write_run(missing_run, config_factory())
+    (missing_run / "final-findings.json").unlink()
+    with pytest.raises(ValueError, match="artifact set"):
+        observe_release_artifacts(missing_run, ROOT)
+
+    extra_run = tmp_path / "extra-run"
+    _write_run(extra_run, config_factory())
+    (extra_run / "undeclared.json").write_text("{}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="artifact set"):
+        observe_release_artifacts(extra_run, ROOT)
+
+    changed_run = tmp_path / "changed-run"
+    _write_run(changed_run, config_factory())
+    (changed_run / "final-findings.json").write_text(
+        '{"synthetic":"changed"}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="artifact hash mismatch"):
+        observe_release_artifacts(changed_run, ROOT)
+
+
+def test_observer_rejects_resealed_manifest_missing_required_runtime_artifact(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    run_dir = tmp_path / "run"
+    _write_run(run_dir, config)
+    (run_dir / "final-findings.json").unlink()
+    _seal_manifest(run_dir, config)
+
+    with pytest.raises(ValueError, match="lacks runtime artifacts"):
+        observe_release_artifacts(run_dir, ROOT)
+
+
+def test_artifact_collection_rejects_path_swap_before_open(
+    tmp_path: Path,
+    config_factory,
+    monkeypatch,
+) -> None:
+    run_dir = tmp_path / "run"
+    _write_run(run_dir, config_factory())
+    artifact = run_dir / "final-findings.json"
+    original = tmp_path / "original.json"
+    replacement = tmp_path / "replacement.json"
+    replacement.write_bytes(artifact.read_bytes())
+    real_open = os.open
+    swapped = False
+
+    def swap_then_open(
+        path: os.PathLike[str] | str,
+        flags: int,
+        mode: int = 0o777,
+    ) -> int:
+        nonlocal swapped
+        if Path(path) == artifact and not swapped:
+            swapped = True
+            artifact.rename(original)
+            artifact.symlink_to(replacement)
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(release_artifact_module.os, "open", swap_then_open)
+
+    with pytest.raises(ValueError, match="opened safely"):
+        collect_run_artifacts(run_dir)
+
+
+def test_observer_rejects_resealed_stale_traceability(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    run_dir = tmp_path / "run"
+    _write_run(run_dir, config)
+    write_traceability_artifact(
+        run_dir / "maximum_assurance_traceability.json",
+        build_traceability_matrix("b" * 40),
+    )
+    _seal_manifest(run_dir, config, commit=COMMIT)
+
+    with pytest.raises(ValueError, match="traceability is stale"):
+        observe_release_artifacts(run_dir, ROOT)
+
+
+def test_observer_rejects_legacy_manifest_without_reconstructable_config(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    run_dir = tmp_path / "run"
+    current = _write_run(run_dir, config_factory())
+    payload = current.model_dump(mode="json")
+    payload["schema_version"] = "1.0"
+    payload.pop("run_configuration")
+    payload.pop("manifest_sha256")
+    payload["manifest_sha256"] = canonical_sha256(payload)
+    write_run_evidence_manifest(
+        run_dir / "run-evidence-manifest.json",
+        RunEvidenceManifest.model_validate(payload),
+    )
+
+    with pytest.raises(ValueError, match=r"schema 1\.1"):
+        observe_release_artifacts(run_dir, ROOT)
+
+
+def test_evidence_loader_and_writer_reject_links_and_existing_destinations(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    run_dir = tmp_path / "run"
+    _write_run(run_dir, config_factory())
+    evidence = observe_release_artifacts(run_dir, ROOT)
+    output = tmp_path / "evidence.json"
+    write_release_artifact_evidence(output, evidence)
+
+    linked = tmp_path / "linked-evidence.json"
+    linked.symlink_to(output)
+    with pytest.raises(ValueError, match="unshared regular file"):
+        load_release_artifact_evidence(linked)
+    with pytest.raises(ValueError, match="fresh file"):
+        write_release_artifact_evidence(output, evidence)
+
+    hardlinked = tmp_path / "hardlinked-evidence.json"
+    os.link(output, hardlinked)
+    with pytest.raises(ValueError, match="unshared regular file"):
+        load_release_artifact_evidence(hardlinked)
+
+
+def test_evidence_writer_rejects_same_size_path_replacement_after_close(
+    tmp_path: Path,
+    config_factory,
+    monkeypatch,
+) -> None:
+    run_dir = tmp_path / "run"
+    _write_run(run_dir, config_factory())
+    evidence = observe_release_artifacts(run_dir, ROOT)
+    output = tmp_path / "evidence.json"
+    replacement = tmp_path / "replacement.json"
+    serialized_size = len(release_artifact_module.stable_json(evidence).encode("utf-8"))
+    replacement.write_bytes(b"x" * serialized_size)
+    real_close = os.close
+    swapped = False
+
+    def close_then_swap(descriptor: int) -> None:
+        nonlocal swapped
+        real_close(descriptor)
+        if not swapped and output.exists():
+            swapped = True
+            output.unlink()
+            replacement.rename(output)
+
+    monkeypatch.setattr(release_artifact_module.os, "close", close_then_swap)
+
+    with pytest.raises(ValueError, match="not a unique regular file"):
+        write_release_artifact_evidence(output, evidence)
+    assert output.read_bytes() == b"x" * serialized_size
+
+
+def test_evidence_model_rejects_inventory_and_self_hash_tampering(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    run_dir = tmp_path / "run"
+    _write_run(run_dir, config_factory())
+    evidence = observe_release_artifacts(run_dir, ROOT)
+    payload = evidence.model_dump(mode="json")
+    payload["artifact_count"] += 1
+    with pytest.raises(ValidationError, match="artifact count"):
+        ReleaseArtifactEvidence.model_validate(payload)
+
+    payload = evidence.model_dump(mode="json")
+    payload["evidence_sha256"] = "0" * 64
+    with pytest.raises(ValidationError, match="evidence hash"):
+        ReleaseArtifactEvidence.model_validate(payload)
+
+
+def test_release_validator_requires_an_explicit_emitted_run() -> None:
+    result = subprocess.run(
+        [sys.executable, "scripts/validate_release_evidence.py"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 2
+    assert "--run-dir" in result.stderr
+    assert "release evidence valid" not in result.stdout
+
+
+def test_release_validator_observes_run_and_writes_sealed_evidence(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    run_dir = tmp_path / "run"
+    manifest = _write_run(run_dir, config_factory())
+    output = tmp_path / "observed-release-artifacts.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_release_evidence.py",
+            "--run-dir",
+            str(run_dir),
+            "--artifact-evidence-output",
+            str(output),
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "release evidence valid" in result.stdout
+    evidence = load_release_artifact_evidence(output)
+    assert evidence.run_id == manifest.run_id
+    assert evidence.manifest_sha256 == manifest.manifest_sha256
+
+
+def test_release_validator_refuses_to_write_observation_inside_the_run(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    run_dir = tmp_path / "run"
+    _write_run(run_dir, config_factory())
+    output = run_dir / "post-validation-observation.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_release_evidence.py",
+            "--run-dir",
+            str(run_dir),
+            "--artifact-evidence-output",
+            str(output),
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode != 0
+    assert "must be outside the emitted run" in result.stderr
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("alias_kind", ["case", "unicode"])
+def test_release_validator_refuses_case_or_unicode_alias_inside_run(
+    tmp_path: Path,
+    config_factory,
+    alias_kind: str,
+) -> None:
+    import unicodedata
+
+    run_name = "rélease-run"
+    run_dir = tmp_path / run_name
+    _write_run(run_dir, config_factory())
+    if alias_kind == "case":
+        alias = run_dir.with_name(run_name.upper())
+    else:
+        alias = run_dir.with_name(unicodedata.normalize("NFD", run_name))
+    try:
+        aliases_same_directory = alias.samefile(run_dir)
+    except OSError:
+        aliases_same_directory = False
+    if not aliases_same_directory or alias == run_dir:
+        pytest.skip(f"filesystem does not expose a distinct {alias_kind} alias")
+    output = alias / f"{alias_kind}-observation.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_release_evidence.py",
+            "--run-dir",
+            str(run_dir),
+            "--artifact-evidence-output",
+            str(output),
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode != 0
+    assert "must be outside the emitted run" in result.stderr
+    assert not output.exists()
+
+
+def test_published_release_artifact_schema_matches_typed_contract() -> None:
+    published = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+
+    assert published == _generated_schema()
+    assert published["additionalProperties"] is False
+    assert set(published["required"]) == {
+        name for name, field in ReleaseArtifactEvidence.model_fields.items() if field.is_required()
+    }
+    assert published["properties"]["artifacts"]["minItems"] == 1
+    assert published["properties"]["artifacts"]["maxItems"] == 100_000

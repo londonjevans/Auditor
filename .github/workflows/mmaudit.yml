@@ -44,8 +44,8 @@ jobs:
           cache: pip
       - name: Install development dependencies
         run: python -m pip install -e ".[dev]"
-      - name: Validate code, traceability, and safe local release evidence
-        run: make release-local
+      - name: Validate code and deterministic tests
+        run: make check
 
   scanner-only:
     name: Deterministic scanners
@@ -77,16 +77,26 @@ jobs:
           --skip-codeql
           --fail-on "$FAIL_LEVEL"
           --no-color
+      - name: Validate emitted release evidence
+        run: >-
+          python scripts/validate_release_evidence.py
+          --run-dir .mmaudit/runs/*
+          --artifact-evidence-output .mmaudit/release-artifact-evidence.json
       - name: Upload local reports
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
+          # Public report subset only. The complete manifest-bound run is
+          # validated in place above; private/** must never be published.
           name: mmaudit-scanner-reports
           path: |
-            .mmaudit/latest/audit-report.md
-            .mmaudit/latest/final-findings.json
-            .mmaudit/latest/scanner-results.json
-            .mmaudit/latest/audit-results.sarif
-            .mmaudit/latest/maximum_assurance_traceability.json
+            .mmaudit/runs/*/audit-report.md
+            .mmaudit/runs/*/final-findings.json
+            .mmaudit/runs/*/scanner-results.json
+            .mmaudit/runs/*/audit-results.sarif
+            .mmaudit/runs/*/maximum_assurance_traceability.json
+            .mmaudit/runs/*/run-evidence-manifest.json
+            .mmaudit/release-artifact-evidence.json
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
 
@@ -191,4 +201,4 @@ jobs:
       - uses: github/codeql-action/upload-sarif@b611370bb5703a7efb587f9d136a52ea24c5c38c # v3
         continue-on-error: true
         with:
-          sarif_file: reports/audit-results.sarif
+          sarif_file: reports/runs

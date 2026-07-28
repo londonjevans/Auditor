@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import stat
 from importlib.resources import files
 from pathlib import Path
@@ -1069,23 +1070,27 @@ def _collect_artifacts(run_dir: Path) -> list[ManifestFileBinding]:
         relative = normalize_relative_path(candidate.relative_to(run_dir))
         if relative == "run-evidence-manifest.json":
             continue
-        if is_sensitive_workspace_path(relative, is_dir=candidate.is_dir()):
-            raise ValueError("run artifacts may not include sensitive filenames")
-        if candidate.is_symlink() or candidate.is_junction():
+        try:
+            candidate_metadata = candidate.lstat()
+        except OSError as exc:
+            raise ValueError("run artifact is unavailable") from exc
+        if stat.S_ISLNK(candidate_metadata.st_mode) or candidate.is_junction():
             raise ValueError("run artifacts may not contain links")
-        if candidate.is_dir():
+        is_directory = stat.S_ISDIR(candidate_metadata.st_mode)
+        if is_sensitive_workspace_path(relative, is_dir=is_directory):
+            raise ValueError("run artifacts may not include sensitive filenames")
+        if is_directory:
             continue
-        metadata = candidate.lstat()
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-            raise ValueError("run artifacts must be unique regular files")
-        total_bytes += metadata.st_size
-        if len(artifacts) + 1 > _MAX_MANIFEST_FILES or total_bytes > _MAX_MANIFEST_BYTES:
+        remaining_bytes = _MAX_MANIFEST_BYTES - total_bytes
+        file_sha256, file_size = _file_sha256(candidate, max_bytes=remaining_bytes)
+        total_bytes += file_size
+        if len(artifacts) + 1 > _MAX_MANIFEST_FILES:
             raise ValueError("run artifact manifest limits were exceeded")
         artifacts.append(
             ManifestFileBinding(
                 path=relative,
-                sha256=_file_sha256(candidate),
-                size=metadata.st_size,
+                sha256=file_sha256,
+                size=file_size,
             )
         )
     if not artifacts:
@@ -1093,12 +1098,71 @@ def _collect_artifacts(run_dir: Path) -> list[ManifestFileBinding]:
     return artifacts
 
 
-def _file_sha256(path: Path) -> str:
+def _file_sha256(path: Path, *, max_bytes: int) -> tuple[str, int]:
+    """Hash one bounded artifact through a stable non-link file descriptor."""
+
+    try:
+        before = path.lstat()
+    except OSError as exc:
+        raise ValueError("run artifact is unavailable") from exc
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > max_bytes:
+        raise ValueError("run artifacts must be bounded unique regular files")
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(1024 * 1024):
+    size = 0
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError("run artifact could not be opened safely") from exc
+    try:
+        opened = os.fstat(descriptor)
+        while True:
+            remaining = max_bytes - size
+            chunk = os.read(descriptor, min(1024 * 1024, remaining + 1))
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > max_bytes:
+                raise ValueError("run artifact manifest limits were exceeded")
             digest.update(chunk)
-    return digest.hexdigest()
+        finished = os.fstat(descriptor)
+    except OSError as exc:
+        raise ValueError("run artifact could not be read safely") from exc
+    finally:
+        os.close(descriptor)
+    try:
+        after = path.lstat()
+    except OSError as exc:
+        raise ValueError("run artifact changed while it was hashed") from exc
+    identities = {
+        _artifact_stat_identity(before),
+        _artifact_stat_identity(opened),
+        _artifact_stat_identity(finished),
+        _artifact_stat_identity(after),
+    }
+    if (
+        len(identities) != 1
+        or not stat.S_ISREG(finished.st_mode)
+        or finished.st_nlink != 1
+        or finished.st_size != size
+    ):
+        raise ValueError("run artifact changed while it was hashed")
+    return digest.hexdigest(), size
+
+
+def _artifact_stat_identity(
+    metadata: os.stat_result,
+) -> tuple[int, int, int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
 
 
 def _read_json_artifact(run_dir: Path, name: str) -> dict[str, Any]:

@@ -1,0 +1,170 @@
+{
+  "artifact_count": 31,
+  "artifact_inventory_sha256": "cd5e843443f218035e969b3bca3f6f7781aa0ad0379c485bd537dbdcc84f388b",
+  "artifacts": [
+    {
+      "path": "audit-report.md",
+      "sha256": "6a00be06502578260f888109d9069d2ea7ca11632478f416078ac8390f91ffa7",
+      "size": 16593
+    },
+    {
+      "path": "audit-results.sarif",
+      "sha256": "29fb3fde7cfed1ffcb0bf860c6f8c3e081a3a923b11fc45d3442fd871e45e0d5",
+      "size": 1038
+    },
+    {
+      "path": "candidate-findings.json",
+      "sha256": "00e8ef422af7b0da74f3a32bb52589878082031d42e87ea1baa38bb21be3e133",
+      "size": 48
+    },
+    {
+      "path": "cross-examination.json",
+      "sha256": "bd54f3a441bd4b0a9998ebed38d4627142104c24601242d66108248f2a5c5d0b",
+      "size": 49
+    },
+    {
+      "path": "dependency-preparation.json",
+      "sha256": "18774ff143b4b026c445ba1c766f1683c26073b3a01a242ba43d66e9a64609bb",
+      "size": 88
+    },
+    {
+      "path": "dependency-sbom.json",
+      "sha256": "02f7e7d38a4dff4a7eb2099f6c924c9abbf977652fa1a436d866807d5608e257",
+      "size": 49
+    },
+    {
+      "path": "economic-simulation-plan.json",
+      "sha256": "d7a975a8dd79c0b68e71baca9b6c25938983c373a2d70d96a215b2ce5f1898b8",
+      "size": 49
+    },
+    {
+      "path": "final-findings.json",
+      "sha256": "3f637f0b4c99c2f9e92b0ed6caa2d1d929f6d6dd7e67b2bd922fbf151674db81",
+      "size": 84566
+    },
+    {
+      "path": "formal-results.json",
+      "sha256": "9f5920b7c8486fe868630ba555c15b22b8864c12e11e90cbeac32f96c06a3cbe",
+      "size": 80
+    },
+    {
+      "path": "invariant-execution-results.json",
+      "sha256": "840d91a9ee920bd3e2d5fef25d65118237b563ea3f367412f1038993ad215009",
+      "size": 66
+    },
+    {
+      "path": "invariant-harness-plan.json",
+      "sha256": "875bcf8782a4e7408b6e03d09b0a5c8abda341ad33bc0fa996a3ae3031df28da",
+      "size": 70
+    },
+    {
+      "path": "invariant-review.json",
+      "sha256": "faeee9815779fb06fffff3dc091642bb8cc8d6ffba686d091b44d8c28d0077be",
+      "size": 48
+    },
+    {
+      "path": "logs/events.jsonl",
+      "sha256": "7bf617fb21e72dee4f42c09a7e621ba500a13a67b544010dfad5e2a125f9965e",
+      "size": 172
+    },
+    {
+      "path": "maximum_assurance_traceability.json",
+      "sha256": "a2447c7b68cdcf9baea8a67f4c23341a784bdb742638e0813c82a0ccf570348d",
+      "size": 16972
+    },
+    {
+      "path": "metadata.json",
+      "sha256": "c62949af7e9cb6011106d28c0c4a2619c9d3e694fd05d2383e82c7419a792935",
+      "size": 28004
+    },
+    {
+      "path": "model-review-coverage.json",
+      "sha256": "4e213b51a77616092e0dd790254291787ee74f5eaf425dec30116961f9218c16",
+      "size": 28210
+    },
+    {
+      "path": "prior-audit-comparison.json",
+      "sha256": "aae4c14009f34a57c04c7840b914511659a1cc5b286c40aeec6537ac432eabe8",
+      "size": 393
+    },
+    {
+      "path": "private/model-review-artifacts.json",
+      "sha256": "3010f1b64ae27f9d685fd3dc9e7c1f454b89e29856e23b0b0b1903e5df800497",
+      "size": 49
+    },
+    {
+      "path": "property-corpus.json",
+      "sha256": "86971387c027b8b0ccaf8546abc7932da7eff4b0e2c50103fb8c81100bb781fd",
+      "size": 209
+    },
+    {
+      "path": "repository-map.json",
+      "sha256": "8822363aca96354a9342b265ae3e421c97eb2396c86177c5e973eaf19e88e1ca",
+      "size": 3348
+    },
+    {
+      "path": "reproduction-results.json",
+      "sha256": "2117c509b5c25abbaf41b39512d094333be26e391a69f89ecb16404a751045c8",
+      "size": 140
+    },
+    {
+      "path": "scanner-results.json",
+      "sha256": "6f8a6a83ebd0366d7688bb697361eb2093ece49a081092c00e4249707db82ded",
+      "size": 5732
+    },
+    {
+      "path": "scope-assessment.json",
+      "sha256": "119d01a56b656f2f7b02c77ad60318173c6cc5c6184218f402c89af7595a2142",
+      "size": 1756
+    },
+    {
+      "path": "solidity-compilation.json",
+      "sha256": "a28f9f6c0cb50bcdc695a813fd3245060b87bf35d1d6a520306d97cfd658255e",
+      "size": 844
+    },
+    {
+      "path": "solidity-coverage.json",
+      "sha256": "c0b104ff27d99015f8e9331b7681888f5676bc552aff65a063ed9b624adaea9f",
+      "size": 15212
+    },
+    {
+      "path": "solidity-graphs.json",
+      "sha256": "b3286064377da8412617f1c00d673e1ddb661d30f11d4037141fc485d83b3429",
+      "size": 71535
+    },
+    {
+      "path": "solidity-index.json",
+      "sha256": "7712bd96182450d0e759dc6a0d4cdb13c198ab57998ee17b7163e8aeb77a9c44",
+      "size": 18144
+    },
+    {
+      "path": "solidity-invariants.json",
+      "sha256": "22c8554c6eb58ec1cfe2bbda3e5f67ede532797dff643c8b9f1754804c840ab7",
+      "size": 459
+    },
+    {
+      "path": "solidity-projects.json",
+      "sha256": "16bbdcaac9e7e1744124df590fdfc09a6c3af4f879e8a2bf12064afbf17b89cf",
+      "size": 965
+    },
+    {
+      "path": "specialist-execution.json",
+      "sha256": "8ba526b407b0ed90163fc70d73757291bee75f89af979e1fbddd94ff49fae876",
+      "size": 14176
+    },
+    {
+      "path": "verification-results.json",
+      "sha256": "2f65f0afaeba7db782902f2a8f82c3a7ce6bd4445f991340c382025bceb35b9b",
+      "size": 115
+    }
+  ],
+  "evidence_sha256": "7261c479596349b94f07fd870e0bc17964f824ec49a5b389cf8fd83ba21a7178",
+  "generated_by": "mmaudit",
+  "manifest_file_sha256": "ac0ff2c896c815d7417d5c15ea0c3051895becc52215f9d4267afd1d54ff4a02",
+  "manifest_path": "run-evidence-manifest.json",
+  "manifest_sha256": "3c4c0b4f42a1310a674b5d32a8403b82678999b8b845cb129624940baf817a1f",
+  "run_id": "20260728T082858Z-66f3e567",
+  "schema_version": "1.0",
+  "traceability_path": "maximum_assurance_traceability.json",
+  "traceability_sha256": "a2447c7b68cdcf9baea8a67f4c23341a784bdb742638e0813c82a0ccf570348d"
+}
