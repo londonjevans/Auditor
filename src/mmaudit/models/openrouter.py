@@ -352,7 +352,7 @@ class OpenRouterQualificationRoutingEvidence:
 class OpenRouterReasoning:
     """Bounded reasoning controls supported by OpenRouter."""
 
-    effort: Literal["minimal", "low", "medium", "high", "xhigh"] | None = None
+    effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None
     max_tokens: int | None = None
     exclude: bool = False
 

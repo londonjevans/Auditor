@@ -39,6 +39,8 @@ _SAFE_REQUEST_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
 _SAFE_GENERATION_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,255}$"
 SMOKE_FIXTURE_PATH = "tests/fixtures/solidity/provider_smoke/src/ProviderSmoke.sol"
 SMOKE_FIXTURE_SHA256 = "bbb0127919f734caedffb6f9143a634b6925ff4451985d1410a47e1637f1517b"
+SMOKE_MAX_OUTPUT_TOKENS: Literal[1024] = 1_024
+SMOKE_REASONING_EFFORT: Literal["none"] = "none"
 _PLACEHOLDER_TOKENS = frozenset(
     {"alpha", "dummy", "example", "fake", "placeholder", "synthetic", "test", "vendor"}
 )
@@ -60,6 +62,15 @@ class RealProviderTestSettings:
     provider_endpoint_allowlist: tuple[str, ...]
     privacy_profile: Literal["STRICT_ZDR"]
     evidence_output: Path
+
+
+@dataclass(frozen=True)
+class RealProviderSmokeReasoningCapabilities:
+    """Validated catalog controls required to disable optional smoke reasoning."""
+
+    mandatory: Literal[False]
+    default_enabled: bool
+    supports_max_tokens: bool
 
 
 class SyntheticProviderSmokeResponse(BaseModel):
@@ -167,6 +178,12 @@ class _RealProviderSmokeEvidenceBody(BaseModel):
     reasoning_tokens: int = Field(ge=0)
     cached_tokens: int = Field(ge=0)
     total_tokens: int = Field(ge=0)
+    requested_max_output_tokens: Literal[1024]
+    requested_reasoning_effort: Literal["none"]
+    requested_reasoning_excluded: Literal[True]
+    model_reasoning_mandatory: Literal[False]
+    model_reasoning_default_enabled: bool
+    model_reasoning_supports_max_tokens: bool
     actual_cost_usd: str
     accounted_cost_usd: str
     ledger_cap_usd: str
@@ -263,8 +280,12 @@ class _RealProviderSmokeEvidenceBody(BaseModel):
             raise ValueError("smoke verification subject hash is inconsistent")
         if self.ended_at < self.started_at:
             raise ValueError("smoke request ended before it started")
+        if self.reasoning_tokens != 0:
+            raise ValueError("smoke reasoning was not disabled as requested")
         if self.reasoning_tokens > self.completion_tokens:
             raise ValueError("smoke reasoning tokens exceed completion tokens")
+        if self.completion_tokens > self.requested_max_output_tokens:
+            raise ValueError("smoke completion tokens exceed the requested output ceiling")
         if self.cached_tokens > self.prompt_tokens:
             raise ValueError("smoke cached tokens exceed prompt tokens")
         if self.total_tokens != self.prompt_tokens + self.completion_tokens:
@@ -325,6 +346,59 @@ def load_pinned_synthetic_smoke_fixture(repository_root: Path) -> tuple[str, str
     if not source or "\x00" in source:
         raise ValueError("the synthetic provider fixture is empty or invalid")
     return source, observed.binding.sha256
+
+
+def validate_smoke_reasoning_off_preflight(
+    *,
+    models_payload: Any,
+    exact_model_id: str,
+) -> RealProviderSmokeReasoningCapabilities:
+    """Require catalog proof that explicit reasoning disablement is permitted."""
+
+    if _MODEL_PATTERN.fullmatch(exact_model_id) is None:
+        raise RealProviderTestConfigurationError("smoke reasoning model ID is invalid")
+    if not isinstance(models_payload, dict):
+        raise RealProviderTestConfigurationError("smoke model catalog is invalid")
+    models = models_payload.get("data")
+    if (
+        not isinstance(models, list)
+        or not models
+        or len(models) > 10_000
+        or any(not isinstance(item, dict) for item in models)
+    ):
+        raise RealProviderTestConfigurationError("smoke model catalog is invalid")
+    matches = [item for item in models if item.get("id") == exact_model_id]
+    if len(matches) != 1:
+        raise RealProviderTestConfigurationError(
+            "smoke model catalog does not bind exactly one requested model"
+        )
+    selected = matches[0]
+    parameters = selected.get("supported_parameters")
+    reasoning = selected.get("reasoning")
+    if (
+        not isinstance(parameters, list)
+        or "reasoning" not in parameters
+        or not isinstance(reasoning, dict)
+    ):
+        raise RealProviderTestConfigurationError(
+            "smoke model does not publish reasoning control metadata"
+        )
+    mandatory = reasoning.get("mandatory")
+    default_enabled = reasoning.get("default_enabled")
+    supports_max_tokens = reasoning.get("supports_max_tokens", False)
+    if (
+        mandatory is not False
+        or not isinstance(default_enabled, bool)
+        or not isinstance(supports_max_tokens, bool)
+    ):
+        raise RealProviderTestConfigurationError(
+            "smoke model cannot prove optional bounded reasoning controls"
+        )
+    return RealProviderSmokeReasoningCapabilities(
+        mandatory=False,
+        default_enabled=default_enabled,
+        supports_max_tokens=supports_max_tokens,
+    )
 
 
 def load_real_provider_test_settings(

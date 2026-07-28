@@ -83,3 +83,11 @@ def test_qualification_request_limit_is_explicitly_bounded() -> None:
 def test_reasoning_effort_and_token_budget_are_mutually_exclusive_at_config_load() -> None:
     with pytest.raises(ValidationError, match="mutually exclusive"):
         ModelReasoningConfig(effort="high", max_tokens=4_096)
+
+
+def test_reasoning_can_be_explicitly_disabled_for_optional_reasoning_models() -> None:
+    controls = ModelReasoningConfig(effort="none", exclude=True)
+
+    assert controls.effort == "none"
+    assert controls.max_tokens is None
+    assert controls.exclude is True

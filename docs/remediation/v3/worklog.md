@@ -8,9 +8,9 @@ AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: Reproduce the output-budget failure locally, determine whether excluded reasoning consumed the 512-token completion budget, and implement a bounded materially different request only after a regression proves sufficient answer space; do not retry unchanged.
-LAST_COMMAND: MMAUDIT_RUN_REAL_PROVIDER_TESTS=1 MMAUDIT_SECRETS_ENV_FILE=<operator-controlled Auditor .env> MMAUDIT_REAL_PROVIDER_COST_CAP_USD=250.00 MMAUDIT_OPENROUTER_COST_LEDGER=<Auditor cumulative ledger> MMAUDIT_REAL_PROVIDER_MODEL_ID=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_MODEL_ALLOWLIST=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_ENDPOINT_ALLOWLIST=akashml/fp8 MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=STRICT_ZDR MMAUDIT_REAL_PROVIDER_EVIDENCE_OUTPUT=<fresh v3 runtime artifact> .venv/bin/pytest -q tests/integration/test_real_openrouter_provider.py
-LAST_RESULT: REJECTED_TRUNCATED; one completion POST returned a schema-uncredited response with finish_reason=length and no content. The fail-closed client raised OpenRouterTruncatedResponseError, emitted no artifact, reconciled actual cost 0.00054756 USD, and released the reservation. No unchanged retry is permitted.
+NEXT_ACTION: Commit and push the complete explicit reasoning-off smoke correction, verify the clean synchronized checkpoint and unchanged budget, then execute at most one materially changed provider call.
+LAST_COMMAND: .venv/bin/ruff format . && .venv/bin/ruff check . && .venv/bin/mypy
+LAST_RESULT: PASS; post-review full pytest passed 1879 tests with 10 explicit external/provider/isolation skips in 228.56s, full Ruff left 297 files unchanged and passed, strict mypy passed 129 source files, no success artifact exists, and the ledger remains reconciled with zero reservation.
 REAL_MODEL_CALLS_ATTEMPTED: 3
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 3
@@ -161,6 +161,50 @@ LAST_CHECKPOINT_COMMIT: 8004dd7662ca521565db1d87cd3e76d8678cf44b
   Before another POST, add a local regression that distinguishes total
   reasoning/output exhaustion from sufficient bounded answer space and make a
   materially different, evidence-backed token/reasoning configuration.
+- **Content-free generation diagnosis:** The first diagnostic command failed
+  locally before secret loading because it referenced the wrong loader module;
+  the corrected explicit-loader command made only authenticated metadata GETs.
+  Frozen generation evidence reports `prompt_tokens=211`,
+  `completion_tokens=506`, `reasoning_tokens=506`, `cached_tokens=0`,
+  `finish_reason=length`, provider `AkashML`, canonical model
+  `qwen/qwen3.6-35b-a3b-20260415`, and cost `0.00054756 USD`. This proves the
+  entire completion budget was consumed by reasoning.
+- **Capability evidence:** Current public exact-model metadata reports
+  `reasoning.mandatory=false`, `reasoning.default_enabled=true`, and omits
+  `reasoning.supports_max_tokens`. OpenRouter's official reasoning reference
+  defines `effort=none` as reasoning disabled. The prior
+  `reasoning.max_tokens=64` control was therefore not supported by this model
+  and was not an adequate answer-space guarantee.
+- **Bounded remediation:** The smoke now requires exact catalog proof that
+  reasoning is optional, sends `reasoning={effort:none, exclude:true}`, reserves
+  `1024` output tokens, and will reject success evidence unless observed
+  reasoning tokens are zero. Its artifact records the requested reasoning/output
+  controls and the catalog capability fields.
+- **Local remediation validation:** The optional-reasoning capability matrix,
+  explicit-off request payload, config parsing, evidence reconciliation, and
+  gated integration subset passed `168` tests with one paid-provider skip in
+  `0.70s`; affected Ruff and strict mypy passed.
+- **Expanded local validation:** The provider, discovery, candidate,
+  qualification, CLI, pipeline, harness, and gated integration subset passed
+  `388` tests with one explicit paid-provider skip in `69.10s`.
+- **Complete local validation:** `.venv/bin/pytest -q` passed `1879` tests and
+  skipped `10` explicitly gated paid-provider, external-engine, isolation, and
+  loopback prerequisites in `230.28s`. Full Ruff left `297` files unchanged
+  and passed; strict mypy passed `129` source files; release schema generation
+  produced no drift; `git diff --check` passed. The success artifact remains
+  absent and the reconciled ledger remains `spent=0.00173430`,
+  `reserved=0`, `remaining=249.99826570`, three entries.
+- **Independent pre-spend correction:** A read-only reviewer demonstrated that a
+  synthetic success artifact could claim `completion_tokens=1025` while
+  declaring a `1024` requested ceiling. Evidence coherence now requires
+  `completion_tokens <= requested_max_output_tokens`, and the negative
+  regression passes in a `47`-test focused harness suite. No production privacy,
+  identity, cost, or fail-closed control was weakened.
+- **Post-review complete validation:** `.venv/bin/pytest -q` passed `1879`
+  tests with the same `10` explicit prerequisite skips in `228.56s`; full Ruff
+  and strict mypy passed. The expected success artifact remains absent and the
+  ledger remains `spent=0.00173430`, `reserved=0`,
+  `remaining=249.99826570`, three entries.
 
 ## 2026-07-28 — V3-BASELINE-001
 

@@ -3208,6 +3208,15 @@ async def test_certification_request_pins_provider_reasoning_and_single_model(
     assert usage.records[0].configured_provider_endpoints == ["approved-provider"]
 
 
+def test_reasoning_payload_can_explicitly_disable_optional_reasoning() -> None:
+    reasoning = OpenRouterReasoning(effort="none", exclude=True)
+
+    assert reasoning.as_request_payload() == {
+        "exclude": True,
+        "effort": "none",
+    }
+
+
 @pytest.mark.parametrize("fault", ["missing", "role", "model", "provider", "expired"])
 @pytest.mark.asyncio
 async def test_certification_qualification_binding_fails_before_transport(

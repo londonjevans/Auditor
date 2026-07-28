@@ -38,6 +38,8 @@ from mmaudit.release_io import read_json_evidence
 from tests.real_provider_harness import (
     REAL_PROVIDER_OPT_IN,
     SMOKE_FIXTURE_PATH,
+    SMOKE_MAX_OUTPUT_TOKENS,
+    SMOKE_REASONING_EFFORT,
     RealProviderSmokeEvidence,
     SyntheticProviderSmokeResponse,
     load_pinned_synthetic_smoke_fixture,
@@ -46,6 +48,7 @@ from tests.real_provider_harness import (
     real_provider_smoke_verification_subject_sha256,
     real_provider_tests_enabled,
     seal_real_provider_smoke_evidence,
+    validate_smoke_reasoning_off_preflight,
     write_real_provider_smoke_evidence,
 )
 
@@ -89,7 +92,7 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
         max_model_retries=0,
         max_json_repair_attempts=0,
         budget_usd=float(settings.cost_cap_usd),
-        max_output_tokens_per_request=512,
+        max_output_tokens_per_request=SMOKE_MAX_OUTPUT_TOKENS,
         max_requests_per_agent=1,
         conservative_usd_per_million_tokens=60,
     )
@@ -136,7 +139,10 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     only=settings.provider_endpoint_allowlist,
                     allow_fallbacks=False,
                 ),
-                reasoning=OpenRouterReasoning(max_tokens=64, exclude=True),
+                reasoning=OpenRouterReasoning(
+                    effort=SMOKE_REASONING_EFFORT,
+                    exclude=True,
+                ),
             )
             async with client:
                 await client.validate_authentication()
@@ -148,6 +154,10 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     item.get("id") for item in models if isinstance(item.get("id"), str)
                 }:
                     raise AssertionError("the exact allowlisted model is unavailable")
+                reasoning_capabilities = validate_smoke_reasoning_off_preflight(
+                    models_payload=models_payload,
+                    exact_model_id=settings.model_id,
+                )
                 canonical_slug = openrouter_catalog_canonical_slug(
                     exact_model_id=settings.model_id,
                     models_payload=models_payload,
@@ -203,7 +213,11 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     model=settings.model_id,
                     providers=settings.provider_endpoint_allowlist,
                 )
-                assert preview["reasoning"] == {"exclude": True, "max_tokens": 64}
+                assert preview["max_tokens"] == SMOKE_MAX_OUTPUT_TOKENS
+                assert preview["reasoning"] == {
+                    "exclude": True,
+                    "effort": SMOKE_REASONING_EFFORT,
+                }
                 response = await client.complete(
                     role="real_provider_smoke",
                     models=[settings.model_id],
@@ -307,6 +321,7 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
             assert record.response_sha256 is not None
             assert record.validated_response_sha256 is not None
             assert record.finish_reason == "stop"
+            assert record.reasoning_tokens == 0
             assert refetched_generation.generation_id == record.openrouter_generation_id
             assert refetched_generation.exact_model_id in {
                 settings.model_id,
@@ -318,6 +333,7 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
             assert refetched_generation.completion_tokens == record.completion_tokens
             if refetched_generation.reasoning_tokens is not None:
                 assert refetched_generation.reasoning_tokens == record.reasoning_tokens
+            assert refetched_generation.reasoning_tokens in {None, 0}
             if refetched_generation.cached_tokens is not None:
                 assert refetched_generation.cached_tokens == record.cached_tokens
             assert Decimal(refetched_generation.total_cost_usd) == Decimal(
@@ -400,6 +416,14 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     "reasoning_tokens": record.reasoning_tokens,
                     "cached_tokens": record.cached_tokens,
                     "total_tokens": record.total_tokens,
+                    "requested_max_output_tokens": SMOKE_MAX_OUTPUT_TOKENS,
+                    "requested_reasoning_effort": SMOKE_REASONING_EFFORT,
+                    "requested_reasoning_excluded": True,
+                    "model_reasoning_mandatory": reasoning_capabilities.mandatory,
+                    "model_reasoning_default_enabled": (reasoning_capabilities.default_enabled),
+                    "model_reasoning_supports_max_tokens": (
+                        reasoning_capabilities.supports_max_tokens
+                    ),
                     "actual_cost_usd": _canonical_money(ledger_entry.actual_cost_usd),
                     "accounted_cost_usd": _canonical_money(ledger_entry.accounted_cost_usd),
                     "ledger_cap_usd": _canonical_money(snapshot.cap_usd),

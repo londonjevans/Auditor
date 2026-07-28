@@ -798,7 +798,7 @@ class ModelProviderPolicyConfig(ConfigModel):
 class ModelReasoningConfig(ConfigModel):
     """Bounded provider reasoning controls applied only when configured."""
 
-    effort: Literal["minimal", "low", "medium", "high", "xhigh"] | None = None
+    effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None
     max_tokens: int | None = Field(default=None, ge=1, le=65_536)
     exclude: bool = False
 

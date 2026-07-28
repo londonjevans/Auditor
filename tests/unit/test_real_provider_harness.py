@@ -21,6 +21,8 @@ from tests.real_provider_harness import (
     REAL_PROVIDER_SECRET_FILE,
     SMOKE_FIXTURE_PATH,
     SMOKE_FIXTURE_SHA256,
+    SMOKE_MAX_OUTPUT_TOKENS,
+    SMOKE_REASONING_EFFORT,
     RealProviderSmokeEvidence,
     RealProviderTestConfigurationError,
     SyntheticProviderSmokeResponse,
@@ -30,6 +32,7 @@ from tests.real_provider_harness import (
     real_provider_smoke_verification_subject_sha256,
     real_provider_tests_enabled,
     seal_real_provider_smoke_evidence,
+    validate_smoke_reasoning_off_preflight,
     write_real_provider_smoke_evidence,
 )
 
@@ -168,6 +171,63 @@ def test_committed_real_provider_fixture_matches_its_pinned_hash() -> None:
     assert len(source.encode()) <= 20_000
 
 
+def test_smoke_reasoning_off_preflight_requires_optional_exact_model_control() -> None:
+    payload = {
+        "data": [
+            {
+                "id": "acme/secure-reasoner-v1",
+                "supported_parameters": ["max_tokens", "reasoning", "response_format"],
+                "reasoning": {
+                    "mandatory": False,
+                    "default_enabled": True,
+                },
+            }
+        ]
+    }
+
+    capabilities = validate_smoke_reasoning_off_preflight(
+        models_payload=payload,
+        exact_model_id="acme/secure-reasoner-v1",
+    )
+
+    assert capabilities.mandatory is False
+    assert capabilities.default_enabled is True
+    assert capabilities.supports_max_tokens is False
+    assert SMOKE_REASONING_EFFORT == "none"
+    assert SMOKE_MAX_OUTPUT_TOKENS == 1_024
+
+
+@pytest.mark.parametrize(
+    "reasoning",
+    [
+        None,
+        {"mandatory": True, "default_enabled": True},
+        {"mandatory": False},
+        {
+            "mandatory": False,
+            "default_enabled": True,
+            "supports_max_tokens": "yes",
+        },
+    ],
+)
+def test_smoke_reasoning_off_preflight_rejects_unproven_control(
+    reasoning: object,
+) -> None:
+    with pytest.raises(RealProviderTestConfigurationError, match="reasoning"):
+        validate_smoke_reasoning_off_preflight(
+            models_payload={
+                "data": [
+                    {
+                        "id": "acme/secure-reasoner-v1",
+                        "supported_parameters": ["reasoning"],
+                        "reasoning": reasoning,
+                    }
+                ]
+            },
+            exact_model_id="acme/secure-reasoner-v1",
+        )
+
+
 def test_real_provider_smoke_output_preflight_rejects_collisions_and_existing_files(
     tmp_path: Path,
 ) -> None:
@@ -263,6 +323,12 @@ def _valid_smoke_evidence_payload() -> dict[str, object]:
         "reasoning_tokens": 0,
         "cached_tokens": 0,
         "total_tokens": 40,
+        "requested_max_output_tokens": SMOKE_MAX_OUTPUT_TOKENS,
+        "requested_reasoning_effort": SMOKE_REASONING_EFFORT,
+        "requested_reasoning_excluded": True,
+        "model_reasoning_mandatory": False,
+        "model_reasoning_default_enabled": True,
+        "model_reasoning_supports_max_tokens": False,
         "actual_cost_usd": "0.0002",
         "accounted_cost_usd": "0.0002",
         "ledger_cap_usd": "250",
@@ -325,6 +391,17 @@ def test_real_provider_smoke_evidence_rejects_unbound_or_substituted_identity() 
     payload = _valid_smoke_evidence_payload()
     payload["verification_subject_sha256"] = "0" * 64
     with pytest.raises(ValidationError, match="subject hash"):
+        seal_real_provider_smoke_evidence(payload)
+
+    payload = _valid_smoke_evidence_payload()
+    payload["reasoning_tokens"] = 1
+    with pytest.raises(ValidationError, match="reasoning was not disabled"):
+        seal_real_provider_smoke_evidence(payload)
+
+    payload = _valid_smoke_evidence_payload()
+    payload["completion_tokens"] = SMOKE_MAX_OUTPUT_TOKENS + 1
+    payload["total_tokens"] = int(payload["prompt_tokens"]) + int(payload["completion_tokens"])
+    with pytest.raises(ValidationError, match="requested output ceiling"):
         seal_real_provider_smoke_evidence(payload)
 
 
