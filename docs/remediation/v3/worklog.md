@@ -8,9 +8,9 @@ AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: Push the exact-ID checkpoint via SSH, verify the synchronized clean tree, fresh artifact path, unchanged atomic budget, and explicit privacy/secret gates, then execute at most one materially changed synthetic provider attempt.
-LAST_COMMAND: git commit -m 'Query OpenRouter metadata by exact model ID'
-LAST_RESULT: PASS; isolated source, regression, and evidence changes committed as 8004dd7662ca521565db1d87cd3e76d8678cf44b after complete validation.
+NEXT_ACTION: Execute exactly one materially changed, explicitly gated synthetic provider smoke from the clean checkpoint; stop and record the first provider/runtime outcome without an unchanged retry.
+LAST_COMMAND: MMAUDIT_RUN_REAL_PROVIDER_TESTS=1 MMAUDIT_SECRETS_ENV_FILE=<operator-controlled Auditor .env> MMAUDIT_REAL_PROVIDER_COST_CAP_USD=250.00 MMAUDIT_OPENROUTER_COST_LEDGER=<Auditor cumulative ledger> MMAUDIT_REAL_PROVIDER_MODEL_ID=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_MODEL_ALLOWLIST=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_ENDPOINT_ALLOWLIST=akashml/fp8 MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=STRICT_ZDR MMAUDIT_REAL_PROVIDER_EVIDENCE_OUTPUT=<fresh v3 runtime artifact> .venv/bin/pytest -q tests/integration/test_real_openrouter_provider.py
+LAST_RESULT: PENDING; the corrected source checkpoint is synchronized, all local gates pass, exact model and endpoint metadata routes return HTTP 200, the artifact path is fresh, and the unchanged ledger has 249.99881326 USD available with no reservation.
 REAL_MODEL_CALLS_ATTEMPTED: 2
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 2
@@ -138,6 +138,14 @@ LAST_CHECKPOINT_COMMIT: 8004dd7662ca521565db1d87cd3e76d8678cf44b
   network request, secret access, or paid call.
 - **Corrected source checkpoint:**
   `8004dd7662ca521565db1d87cd3e76d8678cf44b`.
+- **Second launch preflight:** Clean synchronized `main` at
+  `38ed5e07bf746e91fbe9958527d82d2f19a7d8f3`, source checkpoint
+  `8004dd7662ca521565db1d87cd3e76d8678cf44b`; the explicit operator secret is a
+  regular, non-writable-by-group/world file; the evidence destination is absent;
+  exact model and endpoint-metadata URLs return HTTP `200`; and the ledger
+  remains `cap=250.00`, `spent=0.00118674`, `reserved=0`,
+  `remaining=249.99881326`, two entries, with no over-cap or reservation-overrun
+  state.
 
 ## 2026-07-28 — V3-BASELINE-001
 
