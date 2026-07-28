@@ -595,6 +595,13 @@ def _reconcile_generation_evidence(
         raise GenerationEvidenceValidationError(
             "generation evidence does not reconcile approved returned model"
         )
+    if evidence.exact_model_id not in {
+        expected_exact_model,
+        expected_canonical_model,
+    }:
+        raise GenerationEvidenceValidationError(
+            "generation evidence does not reconcile frozen model identity"
+        )
     comparisons = (
         (
             evidence.generation_id,
@@ -602,7 +609,6 @@ def _reconcile_generation_evidence(
             "generation ID",
         ),
         (evidence.generation_id, routing.get("generation_id"), "routing generation ID"),
-        (evidence.exact_model_id, actual_model, "actual provider model"),
         (usage_record.requested_model, expected_exact_model, "requested exact model"),
         (routing.get("selected_model"), actual_model, "routed actual model"),
         (routing.get("canonical_model"), expected_canonical_model, "routed canonical model"),

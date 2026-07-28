@@ -384,7 +384,9 @@ class CompletionEnvelope:
     usage: dict[str, Any]
     router_metadata: dict[str, Any]
     selected_provider: str
+    selected_provider_identity: str
     selected_provider_name: str
+    response_provider_identity: str | None
     router_attempt: int
     router_attempt_count: int
     router_attempts_observed: bool
@@ -402,6 +404,7 @@ class StructuredCompletion[ValueT: BaseModel]:
 @dataclass(frozen=True)
 class _RegisteredEndpointPricing:
     provider_endpoint: str
+    provider_name: str
     provider_identities: tuple[str, ...]
     pricing: tuple[tuple[str, str], ...]
     pricing_sha256: str
@@ -1313,12 +1316,14 @@ class OpenRouterClient:
         usage_record: UsageRecord,
         identity_binding: OpenRouterIdentityBindingResult,
         trusted_issuer: object | None,
+        generation_observation: OpenRouterGenerationEvidence | None = None,
     ) -> UsageRecord:
         return self._usage_with_identity_result(
             usage_record=usage_record,
             identity_binding=identity_binding,
             trusted_issuer=trusted_issuer,
             require_bound=False,
+            generation_observation=generation_observation,
         )
 
     def _usage_with_identity_result(
@@ -1328,6 +1333,7 @@ class OpenRouterClient:
         identity_binding: OpenRouterIdentityBindingResult,
         trusted_issuer: object | None,
         require_bound: bool,
+        generation_observation: OpenRouterGenerationEvidence | None = None,
     ) -> UsageRecord:
         if (
             usage_record.execution_evidence is ExecutionEvidenceKind.REAL
@@ -1369,6 +1375,18 @@ class OpenRouterClient:
             raise OpenRouterModelError(
                 "model identity binding does not match the completed request"
             )
+        if require_bound and generation_observation is not None:
+            raise OpenRouterModelError(
+                "bound model identity cannot carry an unbound generation observation"
+            )
+        observed_generation: dict[str, Any] | None = None
+        if generation_observation is not None:
+            try:
+                observed_generation = OpenRouterGenerationEvidence.model_validate(
+                    generation_observation.model_dump(mode="json")
+                ).model_dump(mode="json")
+            except (AttributeError, ValidationError):
+                raise OpenRouterModelError("unbound generation observation is invalid") from None
         binding_status = (
             "generation_metadata_bound" if require_bound else "generation_metadata_unbound"
         )
@@ -1378,6 +1396,8 @@ class OpenRouterClient:
             "identity_binding_sha256": binding.binding_sha256,
             "identity_binding_status": binding_status,
         }
+        if observed_generation is not None:
+            routing["unbound_generation_observation"] = observed_generation
         concluded_usage = UsageRecord.model_validate(
             {
                 **usage.model_dump(mode="json"),
@@ -1474,6 +1494,7 @@ class OpenRouterClient:
             registered.append(
                 _RegisteredEndpointPricing(
                     provider_endpoint=endpoint.provider_endpoint,
+                    provider_name=endpoint.provider_name,
                     provider_identities=provider_identities,
                     pricing=tuple(pricing.items()),
                     pricing_sha256=endpoint.pricing_sha256,
@@ -1950,6 +1971,7 @@ class OpenRouterClient:
                 usage_record=completion.usage_record,
                 identity_binding=binding,
                 trusted_issuer=_TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER,
+                generation_observation=generation,
             )
             return StructuredCompletion(value=completion.value, usage_record=unbound_usage)
         bound_usage = self._usage_with_bound_identity(
@@ -2515,7 +2537,9 @@ class OpenRouterClient:
                 else envelope.returned_model
             ),
             "selected_provider_endpoint": envelope.selected_provider,
+            "selected_provider_identity": envelope.selected_provider_identity,
             "selected_provider_name": envelope.selected_provider_name,
+            "response_provider_identity": envelope.response_provider_identity,
             "router_strategy": envelope.router_metadata["strategy"],
             "router_attempt": envelope.router_attempt,
             "router_attempt_count": envelope.router_attempt_count,
@@ -3275,6 +3299,7 @@ def _validate_completion_envelope(
         router_metadata,
         selected_model,
         selected_provider,
+        selected_provider_identity,
         selected_provider_name,
         router_attempt,
         router_attempt_count,
@@ -3288,7 +3313,7 @@ def _validate_completion_envelope(
         endpoint_policy=endpoint_policy,
         model_identity=model_identity,
     )
-    provider = response_provider or selected_provider_name
+    provider = selected_provider_name
     return CompletionEnvelope(
         requested_model=requested_model,
         generation_id=generation_id,
@@ -3301,7 +3326,9 @@ def _validate_completion_envelope(
         usage=usage,
         router_metadata=router_metadata,
         selected_provider=selected_provider,
+        selected_provider_identity=selected_provider_identity,
         selected_provider_name=selected_provider_name,
+        response_provider_identity=response_provider,
         router_attempt=router_attempt,
         router_attempt_count=router_attempt_count,
         router_attempts_observed=router_attempts_observed,
@@ -3353,6 +3380,7 @@ def _validate_router_metadata(
     model_identity: _RegisteredModelIdentity | None,
 ) -> tuple[
     dict[str, Any],
+    str,
     str,
     str,
     str,
@@ -3421,7 +3449,7 @@ def _validate_router_metadata(
             validation_status=ModelRequestValidationStatus.PROVIDER_MISMATCH,
         )
     selected_model = _required_safe_string(selected[0].get("model"), field="selected model")
-    selected_provider_name = _required_safe_string(
+    selected_provider_identity = _required_safe_string(
         selected[0].get("provider"),
         field="selected provider",
     )
@@ -3441,9 +3469,19 @@ def _validate_router_metadata(
             validation_status=ModelRequestValidationStatus.MODEL_MISMATCH,
         )
     selected_provider = _resolve_provider_endpoint(
-        selected_provider_name,
+        selected_provider_identity,
         provider_policy=provider_policy,
         endpoint_policy=endpoint_policy,
+    )
+    selected_endpoint = (
+        endpoint_policy.endpoint(selected_provider_identity)
+        if endpoint_policy is not None
+        else None
+    )
+    selected_provider_name = (
+        selected_endpoint.provider_name
+        if selected_endpoint is not None
+        else selected_provider_identity
     )
     if response_provider is not None:
         response_provider_endpoint = _resolve_provider_endpoint(
@@ -3533,6 +3571,7 @@ def _validate_router_metadata(
         value,
         selected_model,
         selected_provider,
+        selected_provider_identity,
         selected_provider_name,
         router_attempt,
         attempt_count,

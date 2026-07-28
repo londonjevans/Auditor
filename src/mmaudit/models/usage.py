@@ -339,6 +339,7 @@ def _has_valid_bound_identity(record: UsageRecord) -> bool:
         binding is not None
         and binding.strength is not ModelIdentityStrength.UNBOUND
         and binding.generation is not None
+        and "unbound_generation_observation" not in record.routing
         and record.routing.get("identity_binding_status") == "generation_metadata_bound"
         and _identity_binding_matches_record(record, binding)
         and binding.generation.generation_id == record.openrouter_generation_id
@@ -354,8 +355,25 @@ def _has_valid_unbound_identity_conclusion(record: UsageRecord) -> bool:
         and binding.generation is None
         and record.identity_strength is ModelIdentityStrength.UNBOUND
         and record.routing.get("identity_binding_status") == "generation_metadata_unbound"
+        and _has_valid_unbound_generation_observation(record)
         and _identity_binding_matches_record(record, binding)
     )
+
+
+def _has_valid_unbound_generation_observation(record: UsageRecord) -> bool:
+    raw_observation = record.routing.get("unbound_generation_observation")
+    if raw_observation is None:
+        return True
+    if not isinstance(raw_observation, dict):
+        return False
+    # Import lazily because generation evidence depends on usage validation.
+    from mmaudit.models.generation_evidence import OpenRouterGenerationEvidence
+
+    try:
+        observation = OpenRouterGenerationEvidence.model_validate(raw_observation)
+    except ValidationError:
+        return False
+    return observation.model_dump(mode="json") == raw_observation
 
 
 def _validated_identity_binding(
@@ -464,6 +482,10 @@ class UsageLedger:
             "identity_binding_sha256": record.routing.get("identity_binding_sha256"),
             "identity_binding_status": record.routing.get("identity_binding_status"),
         }
+        if "unbound_generation_observation" in record.routing:
+            expected_routing["unbound_generation_observation"] = record.routing[
+                "unbound_generation_observation"
+            ]
         if replacement_core != existing_core or record.routing != expected_routing:
             raise ValueError("usage identity replacement changed immutable request evidence")
         self._records[index] = record

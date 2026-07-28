@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: On operator resume, diagnose the concluded UNBOUND identity result without another paid completion; preserve bounded rejection diagnostics, reproduce the confirmed cause locally, and re-run gates before any materially different request.
-LAST_COMMAND: MMAUDIT_RUN_REAL_PROVIDER_TESTS=1 MMAUDIT_SECRETS_ENV_FILE=<operator-controlled Auditor .env> MMAUDIT_REAL_PROVIDER_COST_CAP_USD=250.00 MMAUDIT_OPENROUTER_COST_LEDGER=<Auditor cumulative ledger> MMAUDIT_REAL_PROVIDER_MODEL_ID=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_MODEL_ALLOWLIST=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_ENDPOINT_ALLOWLIST=akashml/fp8 MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=STRICT_ZDR MMAUDIT_REAL_PROVIDER_EVIDENCE_OUTPUT=<fresh v3 runtime artifact> .venv/bin/pytest -q tests/integration/test_real_openrouter_provider.py
-LAST_RESULT: FAIL_CLOSED; the materially changed reasoning-disabled response passed structured-output validation but post-generation identity binding concluded UNBOUND. No review or success credit was granted, no success artifact was emitted, and cost reconciled to 0.00006484 USD.
+NEXT_ACTION: On operator resume, add a private typed rejection artifact for schema-valid UNBOUND smoke completions, prove it cannot receive success credit or leak forbidden values, then use preserved diagnostics before considering another materially different paid request.
+LAST_COMMAND: .venv/bin/ruff format src/mmaudit/models/openrouter.py src/mmaudit/models/generation_evidence.py src/mmaudit/models/usage.py tests/unit/test_openrouter.py tests/unit/test_generation_evidence.py tests/unit/test_usage.py && .venv/bin/ruff check src/mmaudit/models/openrouter.py src/mmaudit/models/generation_evidence.py src/mmaudit/models/usage.py tests/unit/test_openrouter.py tests/unit/test_generation_evidence.py tests/unit/test_usage.py && .venv/bin/mypy src/mmaudit/models/openrouter.py src/mmaudit/models/generation_evidence.py src/mmaudit/models/usage.py && .venv/bin/pytest -q tests/unit/test_openrouter.py tests/unit/test_generation_evidence.py tests/unit/test_usage.py && git diff --check
+LAST_RESULT: PASS; Ruff formatting/checks passed, strict mypy found no issues in the three affected source files, 198 focused tests passed in 1.25s, and git diff validation passed.
 REAL_MODEL_CALLS_ATTEMPTED: 4
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 4
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.99820086
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: No successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: fa0dcf6e38a963962f780230359f3ac28ce9050a
+LAST_CHECKPOINT_COMMIT: c97c23b8d9cf6102b943e31d74f99c6f7456fbb0
 
 ## 2026-07-28 — V3-SMOKE-001
 
@@ -542,3 +542,28 @@ LAST_CHECKPOINT_COMMIT: fa0dcf6e38a963962f780230359f3ac28ce9050a
   identity-bound synthetic completion remains `V3-SMOKE-001`.
 - **Pause:** Operator-requested pause begins at this clean ticket boundary. No
   provider request is running and no paid call was launched.
+
+### V3-SMOKE-001 provider-alias diagnostic checkpoint
+
+- **Status:** `IN_PROGRESS`; paused by operator after a validated local slice.
+- **Confirmed local defect:** OpenRouter may identify the approved route by its
+  endpoint tag while generation metadata uses the frozen provider display name.
+  The completion envelope now preserves both raw observations and normalizes the
+  provider used for identity comparison to the frozen endpoint display name.
+- **Alias reconciliation:** Trusted generation metadata now accepts only the
+  exact requested/canonical model pair frozen by discovery; a third model remains
+  rejected. This removes a false mismatch without broadening accepted aliases.
+- **Fail-closed diagnostics:** A schema-valid unbound generation observation can
+  now be retained as a strictly validated, self-hashed projection in the
+  concluded usage record. It remains non-creditable, cannot appear on a bound
+  record, and cannot alter immutable request evidence.
+- **Focused evidence:** The first four-case run reproduced a ledger replacement
+  failure (`1 failed, 3 passed`). The usage ledger was tightened to validate and
+  permit only the typed unbound observation. The final affected validation passed
+  Ruff, strict mypy, `198` unit tests in `1.25s`, and `git diff --check`.
+- **Provider and secret state:** No network request, paid model call, secret-file
+  read, or artifact write occurred. Recorded spend and runtime counters remain
+  unchanged.
+- **Resume action:** Implement the separate private typed rejection artifact,
+  validate non-disclosure and no-credit behavior, then inspect its bounded
+  diagnostics before any materially different paid completion.

@@ -56,10 +56,14 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   reasoning-disabled response was schema-valid but rejected as identity
   `UNBOUND` after spending `0.00006484 USD`. Neither response received review
   credit and no success artifact exists.
-- **Next action:** On operator resume, preserve bounded diagnostics for an
-  unbound completion, diagnose the identity-binding mismatch without repeating
-  the paid request, add a local regression for the confirmed cause, and re-run
-  local gates before considering a materially different provider request.
+- **Local diagnostic correction:** Endpoint-tag versus provider-display identity
+  normalization and exact/canonical model reconciliation now have negative
+  regressions. Typed unbound generation observations are retained without review
+  credit; affected validation passed `198` tests, Ruff, strict mypy, and diff
+  checks. No provider call ran.
+- **Next action:** On operator resume, add the private typed rejection artifact
+  and its non-disclosure/no-credit regressions, then use its bounded diagnostics
+  before considering a materially different provider request.
 
 ## V3-PRIVACY-001 — Explicit privacy and retention profiles
 

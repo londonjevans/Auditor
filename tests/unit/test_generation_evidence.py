@@ -350,6 +350,23 @@ def test_generation_evidence_accepts_requested_model_as_the_actual_provider_mode
     assert _reconcile(evidence, usage_record=usage).exact_model_id == _MODEL
 
 
+@pytest.mark.parametrize(
+    ("actual_model", "generation_model"),
+    [
+        (_MODEL, _CANONICAL_MODEL),
+        (_CANONICAL_MODEL, _MODEL),
+    ],
+)
+def test_generation_evidence_accepts_frozen_exact_canonical_alias_pair(
+    actual_model: str,
+    generation_model: str,
+) -> None:
+    usage = _usage_record(actual_model=actual_model)
+    evidence = _evidence(payload=_generation_payload(model=generation_model))
+
+    assert _reconcile(evidence, usage_record=usage).exact_model_id == generation_model
+
+
 def test_canonical_generation_requires_frozen_catalog_identity_binding() -> None:
     usage = _usage_record()
     unbound_usage = usage.model_copy(
@@ -403,11 +420,12 @@ def test_generation_verification_rejects_wrong_canonical_identity() -> None:
         )
 
 
-def test_generation_evidence_rejects_actual_model_mismatch() -> None:
+def test_generation_evidence_rejects_model_outside_frozen_alias_pair() -> None:
     usage = _usage_record(actual_model=_MODEL)
+    evidence = _evidence(payload=_generation_payload(model="alpha/unapproved-secure"))
 
-    with pytest.raises(GenerationEvidenceValidationError, match="actual provider model"):
-        _reconcile(_evidence(), usage_record=usage)
+    with pytest.raises(GenerationEvidenceValidationError, match="frozen model identity"):
+        _reconcile(evidence, usage_record=usage)
 
 
 def test_reconciliation_revalidates_the_evidence_self_hash() -> None:
@@ -421,7 +439,7 @@ def test_reconciliation_revalidates_the_evidence_self_hash() -> None:
     ("field", "value", "requested_generation_id", "message"),
     [
         ("id", "gen-other", "gen-other", "generation ID"),
-        ("model", "beta/other-secure", _GENERATION_ID, "actual provider model"),
+        ("model", "beta/other-secure", _GENERATION_ID, "frozen model identity"),
         ("provider_name", "Other Provider", _GENERATION_ID, "expected provider"),
         ("finish_reason", "error", _GENERATION_ID, "finish reason"),
         ("native_finish_reason", "other", _GENERATION_ID, "native finish reason"),

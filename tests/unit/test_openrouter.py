@@ -261,8 +261,14 @@ def _model_discovery_run(
     *,
     exact_model: str = "alpha/atlas-secure",
     canonical_model: str = "alpha/atlas-secure-20260727",
+    provider: str = "approved-provider",
+    provider_name: str = "Approved Provider",
 ) -> tuple[OpenRouterModelDiscoveryRunManifest, OpenRouterModelDiscoveryEvidence]:
-    endpoint_snapshot = _endpoint_snapshot(model=exact_model)
+    endpoint_snapshot = _endpoint_snapshot(
+        model=exact_model,
+        provider=provider,
+        provider_name=provider_name,
+    )
     catalog = {
         "data": [
             {
@@ -289,7 +295,7 @@ def _model_discovery_run(
     )
     route = DiscoveryCandidateRoute(
         exact_model_id=exact_model,
-        approved_provider_endpoint="approved-provider",
+        approved_provider_endpoint=provider,
     )
     _provenance, evidence = _issue_real_openrouter_discovery_run(
         run_id="1" * 32,
@@ -322,6 +328,141 @@ def _model_discovery_run(
     )
     manifest = write_model_discovery_run(tmp_path / canonical_model.rsplit("/", 1)[-1], evidence)
     return manifest, evidence[0]
+
+
+@pytest.mark.asyncio
+async def test_endpoint_tag_observation_normalizes_to_frozen_provider_name(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    provider_endpoint = "akashml/fp8"
+    provider_name = "AkashML"
+    canonical_model = "alpha/atlas-secure-20260727"
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        canonical_model=canonical_model,
+        provider=provider_endpoint,
+        provider_name=provider_name,
+    )
+    client, http_client, usage = _client(
+        config_factory(execution={"max_json_repair_attempts": 0}),
+        lambda _request: _completion_response(
+            '{"answer":"canonical provider identity"}',
+            selected_model=canonical_model,
+            provider=provider_endpoint,
+        ),
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=(provider_endpoint,),
+        ),
+        qualification_routing=(_qualification_routing_for_discovery(evidence),),
+    )
+    client.register_certification_model_discovery(evidence=evidence, manifest=manifest)
+    try:
+        completion = await client.complete_with_evidence(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="synthetic local input",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    record = usage.records[0]
+    assert completion.value.answer == "canonical provider identity"
+    assert record.validation_status.value == "valid"
+    assert record.provider == provider_name
+    assert record.actual_provider_endpoint == provider_endpoint
+    assert record.routing["selected_provider_identity"] == provider_endpoint
+    assert record.routing["selected_provider_name"] == provider_name
+
+    retrieved_at = datetime.now(UTC)
+    generation = validate_openrouter_generation_payload(
+        _generation_payload(
+            model=canonical_model,
+            provider_name=provider_name,
+        ),
+        requested_generation_id="generation-test",
+        retrieved_at=retrieved_at,
+        execution_evidence=ExecutionEvidenceKind.MOCK,
+    )
+    binding = client.bind_generation_identity(
+        usage_record=record,
+        generation_evidence=generation,
+        evaluated_at=retrieved_at,
+    )
+    assert binding.strength is OpenRouterIdentityStrength.CANONICAL_MODEL_AND_ENDPOINT_BOUND
+
+
+@pytest.mark.asyncio
+async def test_unbound_generation_mismatch_preserves_bounded_observation(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    manifest, evidence = _model_discovery_run(tmp_path)
+    client, http_client, _usage = _client(
+        config_factory(execution={"max_json_repair_attempts": 0}),
+        lambda _request: _completion_response(
+            '{"answer":"unbound observation content canary"}',
+            selected_model=evidence.canonical_slug,
+            provider="Approved Provider",
+        ),
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(_qualification_routing_for_discovery(evidence),),
+    )
+    client.register_certification_model_discovery(evidence=evidence, manifest=manifest)
+    try:
+        completion = await client.complete_with_evidence(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="synthetic local input",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    retrieved_at = datetime.now(UTC)
+    generation = validate_openrouter_generation_payload(
+        _generation_payload(
+            model=evidence.canonical_slug,
+            provider_name="Different Provider",
+        ),
+        requested_generation_id="generation-test",
+        retrieved_at=retrieved_at,
+        execution_evidence=ExecutionEvidenceKind.MOCK,
+    )
+    binding = client.bind_generation_identity(
+        usage_record=completion.usage_record,
+        generation_evidence=generation,
+        evaluated_at=retrieved_at,
+    )
+    assert binding.strength is OpenRouterIdentityStrength.UNBOUND
+    concluded = client._usage_with_unbound_identity(
+        usage_record=completion.usage_record,
+        identity_binding=binding,
+        trusted_issuer=None,
+        generation_observation=generation,
+    )
+
+    observation = concluded.routing["unbound_generation_observation"]
+    assert observation == generation.model_dump(mode="json")
+    assert observation["provider_name"] == "Different Provider"
+    assert observation["exact_model_id"] == evidence.canonical_slug
+    assert binding.diagnostic_codes == (
+        OpenRouterIdentityDiagnosticCode.GENERATION_PROVIDER_MISMATCH,
+    )
+    assert "unbound observation content canary" not in json.dumps(
+        observation,
+        sort_keys=True,
+    )
+    assert not is_creditable_usage_record(concluded, require_certification=True)
 
 
 def _qualification_routing_for_discovery(
