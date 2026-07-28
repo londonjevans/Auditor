@@ -48,17 +48,14 @@ python -m venv .venv
 source .venv/bin/activate
 python -m pip install -e ".[dev]"
 
-cp .env.example .env
+cp operator-secrets.example /absolute/operator/control/mmaudit-secrets.env
+chmod 600 /absolute/operator/control/mmaudit-secrets.env
 cp mmaudit.example.toml mmaudit.toml
 ```
 
-The package does not automatically load `.env`; export it deliberately:
-
-```bash
-set -a
-source .env
-set +a
-```
+The package never loads a target repository's `.env`. Supply the operator control-plane
+file explicitly with `--secrets-env-file /absolute/operator/control/mmaudit-secrets.env`
+or `MMAUDIT_SECRETS_ENV_FILE`.
 
 For an application repository where this project is vendored under `tools/mmaudit`, use:
 
@@ -68,13 +65,15 @@ python -m venv .venv
 source .venv/bin/activate
 python -m pip install -e ".[dev]"
 
-cp .env.example .env
+cp operator-secrets.example /absolute/operator/control/mmaudit-secrets.env
+chmod 600 /absolute/operator/control/mmaudit-secrets.env
 cp mmaudit.example.toml mmaudit.toml
 
-mmaudit doctor
+mmaudit doctor --secrets-env-file /absolute/operator/control/mmaudit-secrets.env
 mmaudit scan --repo ../..
 mmaudit models init-cost-ledger --cost-ledger /absolute/operator/control/mmaudit-cost-ledger.json
 mmaudit run --repo ../.. --allow-code-egress --budget-usd 20 \
+  --secrets-env-file /absolute/operator/control/mmaudit-secrets.env \
   --cost-ledger /absolute/operator/control/mmaudit-cost-ledger.json
 ```
 
@@ -558,6 +557,33 @@ evidence-cap bypasses, and incomplete maximum-assurance reports. With no report 
 validates the corpus and exits incomplete rather than claiming a score. CI benchmark gates fail on
 missed known critical cases, confirmed high/critical safe controls, evidence-cap bypasses, omitted
 coverage, or missing per-repository maximum-assurance semantic/economic coverage metrics.
+
+## Candidate-bound release evidence
+
+Release reporting is derived from an explicit emitted run and a clean exact mmaudit commit. The
+generator accepts only pre-existing empty private output directories outside the product candidate,
+audited target, and emitted run. It executes the four fixed provider-free quality commands, validates
+typed artifact/manifest/schema observations, and preserves unavailable benchmark, model, doctor,
+maximum-assurance, and replay prerequisites as blockers.
+
+```bash
+mkdir -m 700 /private/tmp/mmaudit-release-evidence /private/tmp/mmaudit-release-report
+python scripts/generate_release_report.py \
+  --release-id candidate-commit-short-id \
+  --release-repository /path/to/clean/mmaudit \
+  --target-repository /path/to/audited/source \
+  --run-dir /path/to/emitted/run \
+  --artifact-evidence-file /path/to/artifact-evidence.json \
+  --run-verification-file /path/to/current-run-verification.json \
+  --evidence-root /private/tmp/mmaudit-release-evidence \
+  --report-root /private/tmp/mmaudit-release-report
+```
+
+Generation includes authoritative integrity validation but does not imply completeness. Apply
+`scripts/validate_release_evidence.py --full --require-complete` to the explicit report and evidence
+paths when all twelve real maximum-assurance prerequisites are expected to pass. A committed copy of
+a report is historical evidence; changing the candidate commit requires a newly generated external
+report.
 
 ## CI
 

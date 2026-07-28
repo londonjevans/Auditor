@@ -87,6 +87,8 @@ def test_permanent_git_and_key_exclusions_cannot_be_negated() -> None:
         "nested/Mnemonic.txt",
         "nested/Seed.toml",
         "nested/.env.sol",
+        "operator-secrets.example",
+        "nested/operator-secrets.example",
     ],
 )
 def test_control_plane_and_wallet_artifacts_are_case_insensitively_excluded(

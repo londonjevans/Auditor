@@ -6,9 +6,9 @@ commit `e304807cf942542706b88544fa216516f8f95cad`.
 AUTORUN_STATUS: IN_PROGRESS
 CURRENT_TICKET: EVAL-DEFECT-010
 LAST_COMPLETED_TICKET: EVAL-DEFECT-009
-NEXT_ACTION: Freeze the stale-report/current-candidate negative assay, inventory real gate observations and evidence hashes, and design a typed fresh release-attestation derivation without promoting blocked integrations.
-LAST_COMMAND: git commit -m "Validate emitted release artifacts"
-LAST_RESULT: PASS — isolated implementation checkpoint cd46d215bd77e4c6e1d505d4a7f7773bdb78e525 created after the full and ticket-specific validation checkpoints.
+NEXT_ACTION: Review and checkpoint the clean EVAL-010 implementation, then generate fresh external candidate-bound runtime evidence without provider access.
+LAST_COMMAND: .venv/bin/ruff format . && .venv/bin/ruff check . && .venv/bin/mypy && .venv/bin/pytest -q
+LAST_RESULT: PASS — 291 files unchanged, Ruff clean, strict mypy clean across 128 source files, and 1799 passed with 10 explicit external-prerequisite skips in 215.89s.
 REMAINING_CODE_DEFECTS: 4
 REMAINING_REAL_INTEGRATIONS: OpenRouter exact-model smoke/qualification/specialist review; certified-isolation Foundry and Slither; Echidna; Medusa; Halmos; formal proof engine; rootless isolation; isolated replay; product benchmark reports
 BLOCKED_EXTERNAL_PREREQUISITES: Operator-reviewed production model lineage mapping; Echidna; Medusa; Kontrol; Certora; rootless runtime/image; private holdout; and independently adjudicated expert comparison are not yet evidenced as available
@@ -1037,6 +1037,95 @@ LAST_CHECKPOINT_COMMIT: cd46d215bd77e4c6e1d505d4a7f7773bdb78e525
   candidate-commit, effective-config, emitted-artifact-observation, or generation
   timestamp binding. Its reported test/source/schema counts and manifest command
   predate the current candidate, yet its self-hash remains structurally valid.
-- **Exact next safe action:** Add negative tests proving a structurally valid
-  stale report cannot satisfy release validation, then introduce the minimum
-  typed current-candidate binding and deterministic report generator.
+- **Implementation slice:** Added strict, self-hashed observations for a clean
+  Git candidate, one exact emitted audit run, and deterministic local release
+  inputs. The run identity remains explicitly separate from the product
+  candidate identity. Renamed the tracked operator-secret template out of the
+  permanently forbidden `.env.*` namespace while retaining permanent target
+  ingestion exclusions for the replacement template and all secret-shaped
+  inputs.
+- **Evidence derivation slice:** Added descriptor-safe canonical evidence I/O,
+  typed runtime gate receipts, a five-input v2 release report, and a CURRENT
+  run-verification binding. Passed gates require real exit-zero execution,
+  measured tool identity, nonempty checks, and exact artifacts; failures cannot
+  be laundered as blockers. The verifier independently re-observes the emitted
+  run and hash-bound target sources, with distinct explicit target and mmaudit
+  repository roots. The report derives every count and status from the receipt
+  set and binds the candidate commit/tree, effective configuration, emitted
+  inventory, verification, static corpus, and exact evidence files.
+- **Validation so far:**
+  - An initial Ruff command incorrectly included the non-Python
+    `src/mmaudit/templates/mmauditignore` template and exited `2`; it was not
+    repeated unchanged.
+  - `.venv/bin/ruff format src/mmaudit/release_run.py
+    src/mmaudit/release_static.py src/mmaudit/constants.py
+    tests/unit/test_release_run.py tests/unit/test_release_static.py
+    tests/unit/test_repository.py` — PASS; six files unchanged.
+  - `.venv/bin/ruff check <same Python files>` — PASS.
+  - `.venv/bin/mypy src/mmaudit/release_run.py
+    src/mmaudit/release_static.py` — PASS, two source files.
+  - `.venv/bin/pytest -q tests/unit/test_release_run.py
+    tests/unit/test_release_static.py tests/unit/test_repository.py` — PASS,
+    `68 passed in 1.17s`.
+  - `.venv/bin/ruff format <candidate/gate/io/report/run/static/verification
+    source and tests>` — PASS; 14 files unchanged.
+  - `.venv/bin/ruff check <same files>` — PASS.
+  - `.venv/bin/mypy src/mmaudit/release_candidate.py
+    src/mmaudit/release_gates.py src/mmaudit/release_io.py
+    src/mmaudit/release_report.py src/mmaudit/release_run.py
+    src/mmaudit/release_static.py src/mmaudit/release_verification.py` — PASS,
+    seven source files.
+  - `.venv/bin/pytest -q tests/unit/test_release_candidate.py
+    tests/unit/test_release_gates.py tests/unit/test_release_io.py
+    tests/unit/test_release_report.py tests/unit/test_release_run.py
+    tests/unit/test_release_static.py tests/unit/test_release_verification.py`
+    — PASS, `115 passed in 4.01s`.
+  - Hardened the four fixed local commands with Python safe-path execution,
+    a hash-bound socket-denial guard, a fixed sanitized environment, separate
+    Python/distribution hashes, bounded output/runtime/resources, nonempty
+    pytest JUnit accounting, and confirmed descendant process-group cleanup.
+    Regressions prove repository-local tool shadows are ignored, the network
+    guard actually loads, direct/raw socket operations fail, and incomplete
+    process cleanup fails closed.
+  - Added typed bound-observation artifacts. Only exact emitted artifacts,
+    reconstructable CURRENT manifests, and static schemas/nonempty corpus
+    denominators can pass locally. Benchmark certificate, doctor, real
+    maximum-assurance execution, exact-model benchmark, and isolated replay
+    remain `BLOCKED_TECHNICAL`; attempts to relabel a blocker as a pass fail
+    semantic validation.
+  - Added the fixed report collector/generator, fresh private external output
+    roots, exact flat output inventories, generated standalone result schemas,
+    explicit artifact-only versus full validator modes, and an authoritative
+    `--require-complete` policy. The old declarative report builder/loader is no
+    longer a production certification path.
+  - Independent review identified and resolved final source-state TOCTOU,
+    one-way containment, auxiliary evidence identity, non-strict parsing,
+    end-of-validation freshness, exact-role, ignored tool-shadow, tool-hash,
+    network-guard, and descendant-cleanup gaps. No remaining completion-policy
+    bypass was found in the reviewed path.
+  - `.venv/bin/python scripts/generate_release_schemas.py --write` followed by
+    verification — PASS; candidate, bound/local result, gate bundle, v2 report,
+    run, verification, and static-evidence schemas match their strict models.
+  - `.venv/bin/pytest -q tests/unit/test_release.py
+    tests/unit/test_release_candidate.py tests/unit/test_release_collection.py
+    tests/unit/test_release_gates.py tests/unit/test_release_io.py
+    tests/unit/test_release_observations.py tests/unit/test_release_report.py
+    tests/unit/test_release_run.py tests/unit/test_release_runtime.py
+    tests/unit/test_release_schemas.py tests/unit/test_release_static.py
+    tests/unit/test_release_validation.py
+    tests/unit/test_release_verification.py` — PASS, `188 passed in 8.66s`.
+  - All seven immutable baseline evaluation SHA-256 values reverified exactly;
+    `docs/evaluation/` remains unchanged and `git diff --check` passed.
+  - The first tracked-diff credential scan intentionally used an over-broad
+    `OPENROUTER_API_KEY=` pattern and exited `9` on the documented placeholder;
+    it exposed no value. A materially narrower scan rejected real
+    `sk-or-v1-*` shapes and non-placeholder assignments and passed.
+  - `.venv/bin/ruff format . && .venv/bin/ruff check . &&
+    .venv/bin/mypy && .venv/bin/pytest -q` — PASS; 291 files unchanged,
+    Ruff clean, strict mypy clean across 128 source files, and `1799 passed,
+    10 skipped in 215.89s`. Every skip names an unavailable paid-provider,
+    real-engine, rootless-image, local-fork, replay, or loopback prerequisite;
+    none received release credit.
+- **Exact next safe action:** Create the implementation checkpoint, then use
+  that clean exact commit to generate and authoritatively validate fresh
+  external `BLOCKED_TECHNICAL` release evidence without provider access.

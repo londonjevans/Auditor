@@ -1,9 +1,8 @@
 # Additional project-specific exclusions.
 # Defaults already exclude VCS metadata, dependencies, generated output,
-# binary/archive formats, private keys, and .env files.
+# binary/archive formats, private keys, .env files, and operator secret templates.
 #
 # Negation can deliberately re-include an appropriate default exclusion:
 # !vendor/first_party_library/
 
 .mmaudit/
-

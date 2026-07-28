@@ -77,16 +77,17 @@ jobs:
           --skip-codeql
           --fail-on "$FAIL_LEVEL"
           --no-color
-      - name: Validate emitted release evidence
+      - name: Observe emitted scanner artifacts
         run: >-
           python scripts/validate_release_evidence.py
+          --artifact-only
           --run-dir .mmaudit/runs/*
           --artifact-evidence-output .mmaudit/release-artifact-evidence.json
       - name: Upload local reports
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          # Public report subset only. The complete manifest-bound run is
-          # validated in place above; private/** must never be published.
+          # Public report subset only. Artifact observation above does not
+          # validate or claim a complete release; private/** must never be published.
           name: mmaudit-scanner-reports
           path: |
             .mmaudit/runs/*/audit-report.md

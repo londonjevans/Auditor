@@ -1,0 +1,506 @@
+"""Strict, descriptor-safe JSON evidence I/O for release artifacts."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import os
+import stat
+import unicodedata
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+from typing import Any, cast
+
+from pydantic import BaseModel
+
+from mmaudit.orchestration.manifest import ManifestFileBinding
+from mmaudit.reporting.json_report import stable_json
+from mmaudit.repository.ignore import normalize_relative_path
+from mmaudit.repository.secrets import is_sensitive_workspace_path
+
+type JsonScalar = bool | int | float | str | None
+type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]
+type JsonWritable = BaseModel | dict[str, Any] | list[Any]
+
+DEFAULT_MAX_EVIDENCE_BYTES = 100_000_000
+_READ_CHUNK_BYTES = 1024 * 1024
+_NOFOLLOW_FLAG = getattr(os, "O_NOFOLLOW", 0)
+_DIRECTORY_FLAG = getattr(os, "O_DIRECTORY", 0)
+_DESCRIPTOR_TRAVERSAL_SUPPORTED = (
+    _NOFOLLOW_FLAG != 0
+    and _DIRECTORY_FLAG != 0
+    and os.open in os.supports_dir_fd
+    and os.stat in os.supports_dir_fd
+    and os.unlink in os.supports_dir_fd
+)
+
+
+@dataclass(frozen=True, slots=True)
+class JsonEvidenceObservation:
+    """Exact safely read JSON bytes, parsed value, and file binding."""
+
+    value: JsonValue
+    content: bytes
+    binding: ManifestFileBinding
+
+
+@dataclass(frozen=True, slots=True)
+class _RootHandle:
+    path: Path
+    descriptor: int
+    identity: tuple[int, int, int]
+
+
+@dataclass(frozen=True, slots=True)
+class _FileObservation:
+    content: bytes
+    identity: tuple[int, int, int, int, int, int, int]
+
+
+def read_json_evidence(
+    *,
+    evidence_root: Path,
+    relative_path: str | Path,
+    max_bytes: int = DEFAULT_MAX_EVIDENCE_BYTES,
+) -> JsonEvidenceObservation:
+    """Read stable JSON beneath an explicit root without following path links."""
+
+    bound = _validate_max_bytes(max_bytes)
+    normalized = _normalize_evidence_path(relative_path)
+    observation = _observe_file_twice(
+        evidence_root=evidence_root,
+        relative_path=normalized,
+        max_bytes=bound,
+    )
+    value = _decode_json(observation.content)
+    return JsonEvidenceObservation(
+        value=value,
+        content=observation.content,
+        binding=_binding(normalized, observation.content),
+    )
+
+
+def write_json_evidence(
+    *,
+    evidence_root: Path,
+    relative_path: str | Path,
+    value: JsonWritable,
+    max_bytes: int = DEFAULT_MAX_EVIDENCE_BYTES,
+) -> ManifestFileBinding:
+    """Write canonical JSON to one fresh private file and verify its exact inode."""
+
+    bound = _validate_max_bytes(max_bytes)
+    normalized = _normalize_evidence_path(relative_path)
+    try:
+        serialized = stable_json(value).encode("utf-8")
+        _decode_json(serialized)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError("release evidence value is not finite JSON") from exc
+    if not serialized or len(serialized) > bound:
+        raise ValueError("release evidence JSON exceeds its output bound")
+
+    created_identity: tuple[int, int] | None = None
+    completed = False
+    try:
+        root = _open_root(evidence_root)
+        parent_descriptor: int | None = None
+        descriptor: int | None = None
+        try:
+            parent_descriptor, leaf = _open_parent(root, normalized)
+            flags = (
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0) | _NOFOLLOW_FLAG
+            )
+            try:
+                descriptor = os.open(
+                    leaf,
+                    flags,
+                    0o600,
+                    dir_fd=parent_descriptor,
+                )
+            except OSError as exc:
+                raise ValueError("release evidence destination must be a fresh file") from exc
+            os.fchmod(descriptor, 0o600)
+            opened = os.fstat(descriptor)
+            created_identity = (opened.st_dev, opened.st_ino)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_nlink != 1
+                or opened.st_size != 0
+                or stat.S_IMODE(opened.st_mode) != 0o600
+            ):
+                raise ValueError("release evidence output is not a fresh private file")
+
+            view = memoryview(serialized)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise OSError("release evidence write made no progress")
+                view = view[written:]
+            os.fsync(descriptor)
+            written_metadata = os.fstat(descriptor)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            readback = _read_descriptor(descriptor, max_bytes=bound)
+            verified_metadata = os.fstat(descriptor)
+            entry_metadata = os.stat(leaf, dir_fd=parent_descriptor, follow_symlinks=False)
+            if (
+                readback != serialized
+                or created_identity != (written_metadata.st_dev, written_metadata.st_ino)
+                or _stat_identity(written_metadata) != _stat_identity(verified_metadata)
+                or _stat_identity(verified_metadata) != _stat_identity(entry_metadata)
+                or verified_metadata.st_nlink != 1
+                or verified_metadata.st_size != len(serialized)
+                or stat.S_IMODE(verified_metadata.st_mode) != 0o600
+                or _is_link_or_reparse(entry_metadata)
+            ):
+                raise ValueError("release evidence output changed while being written")
+            os.fsync(parent_descriptor)
+        except OSError as exc:
+            raise ValueError("release evidence output could not be written safely") from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            if parent_descriptor is not None:
+                os.close(parent_descriptor)
+            os.close(root.descriptor)
+
+        observed = _observe_file_twice(
+            evidence_root=evidence_root,
+            relative_path=normalized,
+            max_bytes=bound,
+        )
+        if (
+            observed.content != serialized
+            or created_identity != observed.identity[:2]
+            or stat.S_IMODE(observed.identity[2]) != 0o600
+        ):
+            raise ValueError("release evidence output changed after writing")
+        completed = True
+        return _binding(normalized, serialized)
+    finally:
+        if not completed:
+            _unlink_created_file(
+                evidence_root=evidence_root,
+                relative_path=normalized,
+                created_identity=created_identity,
+            )
+
+
+def create_evidence_file_binding(
+    *,
+    evidence_root: Path,
+    relative_path: str | Path,
+    max_bytes: int = DEFAULT_MAX_EVIDENCE_BYTES,
+) -> ManifestFileBinding:
+    """Create a binding from two equal observations of one exact evidence file."""
+
+    bound = _validate_max_bytes(max_bytes)
+    normalized = _normalize_evidence_path(relative_path)
+    observation = _observe_file_twice(
+        evidence_root=evidence_root,
+        relative_path=normalized,
+        max_bytes=bound,
+    )
+    return _binding(normalized, observation.content)
+
+
+def revalidate_evidence_file_binding(
+    *,
+    evidence_root: Path,
+    binding: ManifestFileBinding,
+    max_bytes: int = DEFAULT_MAX_EVIDENCE_BYTES,
+) -> ManifestFileBinding:
+    """Require a declared file binding to equal a fresh exact observation."""
+
+    expected = ManifestFileBinding.model_validate(binding.model_dump(mode="json"))
+    observed = create_evidence_file_binding(
+        evidence_root=evidence_root,
+        relative_path=expected.path,
+        max_bytes=max_bytes,
+    )
+    if observed != expected:
+        raise ValueError("release evidence file differs from its manifest binding")
+    return observed
+
+
+def _observe_file_twice(
+    *,
+    evidence_root: Path,
+    relative_path: str,
+    max_bytes: int,
+) -> _FileObservation:
+    first = _read_file_once(
+        evidence_root=evidence_root,
+        relative_path=relative_path,
+        max_bytes=max_bytes,
+    )
+    second = _read_file_once(
+        evidence_root=evidence_root,
+        relative_path=relative_path,
+        max_bytes=max_bytes,
+    )
+    if first != second:
+        raise ValueError("release evidence file changed while being observed")
+    return second
+
+
+def _read_file_once(
+    *,
+    evidence_root: Path,
+    relative_path: str,
+    max_bytes: int,
+) -> _FileObservation:
+    root = _open_root(evidence_root)
+    parent_descriptor: int | None = None
+    descriptor: int | None = None
+    try:
+        parent_descriptor, leaf = _open_parent(root, relative_path)
+        try:
+            before = os.stat(leaf, dir_fd=parent_descriptor, follow_symlinks=False)
+        except OSError as exc:
+            raise ValueError("release evidence file is missing") from exc
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or _is_link_or_reparse(before)
+            or before.st_nlink != 1
+            or before.st_size > max_bytes
+        ):
+            raise ValueError("release evidence file must be a bounded unshared regular file")
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | _NOFOLLOW_FLAG
+        try:
+            descriptor = os.open(leaf, flags, dir_fd=parent_descriptor)
+        except OSError as exc:
+            raise ValueError("release evidence file could not be opened safely") from exc
+        opened = os.fstat(descriptor)
+        if _stat_identity(opened) != _stat_identity(before):
+            raise ValueError("release evidence file changed before it was read")
+        content = _read_descriptor(descriptor, max_bytes=max_bytes)
+        finished = os.fstat(descriptor)
+        try:
+            after = os.stat(leaf, dir_fd=parent_descriptor, follow_symlinks=False)
+        except OSError as exc:
+            raise ValueError("release evidence file changed while it was read") from exc
+        identities = {
+            _stat_identity(before),
+            _stat_identity(opened),
+            _stat_identity(finished),
+            _stat_identity(after),
+        }
+        if (
+            len(identities) != 1
+            or len(content) != before.st_size
+            or finished.st_nlink != 1
+            or _is_link_or_reparse(after)
+        ):
+            raise ValueError("release evidence file changed while it was read")
+    except OSError as exc:
+        raise ValueError("release evidence file could not be read safely") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if parent_descriptor is not None:
+            os.close(parent_descriptor)
+        os.close(root.descriptor)
+    _require_same_root(evidence_root, root.identity)
+    return _FileObservation(content=content, identity=_stat_identity(after))
+
+
+def _open_root(path: Path) -> _RootHandle:
+    if not _DESCRIPTOR_TRAVERSAL_SUPPORTED:
+        raise ValueError("descriptor-safe release evidence traversal is unavailable")
+    absolute = Path(os.path.abspath(path))
+    current = Path(absolute.anchor)
+    try:
+        for part in absolute.parts[1:]:
+            current /= part
+            metadata = current.lstat()
+            if stat.S_ISLNK(metadata.st_mode) or current.is_junction():
+                raise ValueError("release evidence root may not traverse a link")
+        before = absolute.lstat()
+    except OSError as exc:
+        raise ValueError("release evidence root is unavailable") from exc
+    if not stat.S_ISDIR(before.st_mode) or _is_link_or_reparse(before):
+        raise ValueError("release evidence root must be an unlinked directory")
+    flags = os.O_RDONLY | _DIRECTORY_FLAG | getattr(os, "O_CLOEXEC", 0) | _NOFOLLOW_FLAG
+    try:
+        descriptor = os.open(absolute, flags)
+    except OSError as exc:
+        raise ValueError("release evidence root could not be opened safely") from exc
+    try:
+        opened = os.fstat(descriptor)
+        after = absolute.lstat()
+        expected = _directory_identity(before)
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or _is_link_or_reparse(after)
+            or _directory_identity(opened) != expected
+            or _directory_identity(after) != expected
+        ):
+            raise ValueError("release evidence root changed while being opened")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return _RootHandle(
+        path=absolute.resolve(strict=True),
+        descriptor=descriptor,
+        identity=expected,
+    )
+
+
+def _open_parent(root: _RootHandle, relative_path: str) -> tuple[int, str]:
+    parts = PurePosixPath(relative_path).parts
+    descriptor = os.dup(root.descriptor)
+    try:
+        for part in parts[:-1]:
+            flags = os.O_RDONLY | _DIRECTORY_FLAG | getattr(os, "O_CLOEXEC", 0) | _NOFOLLOW_FLAG
+            try:
+                child = os.open(part, flags, dir_fd=descriptor)
+            except OSError as exc:
+                raise ValueError("release evidence parent is unavailable or linked") from exc
+            try:
+                metadata = os.fstat(child)
+                if not stat.S_ISDIR(metadata.st_mode) or _is_link_or_reparse(metadata):
+                    raise ValueError("release evidence parent must be an unlinked directory")
+            except BaseException:
+                os.close(child)
+                raise
+            os.close(descriptor)
+            descriptor = child
+        return descriptor, parts[-1]
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _read_descriptor(descriptor: int, *, max_bytes: int) -> bytes:
+    content = bytearray()
+    while len(content) <= max_bytes:
+        chunk = os.read(
+            descriptor,
+            min(_READ_CHUNK_BYTES, max_bytes + 1 - len(content)),
+        )
+        if not chunk:
+            break
+        content.extend(chunk)
+    if len(content) > max_bytes:
+        raise ValueError("release evidence file exceeds its read bound")
+    return bytes(content)
+
+
+def _require_same_root(path: Path, expected: tuple[int, int, int]) -> None:
+    root = _open_root(path)
+    try:
+        if root.identity != expected:
+            raise ValueError("release evidence root changed during file observation")
+    finally:
+        os.close(root.descriptor)
+
+
+def _normalize_evidence_path(path: str | Path) -> str:
+    raw = str(path)
+    try:
+        normalized = normalize_relative_path(raw)
+    except ValueError as exc:
+        raise ValueError("release evidence path must be a safe relative path") from exc
+    if (
+        not normalized
+        or normalized == "."
+        or normalized != raw
+        or normalized.startswith("-")
+        or unicodedata.normalize("NFC", normalized) != normalized
+        or is_sensitive_workspace_path(normalized)
+    ):
+        raise ValueError("release evidence path must be direct, normalized, and non-sensitive")
+    return normalized
+
+
+def _validate_max_bytes(max_bytes: int) -> int:
+    if type(max_bytes) is not int or not 1 <= max_bytes <= DEFAULT_MAX_EVIDENCE_BYTES:
+        raise ValueError("release evidence byte bound is invalid")
+    return max_bytes
+
+
+def _binding(relative_path: str, content: bytes) -> ManifestFileBinding:
+    return ManifestFileBinding(
+        path=relative_path,
+        sha256=hashlib.sha256(content).hexdigest(),
+        size=len(content),
+    )
+
+
+def _decode_json(data: bytes) -> JsonValue:
+    def unique_object(pairs: list[tuple[str, JsonValue]]) -> dict[str, JsonValue]:
+        result: dict[str, JsonValue] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("release evidence JSON contains duplicate keys")
+            result[key] = value
+        return result
+
+    def reject_nonfinite(value: str) -> None:
+        raise ValueError("release evidence JSON contains a non-finite value")
+
+    def finite_float(value: str) -> float:
+        parsed = float(value)
+        if not math.isfinite(parsed):
+            raise ValueError("release evidence JSON contains an out-of-range number")
+        return parsed
+
+    try:
+        value = json.loads(
+            data,
+            object_pairs_hook=unique_object,
+            parse_constant=reject_nonfinite,
+            parse_float=finite_float,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("release evidence file is not valid JSON") from exc
+    return cast(JsonValue, value)
+
+
+def _is_link_or_reparse(metadata: os.stat_result) -> bool:
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    return stat.S_ISLNK(metadata.st_mode) or bool(attributes & reparse_flag)
+
+
+def _directory_identity(metadata: os.stat_result) -> tuple[int, int, int]:
+    return metadata.st_dev, metadata.st_ino, metadata.st_mode
+
+
+def _stat_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _unlink_created_file(
+    *,
+    evidence_root: Path,
+    relative_path: str,
+    created_identity: tuple[int, int] | None,
+) -> None:
+    if created_identity is None:
+        return
+    root: _RootHandle | None = None
+    parent_descriptor: int | None = None
+    try:
+        root = _open_root(evidence_root)
+        parent_descriptor, leaf = _open_parent(root, relative_path)
+        metadata = os.stat(leaf, dir_fd=parent_descriptor, follow_symlinks=False)
+        if (metadata.st_dev, metadata.st_ino) == created_identity:
+            os.unlink(leaf, dir_fd=parent_descriptor)
+            os.fsync(parent_descriptor)
+    except (OSError, ValueError):
+        return
+    finally:
+        if parent_descriptor is not None:
+            os.close(parent_descriptor)
+        if root is not None:
+            os.close(root.descriptor)

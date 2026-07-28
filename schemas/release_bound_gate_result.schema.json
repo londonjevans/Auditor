@@ -1,0 +1,691 @@
+{
+  "$defs": {
+    "ArtifactSetSubject": {
+      "additionalProperties": false,
+      "description": "Exact emitted artifact-set identity used by the artifacts gate.",
+      "properties": {
+        "artifact_count": {
+          "minimum": 1,
+          "title": "Artifact Count",
+          "type": "integer"
+        },
+        "artifact_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Artifact Evidence Sha256",
+          "type": "string"
+        },
+        "artifact_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Artifact Inventory Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "const": "artifact_set",
+          "title": "Kind",
+          "type": "string"
+        },
+        "manifest_file_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest File Sha256",
+          "type": "string"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "traceability_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Traceability Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "run_id",
+        "artifact_evidence_sha256",
+        "artifact_inventory_sha256",
+        "artifact_count",
+        "manifest_file_sha256",
+        "traceability_sha256"
+      ],
+      "title": "ArtifactSetSubject",
+      "type": "object"
+    },
+    "AuditProfile": {
+      "enum": [
+        "quick",
+        "standard",
+        "deep",
+        "maximum-assurance"
+      ],
+      "title": "AuditProfile",
+      "type": "string"
+    },
+    "BoundReleaseGateSubject": {
+      "discriminator": {
+        "mapping": {
+          "artifact_set": "#/$defs/ArtifactSetSubject",
+          "manifest_set": "#/$defs/ManifestSetSubject",
+          "prerequisite_blocker": "#/$defs/PrerequisiteBlockerSubject",
+          "schema_set": "#/$defs/SchemaSetSubject"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ArtifactSetSubject"
+        },
+        {
+          "$ref": "#/$defs/ManifestSetSubject"
+        },
+        {
+          "$ref": "#/$defs/SchemaSetSubject"
+        },
+        {
+          "$ref": "#/$defs/PrerequisiteBlockerSubject"
+        }
+      ]
+    },
+    "ManifestSetSubject": {
+      "additionalProperties": false,
+      "description": "Reconstructable manifest/configuration and CURRENT verification identity.",
+      "properties": {
+        "achieved_profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditProfile"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "effective_config_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Effective Config Sha256",
+          "type": "string"
+        },
+        "kind": {
+          "const": "manifest_set",
+          "title": "Kind",
+          "type": "string"
+        },
+        "manifest_file_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest File Sha256",
+          "type": "string"
+        },
+        "manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Manifest Sha256",
+          "type": "string"
+        },
+        "requested_profile": {
+          "$ref": "#/$defs/AuditProfile"
+        },
+        "run_configuration_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Run Configuration Sha256",
+          "type": "string"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "verification_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Verification Binding Sha256",
+          "type": "string"
+        },
+        "verification_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Verification Sha256",
+          "type": "string"
+        },
+        "verification_status": {
+          "const": "current",
+          "title": "Verification Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "run_id",
+        "manifest_sha256",
+        "manifest_file_sha256",
+        "run_configuration_sha256",
+        "effective_config_sha256",
+        "requested_profile",
+        "achieved_profile",
+        "verification_binding_sha256",
+        "verification_sha256",
+        "verification_status"
+      ],
+      "title": "ManifestSetSubject",
+      "type": "object"
+    },
+    "PrerequisiteBlockerSubject": {
+      "additionalProperties": false,
+      "description": "Explicit absence of one dedicated real runtime prerequisite.",
+      "properties": {
+        "code": {
+          "maxLength": 100,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]{0,99}$",
+          "title": "Code",
+          "type": "string"
+        },
+        "gate_id": {
+          "$ref": "#/$defs/ReleaseGateId"
+        },
+        "kind": {
+          "const": "prerequisite_blocker",
+          "title": "Kind",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "gate_id",
+        "code",
+        "summary"
+      ],
+      "title": "PrerequisiteBlockerSubject",
+      "type": "object"
+    },
+    "ReleaseGateFixedPlan": {
+      "additionalProperties": false,
+      "description": "Self-hashed canonical plan used to prevent receipt semantic replay.",
+      "properties": {
+        "arguments": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Arguments",
+          "type": "array"
+        },
+        "child_environment_contract_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Child Environment Contract Sha256"
+        },
+        "executor": {
+          "$ref": "#/$defs/ReleaseGatePlanExecutor"
+        },
+        "fixed_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Fixed Plan Sha256",
+          "type": "string"
+        },
+        "gate_id": {
+          "$ref": "#/$defs/ReleaseGateId"
+        },
+        "generated_by": {
+          "const": "mmaudit",
+          "title": "Generated By",
+          "type": "string"
+        },
+        "max_output_bytes": {
+          "maximum": 4194304,
+          "minimum": 1,
+          "title": "Max Output Bytes",
+          "type": "integer"
+        },
+        "module": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Module"
+        },
+        "network_allowed": {
+          "const": false,
+          "title": "Network Allowed",
+          "type": "boolean"
+        },
+        "network_guard_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Network Guard Sha256"
+        },
+        "python_safe_path": {
+          "anyOf": [
+            {
+              "const": true,
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Python Safe Path"
+        },
+        "result_artifact_path": {
+          "pattern": "^release-gate-[a-z0-9_]+-result\\.json$",
+          "title": "Result Artifact Path",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "semantic_contract": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Semantic Contract",
+          "type": "string"
+        },
+        "supplemental_artifact_path": {
+          "anyOf": [
+            {
+              "pattern": "^release-gate-[a-z0-9_]+-[a-z0-9_-]+\\.[a-z0-9]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supplemental Artifact Path"
+        },
+        "timeout_seconds": {
+          "anyOf": [
+            {
+              "maximum": 3600,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timeout Seconds"
+        }
+      },
+      "required": [
+        "schema_version",
+        "generated_by",
+        "gate_id",
+        "executor",
+        "semantic_contract",
+        "arguments",
+        "max_output_bytes",
+        "python_safe_path",
+        "result_artifact_path",
+        "network_allowed",
+        "fixed_plan_sha256"
+      ],
+      "title": "ReleaseGateFixedPlan",
+      "type": "object"
+    },
+    "ReleaseGateId": {
+      "description": "The exact fixed twelve-gate release portfolio.",
+      "enum": [
+        "artifacts",
+        "benchmark_certificate",
+        "doctor",
+        "manifests",
+        "maximum_assurance_run",
+        "model_benchmark",
+        "mypy",
+        "pytest",
+        "replay",
+        "ruff_check",
+        "ruff_format",
+        "schemas"
+      ],
+      "title": "ReleaseGateId",
+      "type": "string"
+    },
+    "ReleaseGatePlanExecutor": {
+      "description": "Closed executor family for one release-gate semantic contract.",
+      "enum": [
+        "fixed_local_python_module",
+        "bound_runtime_observation"
+      ],
+      "title": "ReleaseGatePlanExecutor",
+      "type": "string"
+    },
+    "ReleaseGatePrerequisiteBlocker": {
+      "additionalProperties": false,
+      "description": "Typed reason that a real prerequisite could not execute.",
+      "properties": {
+        "code": {
+          "maxLength": 100,
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]{0,99}$",
+          "title": "Code",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "summary"
+      ],
+      "title": "ReleaseGatePrerequisiteBlocker",
+      "type": "object"
+    },
+    "ReleaseGateStatus": {
+      "description": "One derived gate outcome.",
+      "enum": [
+        "passed",
+        "blocked_technical",
+        "failed"
+      ],
+      "title": "ReleaseGateStatus",
+      "type": "string"
+    },
+    "ReleaseReportInputBinding": {
+      "additionalProperties": false,
+      "description": "Exact file and inner-evidence identity for one fixed report input.",
+      "properties": {
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "file_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "File Sha256",
+          "type": "string"
+        },
+        "file_size": {
+          "maximum": 100000000,
+          "minimum": 1,
+          "title": "File Size",
+          "type": "integer"
+        },
+        "path": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/ReleaseReportInputRole"
+        }
+      },
+      "required": [
+        "role",
+        "path",
+        "file_sha256",
+        "file_size",
+        "evidence_sha256"
+      ],
+      "title": "ReleaseReportInputBinding",
+      "type": "object"
+    },
+    "ReleaseReportInputRole": {
+      "description": "Fixed typed inputs from which a release report is derived.",
+      "enum": [
+        "candidate",
+        "gate_evidence",
+        "run",
+        "run_verification",
+        "static_evidence"
+      ],
+      "title": "ReleaseReportInputRole",
+      "type": "string"
+    },
+    "SchemaSetSubject": {
+      "additionalProperties": false,
+      "description": "Nonempty static schema/corpus evidence bound to the candidate.",
+      "properties": {
+        "adversarial_cases": {
+          "minimum": 1,
+          "title": "Adversarial Cases",
+          "type": "integer"
+        },
+        "benchmark_source_bindings": {
+          "minimum": 1,
+          "title": "Benchmark Source Bindings",
+          "type": "integer"
+        },
+        "candidate_commit": {
+          "title": "Candidate Commit",
+          "type": "string"
+        },
+        "economic_cases": {
+          "minimum": 1,
+          "title": "Economic Cases",
+          "type": "integer"
+        },
+        "full_protocol_files": {
+          "minimum": 1,
+          "title": "Full Protocol Files",
+          "type": "integer"
+        },
+        "kind": {
+          "const": "schema_set",
+          "title": "Kind",
+          "type": "string"
+        },
+        "model_cases": {
+          "minimum": 1,
+          "title": "Model Cases",
+          "type": "integer"
+        },
+        "schema_count": {
+          "minimum": 1,
+          "title": "Schema Count",
+          "type": "integer"
+        },
+        "schema_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Schema Inventory Sha256",
+          "type": "string"
+        },
+        "static_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Static Evidence Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "candidate_commit",
+        "static_evidence_sha256",
+        "schema_inventory_sha256",
+        "schema_count",
+        "benchmark_source_bindings",
+        "model_cases",
+        "economic_cases",
+        "adversarial_cases",
+        "full_protocol_files"
+      ],
+      "title": "SchemaSetSubject",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/release_bound_gate_result.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Self-hashed bound release observation artifact.",
+  "properties": {
+    "argv": {
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "title": "Argv",
+      "type": "array"
+    },
+    "argv_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Argv Sha256",
+      "type": "string"
+    },
+    "candidate_distribution_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Candidate Distribution Sha256",
+      "type": "string"
+    },
+    "candidate_observation_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Candidate Observation Sha256",
+      "type": "string"
+    },
+    "ended_at": {
+      "format": "date-time",
+      "title": "Ended At",
+      "type": "string"
+    },
+    "execution_evidence": {
+      "const": "real",
+      "title": "Execution Evidence",
+      "type": "string"
+    },
+    "gate_id": {
+      "$ref": "#/$defs/ReleaseGateId"
+    },
+    "generated_by": {
+      "const": "mmaudit",
+      "title": "Generated By",
+      "type": "string"
+    },
+    "plan": {
+      "$ref": "#/$defs/ReleaseGateFixedPlan"
+    },
+    "prerequisite_blocker": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReleaseGatePrerequisiteBlocker"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "python_executable_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Python Executable Sha256",
+      "type": "string"
+    },
+    "result_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Result Sha256",
+      "type": "string"
+    },
+    "run_binding_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Run Binding Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_input_bindings": {
+      "items": {
+        "$ref": "#/$defs/ReleaseReportInputBinding"
+      },
+      "maxItems": 4,
+      "minItems": 1,
+      "title": "Source Input Bindings",
+      "type": "array"
+    },
+    "source_input_inventory_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Input Inventory Sha256",
+      "type": "string"
+    },
+    "started_at": {
+      "format": "date-time",
+      "title": "Started At",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/ReleaseGateStatus"
+    },
+    "subject": {
+      "$ref": "#/$defs/BoundReleaseGateSubject"
+    },
+    "subject_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Subject Sha256",
+      "type": "string"
+    },
+    "tool_name": {
+      "const": "mmaudit.release_observations",
+      "title": "Tool Name",
+      "type": "string"
+    },
+    "tool_version": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Tool Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "generated_by",
+    "gate_id",
+    "candidate_observation_sha256",
+    "run_binding_sha256",
+    "plan",
+    "status",
+    "started_at",
+    "ended_at",
+    "argv",
+    "argv_sha256",
+    "tool_name",
+    "tool_version",
+    "python_executable_sha256",
+    "candidate_distribution_sha256",
+    "execution_evidence",
+    "source_input_bindings",
+    "source_input_inventory_sha256",
+    "subject",
+    "subject_sha256",
+    "prerequisite_blocker",
+    "result_sha256"
+  ],
+  "title": "BoundReleaseGateResult",
+  "type": "object"
+}

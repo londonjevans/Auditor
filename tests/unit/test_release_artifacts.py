@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -40,6 +41,7 @@ from mmaudit.traceability import (
     build_traceability_matrix,
     write_traceability_artifact,
 )
+from scripts import validate_release_evidence as release_evidence_cli
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = ROOT / "schemas" / "release_artifact_evidence.schema.json"
@@ -444,7 +446,7 @@ def test_evidence_model_rejects_inventory_and_self_hash_tampering(
         ReleaseArtifactEvidence.model_validate(payload)
 
 
-def test_release_validator_requires_an_explicit_emitted_run() -> None:
+def test_release_validator_requires_an_explicit_mode() -> None:
     result = subprocess.run(
         [sys.executable, "scripts/validate_release_evidence.py"],
         cwd=ROOT,
@@ -455,8 +457,200 @@ def test_release_validator_requires_an_explicit_emitted_run() -> None:
     )
 
     assert result.returncode == 2
-    assert "--run-dir" in result.stderr
-    assert "release evidence valid" not in result.stdout
+    assert "--artifact-only" in result.stderr
+    assert "--full" in result.stderr
+    assert "valid" not in result.stdout
+
+
+def test_release_validator_rejects_legacy_implicit_report_invocation(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_release_evidence.py",
+            "--run-dir",
+            str(run_dir),
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 2
+    assert "--artifact-only" in result.stderr
+    assert "--full" in result.stderr
+    assert "valid" not in result.stdout
+
+
+def test_release_validator_artifact_only_requires_run_directory() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_release_evidence.py",
+            "--artifact-only",
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 2
+    assert "--artifact-only requires --run-dir" in result.stderr
+    assert "valid" not in result.stdout
+
+
+def test_release_validator_full_mode_requires_every_authoritative_input(
+    tmp_path: Path,
+) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_release_evidence.py",
+            "--full",
+            "--run-dir",
+            str(tmp_path / "run"),
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 2
+    assert "--report-root" in result.stderr
+    assert "--report-path" in result.stderr
+    assert "--evidence-root" in result.stderr
+    assert "--release-repository" in result.stderr
+    assert "--target-repository" in result.stderr
+    assert "--artifact-evidence-file" in result.stderr
+    assert "--run-verification-file" in result.stderr
+    assert "valid" not in result.stdout
+
+
+def test_release_validator_artifact_only_rejects_report_inputs(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_release_evidence.py",
+            "--artifact-only",
+            "--run-dir",
+            str(tmp_path / "run"),
+            "--report-root",
+            str(tmp_path / "reports"),
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 2
+    assert "--artifact-only does not accept full-report options" in result.stderr
+    assert "valid" not in result.stdout
+
+
+def test_release_validator_full_mode_forwards_only_explicit_authoritative_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    observed: dict[str, object] = {}
+
+    def validate(**kwargs: object) -> SimpleNamespace:
+        observed.update(kwargs)
+        return SimpleNamespace(
+            status=SimpleNamespace(value="blocked_technical"),
+            passed_gates=7,
+            total_gates=12,
+        )
+
+    monkeypatch.setattr(release_evidence_cli, "validate_release_report", validate)
+    paths = {
+        "report_root": tmp_path / "report-root",
+        "evidence_root": tmp_path / "evidence-root",
+        "release_repository_root": tmp_path / "release-repository",
+        "emitted_run_dir": tmp_path / "run",
+        "target_repository_root": tmp_path / "target-repository",
+        "artifact_evidence_path": tmp_path / "artifact-evidence.json",
+        "run_verification_path": tmp_path / "raw-run-verification.json",
+    }
+
+    release_evidence_cli.main(
+        [
+            "--full",
+            "--report-root",
+            str(paths["report_root"]),
+            "--report-path",
+            "release-report.json",
+            "--evidence-root",
+            str(paths["evidence_root"]),
+            "--release-repository",
+            str(paths["release_repository_root"]),
+            "--run-dir",
+            str(paths["emitted_run_dir"]),
+            "--target-repository",
+            str(paths["target_repository_root"]),
+            "--artifact-evidence-file",
+            str(paths["artifact_evidence_path"]),
+            "--run-verification-file",
+            str(paths["run_verification_path"]),
+        ]
+    )
+
+    assert observed == {
+        **paths,
+        "report_relative_path": "release-report.json",
+        "require_complete": False,
+    }
+    assert (
+        capsys.readouterr().out == "release report integrity valid: "
+        "release_status=blocked_technical passed_gates=7/12\n"
+    )
+
+
+def test_release_validator_require_complete_propagates_fail_closed_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_incomplete(**kwargs: object) -> SimpleNamespace:
+        assert kwargs["require_complete"] is True
+        raise ValueError("release does not satisfy the complete maximum-assurance policy")
+
+    monkeypatch.setattr(release_evidence_cli, "validate_release_report", reject_incomplete)
+
+    with pytest.raises(ValueError, match="does not satisfy"):
+        release_evidence_cli.main(
+            [
+                "--full",
+                "--report-root",
+                str(tmp_path / "report-root"),
+                "--report-path",
+                "release-report.json",
+                "--evidence-root",
+                str(tmp_path / "evidence-root"),
+                "--release-repository",
+                str(tmp_path / "release-repository"),
+                "--run-dir",
+                str(tmp_path / "run"),
+                "--target-repository",
+                str(tmp_path / "target-repository"),
+                "--artifact-evidence-file",
+                str(tmp_path / "artifact-evidence.json"),
+                "--run-verification-file",
+                str(tmp_path / "raw-run-verification.json"),
+                "--require-complete",
+            ]
+        )
 
 
 def test_release_validator_observes_run_and_writes_sealed_evidence(
@@ -471,6 +665,7 @@ def test_release_validator_observes_run_and_writes_sealed_evidence(
         [
             sys.executable,
             "scripts/validate_release_evidence.py",
+            "--artifact-only",
             "--run-dir",
             str(run_dir),
             "--artifact-evidence-output",
@@ -484,7 +679,8 @@ def test_release_validator_observes_run_and_writes_sealed_evidence(
     )
 
     assert result.returncode == 0, result.stderr
-    assert "release evidence valid" in result.stdout
+    assert "release artifact observation valid" in result.stdout
+    assert "release report" not in result.stdout
     evidence = load_release_artifact_evidence(output)
     assert evidence.run_id == manifest.run_id
     assert evidence.manifest_sha256 == manifest.manifest_sha256
@@ -502,6 +698,7 @@ def test_release_validator_refuses_to_write_observation_inside_the_run(
         [
             sys.executable,
             "scripts/validate_release_evidence.py",
+            "--artifact-only",
             "--run-dir",
             str(run_dir),
             "--artifact-evidence-output",
@@ -546,6 +743,7 @@ def test_release_validator_refuses_case_or_unicode_alias_inside_run(
         [
             sys.executable,
             "scripts/validate_release_evidence.py",
+            "--artifact-only",
             "--run-dir",
             str(run_dir),
             "--artifact-evidence-output",
