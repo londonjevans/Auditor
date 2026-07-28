@@ -4,16 +4,16 @@ The seven files under `docs/evaluation/` are immutable baseline evidence from
 commit `e304807cf942542706b88544fa216516f8f95cad`.
 
 AUTORUN_STATUS: IN_PROGRESS
-CURRENT_TICKET: EVAL-DEFECT-009
-LAST_COMPLETED_TICKET: EVAL-DEFECT-008
-NEXT_ACTION: Inventory the release evidence producer, emitted artifact manifest, and validator; reproduce missing, linked, undeclared, name-only, stale, and hash-mismatched artifact acceptance before changing validation behavior.
-LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_benchmark.py tests/unit/test_benchmark_certificate.py tests/unit/test_benchmark_model_evidence.py tests/unit/test_benchmark_assurance_binding.py tests/unit/test_benchmark_report_schema.py tests/unit/test_cli.py::test_benchmark_certificate_cli_success_and_current_verification tests/unit/test_cli.py::test_benchmark_certificate_cli_rejects_resealed_semantic_counter_bypass tests/unit/test_scanners_reporting.py tests/integration/test_pipeline.py
-LAST_RESULT: PASS — 176 focused benchmark, certificate, schema, reporting, pipeline, and CLI tests passed in 58.86s; the exact checkpoint also passed Ruff format/check, strict mypy, and 1590 pytest tests with 10 explicit real-integration skips.
-REMAINING_CODE_DEFECTS: 5
+CURRENT_TICKET: EVAL-DEFECT-010
+LAST_COMPLETED_TICKET: EVAL-DEFECT-009
+NEXT_ACTION: Freeze the stale-report/current-candidate negative assay, inventory real gate observations and evidence hashes, and design a typed fresh release-attestation derivation without promoting blocked integrations.
+LAST_COMMAND: git commit -m "Validate emitted release artifacts"
+LAST_RESULT: PASS — isolated implementation checkpoint cd46d215bd77e4c6e1d505d4a7f7773bdb78e525 created after the full and ticket-specific validation checkpoints.
+REMAINING_CODE_DEFECTS: 4
 REMAINING_REAL_INTEGRATIONS: OpenRouter exact-model smoke/qualification/specialist review; certified-isolation Foundry and Slither; Echidna; Medusa; Halmos; formal proof engine; rootless isolation; isolated replay; product benchmark reports
 BLOCKED_EXTERNAL_PREREQUISITES: Operator-reviewed production model lineage mapping; Echidna; Medusa; Kontrol; Certora; rootless runtime/image; private holdout; and independently adjudicated expert comparison are not yet evidenced as available
 OPENROUTER_COST_USED_USD: 0.00118674
-LAST_CHECKPOINT_COMMIT: a80087321a1a4f6ef1f79aee19ff4eebd8d7a0cd
+LAST_CHECKPOINT_COMMIT: cd46d215bd77e4c6e1d505d4a7f7773bdb78e525
 
 ## Immutable baseline
 
@@ -911,3 +911,132 @@ LAST_CHECKPOINT_COMMIT: a80087321a1a4f6ef1f79aee19ff4eebd8d7a0cd
 - **Next action:** Begin `EVAL-DEFECT-009` by reproducing declared-name,
   missing/link, undeclared, stale, and hash-mismatch acceptance in release
   validation.
+
+## 2026-07-28 — EVAL-DEFECT-009
+
+- **Status:** `COMPLETE`
+- **Defensive objective:** Require release validation to observe an actual,
+  bounded emitted run directory, load its exact sealed evidence manifest, and
+  verify the complete artifact inventory and hashes before runtime artifact names
+  can satisfy traceability or release gates.
+- **Baseline assay:** `.venv/bin/python scripts/validate_release_evidence.py`
+  exited `0` and printed `release evidence valid` without accepting or loading a
+  run directory. The script constructed `runtime_artifacts` by unioning the
+  filenames declared in traceability itself, so missing, linked, undeclared,
+  stale, or hash-mismatched emitted artifacts could not affect the result.
+- **Implementation slice:** Added a typed, self-hashed release-artifact
+  observation over one explicit emitted run; the observer parses the exact
+  safely-read 1.1 manifest bytes, validates the complete emitted set and hashes,
+  verifies current traceability content and required runtime artifacts, and
+  observes the inventory again before accepting it. Artifact hashing now uses a
+  non-following file descriptor with before/opened/finished/after identity
+  reconciliation. Evidence writes use a fresh private read/write descriptor,
+  byte-for-byte readback, and descriptor-to-final-path identity comparison.
+  The validator refuses output within the observed run using directory identity
+  rather than lexical casing. CI validates one emitted run and uploads only an
+  explicit public-artifact allowlist, its run manifest, and the sealed
+  observation; `private/**` remains local.
+- **Negative regressions:** Missing manifest; linked run root or ancestor;
+  linked/hardlinked artifact; missing, undeclared, changed-hash, stale
+  traceability, legacy/non-reconstructable manifest, resealed name-only reduced
+  inventory, pathname swap before open, evidence-link/tamper/replacement,
+  validator-without-run, output-inside-run, and distinct case/Unicode filesystem
+  aliases.
+- **Runtime validation:** A fresh local scanner-only run was emitted at
+  `/private/tmp/mmaudit-eval009-runtime/runs/20260728T082858Z-66f3e567`.
+  `scripts/validate_release_evidence.py` observed 31 actual artifacts and wrote
+  `docs/remediation/runtime/eval_defect_009.json`; its file SHA-256 is
+  `bf2420a76c4009bb9ddb622b252c1658ddef974d80a923edc8a3be821bb869c1`.
+  This is real local STANDARD scanner evidence, not maximum-assurance
+  certification.
+- **Validation so far:**
+  - `.venv/bin/ruff format src/mmaudit/orchestration/manifest.py
+    src/mmaudit/release_artifacts.py tests/unit/test_release_artifacts.py
+    scripts/validate_release_evidence.py` — PASS; one file reformatted.
+  - `.venv/bin/ruff check <same files>` — PASS.
+  - `.venv/bin/mypy src/mmaudit/orchestration/manifest.py
+    src/mmaudit/release_artifacts.py` — PASS, two source files.
+  - `.venv/bin/pytest -q tests/unit/test_release_artifacts.py` — PASS,
+    `20 passed in 3.34s`, including both distinct filesystem-alias regressions.
+  - The first adjacent command named nonexistent
+    `tests/integration/test_traceability.py`; pytest exited `4` before
+    collection. The corrected path is `test_traceability_artifact.py`; this
+    command will not be repeated unchanged.
+  - The next command used the corrected traceability path but guessed a
+    nonexistent pipeline test node; `rg` isolated the actual
+    `test_successful_multi_agent_audit` node before retrying.
+  - `.venv/bin/pytest -q tests/unit/test_manifest.py tests/unit/test_release.py
+    tests/unit/test_release_artifacts.py tests/unit/test_traceability.py
+    tests/integration/test_traceability_artifact.py
+    tests/integration/test_pipeline.py::test_successful_multi_agent_audit` —
+    PASS, `52 passed in 4.48s`.
+  - Ruby/Psych 2.6 rejected the newer `aliases:` keyword after the tests passed;
+    the compatible read-only parser command then validated the workflow as a
+    four-job mapping. `git diff --check` passed.
+  - Independent reviewers found no remaining EVAL-009 code blocker after
+    verifying the public/private CI boundary, exact-run selection, SARIF handoff,
+    manifest parsing, file-descriptor-bound hashing, evidence readback/final-path
+    identity, missing/resealed/stale/hash/link regressions, and case/Unicode
+    containment aliases. The uploaded CI bundle is explicitly documented as a
+    public report subset, not a complete independently revalidatable run.
+  - Re-running `.venv/bin/python scripts/validate_release_evidence.py --run-dir
+    /private/tmp/mmaudit-eval009-runtime/runs/20260728T082858Z-66f3e567
+    --artifact-evidence-output
+    docs/remediation/runtime/eval_defect_009.json` under the hardened writer —
+    PASS; 31 artifacts, mode `0600`, 5,568 bytes, unchanged deterministic file
+    SHA-256
+    `bf2420a76c4009bb9ddb622b252c1658ddef974d80a923edc8a3be821bb869c1`.
+  - `.venv/bin/ruff format .` — PASS, 266 files unchanged.
+  - `.venv/bin/ruff check .` — PASS.
+  - `.venv/bin/mypy` — PASS, 117 source files.
+  - `.venv/bin/pytest -q` — PASS, `1610 passed, 10 skipped in 205.76s`;
+    every skip names an unavailable paid-provider, real engine, rootless image,
+    local-fork isolation, replay, or loopback prerequisite and none counted as
+    release execution.
+  - `make release-evidence PYTHON=.venv/bin/python
+    RELEASE_RUN_DIR=/private/tmp/mmaudit-eval009-runtime/runs/20260728T082858Z-66f3e567`
+    — PASS; the release validator loaded the exact emitted manifest and reported
+    `schemas=21`, `benchmark_sources=15`, `model_cases=16`,
+    `economic_cases=18`, `adversarial_cases=10`,
+    `full_protocol_files=9`, and the honest existing
+    `release_status=blocked_technical`.
+  - `.venv/bin/pytest -q tests/unit/test_release_artifacts.py
+    tests/unit/test_manifest.py` — PASS, `33 passed in 4.13s`.
+  - Final integrity review: Ruby/Psych parsed the workflow as four jobs;
+    `git diff --check` passed; all seven immutable evaluation hashes match;
+    `docs/evaluation/` has no diff; `.env` remains ignored and unstaged; the
+    changed source, tests, schema, and runtime artifact contain no high-risk
+    credential/key pattern.
+- **Remaining limitation:** Commit-bound release-report freshness and
+  reconciliation with the exact candidate remain intentionally deferred to
+  `EVAL-DEFECT-010`; concurrent replacement of an already validated ancestor
+  directory requires local filesystem control while no target process executes
+  and remains outside this ticket's file-level acceptance contract.
+- **Runtime evidence:** `docs/remediation/runtime/eval_defect_009.json`, SHA-256
+  `bf2420a76c4009bb9ddb622b252c1658ddef974d80a923edc8a3be821bb869c1`.
+- **Result:** `COMPLETE` at implementation checkpoint
+  `cd46d215bd77e4c6e1d505d4a7f7773bdb78e525`. Release validation now
+  observes a real explicit run, requires a reconstructable sealed manifest,
+  reconciles the complete emitted set/size/hash and current traceability, and
+  persists a self-hashed observation. Missing, linked, hardlinked, undeclared,
+  name-only, stale, hash-mismatched, and concurrently replaced file evidence
+  fails closed.
+- **Next action:** Begin `EVAL-DEFECT-010` without weakening the honest
+  `BLOCKED_TECHNICAL` real-integration status.
+
+## 2026-07-28 — EVAL-DEFECT-010
+
+- **Status:** `IN_PROGRESS`
+- **Defensive objective:** Derive a fresh release report from actual gate
+  observations and bind it to the exact candidate commit, effective
+  configuration, emitted artifacts, and evidence hashes while preserving every
+  external blocker.
+- **Baseline assay:** The committed `docs/release_gate_report.json` still names
+  `release-001-2026-07-27` and
+  `repository_state=uncommitted-worktree-no-initial-commit`; it contains no
+  candidate-commit, effective-config, emitted-artifact-observation, or generation
+  timestamp binding. Its reported test/source/schema counts and manifest command
+  predate the current candidate, yet its self-hash remains structurally valid.
+- **Exact next safe action:** Add negative tests proving a structurally valid
+  stale report cannot satisfy release validation, then introduce the minimum
+  typed current-candidate binding and deterministic report generator.

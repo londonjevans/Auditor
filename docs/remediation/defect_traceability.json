@@ -88,17 +88,17 @@
       "id": "EVAL-DEFECT-009",
       "summary": "Release validation trusts declared artifact names rather than emitted artifacts.",
       "baseline_path": "scripts/validate_release_evidence.py",
-      "status": "QUEUED",
-      "regression_test": null,
-      "runtime_artifact": null,
-      "acceptance_command": null,
-      "completion_commit": null
+      "status": "COMPLETE",
+      "regression_test": "tests/unit/test_release_artifacts.py",
+      "runtime_artifact": "docs/remediation/runtime/eval_defect_009.json",
+      "acceptance_command": "make release-evidence PYTHON=.venv/bin/python RELEASE_RUN_DIR=/private/tmp/mmaudit-eval009-runtime/runs/20260728T082858Z-66f3e567 && .venv/bin/pytest -q tests/unit/test_release_artifacts.py tests/unit/test_manifest.py",
+      "completion_commit": "cd46d215bd77e4c6e1d505d4a7f7773bdb78e525"
     },
     {
       "id": "EVAL-DEFECT-010",
       "summary": "The release report is stale and not commit-bound.",
       "baseline_path": "docs/release_gate_report.json",
-      "status": "QUEUED",
+      "status": "IN_PROGRESS",
       "regression_test": null,
       "runtime_artifact": null,
       "acceptance_command": null,

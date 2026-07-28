@@ -190,10 +190,13 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Acceptance criteria:** Missing, linked, undeclared, name-only, stale, or
   hash-mismatched runtime artifacts fail validation.
 - **Dependencies:** `EVAL-DEFECT-008`.
-- **Status:** `IN_PROGRESS`
-- **Next action:** Inventory the release evidence producer, emitted artifact
-  manifest, and validator; reproduce each declared-name and hash-binding bypass
-  before changing validation behavior.
+- **Status:** `COMPLETE`
+- **Evidence:** `docs/remediation/runtime/eval_defect_009.json`; implementation
+  checkpoint `cd46d215bd77e4c6e1d505d4a7f7773bdb78e525`; full validation
+  `1610 passed, 10 skipped`.
+- **Next action:** Preserve exact emitted-set and file-identity validation while
+  binding a freshly derived release report to the candidate under
+  `EVAL-DEFECT-010`.
 
 ## EVAL-DEFECT-010 — Release report is stale and unbound
 
@@ -202,7 +205,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   effective config, and evidence hashes reconcile; blocked integrations stay
   blocked.
 - **Dependencies:** `EVAL-DEFECT-009`.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
+- **Next action:** Freeze the stale-report negative assay, inventory the existing
+  gate observations and runtime evidence, and define a typed candidate/report
+  binding before generating a replacement report.
 
 ## EVAL-DEFECT-011 — Mutation portfolio and real kill score are incomplete
 
