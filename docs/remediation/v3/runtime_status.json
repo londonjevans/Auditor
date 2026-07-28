@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0.0",
+  "updated_at": "2026-07-28T00:00:02Z",
+  "candidate_commit": "6465bb5824903180f2fc631663ab327993c36a20",
+  "autorun_status": "RUNNING",
+  "current_milestone": "canonical_model_and_endpoint_identity",
+  "current_ticket": "V3-IDENTITY-001",
+  "real_model_calls": {
+    "attempted": 2,
+    "succeeded": 0,
+    "rejected": 2
+  },
+  "openrouter_budget_usd": {
+    "cap": "250.00000000",
+    "used": "0.00118674",
+    "reserved": "0.00000000",
+    "remaining": "249.99881326"
+  },
+  "completed_real_audits": 0,
+  "release_status": "INCOMPLETE",
+  "superiority_status": "NOT_DEMONSTRATED"
+}

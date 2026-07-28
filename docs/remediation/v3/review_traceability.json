@@ -1,0 +1,219 @@
+{
+  "schema_version": "1.0.0",
+  "objective_sha256": "f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43",
+  "baseline_commit": "6465bb5824903180f2fc631663ab327993c36a20",
+  "evidence_classes": [
+    "REAL_RUNTIME",
+    "LOCAL_IMPLEMENTATION",
+    "MOCK_OR_SYNTHETIC",
+    "HISTORICAL_REJECTED",
+    "MISSING"
+  ],
+  "requirements": [
+    {
+      "id": "A",
+      "title": "Preserve the existing moat",
+      "tickets": ["V3-IDENTITY-001", "V3-CONSENSUS-001", "V3-REPORT-001", "V3-RELEASE-001"],
+      "status": "PARTIAL",
+      "current_evidence_class": "LOCAL_IMPLEMENTATION",
+      "evidence": ["Existing source-location, evidence-cap, secret, isolation, and report-evidence regressions passed in the 1799-test baseline."],
+      "remaining_proof": "Regression-protect the controls through every redesign and prove them in final real runs."
+    },
+    {
+      "id": "B",
+      "title": "Authoritative current review",
+      "tickets": ["V3-BASELINE-001"],
+      "status": "COMPLETE",
+      "current_evidence_class": "REAL_RUNTIME",
+      "evidence": ["The complete 1417-line review was read and mapped against clean HEAD 6465bb5."],
+      "remaining_proof": null
+    },
+    {
+      "id": "C",
+      "title": "Restore a clean engineering baseline",
+      "tickets": ["V3-BASELINE-001"],
+      "status": "COMPLETE",
+      "current_evidence_class": "REAL_RUNTIME",
+      "evidence": [
+        ".venv/bin/python scripts/generate_release_schemas.py: PASS",
+        "focused release schema/report tests: 8 passed",
+        ".venv/bin/ruff format .: 294 files unchanged",
+        ".venv/bin/ruff check .: PASS",
+        ".venv/bin/mypy: 128 source files passed",
+        ".venv/bin/pytest -q: 1799 passed, 10 skipped in 217.18s"
+      ],
+      "remaining_proof": null
+    },
+    {
+      "id": "D",
+      "title": "One successful real model call before large refactoring",
+      "tickets": ["V3-SMOKE-001"],
+      "status": "QUEUED",
+      "current_evidence_class": "HISTORICAL_REJECTED",
+      "evidence": ["Two prior paid attempts, zero successful or credited calls, cost 0.00118674 USD."],
+      "remaining_proof": "One identity-bound, non-truncated, schema-valid synthetic completion with exact endpoint and reconciled cost."
+    },
+    {
+      "id": "E",
+      "title": "Canonical model and provider identity",
+      "tickets": ["V3-IDENTITY-001"],
+      "status": "IN_PROGRESS",
+      "current_evidence_class": "LOCAL_IMPLEMENTATION",
+      "evidence": ["Frozen discovery, endpoint snapshots, and generation refetch exist but raw requested/returned equality still rejects legitimate canonical normalization."],
+      "remaining_proof": "Typed identity strengths, frozen alias resolution, exact endpoint binding, unbound response retention, regressions, and real smoke evidence."
+    },
+    {
+      "id": "F",
+      "title": "Explicit privacy profiles and consent",
+      "tickets": ["V3-PRIVACY-001"],
+      "status": "QUEUED",
+      "current_evidence_class": "LOCAL_IMPLEMENTATION",
+      "evidence": ["Current implementation exposes only a require_zdr flag and secret boundary controls."],
+      "remaining_proof": "STRICT_ZDR default, synthetic benchmark profile, and operator-authored retention consent that cannot activate silently."
+    },
+    {
+      "id": "G",
+      "title": "Capability-adaptive structured output",
+      "tickets": ["V3-OUTPUT-001"],
+      "status": "QUEUED",
+      "current_evidence_class": "LOCAL_IMPLEMENTATION",
+      "evidence": ["Current provider path assumes native JSON schema and discovery filters on response_format."],
+      "remaining_proof": "Endpoint-negotiated schema, JSON-object, or validated-text modes and one syntax-only bound repair."
+    },
+    {
+      "id": "H",
+      "title": "Model-aware token budgets",
+      "tickets": ["V3-TOKENS-001"],
+      "status": "QUEUED",
+      "current_evidence_class": "LOCAL_IMPLEMENTATION",
+      "evidence": ["Current context builder divides a fixed global byte pool."],
+      "remaining_proof": "Endpoint-limit-aware token planning and a reconciled context manifest."
+    },
+    {
+      "id": "I",
+      "title": "Coherent repository sharding and seven-pass review",
+      "tickets": ["V3-SHARD-001", "V3-SCHEDULER-001"],
+      "status": "QUEUED",
+      "current_evidence_class": "MISSING",
+      "evidence": [],
+      "remaining_proof": "Stable semantic shards and resumable orientation, blind review, reduction, integration, cross-examination, validation, and judgment passes."
+    },
+    {
+      "id": "J",
+      "title": "Truncation resharding",
+      "tickets": ["V3-TRUNCATION-001"],
+      "status": "QUEUED",
+      "current_evidence_class": "MISSING",
+      "evidence": ["Historical truncated call was rejected and cost-accounted but not recovered."],
+      "remaining_proof": "Provisional complete-record retention, deterministic child shards, bounded retries, and separate finding/coverage/summary validity."
+    },
+    {
+      "id": "K",
+      "title": "Risk-tiered substantive surface coverage",
+      "tickets": ["V3-COVERAGE-001"],
+      "status": "QUEUED",
+      "current_evidence_class": "LOCAL_IMPLEMENTATION",
+      "evidence": ["Response-backed surface records exist, but current all-requested-surface expectations are infeasible for large repositories."],
+      "remaining_proof": "T0-T3 tiers, lineage-aware gates, compact gap-fill tasks, and mathematical/cost feasibility preflight."
+    },
+    {
+      "id": "L",
+      "title": "Qualified model selection and responsibilities",
+      "tickets": ["V3-QUALIFY-001", "V3-SINGLE-AUDIT-001", "V3-MULTI-AUDIT-001"],
+      "status": "QUEUED",
+      "current_evidence_class": "MISSING",
+      "evidence": ["No exact production model is currently qualified."],
+      "remaining_proof": "Frozen staged qualification and real role/whole-protocol execution across independently reviewed root lineages."
+    },
+    {
+      "id": "M",
+      "title": "Staged aggregate USD 250 budget",
+      "tickets": ["V3-SMOKE-001", "V3-QUALIFY-001", "V3-MULTI-AUDIT-001"],
+      "status": "PARTIAL",
+      "current_evidence_class": "LOCAL_IMPLEMENTATION",
+      "evidence": ["Atomic ledger exists; used 0.00118674 USD, reserved 0, remaining 249.99881326 USD."],
+      "remaining_proof": "Preflight/reservation/reconciliation evidence for every future real call and aggregate final reconciliation."
+    },
+    {
+      "id": "N",
+      "title": "Deterministic consensus and cross-examination",
+      "tickets": ["V3-CONSENSUS-001"],
+      "status": "QUEUED",
+      "current_evidence_class": "LOCAL_IMPLEMENTATION",
+      "evidence": ["Evidence caps and monotonic judgment exist, but a single verifier can currently suppress candidates and cross-examination is underweighted."],
+      "remaining_proof": "Independent SUPPORT/DISPUTE/INCONCLUSIVE matrix and multiple-lineage adjudication."
+    },
+    {
+      "id": "O",
+      "title": "Fail loudly when analysis did not run",
+      "tickets": ["V3-FLOOR-001"],
+      "status": "QUEUED",
+      "current_evidence_class": "LOCAL_IMPLEMENTATION",
+      "evidence": ["Assurance gates fail closed in several paths, but zero-scanner/zero-model no-findings output can still appear completed."],
+      "remaining_proof": "Evidence-derived run states, non-zero minimum floor, non-zero exit, and no-analysis report wording."
+    },
+    {
+      "id": "P",
+      "title": "Client-ready report and forensic bundle",
+      "tickets": ["V3-REPORT-001"],
+      "status": "QUEUED",
+      "current_evidence_class": "LOCAL_IMPLEMENTATION",
+      "evidence": ["Current report is monolithic and coverage-heavy; release artifact validation is reusable."],
+      "remaining_proof": "Concise branded client report, inline excerpts, complete rejected evidence, and seven hash-bound forensic artifacts."
+    },
+    {
+      "id": "Q",
+      "title": "Honest Solidity/EVM product scope",
+      "tickets": ["V3-SCOPE-001"],
+      "status": "QUEUED",
+      "current_evidence_class": "MISSING",
+      "evidence": [],
+      "remaining_proof": "Solidity-EVM and generic-source-review profiles, plugin interface, language mismatch gates, and corrected README/CLI claims."
+    },
+    {
+      "id": "R",
+      "title": "Blind end-to-end product benchmarks",
+      "tickets": ["V3-BENCHMARK-001", "V3-CERTIFICATE-001"],
+      "status": "QUEUED",
+      "current_evidence_class": "MISSING",
+      "evidence": ["Existing Foundry harnesses are component property evidence, not automated discovery recall."],
+      "remaining_proof": "Frozen-before-ground-truth product reports for both required repositories, non-zero scoring, and a current certificate."
+    },
+    {
+      "id": "S",
+      "title": "Required real end-to-end runs",
+      "tickets": ["V3-SMOKE-001", "V3-SINGLE-AUDIT-001", "V3-MULTI-AUDIT-001", "V3-BENCHMARK-001"],
+      "status": "QUEUED",
+      "current_evidence_class": "MISSING",
+      "evidence": [],
+      "remaining_proof": "Real provider smoke, sharded single-model audit, multi-model audit, maximum-assurance benchmark audit, and privacy-gated operator repository run when eligible."
+    },
+    {
+      "id": "T",
+      "title": "Service-layer decision",
+      "tickets": ["V3-ADR-001"],
+      "status": "QUEUED",
+      "current_evidence_class": "MISSING",
+      "evidence": ["Current repository is a CLI engine, not a self-service SaaS."],
+      "remaining_proof": "Post-gate ADR selecting a supported CLI release or a separately implemented service; no premature SaaS claim."
+    },
+    {
+      "id": "U",
+      "title": "Validation and autonomous work loop",
+      "tickets": ["ALL"],
+      "status": "IN_PROGRESS",
+      "current_evidence_class": "REAL_RUNTIME",
+      "evidence": ["Baseline ticket followed reproduce, validate, trace, and checkpoint sequencing; normal tests did not enable paid calls."],
+      "remaining_proof": "Repeat focused/full validation and exact worklog evidence for every ticket."
+    },
+    {
+      "id": "V",
+      "title": "Release completion definition",
+      "tickets": ["V3-MUTATION-001", "V3-BYTECODE-001", "V3-ENGINES-001", "V3-RELEASE-001"],
+      "status": "QUEUED",
+      "current_evidence_class": "MISSING",
+      "evidence": [],
+      "remaining_proof": "Requirement-by-requirement real evidence audit, candidate-bound EVAL-010 report, full validation, independent handoff, and SSH push."
+    }
+  ]
+}
