@@ -131,10 +131,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   materialized yet. Initial identity binding uses the same expectation, and
   multi-generation verification shares an auth-inclusive deadline with bounded,
   non-starving GET concurrency and cancellation cleanup.
-- **Current next action:** Complete final diff/hygiene review, checkpoint and push
-  the fully validated correction, then pause at the operator-requested clean
-  boundary before a fresh no-network Qwen/AkashML preflight. Do not retry the
-  route until all local gates pass from the checkpoint.
+- **Current next action:** `PAUSED_BY_OPERATOR` at validated implementation
+  checkpoint `9f63ab4`. On resume, verify a clean synchronized tree and run a
+  fresh no-network Qwen/AkashML preflight before considering at most one
+  materially changed paid retry.
 
 ## V3-PRIVACY-001 — Explicit privacy and retention profiles
 

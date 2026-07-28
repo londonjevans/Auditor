@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: ACTIVE
+AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: Complete final diff and artifact/secret-exclusion review, record independent acceptance, create and push the clean checkpoint over SSH, and pause before provider preflight.
-LAST_COMMAND: .venv/bin/pytest -q
-LAST_RESULT: PASS; 1938 tests passed and 10 explicitly gated external/provider/isolation prerequisites skipped in 229.76s. The paid provider test remained disabled, and no secret file, network, metadata endpoint, or completion endpoint was accessed.
+NEXT_ACTION: On operator resume, verify the clean synchronized checkpoint and run a fresh no-network Qwen/AkashML preflight before considering at most one materially changed paid retry.
+LAST_COMMAND: git commit -m "Harden generation evidence readiness"
+LAST_RESULT: PASS; isolated local checkpoint 9f63ab4 records the independently reviewed readiness, reconciliation, deadline, fallback-preservation, regression, queue, and worklog changes. No provider access occurred.
 REAL_MODEL_CALLS_ATTEMPTED: 8
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 8
@@ -18,8 +18,8 @@ OPENROUTER_COST_USED_USD: 0.0032118825
 OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9967881175
 COMPLETED_REAL_AUDITS: 0
-BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; Qwen/AkashML generation metadata appeared only after the current readiness window and requires a bounded local polling correction before retry; no successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: c7f08a7b81f2993f41dc7b2d2a64681a10fff837
+BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; the validated Qwen/AkashML readiness correction still requires a fresh no-network preflight before any materially changed retry; no successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
+LAST_CHECKPOINT_COMMIT: 9f63ab48905ee297992feb6f383a573a4e33cef2
 
 ## 2026-07-28 — V3-SMOKE-001
 
@@ -940,3 +940,8 @@ LAST_CHECKPOINT_COMMIT: c7f08a7b81f2993f41dc7b2d2a64681a10fff837
   deadlines, partial-field contradiction handling, reconciliation, cancellation
   cleanup, and ordinary-fallback preservation, with no untracked secret, runtime,
   or generated artifact in scope.
+- **Validated implementation checkpoint:** Commit
+  `9f63ab48905ee297992feb6f383a573a4e33cef2` contains the complete local
+  correction and its regression evidence. The operator-requested pause is now at
+  a no-provider-access boundary: no process or reservation is active, the paid
+  test remains disabled, and `V3-SMOKE-001` remains `IN_PROGRESS`.
