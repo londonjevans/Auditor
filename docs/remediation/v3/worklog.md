@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_BY_OPERATOR
+AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: On operator resume, independently review and run final local validation of the typed bounded reconciliation and durable post-bind rejection change before considering one materially changed provider retry.
-LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_generation_evidence.py tests/unit/test_openrouter.py tests/unit/test_model_identity.py tests/unit/test_usage.py tests/unit/test_real_provider_harness.py tests/unit/test_cost_ledger.py tests/integration/test_real_openrouter_provider.py
-LAST_RESULT: PASS; 319 passed and the explicitly disabled paid provider integration skipped. Affected Ruff and strict targeted mypy also passed. No provider or network request ran.
+NEXT_ACTION: Checkpoint the complete local reconciliation correction, then revalidate the exact Mistral/Venice route, fresh success and rejection destinations, and atomic budget immediately before one materially changed provider retry.
+LAST_COMMAND: .venv/bin/pytest -q
+LAST_RESULT: PASS; 1912 tests passed and 10 explicit external/provider/isolation prerequisites skipped in 229.55s. Post-correction Ruff format/check, strict mypy, release-schema generation, and 320 focused tests plus one paid-provider skip also passed. No provider or network request ran.
 REAL_MODEL_CALLS_ATTEMPTED: 6
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 6
@@ -775,3 +775,25 @@ LAST_CHECKPOINT_COMMIT: f7ec46d72a192fe4457f87a17abec95d60d422c5
   `f7ec46d72a192fe4457f87a17abec95d60d422c5` preserves the typed bounded
   reconciliation and durable post-bind rejection evidence. No successful model
   response or release credit is claimed.
+- **Goal continuation:** Reloaded the complete product objective and authoritative
+  repository state from clean synchronized checkpoint
+  `7e394abe153aacf2389adaa6426b3a402e0e8d61`. `V3-SMOKE-001` is active again.
+  The bounded reconciliation change must pass independent review and the complete
+  local validation gates before any materially changed paid retry.
+- **Independent-review defect:** A compound metadata payload containing both an
+  eventual cost mismatch and an impossible request timestamp selected the
+  retryable cost code first and exhausted four observations. A new negative
+  regression reproduced the behavior. Decisive identity, provider, finish, and
+  timestamp contradictions are now evaluated before every retryable token/cost
+  comparison; the compound case fails immediately as `REQUEST_TIMESTAMP`.
+- **Independent re-review:** No material blocker remains. Every decisive
+  structural, identity, provider, finish, and timestamp contradiction now has
+  priority over eventual usage/cost fields; the compound regression performs one
+  metadata GET and no wait. Final capability issuance still independently
+  revalidates the complete attestation set.
+- **Complete local gate:** Ruff format left `297` files unchanged after the
+  initial formatting normalization; Ruff check passed; strict mypy found no
+  issues in `129` source files; release-schema generation completed without
+  drift; the focused slice passed `320` tests with one paid-provider skip; and
+  the complete suite passed `1912` tests with `10` explicit external,
+  provider, and isolation skips in `229.55s`. No provider or network request ran.

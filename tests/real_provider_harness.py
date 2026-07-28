@@ -718,8 +718,7 @@ class _RealProviderSmokeVerificationRejectionEvidenceBody(BaseModel):
         record = self.usage_record
         aliases = {record.requested_model, self.canonical_model_id}
         if (
-            record.requested_model.split("/", 1)[0]
-            != self.canonical_model_id.split("/", 1)[0]
+            record.requested_model.split("/", 1)[0] != self.canonical_model_id.split("/", 1)[0]
             or record.returned_model not in aliases
             or record.actual_model not in aliases
         ):
@@ -827,8 +826,7 @@ class _RealProviderSmokeVerificationRejectionEvidenceBody(BaseModel):
             or self.ledger_delta_reconciled is not (spend_delta == accounted)
             or self.ledger_prior_entries_unchanged
             is not (
-                self.ledger_prior_entries_sha256_before
-                == self.ledger_prior_entries_sha256_after
+                self.ledger_prior_entries_sha256_before == self.ledger_prior_entries_sha256_after
             )
             or self.ledger_reservations_closed is not (active_reserved == 0)
             or self.ledger_over_cap is not (cap - spent - active_reserved < 0)

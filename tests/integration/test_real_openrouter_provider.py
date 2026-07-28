@@ -338,17 +338,13 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     catalog_identity_binding_sha256=(
                         discovery_payload.catalog_identity_binding_sha256
                     ),
-                    discovery_evidence_sha256=(
-                        discovery_evidence[0].discovery_evidence_sha256
-                    ),
+                    discovery_evidence_sha256=(discovery_evidence[0].discovery_evidence_sha256),
                     expected_provider_name=selected_provider_name,
                     usage_record=record,
                 )
                 try:
                     trusted_generation_verification = (
-                        await client.create_trusted_generation_verification(
-                            (verification_request,)
-                        )
+                        await client.create_trusted_generation_verification((verification_request,))
                     )
                 except OpenRouterGenerationReconciliationError as exc:
                     snapshot = atomic_ledger.snapshot()
@@ -914,15 +910,12 @@ def _write_generation_verification_smoke_rejection(
         or verification_request.usage_record != record
         or not _has_owned_real_usage_attestation(verification_request.usage_record)
     ):
-        raise AssertionError(
-            "verification rejection sink requires one owned bound REAL response"
-        )
+        raise AssertionError("verification rejection sink requires one owned bound REAL response")
     identity_binding = OpenRouterIdentityBindingResult.model_validate(raw_binding)
     if (
         identity_binding.strength is not record.identity_strength
         or identity_binding.generation is None
-        or identity_binding.binding_sha256
-        != record.routing.get("identity_binding_sha256")
+        or identity_binding.binding_sha256 != record.routing.get("identity_binding_sha256")
     ):
         raise AssertionError("verification rejection identity binding is inconsistent")
     try:
@@ -934,9 +927,7 @@ def _write_generation_verification_smoke_rejection(
             expected_catalog_identity_binding_sha256=(
                 verification_request.catalog_identity_binding_sha256
             ),
-            expected_discovery_evidence_sha256=(
-                verification_request.discovery_evidence_sha256
-            ),
+            expected_discovery_evidence_sha256=(verification_request.discovery_evidence_sha256),
             expected_provider_name=verification_request.expected_provider_name,
         )
     except GenerationReconciliationMismatchError as mismatch:
@@ -955,9 +946,7 @@ def _write_generation_verification_smoke_rejection(
         {
             "schema_version": "1.0",
             "ticket_id": "V3-SMOKE-001",
-            "evidence_kind": (
-                "real_openrouter_synthetic_smoke_verification_rejection"
-            ),
+            "evidence_kind": ("real_openrouter_synthetic_smoke_verification_rejection"),
             "status": "REJECTED_GENERATION_VERIFICATION",
             "creditable": False,
             "fixture_path": SMOKE_FIXTURE_PATH,
@@ -969,9 +958,7 @@ def _write_generation_verification_smoke_rejection(
             "initial_generation_evidence_sha256": (
                 identity_binding.generation.generation_evidence_sha256
             ),
-            "verification_generation_evidence_sha256": (
-                last_evidence.evidence_sha256
-            ),
+            "verification_generation_evidence_sha256": (last_evidence.evidence_sha256),
             "mismatch_code": error.mismatch_code.value,
             "reconciliation_attempts": error.attempts,
             "reconciliation_exhausted": error.exhausted,
@@ -987,22 +974,12 @@ def _write_generation_verification_smoke_rejection(
             "ledger_cap_usd": _canonical_money(snapshot.cap_usd),
             "ledger_spent_before_usd": _canonical_money(ledger_before.spent_usd),
             "ledger_spent_usd": _canonical_money(snapshot.spent_usd),
-            "smoke_spend_delta_usd": _canonical_money(
-                ledger_evidence.spend_delta_usd
-            ),
+            "smoke_spend_delta_usd": _canonical_money(ledger_evidence.spend_delta_usd),
             "ledger_delta_reconciled": ledger_evidence.delta_reconciled,
-            "ledger_prior_entries_sha256_before": (
-                ledger_evidence.prior_entries_sha256_before
-            ),
-            "ledger_prior_entries_sha256_after": (
-                ledger_evidence.prior_entries_sha256_after
-            ),
-            "ledger_prior_entries_unchanged": (
-                ledger_evidence.prior_entries_unchanged
-            ),
-            "ledger_active_reserved_usd": _canonical_money(
-                snapshot.active_reserved_usd
-            ),
+            "ledger_prior_entries_sha256_before": (ledger_evidence.prior_entries_sha256_before),
+            "ledger_prior_entries_sha256_after": (ledger_evidence.prior_entries_sha256_after),
+            "ledger_prior_entries_unchanged": (ledger_evidence.prior_entries_unchanged),
+            "ledger_active_reserved_usd": _canonical_money(snapshot.active_reserved_usd),
             "ledger_reservations_closed": snapshot.active_reserved_usd == 0,
             "ledger_over_cap": snapshot.over_cap,
             "ledger_has_reservation_overrun": snapshot.has_reservation_overrun,
@@ -1041,15 +1018,11 @@ def _write_generation_verification_smoke_rejection(
     )
     if (
         observed.binding != file_binding
-        or RealProviderSmokeVerificationRejectionEvidence.model_validate(
-            observed.value
-        )
+        or RealProviderSmokeVerificationRejectionEvidence.model_validate(observed.value)
         != rejection
         or settings.evidence_output.exists()
     ):
-        raise AssertionError(
-            "verification rejection artifact did not round-trip safely"
-        )
+        raise AssertionError("verification rejection artifact did not round-trip safely")
     return rejection_output, rejection
 
 

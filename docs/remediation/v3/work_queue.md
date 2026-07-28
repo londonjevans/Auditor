@@ -92,11 +92,16 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   internally inconsistent metadata fail immediately. A separate private,
   self-hashed rejection artifact preserves the bound-but-unverified result
   without granting success credit.
-- **Pause state:** `PAUSED_BY_OPERATOR` after `319` focused tests, one explicit
-  paid-test skip, affected Ruff, strict targeted mypy, and diff checks passed.
-  No seventh provider request ran.
-- **Current next action:** On operator resume, independently review and run final
-  local validation of the bounded reconciliation change before considering one
+- **Independent correction:** Review found that a retryable cost mismatch could
+  mask a simultaneous decisive timestamp contradiction. A compound negative
+  regression reproduced the defect; decisive identity, provider, finish, and
+  timestamp checks now precede all retryable usage/cost comparisons.
+- **Complete local gate:** Independent re-review found no material blocker.
+  Ruff format/check, strict mypy, release-schema generation, `320` focused tests
+  plus one paid skip, and the complete suite passed, ending with `1912 passed,
+  10 skipped`. No seventh provider request ran.
+- **Current next action:** Checkpoint the complete local correction, revalidate
+  the exact route, fresh destinations, and atomic ledger, then consider one
   materially changed provider retry. Do not repeat the prior implementation
   unchanged.
 

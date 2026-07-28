@@ -728,44 +728,10 @@ def _reconcile_generation_evidence(
             routing.get("native_finish_reason"),
             GenerationReconciliationMismatchCode.NATIVE_FINISH_REASON,
         ),
-        (
-            evidence.prompt_tokens,
-            usage_record.prompt_tokens,
-            GenerationReconciliationMismatchCode.PROMPT_TOKENS,
-        ),
-        (
-            evidence.completion_tokens,
-            usage_record.completion_tokens,
-            GenerationReconciliationMismatchCode.COMPLETION_TOKENS,
-        ),
     )
     for observed, expected, code in comparisons:
         if observed != expected:
             raise GenerationReconciliationMismatchError(code)
-    optional_token_comparisons = (
-        (
-            evidence.reasoning_tokens,
-            usage_record.reasoning_tokens,
-            GenerationReconciliationMismatchCode.REASONING_TOKENS,
-        ),
-        (
-            evidence.cached_tokens,
-            usage_record.cached_tokens,
-            GenerationReconciliationMismatchCode.CACHED_TOKENS,
-        ),
-    )
-    for observed, expected, code in optional_token_comparisons:
-        if observed is not None and observed != expected:
-            raise GenerationReconciliationMismatchError(code)
-    assert usage_record.reported_cost_usd is not None
-    usage_cost = _canonical_nonnegative_decimal(
-        usage_record.reported_cost_usd,
-        "usage-record cost",
-    )
-    if evidence.total_cost_usd != usage_cost:
-        raise GenerationReconciliationMismatchError(
-            GenerationReconciliationMismatchCode.REPORTED_COST
-        )
     if evidence.created_at is not None:
         assert usage_record.started_at is not None
         assert usage_record.ended_at is not None
@@ -778,6 +744,40 @@ def _reconcile_generation_evidence(
             raise GenerationReconciliationMismatchError(
                 GenerationReconciliationMismatchCode.REQUEST_TIMESTAMP
             )
+    eventual_token_comparisons = (
+        (
+            evidence.prompt_tokens,
+            usage_record.prompt_tokens,
+            GenerationReconciliationMismatchCode.PROMPT_TOKENS,
+        ),
+        (
+            evidence.completion_tokens,
+            usage_record.completion_tokens,
+            GenerationReconciliationMismatchCode.COMPLETION_TOKENS,
+        ),
+        (
+            evidence.reasoning_tokens,
+            usage_record.reasoning_tokens,
+            GenerationReconciliationMismatchCode.REASONING_TOKENS,
+        ),
+        (
+            evidence.cached_tokens,
+            usage_record.cached_tokens,
+            GenerationReconciliationMismatchCode.CACHED_TOKENS,
+        ),
+    )
+    for observed, expected, code in eventual_token_comparisons:
+        if observed is not None and observed != expected:
+            raise GenerationReconciliationMismatchError(code)
+    assert usage_record.reported_cost_usd is not None
+    usage_cost = _canonical_nonnegative_decimal(
+        usage_record.reported_cost_usd,
+        "usage-record cost",
+    )
+    if evidence.total_cost_usd != usage_cost:
+        raise GenerationReconciliationMismatchError(
+            GenerationReconciliationMismatchCode.REPORTED_COST
+        )
     return evidence
 
 

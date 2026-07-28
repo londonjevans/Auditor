@@ -656,9 +656,7 @@ def _synthetic_unbound_real_smoke_record() -> UsageRecord:
 def _valid_smoke_verification_rejection_payload() -> dict[str, object]:
     success = _valid_smoke_evidence_payload()
     record = _synthetic_bound_real_smoke_record()
-    binding = OpenRouterIdentityBindingResult.model_validate(
-        record.routing["identity_binding"]
-    )
+    binding = OpenRouterIdentityBindingResult.model_validate(record.routing["identity_binding"])
     assert binding.generation is not None
     return {
         "schema_version": "1.0",
@@ -672,9 +670,7 @@ def _valid_smoke_verification_rejection_payload() -> dict[str, object]:
         "approved_provider_endpoint": success["approved_provider_endpoint"],
         "verification_subject_sha256": success["verification_subject_sha256"],
         "identity_binding_sha256": binding.binding_sha256,
-        "initial_generation_evidence_sha256": (
-            binding.generation.generation_evidence_sha256
-        ),
+        "initial_generation_evidence_sha256": (binding.generation.generation_evidence_sha256),
         "verification_generation_evidence_sha256": "1" * 64,
         "mismatch_code": GenerationReconciliationMismatchCode.REPORTED_COST.value,
         "reconciliation_attempts": 4,
@@ -970,18 +966,13 @@ def test_smoke_verification_rejection_is_typed_self_hashed_and_never_success() -
 
     assert rejection.status == "REJECTED_GENERATION_VERIFICATION"
     assert rejection.creditable is False
-    assert (
-        rejection.mismatch_code
-        is GenerationReconciliationMismatchCode.REPORTED_COST
-    )
+    assert rejection.mismatch_code is GenerationReconciliationMismatchCode.REPORTED_COST
     assert rejection.reconciliation_attempts == 4
     assert rejection.reconciliation_exhausted
     with pytest.raises(ValidationError):
         RealProviderSmokeEvidence.model_validate(rejection.model_dump(mode="json"))
     with pytest.raises(ValidationError):
-        RealProviderSmokeRejectionEvidence.model_validate(
-            rejection.model_dump(mode="json")
-        )
+        RealProviderSmokeRejectionEvidence.model_validate(rejection.model_dump(mode="json"))
 
     tampered = rejection.model_dump(mode="json")
     tampered["mismatch_code"] = GenerationReconciliationMismatchCode.PROVIDER.value
@@ -1018,10 +1009,7 @@ def test_smoke_verification_rejection_writer_is_private_and_canary_free(
 
     assert observed.binding == binding
     assert (
-        RealProviderSmokeVerificationRejectionEvidence.model_validate(
-            observed.value
-        )
-        == rejection
+        RealProviderSmokeVerificationRejectionEvidence.model_validate(observed.value) == rejection
     )
     serialized = observed.content.decode()
     assert "synthetic-secret-canary" not in serialized
@@ -1187,9 +1175,7 @@ def test_bound_verification_failure_branch_writes_noncreditable_rejection(
     tmp_path: Path,
 ) -> None:
     record = _synthetic_bound_real_smoke_record()
-    binding = OpenRouterIdentityBindingResult.model_validate(
-        record.routing["identity_binding"]
-    )
+    binding = OpenRouterIdentityBindingResult.model_validate(record.routing["identity_binding"])
     assert binding.generation is not None
     assert record.openrouter_generation_id is not None
     assert record.validated_response_sha256 is not None
@@ -1213,9 +1199,7 @@ def test_bound_verification_failure_branch_writes_noncreditable_rejection(
         case_id="synthetic-provider-smoke",
         exact_model_id=record.requested_model,
         canonical_model_id=binding.snapshot.canonical_slug,
-        catalog_identity_binding_sha256=str(
-            record.routing["catalog_identity_binding_sha256"]
-        ),
+        catalog_identity_binding_sha256=str(record.routing["catalog_identity_binding_sha256"]),
         discovery_evidence_sha256=discovery_evidence_sha256,
         expected_provider_name=str(record.routing["selected_provider_name"]),
         usage_record=record,
@@ -1305,9 +1289,7 @@ def test_bound_verification_failure_branch_writes_noncreditable_rejection(
         record=record,
     )
     repository_root = Path(__file__).resolve().parents[2]
-    fixture_source, fixture_sha256 = load_pinned_synthetic_smoke_fixture(
-        repository_root
-    )
+    fixture_source, fixture_sha256 = load_pinned_synthetic_smoke_fixture(repository_root)
     user_prompt = f"synthetic local prompt\n{fixture_source}"
 
     rejection_output, rejection = _write_generation_verification_smoke_rejection(

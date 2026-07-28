@@ -1014,13 +1014,10 @@ class OpenRouterClient:
             validated_generation_id = validate_generation_id(generation_id)
         except GenerationEvidenceValidationError as exc:
             raise OpenRouterRequestLimitError(str(exc)) from None
-        if (
-            reconciliation_request is not None
-            and (
-                not isinstance(reconciliation_request, GenerationVerificationRequest)
-                or reconciliation_request.usage_record.openrouter_generation_id
-                != validated_generation_id
-            )
+        if reconciliation_request is not None and (
+            not isinstance(reconciliation_request, GenerationVerificationRequest)
+            or reconciliation_request.usage_record.openrouter_generation_id
+            != validated_generation_id
         ):
             raise OpenRouterRequestLimitError(
                 "generation reconciliation request does not bind the requested generation"
@@ -1679,9 +1676,7 @@ class OpenRouterClient:
         not_found_is_pending: bool = False,
     ) -> dict[str, Any]:
         attempt_limit = (
-            self.execution.max_model_retries + 1
-            if maximum_attempts is None
-            else maximum_attempts
+            self.execution.max_model_retries + 1 if maximum_attempts is None else maximum_attempts
         )
         if (
             not isinstance(attempt_limit, int)

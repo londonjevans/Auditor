@@ -865,6 +865,59 @@ async def test_generation_verification_fails_decisive_provider_mismatch_immediat
 
 
 @pytest.mark.asyncio
+async def test_generation_verification_prioritizes_decisive_timestamp_over_eventual_cost(
+    config_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    waits: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        payload = _generation_payload()
+        payload["data"]["total_cost"] = 0.02
+        payload["data"]["usage"] = 0.02
+        payload["data"]["created_at"] = "2025-01-01T00:00:00Z"
+        return httpx.Response(200, json=payload)
+
+    async def no_wait(delay_seconds: float) -> None:
+        waits.append(delay_seconds)
+
+    config = config_factory(execution={"max_model_retries": 0})
+    client, http_client = _client(config, handler)
+    client.execution_evidence = ExecutionEvidenceKind.REAL
+    monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
+    request = GenerationVerificationRequest(
+        benchmark_report_sha256="1" * 64,
+        case_id="case-synthetic",
+        exact_model_id=_MODEL,
+        canonical_model_id=_CANONICAL_MODEL,
+        catalog_identity_binding_sha256=_catalog_identity_binding(),
+        discovery_evidence_sha256=_DISCOVERY_EVIDENCE_SHA256,
+        expected_provider_name=_PROVIDER_NAME,
+        usage_record=_usage_record(),
+    )
+    try:
+        with pytest.raises(OpenRouterGenerationReconciliationError) as raised:
+            await client.get_generation_evidence(
+                _GENERATION_ID,
+                reconciliation_request=request,
+            )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert raised.value.mismatch_code is GenerationReconciliationMismatchCode.REQUEST_TIMESTAMP
+    assert raised.value.attempts == 1
+    assert not raised.value.exhausted
+    assert raised.value.last_evidence is not None
+    assert raised.value.last_evidence.retrieval_attempts == 1
+    assert calls == 1
+    assert waits == []
+
+
+@pytest.mark.asyncio
 async def test_generation_metadata_does_not_poll_internally_inconsistent_cost(
     config_factory: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
