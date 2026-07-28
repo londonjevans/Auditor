@@ -64,10 +64,10 @@
   },
   "defects": {
     "total": 13,
-    "fixed": 6,
-    "remaining": 7
+    "fixed": 7,
+    "remaining": 6
   },
   "release_status": "NOT_A_RELEASE_CANDIDATE",
   "independent_evaluation_handoff": null,
-  "reason": "Six of thirteen evaluated defects are fixed. The qualification boundary is now fail-closed, but real model qualification remains partial, both bounded provider completion attempts are inconclusive and uncredited, required real engine and isolation integrations remain blocked, and this is not a release candidate."
+  "reason": "Seven of thirteen evaluated defects are fixed. Effective configuration and CLI override provenance now verify from manifest-bound runtime evidence, but real model qualification remains partial, both bounded provider completion attempts are inconclusive and uncredited, required real engine and isolation integrations remain blocked, and this is not a release candidate."
 }

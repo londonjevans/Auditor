@@ -68,17 +68,17 @@
       "id": "EVAL-DEFECT-007",
       "summary": "verify-run cannot reproduce effective CLI profile overrides.",
       "baseline_path": "src/mmaudit/cli.py",
-      "status": "IN_PROGRESS",
-      "regression_test": null,
-      "runtime_artifact": null,
-      "acceptance_command": null,
-      "completion_commit": null
+      "status": "COMPLETE",
+      "regression_test": "tests/unit/test_replay.py::test_verify_run_cli_reconstructs_embedded_maximum_profile_without_config",
+      "runtime_artifact": "docs/remediation/runtime/eval_defect_007.json",
+      "acceptance_command": ".venv/bin/pytest -q tests/unit/test_config.py tests/unit/test_manifest.py tests/unit/test_replay.py tests/unit/test_certification.py",
+      "completion_commit": "2b56995544f6393fd1b1d299beb1d24106aa5071"
     },
     {
       "id": "EVAL-DEFECT-008",
       "summary": "Empty-report benchmark subgates pass vacuously.",
       "baseline_path": "src/mmaudit/benchmark/engine.py",
-      "status": "QUEUED",
+      "status": "IN_PROGRESS",
       "regression_test": null,
       "runtime_artifact": null,
       "acceptance_command": null,

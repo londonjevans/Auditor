@@ -1,0 +1,144 @@
+{
+  "schema_version": "1.0",
+  "ticket_id": "EVAL-DEFECT-007",
+  "baseline_commit": "e304807cf942542706b88544fa216516f8f95cad",
+  "implementation_commit": "2b56995544f6393fd1b1d299beb1d24106aa5071",
+  "executed_at": "2026-07-28T05:52:53Z",
+  "implementation": [
+    {
+      "path": "README.md",
+      "sha256": "e8695e55293eea3ac173c8563d56179ee9c5a03c412e37a74bd2f1c3599de764"
+    },
+    {
+      "path": "schemas/run_evidence_manifest.schema.json",
+      "sha256": "e05925880f2615e387490c7068dd3d59f44e5ce8e6151476e6756ff445985717"
+    },
+    {
+      "path": "src/mmaudit/cli.py",
+      "sha256": "9eb5cd574d0b80bf48d452097820bf9fc47934146ada4584d94825ba108827ee"
+    },
+    {
+      "path": "src/mmaudit/config.py",
+      "sha256": "8cdea690368fd23607cf892092141e62a16279556b7be16f3502715d467c8a5f"
+    },
+    {
+      "path": "src/mmaudit/orchestration/certification.py",
+      "sha256": "5bcd8b6c66eb25f07f1b2ab793dcfc18d3c8912b342963874f0a364282b2e02f"
+    },
+    {
+      "path": "src/mmaudit/orchestration/manifest.py",
+      "sha256": "a7db90dcdc690ce24aa5e04317deb6a02abd03bfb9d8bbb517e3a1a6ea146545"
+    },
+    {
+      "path": "src/mmaudit/orchestration/pipeline.py",
+      "sha256": "57ade975a5788d74608cf8b46a0d82f0b379461e1e7ce8082d7bac4683ea0f0a"
+    },
+    {
+      "path": "src/mmaudit/orchestration/replay.py",
+      "sha256": "e19df135082d2588b45bce2da15e547fbdb1ff6a90b681b8ede8cbdac3cf7c16"
+    },
+    {
+      "path": "src/mmaudit/orchestration/verification.py",
+      "sha256": "dca93be76dd6f5e02737d4fddedb9ed586abf431164b872e9d718cbb0bce3da2"
+    },
+    {
+      "path": "src/mmaudit/traceability.py",
+      "sha256": "14320b770e30e074d0b6411e0be28dcd75f3d6ca28722d36266a86bfc5d25eac"
+    },
+    {
+      "path": "tests/unit/test_certification.py",
+      "sha256": "d775527861403946b2d40179f21e531f03c59a3b7a37dca193b09dbdfb716c21"
+    },
+    {
+      "path": "tests/unit/test_cli.py",
+      "sha256": "d55daa9a029137c0b935f0238b0de1e8cdaa7c0df9910cf4a8afb4bb495bccf8"
+    },
+    {
+      "path": "tests/unit/test_config.py",
+      "sha256": "8d382365becf33ad88a5e5a303d30e9a743a421c1ffe43dfe364c4da5578e09a"
+    },
+    {
+      "path": "tests/unit/test_manifest.py",
+      "sha256": "840a169be685cb4bbb9ea46b5602d2ab48ebb6551e634716fa47664fc2d17eab"
+    },
+    {
+      "path": "tests/unit/test_replay.py",
+      "sha256": "6e370355ba0264c22fa8a0476002de131a15abe4c0c14601e72a5cf448284492"
+    },
+    {
+      "path": "tests/unit/test_traceability.py",
+      "sha256": "bfc77ee5753b9347f0ad039b842049b03cbe637f358c44efec82c3440ce3e388"
+    }
+  ],
+  "regression": {
+    "primary_test": "tests/unit/test_replay.py::test_verify_run_cli_reconstructs_embedded_maximum_profile_without_config",
+    "focused_command": ".venv/bin/pytest -q tests/unit/test_replay.py::test_verify_run_cli_reconstructs_embedded_maximum_profile_without_config tests/unit/test_replay.py::test_v11_replay_reconstructs_embedded_profile_override tests/unit/test_replay.py::test_verify_run_rejects_v11_missing_metadata_when_binding_is_removed tests/unit/test_replay.py::test_verify_run_rejects_type_confused_metadata_boolean tests/unit/test_replay.py::test_verify_run_normalizes_nonfinite_metadata_to_stale tests/unit/test_certification.py::test_certification_rejects_manifest_changed_during_verification tests/unit/test_certification.py::test_certification_reloads_only_manifest_bound_report_bytes",
+    "focused_result": "PASS",
+    "focused_tests_passed": 9,
+    "focused_duration_seconds": 0.94,
+    "component_command": ".venv/bin/pytest -q tests/unit/test_config.py tests/unit/test_manifest.py tests/unit/test_replay.py tests/unit/test_certification.py",
+    "component_result": "PASS",
+    "component_tests_passed": 78,
+    "component_duration_seconds": 2.28,
+    "integration_command": ".venv/bin/pytest -q tests/integration/test_pipeline.py tests/integration/test_offline_replay.py",
+    "integration_result": "PASS",
+    "integration_tests_passed": 44,
+    "integration_tests_skipped": 1,
+    "integration_duration_seconds": 58.82,
+    "full_commands": [
+      {
+        "command": ".venv/bin/ruff check .",
+        "result": "PASS"
+      },
+      {
+        "command": ".venv/bin/mypy",
+        "result": "PASS",
+        "source_files": 116
+      },
+      {
+        "command": ".venv/bin/pytest -q",
+        "result": "PASS",
+        "tests_passed": 1545,
+        "tests_skipped": 10,
+        "duration_seconds": 203.25
+      }
+    ]
+  },
+  "negative_assays": {
+    "profile_override_requires_operator_recollection": false,
+    "changed_base_masked_by_profile_enforcement_is_current": false,
+    "resealed_report_configuration_mismatch_is_current": false,
+    "resealed_run_option_tamper_is_current": false,
+    "override_layer_reclassification_is_current": false,
+    "missing_metadata_is_current": false,
+    "type_confused_metadata_boolean_is_current": false,
+    "nonfinite_metadata_is_current": false,
+    "json_exponent_overflow_is_current": false,
+    "unbound_certification_report_reread_is_accepted": false,
+    "cross_manifest_certification_is_accepted": false,
+    "legacy_manifest_self_authorizes_without_config": false
+  },
+  "configuration_binding": {
+    "file_configuration_recorded": true,
+    "environment_overrides_allowlisted": true,
+    "cli_overrides_allowlisted": true,
+    "run_options_recorded": true,
+    "effective_configuration_recorded": true,
+    "effective_config_sha256_recorded": true,
+    "cli_override_sha256_recorded": true,
+    "model_selection_sha256_recorded": true,
+    "requested_profile_recorded": true,
+    "achieved_profile_derived_from_report": true,
+    "secret_file_path_recorded": false,
+    "secret_value_recorded": false,
+    "legacy_v1_0_requires_explicit_config": true
+  },
+  "real_integration_boundary": {
+    "status": "BLOCKED_TECHNICAL",
+    "reason": "Self-contained verification and deterministic mocked replay are proven. The real isolated Foundry replay test remains explicitly skipped because no hardened isolation backend is available; this unavailable integration receives no maximum-assurance credit.",
+    "tracking_ticket": "REM-ENGINES-001",
+    "openrouter_calls_made": 0,
+    "openrouter_cost_used_usd_exact": "0.00118674"
+  },
+  "immutable_evaluation_artifacts_unchanged": true
+}

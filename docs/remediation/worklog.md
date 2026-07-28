@@ -4,16 +4,16 @@ The seven files under `docs/evaluation/` are immutable baseline evidence from
 commit `e304807cf942542706b88544fa216516f8f95cad`.
 
 AUTORUN_STATUS: IN_PROGRESS
-CURRENT_TICKET: EVAL-DEFECT-007
-LAST_COMPLETED_TICKET: EVAL-DEFECT-006
-NEXT_ACTION: Trace effective configuration and CLI override canonicalization from audit invocation through manifest emission and verify-run reconstruction.
-LAST_COMMAND: git commit -m "Bind production models to verified qualifications"
-LAST_RESULT: PASS — created isolated implementation checkpoint 6ad4e4ac786d2f8fa06af2d8aa0fd117110e9298 after the complete validation gate passed.
-REMAINING_CODE_DEFECTS: 7
+CURRENT_TICKET: EVAL-DEFECT-008
+LAST_COMPLETED_TICKET: EVAL-DEFECT-007
+NEXT_ACTION: Reproduce zero-denominator benchmark false passes and trace required metric aggregation without changing thresholds.
+LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_replay.py::test_verify_run_cli_reconstructs_embedded_maximum_profile_without_config tests/unit/test_replay.py::test_v11_replay_reconstructs_embedded_profile_override tests/unit/test_replay.py::test_verify_run_rejects_v11_missing_metadata_when_binding_is_removed tests/unit/test_replay.py::test_verify_run_rejects_type_confused_metadata_boolean tests/unit/test_replay.py::test_verify_run_normalizes_nonfinite_metadata_to_stale tests/unit/test_certification.py::test_certification_rejects_manifest_changed_during_verification tests/unit/test_certification.py::test_certification_reloads_only_manifest_bound_report_bytes
+LAST_RESULT: PASS — 9 focused acceptance tests passed in 0.94s; the implementation checkpoint and commit-bound runtime evidence are recorded.
+REMAINING_CODE_DEFECTS: 6
 REMAINING_REAL_INTEGRATIONS: OpenRouter exact-model smoke/qualification/specialist review; certified-isolation Foundry and Slither; Echidna; Medusa; Halmos; formal proof engine; rootless isolation; isolated replay; product benchmark reports
 BLOCKED_EXTERNAL_PREREQUISITES: Operator-reviewed production model lineage mapping; Echidna; Medusa; Kontrol; Certora; rootless runtime/image; private holdout; and independently adjudicated expert comparison are not yet evidenced as available
 OPENROUTER_COST_USED_USD: 0.00118674
-LAST_CHECKPOINT_COMMIT: 6ad4e4ac786d2f8fa06af2d8aa0fd117110e9298
+LAST_CHECKPOINT_COMMIT: 2b56995544f6393fd1b1d299beb1d24106aa5071
 
 ## Immutable baseline
 
@@ -743,3 +743,86 @@ LAST_CHECKPOINT_COMMIT: 6ad4e4ac786d2f8fa06af2d8aa0fd117110e9298
   remain uncredited at total cost `$0.00118674`.
 - **Next action:** Begin `EVAL-DEFECT-007` by proving that effective CLI profile
   overrides can be reconstructed and verified from the emitted run alone.
+
+## 2026-07-28 — EVAL-DEFECT-007
+
+- **Status:** `COMPLETE`
+- **Defensive objective:** Make every run self-describe its complete effective
+  configuration and normalized safe override layers so `verify-run`, replay, and
+  certification reproduce the audited configuration without operator memory.
+- **Baseline negative assay:** A disposable synthetic manifest built from a
+  standard base config plus `--profile maximum-assurance` recorded only derived
+  hashes. The real `verify-run` CLI reloaded the unchanged standard config,
+  returned exit `6`/`STALE`, and reported changed configuration, model, scanner,
+  and compiler bindings. Passing the exact effective config directly produced
+  `CURRENT` with zero mismatches, isolating the defect to discarded override
+  provenance.
+- **Adjacent reconciliation assay:** The current builder can combine a report
+  claiming one profile/configuration with bindings built from another and the
+  verifier can return `CURRENT`; report configuration hash, model hash, and audit
+  profile therefore require explicit cross-checks at sealing and verification.
+- **Implementation slice:** Added canonical, allowlisted file/environment/CLI
+  configuration layers; typed non-secret run options; complete file and effective
+  configuration serialization; layer, model, invocation, requested-profile, and
+  achieved-profile hashes; manifest schema `1.1` with strict `1.0` compatibility;
+  report-backed run-option and layer-origin reconciliation; and embedded config
+  recovery for verification, replay, and certification. `--cost-ledger` is
+  normalized into the effective CLI layer, while secret-file paths and key material
+  remain excluded.
+- **Adversarial assays closed so far:** Report identity hashes resealed into a
+  manifest now produce explicit configuration mismatches; a raw base-config change
+  masked by profile enforcement is still stale; self-consistent run-option
+  tampering and CLI/environment layer reclassification are rejected through the
+  independently emitted report provenance. Legacy `1.0` evidence remains readable
+  but cannot self-authorize without an explicit configuration. Final independent
+  review also found and closed missing `metadata.json`, type-confused Boolean,
+  non-finite JSON, duplicate-key, unbound certification reread, mutable-path
+  report-read, and quick/deep published-schema seams. Every verification and
+  certification report read now uses the exact manifest-bound byte snapshot.
+- **Focused validation so far:**
+  - `.venv/bin/pytest -q tests/unit/test_config.py tests/unit/test_manifest.py
+    tests/unit/test_traceability.py` — `52 passed`.
+  - `.venv/bin/pytest -q tests/unit/test_replay.py
+    tests/unit/test_certification.py` — `22 passed`.
+  - `.venv/bin/pytest -q tests/unit/test_cli.py` — `59 passed`.
+  - Two focused pipeline integration tests — `2 passed`.
+  - `.venv/bin/pytest -q tests/unit/test_config.py tests/unit/test_manifest.py
+    tests/unit/test_replay.py tests/unit/test_certification.py` — `75 passed in
+    1.85s` after final adversarial fixes.
+  - Focused Ruff and strict mypy checks on the final security-sensitive source
+    changes — PASS.
+  - `.venv/bin/pytest -q tests/integration/test_pipeline.py
+    tests/integration/test_offline_replay.py` — `44 passed, 1 skipped in 58.82s`;
+    the skip is the explicit unavailable hardened-isolation replay integration.
+  - `.venv/bin/ruff check .` — PASS.
+  - `.venv/bin/mypy` — PASS, `116 source files`.
+  - `.venv/bin/pytest -q` — `1542 passed, 10 skipped in 202.71s`; every
+    skip names an unavailable real provider, engine, hardened-isolation, replay,
+    or sandbox loopback prerequisite and receives no maximum-assurance credit.
+  - Final review found JSON exponent overflow and a certification manifest-swap
+    seam; both are now fail-closed, with `78 passed in 2.28s` across the complete
+    config/manifest/replay/certification focused set and strict mypy clean.
+- Final post-review `.venv/bin/pytest -q` — `1545 passed, 10 skipped in
+    203.25s`; targeted independent rechecks also passed `4` tests covering
+    exponent overflow and cross-manifest certification identity.
+- **Integrity review:** `git diff --check` passed; all seven immutable evaluation
+  hashes match; `docs/evaluation/` is unchanged; `.env` remains ignored and
+  untracked; no credential-like additions or generated debris were found.
+- **Runtime evidence:** `docs/remediation/runtime/eval_defect_007.json`.
+- **Result:** `COMPLETE` at implementation checkpoint
+  `2b56995544f6393fd1b1d299beb1d24106aa5071`. The deterministic
+  configuration/replay verification defect is closed. Real isolated Foundry
+  replay remains independently `BLOCKED_TECHNICAL` because no hardened backend
+  is available and receives no maximum-assurance credit.
+- **Next action:** Begin `EVAL-DEFECT-008` by reproducing all vacuous benchmark
+  metric passes and preserving failed/malformed/stale analyses in denominators.
+
+## 2026-07-28 — EVAL-DEFECT-008
+
+- **Status:** `IN_PROGRESS`
+- **Defensive objective:** Represent every unavailable benchmark denominator
+  explicitly and make required zero-report, zero-case, zero-call, zero-location,
+  and zero-attempt metrics fail closed without weakening acceptance thresholds.
+- **Exact next safe action:** Inspect benchmark engine, schemas, report loaders,
+  release gates, and existing negative assays; then freeze the baseline
+  zero-denominator behavior in focused regression tests.

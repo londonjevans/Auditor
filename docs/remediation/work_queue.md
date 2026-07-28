@@ -162,9 +162,12 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Acceptance criteria:** A profile-overridden run verifies without operator
   recollection; effective configuration and CLI override hashes reconcile.
 - **Dependencies:** `EVAL-DEFECT-006`.
-- **Status:** `IN_PROGRESS`
-- **Next action:** Trace configuration loading, profile application, CLI override
-  canonicalization, manifest emission, and `verify-run` reconstruction.
+- **Status:** `COMPLETE`
+- **Evidence:** `docs/remediation/runtime/eval_defect_007.json`; implementation
+  checkpoint `2b56995544f6393fd1b1d299beb1d24106aa5071`; final validation
+  `1545 passed, 10 skipped`.
+- **Next action:** Preserve the manifest-bound effective configuration while
+  making every required benchmark denominator fail closed.
 
 ## EVAL-DEFECT-008 — Empty benchmark gates pass vacuously
 
@@ -174,7 +177,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `NOT_EVALUABLE`, never `PASS`; malformed/stale/failed analyses remain in
   denominators; required metrics and costs are distinct.
 - **Dependencies:** `EVAL-DEFECT-007`.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
+- **Next action:** Inventory benchmark metric construction, report loading, and
+  release-gate aggregation; reproduce every zero-denominator false pass before
+  changing metric semantics.
 
 ## EVAL-DEFECT-009 — Release validation trusts declared names
 
