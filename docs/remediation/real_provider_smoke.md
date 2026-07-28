@@ -15,7 +15,9 @@ present:
   `author/model` ID;
 - `MMAUDIT_REAL_PROVIDER_MODEL_ALLOWLIST` containing that exact model ID; and
 - `MMAUDIT_REAL_PROVIDER_ENDPOINT_ALLOWLIST` containing exactly one approved
-  provider endpoint tag or slug.
+  provider endpoint tag or slug;
+- `MMAUDIT_REAL_PROVIDER_EVIDENCE_OUTPUT` set to a fresh absolute `.json` path
+  beneath an existing unlinked operator-controlled directory.
 
 Run only the explicitly selected test:
 
@@ -23,12 +25,18 @@ Run only the explicitly selected test:
 .venv/bin/pytest -q tests/integration/test_real_openrouter_provider.py
 ```
 
-The harness validates all non-secret settings before opening the secret file. It
+The harness validates all non-secret settings, the pinned committed
+`tests/fixtures/solidity/provider_smoke/src/ProviderSmoke.sol` hash, and the fresh
+evidence destination before opening the secret file. It
 uses the repository's dotenv parser (never shell evaluation), canonical OpenRouter
 transport, certification routing with fallbacks disabled, parameter enforcement,
 data collection denied, ZDR required, a durable atomic cost ledger, one-request
 limit, and no raw prompt/response storage. It sends no repository source or target
-data. The paid test opens the existing cumulative ledger and cannot create or reset
+data beyond that bounded synthetic fixture. A successful response writes a fresh
+mode-`0600`, self-hashed evidence artifact containing only validated structured
+output and non-secret model, provider, identity, token, timing, hash, and reconciled
+cost metadata. The raw prompt, raw completion, credential, secret-file path, and
+fixture source are not persisted. The paid test opens the existing cumulative ledger and cannot create or reset
 budget state. Missing, deleted, moved, malformed, or cap-mismatched ledger state
 fails before secret loading or network access; absent opt-in skips the test.
 Production `mmaudit run` uses the same rule: it must open an existing ledger

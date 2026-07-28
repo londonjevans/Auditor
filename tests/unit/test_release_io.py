@@ -11,6 +11,7 @@ import mmaudit.release_io as release_io_module
 from mmaudit.orchestration.manifest import ManifestFileBinding
 from mmaudit.release_io import (
     create_evidence_file_binding,
+    read_file_evidence,
     read_json_evidence,
     revalidate_evidence_file_binding,
     write_json_evidence,
@@ -35,6 +36,26 @@ def test_reader_returns_exact_json_and_manifest_binding(tmp_path: Path) -> None:
     assert observed.content == content
     assert observed.binding == ManifestFileBinding(
         path="gates/result.json",
+        sha256=hashlib.sha256(content).hexdigest(),
+        size=len(content),
+    )
+
+
+def test_file_reader_returns_exact_non_json_bytes_and_binding(tmp_path: Path) -> None:
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+    content = b"pragma solidity ^0.8.20;\n"
+    (evidence_root / "Fixture.sol").write_bytes(content)
+
+    observed = read_file_evidence(
+        evidence_root=evidence_root,
+        relative_path="Fixture.sol",
+        max_bytes=1_000,
+    )
+
+    assert observed.content == content
+    assert observed.binding == ManifestFileBinding(
+        path="Fixture.sol",
         sha256=hashlib.sha256(content).hexdigest(),
         size=len(content),
     )

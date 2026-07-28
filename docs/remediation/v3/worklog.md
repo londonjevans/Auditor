@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_BY_OPERATOR
-CURRENT_MILESTONE: Paused before the successful real synthetic OpenRouter call
-CURRENT_TICKET: NONE
+AUTORUN_STATUS: ACTIVE
+CURRENT_MILESTONE: Real synthetic OpenRouter smoke
+CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: On operator resume, begin V3-SMOKE-001 from the preserved opt-in harness without launching a paid call until every explicit gate passes.
-LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_openrouter.py
-LAST_RESULT: PASS; 115 tests passed in 0.49s after the final diagnostic wording correction, followed by affected Ruff and diff checks. The immediately preceding complete suite passed 1859 tests with 10 explicit prerequisite skips in 237.78s. No paid provider call ran.
+NEXT_ACTION: Validate the preserved opt-in harness and committed synthetic fixture, then execute one paid request only if every secret, privacy, routing, identity, artifact, and budget gate passes.
+LAST_COMMAND: .venv/bin/pytest -q
+LAST_RESULT: PASS; 1868 tests passed and 10 explicit external/provider/isolation prerequisites skipped in 243.36s. The paid provider integration remained disabled. No network or secret access occurred.
 REAL_MODEL_CALLS_ATTEMPTED: 2
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 2
@@ -20,6 +20,51 @@ OPENROUTER_BUDGET_REMAINING_USD: 249.99881326
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: No successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
 LAST_CHECKPOINT_COMMIT: f001bcae1a88454a6b6f176827699343958f502b
+
+## 2026-07-28 — V3-SMOKE-001
+
+- **Status:** `IN_PROGRESS`.
+- **Defensive objective:** Complete one strictly routed, identity-bound,
+  non-truncated structured response against only the committed bounded synthetic
+  Solidity fixture, with reconciled cost and a non-secret evidence artifact.
+- **Starting evidence:** The operator-gated integration harness and fixture
+  preparation are preserved locally; the paid test remains disabled by default.
+  Historical spend is `0.00118674 USD`, with no reservation and no successful
+  response credited.
+- **Next safe action:** Review and test every local gate before explicitly loading
+  the operator-controlled secret file or enabling network access.
+- **Reproduced regression:** Before implementation,
+  `.venv/bin/pytest -q tests/unit/test_real_provider_harness.py` failed during
+  collection because the typed smoke-evidence contract and sink did not exist.
+- **Local remediation:** Added a pinned descriptor-safe read of the committed
+  synthetic Solidity fixture, a fresh-path preflight, a self-hashed typed success
+  artifact, mode-`0600` descriptor-safe JSON write/readback, credential/path/source
+  canary scans, explicit `STRICT_ZDR` and real-execution evidence, canonical
+  identity/provider assertions, independent generation evidence, and exact atomic
+  ledger reconciliation under a `5 USD` smoke-stage ceiling.
+- **Verification subject:** Replaced the placeholder generation-binding hash with
+  a canonical hash of the actual fixture, request/generation IDs, exact/canonical
+  model IDs, validated-response hash, prompt/schema hashes, endpoint snapshot, and
+  discovery evidence.
+- **Focused evidence:** The secret, ledger, discovery, generation, usage,
+  OpenRouter, release-I/O, harness, and gated-integration subset passed `334` tests
+  with one explicit paid-provider skip in `1.25s`; the expanded pinned-fixture and
+  output-preflight subset passed `81` with the same skip. Affected Ruff and strict
+  mypy passed.
+- **Provider state:** No provider request or metadata fetch has run in this ticket.
+  Spend remains `0.00118674 USD`, reservations remain zero, and no successful
+  response is credited.
+- **Next safe action:** Complete independent pre-spend review, commit the clean
+  harness/fixture checkpoint, then run the one explicitly gated synthetic call
+  only from that exact checkpoint.
+- **Independent pre-spend acceptance:** Final read-only review found no material
+  local blocker after enforcing the exact pinned fixture hash, recomputing the
+  verification-subject hash from artifact fields, and treating optional generation
+  reasoning/cached metadata as optional. The reviewer independently passed `334`
+  tests with one paid skip and confirmed affected Ruff and diff checks.
+- **Exact pre-call complete suite:** `.venv/bin/pytest -q` passed `1868` tests and
+  skipped `10` explicit external/provider/isolation prerequisites in `243.36s`.
+  The real provider smoke remained disabled.
 
 ## 2026-07-28 — V3-BASELINE-001
 

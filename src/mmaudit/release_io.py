@@ -46,6 +46,14 @@ class JsonEvidenceObservation:
 
 
 @dataclass(frozen=True, slots=True)
+class FileEvidenceObservation:
+    """Exact safely read bytes and their immutable file binding."""
+
+    content: bytes
+    binding: ManifestFileBinding
+
+
+@dataclass(frozen=True, slots=True)
 class _RootHandle:
     path: Path
     descriptor: int
@@ -76,6 +84,27 @@ def read_json_evidence(
     value = _decode_json(observation.content)
     return JsonEvidenceObservation(
         value=value,
+        content=observation.content,
+        binding=_binding(normalized, observation.content),
+    )
+
+
+def read_file_evidence(
+    *,
+    evidence_root: Path,
+    relative_path: str | Path,
+    max_bytes: int = DEFAULT_MAX_EVIDENCE_BYTES,
+) -> FileEvidenceObservation:
+    """Read bounded bytes beneath an explicit root without following or sharing links."""
+
+    bound = _validate_max_bytes(max_bytes)
+    normalized = _normalize_evidence_path(relative_path)
+    observation = _observe_file_twice(
+        evidence_root=evidence_root,
+        relative_path=normalized,
+        max_bytes=bound,
+    )
+    return FileEvidenceObservation(
         content=observation.content,
         binding=_binding(normalized, observation.content),
     )

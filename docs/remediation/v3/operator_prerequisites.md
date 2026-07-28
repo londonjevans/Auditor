@@ -15,6 +15,8 @@ Real provider tests require all of the following:
 - an exact model allowlist and exact approved endpoint;
 - an explicit privacy profile;
 - a numeric per-command cost cap within the aggregate remaining budget;
+- a fresh absolute private JSON evidence destination beneath an existing
+  operator-controlled directory;
 - a committed synthetic local Solidity source scope for smoke and qualification;
 - fallback routing disabled for certification.
 

@@ -47,7 +47,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   privacy, reconciled cost, bounded output, schema validation, and canary
   non-disclosure are evidenced in a non-secret runtime artifact.
 - **Dependencies:** `V3-IDENTITY-001`.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
 
 ## V3-PRIVACY-001 — Explicit privacy and retention profiles
 
