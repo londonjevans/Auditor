@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: ACTIVE
+AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: Validate the preserved opt-in harness and committed synthetic fixture, then execute one paid request only if every secret, privacy, routing, identity, artifact, and budget gate passes.
+NEXT_ACTION: On operator resume, verify the current single-model metadata route from official OpenRouter documentation, add a regression for the observed 404, correct only the confirmed route defect, revalidate locally, and do not retry the provider request unchanged.
 LAST_COMMAND: MMAUDIT_RUN_REAL_PROVIDER_TESTS=1 MMAUDIT_SECRETS_ENV_FILE=<operator-controlled Auditor .env> MMAUDIT_REAL_PROVIDER_COST_CAP_USD=250.00 MMAUDIT_OPENROUTER_COST_LEDGER=<Auditor cumulative ledger> MMAUDIT_REAL_PROVIDER_MODEL_ID=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_MODEL_ALLOWLIST=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_ENDPOINT_ALLOWLIST=akashml/fp8 MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=STRICT_ZDR MMAUDIT_REAL_PROVIDER_EVIDENCE_OUTPUT=<fresh v3 runtime artifact> .venv/bin/pytest -q tests/integration/test_real_openrouter_provider.py
-LAST_RESULT: PENDING; the exact one-call synthetic provider smoke is authorized to start only from the clean committed checkpoint and all local gates have passed.
+LAST_RESULT: FAILED_PREFLIGHT_NO_POST; authentication and the model-catalog GET succeeded, but single-model metadata lookup returned HTTP 404 before any completion POST. No response artifact was emitted, the atomic ledger remains unchanged at spent=0.00118674 USD and reserved=0, and the request must not be retried unchanged.
 REAL_MODEL_CALLS_ATTEMPTED: 2
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 2
@@ -78,6 +78,23 @@ LAST_CHECKPOINT_COMMIT: d2a54d9d3d57b89f6abeb567caaad7719eb74f96
   non-writable-by-group/world file; and the existing atomic ledger reports
   `cap=250.00`, `spent=0.00118674`, `reserved=0`, `remaining=249.99881326`,
   two entries, no over-cap state, and no reservation overrun.
+- **Real-provider preflight outcome:** The explicitly gated integration command
+  failed in `2.41s` before a completion request. Authenticated credential
+  validation and the exact-model catalog lookup succeeded. The subsequent
+  single-model metadata GET for the catalog-resolved canonical slug returned
+  HTTP `404`, so no completion POST occurred and no provider response was
+  credited.
+- **Post-failure evidence:** The expected runtime artifact remains absent. The
+  atomic ledger still contains exactly two historical
+  `UNCERTAIN_ACCOUNTED` entries with `spent=0.00118674 USD`, `reserved=0`, and
+  `remaining=249.99881326`; Git remains clean and synchronized at
+  `6a24f119334f6e7552141361944f6d3aed3c76ce`. This metadata-route failure is not
+  counted as a paid model-call attempt.
+- **Operator pause:** Autorun is paused at a clean boundary. No process or
+  reservation is active. On resume, confirm the current official OpenRouter
+  single-model metadata route, reproduce the `404` with a local regression,
+  correct the confirmed route defect, and re-run local gates before considering
+  one materially changed provider attempt.
 
 ## 2026-07-28 — V3-BASELINE-001
 

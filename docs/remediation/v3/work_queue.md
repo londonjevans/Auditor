@@ -48,6 +48,12 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   non-disclosure are evidenced in a non-secret runtime artifact.
 - **Dependencies:** `V3-IDENTITY-001`.
 - **Status:** `IN_PROGRESS`
+- **Pause evidence:** The first v3 launch stopped before a completion POST when
+  single-model metadata lookup returned HTTP `404`; no artifact, spend, or
+  reservation was added.
+- **Next action:** On operator resume, verify the current metadata route from
+  official OpenRouter documentation, add the local regression, correct the
+  confirmed defect, and revalidate before any materially changed provider attempt.
 
 ## V3-PRIVACY-001 — Explicit privacy and retention profiles
 
