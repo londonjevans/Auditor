@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.99881326
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: No successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 5ea145302520cc295eb551eb74a623e1471e98d3
+LAST_CHECKPOINT_COMMIT: f001bcae1a88454a6b6f176827699343958f502b
 
 ## 2026-07-28 — V3-BASELINE-001
 
