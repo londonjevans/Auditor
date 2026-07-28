@@ -51,9 +51,12 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Pause evidence:** The first v3 launch stopped before a completion POST when
   single-model metadata lookup returned HTTP `404`; no artifact, spend, or
   reservation was added.
-- **Next action:** Query single-model metadata with the exact catalog/requested
-  model ID, validate and bind the returned canonical slug, add the local
-  regression, and revalidate before any materially changed provider attempt.
+- **Runtime evidence:** Exact-ID metadata now succeeds, but the next single POST
+  was rejected fail-closed with `finish_reason=length`, no content, no artifact,
+  and reconciled actual cost `0.00054756 USD`.
+- **Next action:** Add a local output-budget/reasoning regression and make a
+  bounded materially different request configuration that reserves sufficient
+  schema-answer space; do not retry the truncated request unchanged.
 
 ## V3-PRIVACY-001 — Explicit privacy and retention profiles
 

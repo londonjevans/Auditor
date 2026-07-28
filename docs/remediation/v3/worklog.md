@@ -8,15 +8,15 @@ AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: Execute exactly one materially changed, explicitly gated synthetic provider smoke from the clean checkpoint; stop and record the first provider/runtime outcome without an unchanged retry.
+NEXT_ACTION: Reproduce the output-budget failure locally, determine whether excluded reasoning consumed the 512-token completion budget, and implement a bounded materially different request only after a regression proves sufficient answer space; do not retry unchanged.
 LAST_COMMAND: MMAUDIT_RUN_REAL_PROVIDER_TESTS=1 MMAUDIT_SECRETS_ENV_FILE=<operator-controlled Auditor .env> MMAUDIT_REAL_PROVIDER_COST_CAP_USD=250.00 MMAUDIT_OPENROUTER_COST_LEDGER=<Auditor cumulative ledger> MMAUDIT_REAL_PROVIDER_MODEL_ID=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_MODEL_ALLOWLIST=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_ENDPOINT_ALLOWLIST=akashml/fp8 MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=STRICT_ZDR MMAUDIT_REAL_PROVIDER_EVIDENCE_OUTPUT=<fresh v3 runtime artifact> .venv/bin/pytest -q tests/integration/test_real_openrouter_provider.py
-LAST_RESULT: PENDING; the corrected source checkpoint is synchronized, all local gates pass, exact model and endpoint metadata routes return HTTP 200, the artifact path is fresh, and the unchanged ledger has 249.99881326 USD available with no reservation.
-REAL_MODEL_CALLS_ATTEMPTED: 2
+LAST_RESULT: REJECTED_TRUNCATED; one completion POST returned a schema-uncredited response with finish_reason=length and no content. The fail-closed client raised OpenRouterTruncatedResponseError, emitted no artifact, reconciled actual cost 0.00054756 USD, and released the reservation. No unchanged retry is permitted.
+REAL_MODEL_CALLS_ATTEMPTED: 3
 REAL_MODEL_CALLS_SUCCEEDED: 0
-REAL_MODEL_CALLS_REJECTED: 2
-OPENROUTER_COST_USED_USD: 0.00118674
+REAL_MODEL_CALLS_REJECTED: 3
+OPENROUTER_COST_USED_USD: 0.00173430
 OPENROUTER_COST_RESERVED_USD: 0.00
-OPENROUTER_BUDGET_REMAINING_USD: 249.99881326
+OPENROUTER_BUDGET_REMAINING_USD: 249.99826570
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: No successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
 LAST_CHECKPOINT_COMMIT: 8004dd7662ca521565db1d87cd3e76d8678cf44b
@@ -146,6 +146,21 @@ LAST_CHECKPOINT_COMMIT: 8004dd7662ca521565db1d87cd3e76d8678cf44b
   remains `cap=250.00`, `spent=0.00118674`, `reserved=0`,
   `remaining=249.99881326`, two entries, with no over-cap or reservation-overrun
   state.
+- **Second launch outcome:** Exactly one completion POST ran. OpenRouter returned
+  generation `gen-1785255808-bjFsZT1Hmk04U4Edm3tB` for the exact requested
+  model, but its only choice had `finish_reason=length` and no content. The
+  client raised `OpenRouterTruncatedResponseError`; the response earned no
+  schema, review, identity, or success credit and no runtime artifact was
+  emitted.
+- **Cost reconciliation:** The third ledger entry is `RECONCILED` with
+  `reserved=0.00084758 USD`, `actual=0.00054756 USD`, and
+  `accounted=0.00054756 USD`. Aggregate spend is now `0.00173430 USD`,
+  active reservation is zero, remaining budget is `249.99826570 USD`, and no
+  over-cap or reservation-overrun state exists.
+- **No-progress guard:** The truncated request will not be retried unchanged.
+  Before another POST, add a local regression that distinguishes total
+  reasoning/output exhaustion from sufficient bounded answer space and make a
+  materially different, evidence-backed token/reasoning configuration.
 
 ## 2026-07-28 — V3-BASELINE-001
 
