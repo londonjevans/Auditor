@@ -107,10 +107,16 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   review credit exists. The terminal entry conservatively accounted its
   `0.00072452 USD` reservation, bringing cumulative spend to `0.0031470425 USD`
   with zero active reservation.
-- **Current next action:** Do not retry Mistral/Venice unchanged. Perform
-  metadata-only discovery for a materially different exact `STRICT_ZDR` route,
-  bind its live endpoint facts, and repeat the complete no-network preflight
-  before considering another bounded smoke.
+- **Materially different route:** DeepSeek/Novita metadata failed closed because
+  the live single-model response differed from the frozen catalog projection.
+  Exact Qwen `qwen/qwen3.6-35b-a3b` through `akashml/fp8` then passed authenticated
+  metadata-only discovery with typed `STRICT_ZDR`, data-denial, native structured
+  output, optional reasoning, and exact endpoint evidence. No completion ran and
+  ledger cost did not change.
+- **Current next action:** From a clean synchronized checkpoint, execute at most
+  one bounded Qwen/AkashML attempt against the pinned fixture and fresh attempt-8
+  namespace. Validate either qualifying success or durable typed rejection; do
+  not retry either blocked route unchanged.
 
 ## V3-PRIVACY-001 — Explicit privacy and retention profiles
 

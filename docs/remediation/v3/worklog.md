@@ -8,9 +8,9 @@ AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: Do not retry Mistral/Venice unchanged. Run metadata-only discovery for a materially different exact STRICT_ZDR route, freeze and validate its current endpoint facts, and complete a fresh no-network smoke preflight.
-LAST_COMMAND: MMAUDIT_RUN_REAL_PROVIDER_TESTS=1 MMAUDIT_SECRETS_ENV_FILE=<operator-control-plane-file> MMAUDIT_REAL_PROVIDER_COST_CAP_USD=250.00 MMAUDIT_OPENROUTER_COST_LEDGER=<existing-ledger> MMAUDIT_REAL_PROVIDER_MODEL_ID=mistralai/mistral-small-2603 MMAUDIT_REAL_PROVIDER_MODEL_ALLOWLIST=mistralai/mistral-small-2603 MMAUDIT_REAL_PROVIDER_ENDPOINT_ALLOWLIST=venice/fp8 MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=STRICT_ZDR MMAUDIT_REAL_PROVIDER_EVIDENCE_OUTPUT=<fresh-private-attempt-7-output> .venv/bin/pytest -q tests/integration/test_real_openrouter_provider.py
-LAST_RESULT: REJECTED_RATE_LIMIT; the exact provider returned HTTP 429 before any completion or model output. The zero-retry policy failed closed, no success or rejection artifact was written, and no review credit exists. The seventh terminal entry is uncertain_accounted with 0.00072452 USD conservatively accounted; cumulative spent is 0.0031470425, reserved is zero, remaining is 249.9968529575, and there is no over-cap state or reservation overrun.
+NEXT_ACTION: From a clean synchronized checkpoint, execute at most one exact Qwen/AkashML STRICT_ZDR smoke against the pinned fixture and fresh attempt-8 namespace; validate either qualifying success or the durable typed rejection.
+LAST_COMMAND: MMAUDIT_RUN_REAL_PROVIDER_TESTS=1 MMAUDIT_SECRETS_ENV_FILE=<operator-control-plane-file> MMAUDIT_REAL_PROVIDER_COST_CAP_USD=250.00 MMAUDIT_OPENROUTER_COST_LEDGER=<existing-ledger> MMAUDIT_REAL_PROVIDER_MODEL_ID=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_MODEL_ALLOWLIST=qwen/qwen3.6-35b-a3b MMAUDIT_REAL_PROVIDER_ENDPOINT_ALLOWLIST=akashml/fp8 MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=STRICT_ZDR MMAUDIT_REAL_PROVIDER_EVIDENCE_OUTPUT=<fresh-private-attempt-8-output> <no-network-typed-preflight>
+LAST_RESULT: PASS; typed authenticated metadata-only discovery bound exact Qwen/AkashML with strict ZDR, data denial, structured output, optional reasoning, context/output 262144, discovery evidence afd7e1b6d657cd5ef8d5a543b68c6d90e01dcb9883757b742cc4fec0e0c3e784, and manifest 8ec7e176e308c5806c52534467db27202eb026423cc9d47c8417e39b2dd07347. The pinned fixture and fresh attempt-8 namespace passed local preflight; ledger spend remained 0.0031470425 with zero reserved. No completion was requested.
 REAL_MODEL_CALLS_ATTEMPTED: 7
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 7
@@ -822,3 +822,22 @@ LAST_CHECKPOINT_COMMIT: a6ef7bb04cdc58a1b01b06f94a8aa69461e5e44d
   The next safe action is metadata-only discovery of a materially different
   exact `STRICT_ZDR` route, followed by fresh endpoint binding and local
   preflight before another completion is considered.
+- **Alternate discovery attempt one:** Exact DeepSeek/Novita metadata discovery
+  failed closed because the single-model response differed from the frozen
+  catalog projection. No completion was requested, no source was sent, and
+  ledger cost did not change.
+- **Alternate discovery attempt two:** Typed authenticated metadata-only
+  discovery succeeded for exact `qwen/qwen3.6-35b-a3b`, canonical
+  `qwen/qwen3.6-35b-a3b-20260415`, endpoint `akashml/fp8`, and provider
+  `AkashML`. The route is strict-ZDR and data-denial eligible, supports native
+  structured output and optional reasoning, and exposes `262144` context and
+  output capacity. Discovery evidence is
+  `afd7e1b6d657cd5ef8d5a543b68c6d90e01dcb9883757b742cc4fec0e0c3e784`;
+  manifest SHA-256 is
+  `8ec7e176e308c5806c52534467db27202eb026423cc9d47c8417e39b2dd07347`.
+  No model completion was requested.
+- **Attempt-eight no-network preflight:** Exact Qwen/AkashML allowlists, explicit
+  `STRICT_ZDR`, the pinned fixture, fresh private success/rejection namespace,
+  and the seven-entry atomic ledger validated. Spend remains
+  `0.0031470425 USD`, active reservation is zero, remaining budget is
+  `249.9968529575 USD`, and there is no over-cap state or reservation overrun.
