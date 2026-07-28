@@ -151,9 +151,11 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   source files, release-schema drift verification, and the full suite passed,
   ending with `1950 passed, 10 skipped in 227.81s`. Final diff, untracked-file,
   and secret-pattern checks passed with no generated artifact drift.
-- **Current next action:** Checkpoint and push the validated local correction,
-  then perform a fresh no-network preflight before any materially changed
-  provider action.
+- **Validated implementation checkpoint:** Commit `0ff4918` contains the atomic
+  token-basis correction and complete regression matrix.
+- **Current next action:** Push the checkpoint over SSH, verify clean
+  synchronization, then perform a fresh no-network preflight before any
+  materially changed provider action.
 
 ## V3-PRIVACY-001 — Explicit privacy and retention profiles
 

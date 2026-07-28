@@ -8,9 +8,9 @@ AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: Commit and push the validated token-basis correction, verify clean synchronization, then perform a fresh no-network preflight before any materially changed provider action.
-LAST_COMMAND: .venv/bin/ruff format . && .venv/bin/ruff check . && .venv/bin/mypy && .venv/bin/python scripts/generate_release_schemas.py && .venv/bin/pytest -q
-LAST_RESULT: PASS; Ruff format/check passed, strict mypy passed 129 source files, release schemas had no drift, and the complete suite passed 1950 tests with 10 explicit prerequisite skips in 227.81s.
+NEXT_ACTION: Push the validated implementation and state checkpoint over SSH, verify clean synchronization, then perform a fresh no-network preflight before any materially changed provider action.
+LAST_COMMAND: git commit -m "Reconcile OpenRouter token bases atomically"
+LAST_RESULT: PASS; isolated validated implementation checkpoint 0ff4918 was created with only the five intended files.
 REAL_MODEL_CALLS_ATTEMPTED: 9
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9967232775
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; Qwen/AkashML attempt nine exposed a normalized-versus-native token-basis reconciliation defect and will not be retried unchanged; no successful identity-bound model completion; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: c86bae5c8867038ded9e6b8b9a05d40a3155a064
+LAST_CHECKPOINT_COMMIT: 0ff4918568a304bcefc3ad108903ee74b197389b
 
 ## 2026-07-28 — V3-SMOKE-001
 
@@ -1025,3 +1025,7 @@ LAST_CHECKPOINT_COMMIT: c86bae5c8867038ded9e6b8b9a05d40a3155a064
   queue/worklog. There are no untracked files, generated schema changes, or
   secret-pattern additions. Runtime/private artifacts remain ignored and outside
   the commit.
+- **Validated implementation checkpoint:** Commit
+  `0ff4918568a304bcefc3ad108903ee74b197389b` records the reconciler, regression
+  coverage, and exact attempt-nine/full-gate evidence. It contains only the five
+  intended files and no runtime/private artifact.
