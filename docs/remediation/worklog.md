@@ -3,17 +3,17 @@
 The seven files under `docs/evaluation/` are immutable baseline evidence from
 commit `e304807cf942542706b88544fa216516f8f95cad`.
 
-AUTORUN_STATUS: IN_PROGRESS
+AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_TICKET: EVAL-DEFECT-010
 LAST_COMPLETED_TICKET: EVAL-DEFECT-009
-NEXT_ACTION: Review and checkpoint the clean EVAL-010 implementation, then generate fresh external candidate-bound runtime evidence without provider access.
-LAST_COMMAND: .venv/bin/ruff format . && .venv/bin/ruff check . && .venv/bin/mypy && .venv/bin/pytest -q
-LAST_RESULT: PASS — 291 files unchanged, Ruff clean, strict mypy clean across 128 source files, and 1799 passed with 10 explicit external-prerequisite skips in 215.89s.
+NEXT_ACTION: Resume from clean commit 559e18755bb3c1ae93900827fc5c0e0fdd2ce98a; generate a provider-free maximum-assurance negative-control run under the fresh external /private/tmp/mmaudit-eval010-run.YZDhA2 directory, then collect and validate the fresh candidate-bound report.
+LAST_COMMAND: mktemp -d /private/tmp/mmaudit-eval010-run.XXXXXX
+LAST_RESULT: PASS — created the fresh empty external directory /private/tmp/mmaudit-eval010-run.YZDhA2; no audit, provider, scanner, or network execution was started.
 REMAINING_CODE_DEFECTS: 4
 REMAINING_REAL_INTEGRATIONS: OpenRouter exact-model smoke/qualification/specialist review; certified-isolation Foundry and Slither; Echidna; Medusa; Halmos; formal proof engine; rootless isolation; isolated replay; product benchmark reports
 BLOCKED_EXTERNAL_PREREQUISITES: Operator-reviewed production model lineage mapping; Echidna; Medusa; Kontrol; Certora; rootless runtime/image; private holdout; and independently adjudicated expert comparison are not yet evidenced as available
 OPENROUTER_COST_USED_USD: 0.00118674
-LAST_CHECKPOINT_COMMIT: cd46d215bd77e4c6e1d505d4a7f7773bdb78e525
+LAST_CHECKPOINT_COMMIT: 559e18755bb3c1ae93900827fc5c0e0fdd2ce98a
 
 ## Immutable baseline
 

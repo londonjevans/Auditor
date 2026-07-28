@@ -206,9 +206,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   blocked.
 - **Dependencies:** `EVAL-DEFECT-009`.
 - **Status:** `IN_PROGRESS`
-- **Next action:** Freeze the stale-report negative assay, inventory the existing
-  gate observations and runtime evidence, and define a typed candidate/report
-  binding before generating a replacement report.
+- **Next action:** Resume from implementation checkpoint
+  `559e18755bb3c1ae93900827fc5c0e0fdd2ce98a`; generate provider-free external
+  runtime evidence for that clean candidate, authoritatively validate the fresh
+  blocked report, and record the exact evidence before completing this ticket.
 
 ## EVAL-DEFECT-011 — Mutation portfolio and real kill score are incomplete
 
