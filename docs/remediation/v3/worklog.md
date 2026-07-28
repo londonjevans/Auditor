@@ -8,9 +8,9 @@ AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Real synthetic OpenRouter smoke
 CURRENT_TICKET: V3-SMOKE-001
 LAST_COMPLETED_TICKET: V3-IDENTITY-001
-NEXT_ACTION: Checkpoint the complete local reconciliation correction, then revalidate the exact Mistral/Venice route, fresh success and rejection destinations, and atomic budget immediately before one materially changed provider retry.
-LAST_COMMAND: .venv/bin/pytest -q
-LAST_RESULT: PASS; 1912 tests passed and 10 explicit external/provider/isolation prerequisites skipped in 229.55s. Post-correction Ruff format/check, strict mypy, release-schema generation, and 320 focused tests plus one paid-provider skip also passed. No provider or network request ran.
+NEXT_ACTION: From the clean synchronized checkpoint, execute at most one materially changed exact Mistral/Venice STRICT_ZDR smoke with the explicit operator-secret loader and validate either a qualifying success artifact or the separate durable typed rejection.
+LAST_COMMAND: MMAUDIT_RUN_REAL_PROVIDER_TESTS=1 MMAUDIT_SECRETS_ENV_FILE=<operator-control-plane-file> MMAUDIT_REAL_PROVIDER_COST_CAP_USD=250.00 MMAUDIT_OPENROUTER_COST_LEDGER=<existing-ledger> MMAUDIT_REAL_PROVIDER_MODEL_ID=mistralai/mistral-small-2603 MMAUDIT_REAL_PROVIDER_MODEL_ALLOWLIST=mistralai/mistral-small-2603 MMAUDIT_REAL_PROVIDER_ENDPOINT_ALLOWLIST=venice/fp8 MMAUDIT_REAL_PROVIDER_PRIVACY_PROFILE=STRICT_ZDR MMAUDIT_REAL_PROVIDER_EVIDENCE_OUTPUT=<fresh-private-attempt-7-output> <no-network-typed-preflight>
+LAST_RESULT: PASS; pinned fixture and exact allowlists validated, the private success/rejection namespace is fresh, and the atomic ledger has 6 terminal entries, 0.0019275425 USD spent, zero reserved, 249.9980724575 USD remaining, no over-cap state, and no reservation overrun. The secret file was not opened and no network request ran.
 REAL_MODEL_CALLS_ATTEMPTED: 6
 REAL_MODEL_CALLS_SUCCEEDED: 0
 REAL_MODEL_CALLS_REJECTED: 6
@@ -801,3 +801,9 @@ LAST_CHECKPOINT_COMMIT: a6ef7bb04cdc58a1b01b06f94a8aa69461e5e44d
   `a6ef7bb04cdc58a1b01b06f94a8aa69461e5e44d` contains the independently
   reviewed reconciliation ordering fix and is synchronized to the SSH origin.
   No successful model response or release credit is claimed.
+- **Attempt-seven no-network preflight:** The exact Mistral/Venice allowlists,
+  explicit `STRICT_ZDR` policy, pinned fixture, fresh private success/rejection
+  namespace, and existing atomic ledger validated. The ledger contains six
+  terminal entries, `0.0019275425 USD` spent, zero reserved,
+  `249.9980724575 USD` remaining, no over-cap state, and no reservation overrun.
+  The secret file was not opened and no network request ran.
