@@ -19,7 +19,10 @@ _MUTABLE_OR_ROUTED_PARTS = frozenset(
 
 
 def is_exact_openrouter_model_id(value: object) -> bool:
-    """Return whether a value is one immutable lowercase author/model slug."""
+    """Return whether a value is one exact non-routed lowercase author/model slug.
+
+    Exact syntax is not proof that the provider deployment or alias is immutable.
+    """
 
     if not isinstance(value, str) or re.fullmatch(EXACT_MODEL_ID_PATTERN, value) is None:
         return False

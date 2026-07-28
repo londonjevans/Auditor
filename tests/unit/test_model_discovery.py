@@ -18,6 +18,7 @@ from mmaudit.models.discovery import (
     OPENROUTER_ZDR_QUERY,
     DiscoveryCandidateRoute,
     DiscoveryEndpointMetadataBinding,
+    DiscoveryModelMetadataBinding,
     ModelDiscoveryValidationError,
     OpenRouterModelDiscoveryEvidence,
     OpenRouterModelDiscoveryPayload,
@@ -25,6 +26,7 @@ from mmaudit.models.discovery import (
     load_model_discovery_evidence,
     load_model_discovery_run,
     openrouter_endpoint_query,
+    openrouter_model_query,
     validate_openrouter_model_discovery,
     write_model_discovery_run,
 )
@@ -134,9 +136,15 @@ def _discover(
     endpoint_snapshot: OpenRouterEndpointSnapshotEvidence | None = None,
     exact_model_id: str = "alpha/atlas-secure",
 ) -> OpenRouterModelDiscoveryPayload:
+    selected_models = models or [_model()]
+    single_model = next(
+        (item for item in selected_models if item.get("id") == exact_model_id),
+        selected_models[0],
+    )
     return validate_openrouter_model_discovery(
         exact_model_id=exact_model_id,
-        models_payload={"data": models or [_model()]},
+        models_payload={"data": selected_models},
+        single_model_payload={"data": copy.deepcopy(single_model)},
         endpoint_snapshot=endpoint_snapshot or _endpoint_snapshot(),
     )
 
@@ -160,6 +168,16 @@ def _real_evidence(
         )
         for payload in selected
     )
+    model_bindings = tuple(
+        DiscoveryModelMetadataBinding(
+            exact_model_id=payload.exact_model_id,
+            canonical_slug=payload.canonical_slug,
+            api_query=openrouter_model_query(payload.canonical_slug),
+            response_snapshot_sha256="e" * 64,
+            model_metadata_snapshot_sha256=payload.model_metadata_snapshot_sha256,
+        )
+        for payload in selected
+    )
     provenance, evidence = _issue_real_openrouter_discovery_run(
         run_id="1" * 32,
         retrieved_at=datetime(2026, 7, 27, 8, 0, tzinfo=UTC),
@@ -168,6 +186,7 @@ def _real_evidence(
         catalog_snapshot_sha256="c" * 64,
         zdr_snapshot_sha256="d" * 64,
         candidate_routes=routes,
+        model_metadata_bindings=model_bindings,
         endpoint_metadata_bindings=endpoint_bindings,
         payloads=selected,
         issuer=_TRUSTED_OPENROUTER_DISCOVERY_ISSUER,
@@ -268,6 +287,7 @@ def test_requested_model_aliases_are_rejected(model: str) -> None:
         validate_openrouter_model_discovery(
             exact_model_id=model,
             models_payload={"data": [_model(model=model, canonical_slug=model)]},
+            single_model_payload={"data": _model(model=model, canonical_slug=model)},
             endpoint_snapshot=_endpoint_snapshot(),
         )
 
@@ -282,6 +302,32 @@ def test_canonical_slug_is_explicit_catalog_evidence_not_a_prefix_heuristic() ->
 
     with pytest.raises(ValidationError, match="different model"):
         _discover(endpoint_snapshot=_endpoint_snapshot(model="beta/other"))
+
+
+def test_canonical_lookup_accepts_only_requested_or_canonical_model_identity() -> None:
+    catalog_model = _model()
+    canonical_model = copy.deepcopy(catalog_model)
+    canonical_model["id"] = catalog_model["canonical_slug"]
+
+    payload = validate_openrouter_model_discovery(
+        exact_model_id="alpha/atlas-secure",
+        models_payload={"data": [catalog_model]},
+        single_model_payload={"data": canonical_model},
+        endpoint_snapshot=_endpoint_snapshot(),
+    )
+
+    assert payload.exact_model_id == "alpha/atlas-secure"
+    assert payload.canonical_slug == "alpha/atlas-secure-20260727"
+
+    unrelated = copy.deepcopy(canonical_model)
+    unrelated["id"] = "alpha/unrelated-model"
+    with pytest.raises(ModelDiscoveryValidationError, match="identity differs"):
+        validate_openrouter_model_discovery(
+            exact_model_id="alpha/atlas-secure",
+            models_payload={"data": [catalog_model]},
+            single_model_payload={"data": unrelated},
+            endpoint_snapshot=_endpoint_snapshot(),
+        )
 
 
 def test_catalog_and_exact_endpoint_limits_must_be_compatible() -> None:
@@ -343,6 +389,13 @@ def test_real_provenance_requires_the_trusted_issuer_and_whole_second_utc() -> N
         api_query=openrouter_endpoint_query(payload.exact_model_id),
         response_snapshot_sha256=payload.endpoint_snapshot.endpoint_metadata_sha256,
     )
+    model_binding = DiscoveryModelMetadataBinding(
+        exact_model_id=payload.exact_model_id,
+        canonical_slug=payload.canonical_slug,
+        api_query=openrouter_model_query(payload.canonical_slug),
+        response_snapshot_sha256="e" * 64,
+        model_metadata_snapshot_sha256=payload.model_metadata_snapshot_sha256,
+    )
     arguments = {
         "run_id": "1" * 32,
         "retrieved_at": datetime(2026, 7, 27, 8, 0, tzinfo=UTC),
@@ -351,6 +404,7 @@ def test_real_provenance_requires_the_trusted_issuer_and_whole_second_utc() -> N
         "catalog_snapshot_sha256": "c" * 64,
         "zdr_snapshot_sha256": "d" * 64,
         "candidate_routes": (route,),
+        "model_metadata_bindings": (model_binding,),
         "endpoint_metadata_bindings": (binding,),
         "payloads": (payload,),
     }
@@ -402,6 +456,7 @@ async def test_mock_transport_cannot_seal_real_discovery_evidence(
                 retrieved_at=datetime(2026, 7, 27, 8, 0, tzinfo=UTC),
                 models_payload={},
                 zdr_payload={},
+                single_model_payloads={},
                 endpoint_payloads={},
                 candidate_routes=(),
                 payloads=(),

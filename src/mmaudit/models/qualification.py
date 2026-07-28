@@ -10,7 +10,10 @@ from __future__ import annotations
 import json
 import re
 import stat
+import threading
 import tomllib
+import weakref
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -33,7 +36,7 @@ from mmaudit.models.discovery import (
 from mmaudit.models.generation_evidence import (
     OpenRouterGenerationEvidence,
     TrustedGenerationVerification,
-    reconcile_generation_evidence,
+    _reconcile_generation_evidence_structural,
 )
 from mmaudit.models.identifiers import (
     EXACT_MODEL_ID_PATTERN,
@@ -41,7 +44,10 @@ from mmaudit.models.identifiers import (
 )
 from mmaudit.models.release_attestation import TrustedReleaseBindingObservation
 from mmaudit.models.schemas import ExecutionEvidenceKind, StrictModel, UsageRecord
-from mmaudit.models.usage import is_creditable_usage_record
+from mmaudit.models.usage import (
+    _is_structurally_creditable_usage_record,
+    is_creditable_usage_record,
+)
 from mmaudit.orchestration.manifest import canonical_sha256
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -631,7 +637,7 @@ class TrustedBenchmarkVerificationEvidence(StrictModel):
             provider_name = record.routing.get("selected_provider_name")
             if generation_id is None or not isinstance(provider_name, str):
                 raise ValueError("verified benchmark usage lacks provider generation identity")
-            reconcile_generation_evidence(
+            _reconcile_generation_evidence_structural(
                 attestations[generation_id],
                 usage_record=record,
                 expected_exact_model=self.exact_model_id,
@@ -1115,14 +1121,10 @@ class QualificationVerification(StrictModel):
         return self
 
 
-_VERIFIED_QUALIFICATION_ISSUER = object()
-
-
 @dataclass(frozen=True, slots=True, init=False)
 class VerifiedTierAModelQualification:
     """Opaque immutable snapshot of one fully verified Tier A model result."""
 
-    _issuer: object
     exact_model_id: str
     canonical_model_slug: str
     root_lineage: str
@@ -1143,15 +1145,14 @@ class VerifiedTierAModelQualification:
     expires_at: datetime
     benchmark_case_count: int
 
-    def __new__(cls, issuer: object | None = None) -> Self:
-        if issuer is not _VERIFIED_QUALIFICATION_ISSUER:
-            raise TypeError(
-                "verified model qualification can only be issued by the qualification resolver"
-            )
-        return object.__new__(cls)
+    def __new__(cls, *_args: object, **_kwargs: object) -> Self:
+        del cls, _args, _kwargs
+        raise TypeError(
+            "verified model qualification can only be issued by the qualification resolver"
+        )
 
-    def __init__(self, issuer: object | None = None) -> None:
-        del issuer
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        del self, _args, _kwargs
 
     @property
     def quality_measurement(self) -> str:
@@ -1172,11 +1173,10 @@ class VerifiedTierAModelQualification:
         raise TypeError("verified model qualification cannot be serialized")
 
 
-@dataclass(frozen=True, slots=True, init=False)
+@dataclass(frozen=True, slots=True, weakref_slot=True, init=False)
 class VerifiedProductionQualification:
     """Opaque capability proving a current complete production qualification."""
 
-    _issuer: object
     verified_at: datetime
     expires_at: datetime
     artifact_sha256: str
@@ -1192,15 +1192,14 @@ class VerifiedProductionQualification:
     models: tuple[VerifiedTierAModelQualification, ...]
     capability_sha256: str
 
-    def __new__(cls, issuer: object | None = None) -> Self:
-        if issuer is not _VERIFIED_QUALIFICATION_ISSUER:
-            raise TypeError(
-                "verified production qualification can only be issued by the qualification resolver"
-            )
-        return object.__new__(cls)
+    def __new__(cls, *_args: object, **_kwargs: object) -> Self:
+        del cls, _args, _kwargs
+        raise TypeError(
+            "verified production qualification can only be issued by the qualification resolver"
+        )
 
-    def __init__(self, issuer: object | None = None) -> None:
-        del issuer
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        del self, _args, _kwargs
 
     def __copy__(self) -> Never:
         raise TypeError("verified production qualification cannot be copied")
@@ -1233,11 +1232,11 @@ class VerifiedProductionQualification:
         """Revalidate capability integrity and freshness before authority is consumed."""
 
         now = _validate_utc_second(now, label="verified qualification use time")
-        if type(self) is not VerifiedProductionQualification:
+        issued_state = _issued_verified_production_capability_state(self)
+        if type(self) is not VerifiedProductionQualification or issued_state is None:
             raise ValueError("verified production qualification has an invalid capability type")
         if (
-            getattr(self, "_issuer", None) is not _VERIFIED_QUALIFICATION_ISSUER
-            or re.fullmatch(_SHA256_PATTERN, self.artifact_sha256) is None
+            re.fullmatch(_SHA256_PATTERN, self.artifact_sha256) is None
             or re.fullmatch(_SHA256_PATTERN, self.qualification_verification_sha256) is None
             or re.fullmatch(_SHA256_PATTERN, self.production_effective_config_sha256) is None
             or re.fullmatch(_SHA256_PATTERN, self.production_selection_sha256) is None
@@ -1265,10 +1264,9 @@ class VerifiedProductionQualification:
             raise ValueError("verified production qualification is future-dated")
         if self.expires_at <= now or self.expires_at <= self.verified_at:
             raise ValueError("verified production qualification is expired")
-        if any(
-            type(model) is not VerifiedTierAModelQualification
-            or getattr(model, "_issuer", None) is not _VERIFIED_QUALIFICATION_ISSUER
-            for model in self.models
+        if (
+            any(type(model) is not VerifiedTierAModelQualification for model in self.models)
+            or tuple(id(model) for model in self.models) != issued_state.model_identities
         ):
             raise ValueError("verified production qualification contains an invalid model type")
         model_ids = tuple(model.exact_model_id for model in self.models)
@@ -1283,8 +1281,7 @@ class VerifiedProductionQualification:
             _validate_exact_model_id(model.exact_model_id)
             _validate_exact_model_id(model.canonical_model_slug)
             if (
-                getattr(model, "_issuer", None) is not _VERIFIED_QUALIFICATION_ISSUER
-                or re.fullmatch(_LINEAGE_PATTERN, model.root_lineage) is None
+                re.fullmatch(_LINEAGE_PATTERN, model.root_lineage) is None
                 or re.fullmatch(_ENDPOINT_PATTERN, model.approved_provider_endpoint) is None
                 or re.fullmatch(_PROVIDER_NAME_PATTERN, model.approved_provider_name) is None
                 or re.fullmatch(_SHA256_PATTERN, model.endpoint_snapshot_sha256) is None
@@ -1308,8 +1305,10 @@ class VerifiedProductionQualification:
                 raise ValueError(
                     f"verified production model snapshot is invalid: {model.exact_model_id}"
                 )
-        if self.capability_sha256 != _canonical_json_sha256(
-            _verified_production_qualification_payload(self)
+        if (
+            self.capability_sha256 != issued_state.capability_sha256
+            or self.capability_sha256
+            != _canonical_json_sha256(_verified_production_qualification_payload(self))
         ):
             raise ValueError("verified production qualification integrity check failed")
         return self
@@ -1356,6 +1355,71 @@ def _verified_production_qualification_payload(
             for model in capability.models
         ],
     }
+
+
+@dataclass(frozen=True, slots=True)
+class _IssuedProductionCapabilityState:
+    capability_sha256: str
+    model_identities: tuple[int, ...]
+
+
+def _build_verified_production_authority() -> tuple[
+    Callable[[VerifiedProductionQualification], None],
+    Callable[
+        [VerifiedProductionQualification],
+        _IssuedProductionCapabilityState | None,
+    ],
+]:
+    """Keep final qualification authority outside caller-reconstructible dataclass fields."""
+
+    registry: dict[
+        int,
+        tuple[
+            weakref.ReferenceType[VerifiedProductionQualification],
+            _IssuedProductionCapabilityState,
+        ],
+    ] = {}
+    lock = threading.RLock()
+
+    def register(capability: VerifiedProductionQualification) -> None:
+        capability_sha256 = getattr(capability, "capability_sha256", None)
+        if (
+            type(capability) is not VerifiedProductionQualification
+            or not isinstance(capability_sha256, str)
+            or re.fullmatch(_SHA256_PATTERN, capability_sha256) is None
+        ):
+            raise ValueError("cannot register an incomplete production qualification")
+        key = id(capability)
+
+        def discard(reference: weakref.ReferenceType[VerifiedProductionQualification]) -> None:
+            with lock:
+                current = registry.get(key)
+                if current is not None and current[0] is reference:
+                    registry.pop(key, None)
+
+        reference = weakref.ref(capability, discard)
+        with lock:
+            registry[key] = (
+                reference,
+                _IssuedProductionCapabilityState(
+                    capability_sha256=capability_sha256,
+                    model_identities=tuple(id(model) for model in capability.models),
+                ),
+            )
+
+    def issued_state(
+        capability: VerifiedProductionQualification,
+    ) -> _IssuedProductionCapabilityState | None:
+        with lock:
+            registered = registry.get(id(capability))
+        return registered[1] if registered is not None and registered[0]() is capability else None
+
+    return register, issued_state
+
+
+_register_verified_production_capability, _issued_verified_production_capability_state = (
+    _build_verified_production_authority()
+)
 
 
 def verify_model_qualification(
@@ -1503,6 +1567,7 @@ def resolve_verified_production_qualification(
     expected_bindings: QualificationBindings,
     benchmark_reports: tuple[ModelBenchmarkReport, ...],
     benchmark_corpus: ModelBenchmarkSuite,
+    trusted_campaign_verification: object | None,
     trusted_generation_verification: TrustedGenerationVerification,
     trusted_release_observation: TrustedReleaseBindingObservation,
     production_effective_config_sha256: str,
@@ -1540,6 +1605,13 @@ def resolve_verified_production_qualification(
             "production qualification verification time differs from "
             "the trusted release observation"
         )
+    _require_live_campaign_content_provenance(
+        trusted_campaign_verification=trusted_campaign_verification,
+        portfolio_sha256=artifact.bindings.benchmark_portfolio_sha256,
+        benchmark_reports=benchmark_reports,
+        policy_sha256=policy.policy_sha256,
+        effective_config_sha256=expected_bindings.effective_config_sha256,
+    )
     ordered_trusted = _freshly_reverify_production_benchmarks(
         artifact=artifact,
         registry=registry,
@@ -1619,8 +1691,7 @@ def resolve_verified_production_qualification(
             or evidence.stable_measurement_sha256 != result.benchmark_verification_sha256
         ):
             raise ValueError(f"Tier A model lacks complete REAL benchmark evidence: {model_id}")
-        model = VerifiedTierAModelQualification(_VERIFIED_QUALIFICATION_ISSUER)
-        object.__setattr__(model, "_issuer", _VERIFIED_QUALIFICATION_ISSUER)
+        model = object.__new__(VerifiedTierAModelQualification)
         object.__setattr__(model, "exact_model_id", result.exact_model_id)
         object.__setattr__(model, "canonical_model_slug", result.canonical_model_slug)
         object.__setattr__(model, "root_lineage", result.root_lineage)
@@ -1687,8 +1758,7 @@ def resolve_verified_production_qualification(
     if expires_at <= verification.verified_at:
         raise ValueError("verified production qualification is expired")
     expected_bindings_sha256 = _canonical_json_sha256(expected_bindings.model_dump(mode="json"))
-    capability = VerifiedProductionQualification(_VERIFIED_QUALIFICATION_ISSUER)
-    object.__setattr__(capability, "_issuer", _VERIFIED_QUALIFICATION_ISSUER)
+    capability = object.__new__(VerifiedProductionQualification)
     object.__setattr__(capability, "verified_at", verification.verified_at)
     object.__setattr__(capability, "expires_at", expires_at)
     object.__setattr__(capability, "artifact_sha256", artifact.artifact_sha256)
@@ -1735,7 +1805,39 @@ def resolve_verified_production_qualification(
         "capability_sha256",
         _canonical_json_sha256(_verified_production_qualification_payload(capability)),
     )
+    _register_verified_production_capability(capability)
     return capability.require_current(now=verification.verified_at)
+
+
+def _require_live_campaign_content_provenance(
+    *,
+    trusted_campaign_verification: object | None,
+    portfolio_sha256: str,
+    benchmark_reports: tuple[ModelBenchmarkReport, ...],
+    policy_sha256: str,
+    effective_config_sha256: str,
+) -> None:
+    """Require process-local authority over the exact original provider response content."""
+
+    # Local import avoids the model-portfolio -> qualification module cycle.
+    from mmaudit.benchmark.model_portfolio import (
+        TrustedCandidateBenchmarkCampaignVerification,
+    )
+
+    if type(trusted_campaign_verification) is not TrustedCandidateBenchmarkCampaignVerification:
+        raise ValueError(
+            "production qualification requires live response-content campaign provenance"
+        )
+    if not benchmark_reports or any(
+        type(report) is not ModelBenchmarkReport for report in benchmark_reports
+    ):
+        raise ValueError("production qualification requires exact typed benchmark reports")
+    trusted_campaign_verification.require_for(
+        portfolio_sha256=portfolio_sha256,
+        reports=benchmark_reports,
+        policy_sha256=policy_sha256,
+        effective_config_sha256=effective_config_sha256,
+    )
 
 
 def _freshly_reverify_production_benchmarks(
@@ -1908,14 +2010,18 @@ def _verify_trusted_benchmark_binding(
         )
     for record in evidence.usage_records:
         if (
-            not is_creditable_usage_record(
+            not _is_structurally_creditable_usage_record(
                 record,
                 require_real=True,
                 require_certification=True,
             )
             or record.role != "model_benchmark"
             or record.requested_model != candidate.exact_model_id
-            or record.returned_model != candidate.exact_model_id
+            or record.returned_model
+            not in {
+                candidate.exact_model_id,
+                candidate.canonical_model_slug,
+            }
             or record.actual_provider_endpoint != candidate.approved_provider_endpoint
             or record.routing.get("selected_provider_name") != candidate.approved_provider_name
             or record.routing.get("endpoint_snapshot_sha256") != candidate.endpoint_snapshot_sha256
@@ -2529,7 +2635,11 @@ def _usage_matches_certified_selection(
     routing = record.routing
     return (
         qualification_result.expires_at is not None
-        and record.returned_model == selected_model.exact_model_id
+        and record.returned_model
+        in {
+            selected_model.exact_model_id,
+            selected_model.canonical_model_slug,
+        }
         and record.actual_model
         in {
             selected_model.exact_model_id,

@@ -7,12 +7,14 @@ from typing import Any
 
 import pytest
 
+from mmaudit.models.identity import OpenRouterIdentityBindingResult
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     ModelRequestValidationStatus,
     UsageRecord,
 )
 from mmaudit.models.usage import is_creditable_usage_record
+from tests.identity_fixtures import bind_synthetic_usage_identity
 
 _REQUESTED_MODEL = "author/exact-model"
 _CANONICAL_MODEL = "author/exact-model-20260727"
@@ -103,7 +105,7 @@ def test_creditable_usage_accepts_strict_mock_only_when_real_is_not_required() -
     assert not is_creditable_usage_record(
         record.model_copy(update={"execution_evidence": ExecutionEvidenceKind.UNVERIFIED})
     )
-    assert is_creditable_usage_record(
+    assert not is_creditable_usage_record(
         record.model_copy(update={"execution_evidence": ExecutionEvidenceKind.REAL}),
         require_real=True,
     )
@@ -112,6 +114,149 @@ def test_creditable_usage_accepts_strict_mock_only_when_real_is_not_required() -
         require_real=True,
         require_certification=True,
     )
+
+
+def test_real_credit_rejects_self_hashed_unbound_cross_author_alias() -> None:
+    provisional = _creditable_record(execution_evidence=ExecutionEvidenceKind.REAL)
+    record = bind_synthetic_usage_identity(
+        provisional.model_copy(
+            update={
+                "routing": {
+                    **provisional.routing,
+                    "selected_provider_name": provisional.provider,
+                }
+            }
+        )
+    )
+    assert is_creditable_usage_record(record, require_real=True)
+
+    unrelated_model = "bravo/unrelated-model"
+    payload = record.model_dump(mode="json")
+    routing = payload["routing"]
+    binding = routing["identity_binding"]
+    snapshot = binding["snapshot"]
+    snapshot["frozen_aliases"] = sorted({*snapshot["frozen_aliases"], unrelated_model})
+    snapshot["snapshot_sha256"] = _canonical_json_sha256(
+        {key: value for key, value in snapshot.items() if key != "snapshot_sha256"}
+    )
+    binding["request"]["returned_slug"] = unrelated_model
+    binding["request"]["selected_model_slug"] = unrelated_model
+    binding["generation"]["generation_model_slug"] = unrelated_model
+    binding["binding_sha256"] = _canonical_json_sha256(
+        {key: value for key, value in binding.items() if key != "binding_sha256"}
+    )
+    routing.update(
+        {
+            "accepted_model_aliases": sorted({*routing["accepted_model_aliases"], unrelated_model}),
+            "selected_model": unrelated_model,
+            "identity_binding": binding,
+            "identity_binding_sha256": binding["binding_sha256"],
+            "identity_snapshot_sha256": snapshot["snapshot_sha256"],
+        }
+    )
+    forged = UsageRecord.model_validate(
+        {
+            **payload,
+            "returned_model": unrelated_model,
+            "actual_model": unrelated_model,
+            "routing": routing,
+        }
+    )
+
+    assert not is_creditable_usage_record(forged, require_real=True)
+
+
+def test_real_credit_rejects_rewritten_same_author_canonical_identity() -> None:
+    provisional = _creditable_record(execution_evidence=ExecutionEvidenceKind.REAL)
+    record = bind_synthetic_usage_identity(
+        provisional.model_copy(
+            update={
+                "routing": {
+                    **provisional.routing,
+                    "selected_provider_name": provisional.provider,
+                }
+            }
+        )
+    )
+    assert is_creditable_usage_record(record, require_real=True)
+
+    rewritten_canonical = "author/unrelated-model"
+    routing = dict(record.routing)
+    binding = dict(routing["identity_binding"])
+    snapshot = dict(binding["snapshot"])
+    snapshot.update(
+        {
+            "canonical_slug": rewritten_canonical,
+            "frozen_aliases": sorted({record.requested_model, rewritten_canonical}),
+            "catalog_identity_binding_sha256": _canonical_json_sha256(
+                {
+                    "canonical_slug": rewritten_canonical,
+                    "id": record.requested_model,
+                }
+            ),
+        }
+    )
+    snapshot["snapshot_sha256"] = _canonical_json_sha256(
+        {key: value for key, value in snapshot.items() if key != "snapshot_sha256"}
+    )
+    binding["snapshot"] = snapshot
+    binding["request"] = {
+        **binding["request"],
+        "returned_slug": rewritten_canonical,
+        "selected_model_slug": rewritten_canonical,
+    }
+    binding["generation"] = {
+        **binding["generation"],
+        "generation_model_slug": rewritten_canonical,
+    }
+    binding["binding_sha256"] = _canonical_json_sha256(
+        {key: value for key, value in binding.items() if key != "binding_sha256"}
+    )
+    assert OpenRouterIdentityBindingResult.model_validate(binding)
+    routing.update(
+        {
+            "accepted_model_aliases": sorted({record.requested_model, rewritten_canonical}),
+            "canonical_model": rewritten_canonical,
+            "selected_model": rewritten_canonical,
+            "catalog_identity_binding_sha256": snapshot["catalog_identity_binding_sha256"],
+            "identity_snapshot_sha256": snapshot["snapshot_sha256"],
+            "identity_binding": binding,
+            "identity_binding_sha256": binding["binding_sha256"],
+        }
+    )
+    forged = record.model_copy(
+        update={
+            "returned_model": rewritten_canonical,
+            "actual_model": rewritten_canonical,
+            "routing": routing,
+        }
+    )
+
+    assert not is_creditable_usage_record(forged, require_real=True)
+
+
+def test_serialized_real_usage_cannot_reconstruct_runtime_provenance() -> None:
+    provisional = _creditable_record(execution_evidence=ExecutionEvidenceKind.REAL)
+    record = bind_synthetic_usage_identity(
+        provisional.model_copy(
+            update={
+                "routing": {
+                    **provisional.routing,
+                    "selected_provider_name": provisional.provider,
+                }
+            }
+        )
+    )
+    reloaded = UsageRecord.model_validate(record.model_dump(mode="json"))
+
+    assert is_creditable_usage_record(record, require_real=True)
+    assert not is_creditable_usage_record(reloaded, require_real=True)
+    object.__setattr__(
+        reloaded,
+        "_runtime_execution_attestation",
+        (object(), hashlib.sha256(reloaded.model_dump_json().encode()).hexdigest()),
+    )
+    assert not is_creditable_usage_record(reloaded, require_real=True)
 
 
 @pytest.mark.parametrize(
@@ -168,7 +313,13 @@ def test_recorded_explicit_fallback_is_not_itself_a_model_substitution() -> None
     assert is_creditable_usage_record(record)
 
 
-def test_certification_credit_requires_endpoint_snapshot_cost_and_no_fallback() -> None:
+def _canonical_json_sha256(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+    ).hexdigest()
+
+
+def test_unbound_certification_never_receives_credit_from_exact_slug_or_endpoint_hashes() -> None:
     record = _creditable_record()
     certified_routing = {
         **record.routing,
@@ -187,8 +338,8 @@ def test_certification_credit_requires_endpoint_snapshot_cost_and_no_fallback() 
             "routing": certified_routing,
         }
     )
-    assert is_creditable_usage_record(certified)
-    assert is_creditable_usage_record(
+    assert not is_creditable_usage_record(certified)
+    assert not is_creditable_usage_record(
         certified,
         require_real=True,
         require_certification=True,

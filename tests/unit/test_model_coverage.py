@@ -44,6 +44,10 @@ from mmaudit.orchestration.model_coverage import (
     model_review_critical_surface_gate,
     plan_model_surface_review_assignments,
 )
+from tests.identity_fixtures import (
+    bind_synthetic_usage_identity,
+    reattest_synthetic_real_usage,
+)
 
 _PATH = "src/Vault.sol"
 _SOURCE = "".join(f"// synthetic source line {line}\n" for line in range(1, 31))
@@ -219,55 +223,59 @@ def _usage(
     started_at = datetime.now(UTC)
     generation_id = f"generation-{request_id}"
     schema_sha256 = "e" * 64
-    return UsageRecord(
-        request_id=request_id,
-        role=role,
-        execution_evidence=execution_evidence,
-        requested_model=model_id,
-        returned_model=model_id,
-        actual_model=model_id,
-        provider="approved-provider",
-        model_family=model_id.split("/", 1)[0],
-        timestamp=started_at,
-        prompt_tokens=100,
-        completion_tokens=20,
-        total_tokens=120,
-        reported_cost_usd=0.01,
-        accounted_cost_usd=0.01,
-        routing={
-            "generation_id": generation_id,
-            "selected_model": model_id,
-            "selected_provider_endpoint": "approved-provider",
-            "router_strategy": "direct",
-            "finish_reason": "stop",
-            "schema_sha256": schema_sha256,
-            "router_metadata_sha256": "f" * 64,
-            "provider_policy_sha256": "0" * 64,
-            "validation_status": "valid",
-            "zdr_requested": True,
-            "data_collection": "deny",
-            "repair_used": False,
-            "repair_request": False,
-            "request_started_at": started_at.isoformat(),
-            "request_ended_at": started_at.isoformat(),
-            "latency_ms": 0,
-        },
-        prompt_sha256="c" * 64,
-        response_sha256="d" * 64,
-        validated_response_sha256="f" * 64,
-        request_body_sha256="a" * 64,
-        schema_sha256=schema_sha256,
-        openrouter_generation_id=generation_id,
-        configured_provider_endpoints=["approved-provider"],
-        actual_provider_endpoint="approved-provider",
-        started_at=started_at,
-        ended_at=started_at,
-        latency_ms=0,
-        finish_reason="stop",
-        retry_count=0,
-        validation_status=ModelRequestValidationStatus.VALID,
-        status="success",
-        attempts=1,
+    return bind_synthetic_usage_identity(
+        UsageRecord(
+            request_id=request_id,
+            role=role,
+            execution_evidence=execution_evidence,
+            requested_model=model_id,
+            returned_model=model_id,
+            actual_model=model_id,
+            provider="approved-provider",
+            model_family=model_id.split("/", 1)[0],
+            timestamp=started_at,
+            prompt_tokens=100,
+            completion_tokens=20,
+            total_tokens=120,
+            reported_cost_usd=0.01,
+            accounted_cost_usd=0.01,
+            routing={
+                "generation_id": generation_id,
+                "selected_model": model_id,
+                "canonical_model": model_id,
+                "selected_provider_endpoint": "approved-provider",
+                "selected_provider_name": "approved-provider",
+                "router_strategy": "direct",
+                "finish_reason": "stop",
+                "schema_sha256": schema_sha256,
+                "router_metadata_sha256": "f" * 64,
+                "provider_policy_sha256": "0" * 64,
+                "validation_status": "valid",
+                "zdr_requested": True,
+                "data_collection": "deny",
+                "repair_used": False,
+                "repair_request": False,
+                "request_started_at": started_at.isoformat(),
+                "request_ended_at": started_at.isoformat(),
+                "latency_ms": 0,
+            },
+            prompt_sha256="c" * 64,
+            response_sha256="d" * 64,
+            validated_response_sha256="f" * 64,
+            request_body_sha256="a" * 64,
+            schema_sha256=schema_sha256,
+            openrouter_generation_id=generation_id,
+            configured_provider_endpoints=["approved-provider"],
+            actual_provider_endpoint="approved-provider",
+            started_at=started_at,
+            ended_at=started_at,
+            latency_ms=0,
+            finish_reason="stop",
+            retry_count=0,
+            validation_status=ModelRequestValidationStatus.VALID,
+            status="success",
+            attempts=1,
+        )
     )
 
 
@@ -469,6 +477,7 @@ def _review_contexts(
 
 def _bind_usage_to_context(usage: UsageRecord, context: ContextPackage) -> None:
     usage.user_prompt_sha256 = hashlib.sha256(render_context(context).encode()).hexdigest()
+    reattest_synthetic_real_usage(usage)
 
 
 def _requests() -> tuple[

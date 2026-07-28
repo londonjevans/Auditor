@@ -31,9 +31,13 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   immutable identity; exact aliases normalize; endpoint/provider/model mismatches
   fail closed; frozen snapshots and focused regressions pass.
 - **Dependencies:** `V3-BASELINE-001`.
-- **Status:** `IN_PROGRESS`
-- **Next action:** Add typed identity strengths and a sealed canonical
-  model-and-endpoint binding without crediting valid-but-unbound output.
+- **Status:** `COMPLETE`
+- **Evidence:** All four metadata surfaces are runtime-bound; canonical aliases,
+  endpoint/provider/model/generation mismatches, valid-unbound retention, no
+  automatic fallback, process-local authority, and persisted-evidence regressions
+  pass. The complete suite passed `1859` tests with `10` explicit prerequisite
+  skips; independent final review found no material blocker.
+- **Next action:** None; on operator resume continue with `V3-SMOKE-001`.
 
 ## V3-SMOKE-001 — Successful real synthetic OpenRouter call
 

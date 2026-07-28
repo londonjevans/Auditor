@@ -586,20 +586,8 @@ async def test_mock_report_cannot_be_relabelled_as_real() -> None:
     forged["report_sha256"] = canonical_sha256(
         {key: value for key, value in forged.items() if key != "report_sha256"}
     )
-    reloaded = ModelBenchmarkReport.model_validate(forged)
-
-    verify_model_benchmark_report_structure(reloaded, corpus=corpus)
-    with pytest.raises(ValueError, match="authenticated qualification workflow"):
-        verify_model_benchmark_report(reloaded, corpus=corpus, require_real=False)
-    with pytest.raises(ValueError, match="authenticated qualification workflow"):
-        verify_model_benchmark_report(reloaded, corpus=corpus, require_real=True)
-    with pytest.raises(TypeError, match="unexpected keyword"):
-        verify_model_benchmark_report(
-            reloaded,
-            corpus=corpus,
-            require_real=True,
-            real_evidence_resolver=lambda **_: True,  # type: ignore[call-arg]
-        )
+    with pytest.raises(ValidationError, match="not creditable"):
+        ModelBenchmarkReport.model_validate(forged)
 
 
 @pytest.mark.asyncio

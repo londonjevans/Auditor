@@ -11,6 +11,7 @@ import pytest
 
 from mmaudit.benchmark.model_portfolio import (
     create_candidate_benchmark_campaign,
+    issue_trusted_candidate_benchmark_campaign_verification,
     load_model_benchmark_portfolio,
     resume_candidate_benchmark_campaign,
     seal_model_benchmark_portfolio_from_campaign,
@@ -139,6 +140,21 @@ async def test_usage_then_raise_is_atomically_retained_with_retry_accounting(
     assert diagnostic.cost_ledger_after.spent_usd == "0.01"
     assert diagnostic.cost_ledger_after.active_reserved_usd == "0"
     assert diagnostic.cost_ledger_after.reconciled_count == 1
+    portfolio = seal_model_benchmark_portfolio_from_campaign(
+        tmp_path / "portfolio",
+        campaign=journal,
+    )
+    capability = issue_trusted_candidate_benchmark_campaign_verification(
+        campaign=journal,
+        portfolio=portfolio,
+        reports=result.reports,
+    )
+    capability.require_for(
+        portfolio_sha256=portfolio.portfolio_sha256,
+        reports=result.reports,
+        policy_sha256=_policy_sha256(),
+        effective_config_sha256=_config_sha256(config),
+    )
     resumed = resume_candidate_benchmark_campaign(
         journal.path,
         candidate_registry=registry,
@@ -149,10 +165,15 @@ async def test_usage_then_raise_is_atomically_retained_with_retry_accounting(
     )
     assert resumed.reports == result.reports
     assert resumed.diagnostics == result.diagnostics
-    portfolio = seal_model_benchmark_portfolio_from_campaign(
-        tmp_path / "portfolio",
-        campaign=resumed,
-    )
+    resumed._live_content_bindings = [  # type: ignore[attr-defined]
+        report.report_sha256 for report in result.reports
+    ]
+    with pytest.raises(ValueError, match="original runtime-attested report"):
+        issue_trusted_candidate_benchmark_campaign_verification(
+            campaign=resumed,
+            portfolio=portfolio,
+            reports=result.reports,
+        )
     loaded, _reports = load_model_benchmark_portfolio(
         tmp_path / "portfolio",
         candidate_registry=registry,

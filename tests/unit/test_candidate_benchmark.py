@@ -4,7 +4,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -13,11 +13,17 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from mmaudit.benchmark.models import load_model_benchmark_corpus
+from mmaudit.benchmark.models import (
+    ModelBenchmarkCaseResult,
+    ModelBenchmarkModelResult,
+    ModelBenchmarkReport,
+    load_model_benchmark_corpus,
+)
 from mmaudit.config import AuditConfig, model_lineage_index
 from mmaudit.models.candidate_benchmark import (
     CandidateBenchmarkFailureStage,
     CandidateBenchmarkRunState,
+    _require_exact_candidate_usage_binding,
     run_candidate_registry_benchmarks,
     validate_candidate_benchmark_policy_capacity,
 )
@@ -25,10 +31,12 @@ from mmaudit.models.discovery import (
     _TRUSTED_OPENROUTER_DISCOVERY_ISSUER,
     DiscoveryCandidateRoute,
     DiscoveryEndpointMetadataBinding,
+    DiscoveryModelMetadataBinding,
     OpenRouterModelDiscoveryEvidence,
     OpenRouterModelDiscoveryPayload,
     _issue_real_openrouter_discovery_run,
     openrouter_endpoint_query,
+    openrouter_model_query,
     validate_openrouter_model_discovery,
     write_model_discovery_run,
 )
@@ -48,11 +56,16 @@ from mmaudit.models.qualification import (
     seal_operator_lineage_review,
     seal_qualification_policy,
 )
-from mmaudit.models.schemas import ExecutionEvidenceKind, UsageRecord
-from mmaudit.models.usage import UsageLedger
+from mmaudit.models.schemas import (
+    ExecutionEvidenceKind,
+    ModelRequestValidationStatus,
+    UsageRecord,
+)
+from mmaudit.models.usage import UsageLedger, is_creditable_usage_record
 from mmaudit.orchestration.budgets import BudgetManager
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.manifest import canonical_sha256
+from tests.identity_fixtures import bind_synthetic_usage_identity
 
 ROOT = Path(__file__).parents[2]
 CORPUS_PATH = ROOT / "benchmarks" / "model_corpus" / "manifest.json"
@@ -73,6 +86,7 @@ class _MockClientFactory:
     failing_models: set[str] = field(default_factory=set)
     authentication_failure_models: set[str] = field(default_factory=set)
     pricing_drift_models: set[str] = field(default_factory=set)
+    single_model_failure_modes: dict[str, str] = field(default_factory=dict)
     orphan_usage_models: set[str] = field(default_factory=set)
     clients: list[OpenRouterClient] = field(default_factory=list)
     http_clients: list[httpx.AsyncClient] = field(default_factory=list)
@@ -143,6 +157,36 @@ class _MockClientFactory:
                     200,
                     request=request,
                     json={"data": [_catalog_model(candidate_spec)]},
+                )
+            if request.method == "GET" and "/model/" in request.url.path:
+                failure_mode = self.single_model_failure_modes.get(candidate.exact_model_id)
+                if failure_mode == "missing":
+                    return httpx.Response(
+                        404,
+                        request=request,
+                        json={"error": {"message": "synthetic model lookup missing"}},
+                    )
+                if failure_mode == "malformed":
+                    return httpx.Response(
+                        200,
+                        request=request,
+                        json={"data": []},
+                    )
+                if failure_mode == "mismatch":
+                    mismatched = {
+                        **_catalog_model(candidate_spec),
+                        "id": "alpha/unrelated-model",
+                        "canonical_slug": "alpha/unrelated-model-20260727",
+                    }
+                    return httpx.Response(
+                        200,
+                        request=request,
+                        json={"data": mismatched},
+                    )
+                return httpx.Response(
+                    200,
+                    request=request,
+                    json={"data": _catalog_model(candidate_spec)},
                 )
             if request.method == "GET" and request.url.path.endswith("/endpoints"):
                 endpoint = _endpoint(candidate_spec)
@@ -277,6 +321,7 @@ def _discovery_and_registry(
             validate_openrouter_model_discovery(
                 exact_model_id=spec.model_id,
                 models_payload=catalog_payload,
+                single_model_payload={"data": _catalog_model(spec)},
                 endpoint_snapshot=snapshot,
             )
         )
@@ -293,6 +338,24 @@ def _discovery_and_registry(
                 approved_provider_endpoint=spec.provider_endpoint,
             )
             for spec in ordered
+        ),
+        model_metadata_bindings=tuple(
+            DiscoveryModelMetadataBinding(
+                exact_model_id=payload.exact_model_id,
+                canonical_slug=payload.canonical_slug,
+                api_query=openrouter_model_query(payload.canonical_slug),
+                response_snapshot_sha256=_canonical_hash(
+                    {
+                        "data": _catalog_model(
+                            next(
+                                spec for spec in ordered if spec.model_id == payload.exact_model_id
+                            )
+                        )
+                    }
+                ),
+                model_metadata_snapshot_sha256=payload.model_metadata_snapshot_sha256,
+            )
+            for payload in payloads
         ),
         endpoint_metadata_bindings=tuple(
             DiscoveryEndpointMetadataBinding(
@@ -379,6 +442,136 @@ def _config(config_factory: Callable[..., AuditConfig]) -> AuditConfig:
         execution={"max_requests_per_agent": 512},
         models={"reasoning": {"effort": "high"}},
     )
+
+
+def _attested_candidate_usage() -> UsageRecord:
+    model_id = "alpha/atlas-secure"
+    endpoint = "provider-alpha"
+    ended_at = _NOW + timedelta(seconds=1)
+    generation_id = "generation-candidate-usage-join"
+    schema_sha256 = _canonical_hash("candidate benchmark schema")
+    return bind_synthetic_usage_identity(
+        UsageRecord(
+            request_id="candidate-usage-join",
+            role="model_benchmark",
+            execution_evidence=ExecutionEvidenceKind.REAL,
+            requested_model=model_id,
+            returned_model=model_id,
+            actual_model=model_id,
+            provider="Provider Alpha",
+            model_family=model_id,
+            timestamp=_NOW,
+            prompt_tokens=100,
+            completion_tokens=25,
+            total_tokens=125,
+            reported_cost_usd=0.01,
+            accounted_cost_usd=0.01,
+            routing={
+                "generation_id": generation_id,
+                "selected_model": model_id,
+                "canonical_model": model_id,
+                "selected_provider_endpoint": endpoint,
+                "selected_provider_name": "Provider Alpha",
+                "router_strategy": "direct",
+                "router_attempt": 1,
+                "router_attempt_count": 1,
+                "router_pipeline": [],
+                "finish_reason": "stop",
+                "schema_sha256": schema_sha256,
+                "router_metadata_sha256": _canonical_hash("router metadata"),
+                "provider_policy_sha256": _canonical_hash("provider policy"),
+                "provider_fallbacks_allowed": False,
+                "certification_request": True,
+                "validation_status": "valid",
+                "zdr_requested": True,
+                "data_collection": "deny",
+                "repair_used": False,
+                "repair_request": False,
+                "request_started_at": _NOW.isoformat(),
+                "request_ended_at": ended_at.isoformat(),
+                "latency_ms": 1_000,
+            },
+            prompt_sha256=_canonical_hash("prompt"),
+            response_sha256=_canonical_hash("response"),
+            validated_response_sha256=_canonical_hash("validated response"),
+            request_body_sha256=_canonical_hash("request body"),
+            schema_sha256=schema_sha256,
+            openrouter_generation_id=generation_id,
+            configured_provider_endpoints=[endpoint],
+            actual_provider_endpoint=endpoint,
+            started_at=_NOW,
+            ended_at=ended_at,
+            latency_ms=1_000,
+            finish_reason="stop",
+            retry_count=0,
+            validation_status=ModelRequestValidationStatus.VALID,
+            status="success",
+            attempts=1,
+        )
+    )
+
+
+def _report_with_usage(record: UsageRecord) -> ModelBenchmarkReport:
+    case = ModelBenchmarkCaseResult.model_construct(usage_record=record)
+    result = ModelBenchmarkModelResult.model_construct(cases=[case])
+    return ModelBenchmarkReport.model_construct(results=[result])
+
+
+@pytest.mark.parametrize(
+    "failure_stage",
+    [None, CandidateBenchmarkFailureStage.BENCHMARK_EXECUTION],
+)
+def test_candidate_usage_join_uses_public_projection_without_restoring_runtime_authority(
+    failure_stage: CandidateBenchmarkFailureStage | None,
+) -> None:
+    observed = _attested_candidate_usage()
+    serialized = UsageRecord.model_validate(observed.model_dump(mode="json"))
+
+    assert observed is not serialized
+    assert observed == serialized
+    assert observed.model_dump(mode="json") == serialized.model_dump(mode="json")
+    assert is_creditable_usage_record(
+        observed,
+        require_real=True,
+        require_certification=True,
+    )
+    assert not is_creditable_usage_record(
+        serialized,
+        require_real=True,
+        require_certification=True,
+    )
+
+    _require_exact_candidate_usage_binding(
+        report=_report_with_usage(serialized),
+        observed_records=(observed,),
+        failure_stage=failure_stage,
+    )
+
+
+@pytest.mark.parametrize(
+    "failure_stage",
+    [None, CandidateBenchmarkFailureStage.BENCHMARK_EXECUTION],
+)
+def test_candidate_usage_join_rejects_changed_public_evidence(
+    failure_stage: CandidateBenchmarkFailureStage | None,
+) -> None:
+    observed = _attested_candidate_usage()
+    changed = UsageRecord.model_validate(
+        {
+            **observed.model_dump(mode="json"),
+            "request_id": "changed-candidate-usage",
+        }
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"not bound to its exact report|unobserved request usage",
+    ):
+        _require_exact_candidate_usage_binding(
+            report=_report_with_usage(changed),
+            observed_records=(observed,),
+            failure_stage=failure_stage,
+        )
 
 
 def test_candidate_benchmark_policy_rejects_underfilled_dimension() -> None:
@@ -790,6 +983,54 @@ async def test_current_endpoint_drift_fails_before_candidate_requests(
     assert diagnostic.failure_stage is CandidateBenchmarkFailureStage.ENDPOINT_REGISTRATION
     assert diagnostic.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
     assert diagnostic.requests_observed == 0
+    assert not factory.request_bodies
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_mode", ("missing", "malformed", "mismatch"))
+async def test_single_model_lookup_failure_fails_before_candidate_requests(
+    tmp_path: Path,
+    config_factory: Callable[..., AuditConfig],
+    failure_mode: str,
+) -> None:
+    config = _config(config_factory)
+    model_id = "alpha/atlas-secure"
+    manifest, evidence, registry = _discovery_and_registry(
+        tmp_path=tmp_path,
+        config=config,
+        specs=(
+            _CandidateSpec(
+                model_id=model_id,
+                provider_endpoint="provider-alpha",
+                provider_name="Provider Alpha",
+            ),
+        ),
+    )
+    factory = _MockClientFactory(
+        single_model_failure_modes={model_id: failure_mode},
+    )
+    try:
+        result = await run_candidate_registry_benchmarks(
+            config=config,
+            discovery_manifest=manifest,
+            discovery_evidence=evidence,
+            candidate_registry=registry,
+            benchmark_suite=load_model_benchmark_corpus(CORPUS_PATH),
+            budget=_budget(tmp_path, config),
+            usage=UsageLedger(),
+            operator_api_key="synthetic-key",
+            explicitly_allow_synthetic_egress=True,
+            client_factory=factory,
+        )
+    finally:
+        await factory.close()
+
+    diagnostic = result.diagnostics[0]
+    assert diagnostic.state is CandidateBenchmarkRunState.UNVERIFIED_FAILURE
+    assert diagnostic.failure_stage is CandidateBenchmarkFailureStage.ENDPOINT_REGISTRATION
+    assert diagnostic.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
+    assert diagnostic.requests_observed == 0
+    assert any("/model/" in path for path in factory.metadata_requests)
     assert not factory.request_bodies
 
 

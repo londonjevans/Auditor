@@ -21,10 +21,12 @@ from mmaudit.models.discovery import (
     _TRUSTED_OPENROUTER_DISCOVERY_ISSUER,
     DiscoveryCandidateRoute,
     DiscoveryEndpointMetadataBinding,
+    DiscoveryModelMetadataBinding,
     OpenRouterModelDiscoveryEvidence,
     OpenRouterModelDiscoveryRunManifest,
     _issue_real_openrouter_discovery_run,
     openrouter_endpoint_query,
+    openrouter_model_query,
     validate_openrouter_model_discovery,
     write_model_discovery_run,
 )
@@ -32,6 +34,11 @@ from mmaudit.models.endpoint_snapshots import (
     EndpointSnapshotValidationError,
     OpenRouterEndpointSnapshotEvidence,
     validate_openrouter_endpoint_snapshot,
+)
+from mmaudit.models.generation_evidence import validate_openrouter_generation_payload
+from mmaudit.models.identity import (
+    OpenRouterIdentityDiagnosticCode,
+    OpenRouterIdentityStrength,
 )
 from mmaudit.models.openrouter import (
     OpenRouterAuthenticationError,
@@ -48,13 +55,18 @@ from mmaudit.models.openrouter import (
     OpenRouterSchemaError,
     OpenRouterTransientError,
     OpenRouterTruncatedResponseError,
+    OpenRouterUnboundIdentityError,
     StructuredCompletion,
     is_retryable_status,
     safe_headers,
     strict_json_schema,
 )
-from mmaudit.models.schemas import ExecutionEvidenceKind
-from mmaudit.models.usage import UsageLedger
+from mmaudit.models.schemas import ExecutionEvidenceKind, UsageRecord
+from mmaudit.models.usage import (
+    UsageLedger,
+    _attest_owned_real_usage_record,
+    is_creditable_usage_record,
+)
 from mmaudit.orchestration.budgets import BudgetExhaustedError, BudgetManager
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 
@@ -181,6 +193,37 @@ def _completion_response(
     )
 
 
+def _generation_payload(
+    *,
+    generation_id: str = "generation-test",
+    model: str = "alpha/atlas-secure-20260727",
+    provider_name: str = "Approved Provider",
+) -> dict[str, Any]:
+    return {
+        "data": {
+            "api_type": "completions",
+            "cancelled": False,
+            "created_at": datetime.now(UTC).isoformat(),
+            "finish_reason": "stop",
+            "generation_time": 120,
+            "id": generation_id,
+            "latency": 125,
+            "model": model,
+            "native_finish_reason": "stop",
+            "native_tokens_cached": 0,
+            "native_tokens_completion": 5,
+            "native_tokens_prompt": 10,
+            "native_tokens_reasoning": 0,
+            "provider_name": provider_name,
+            "request_id": "provider-request-test",
+            "tokens_completion": 5,
+            "tokens_prompt": 10,
+            "total_cost": 0.01,
+            "usage": 0.01,
+        }
+    }
+
+
 def _endpoint_snapshot(
     *,
     model: str = "alpha/atlas-secure",
@@ -216,10 +259,10 @@ def _endpoint_snapshot(
 def _model_discovery_run(
     tmp_path: Path,
     *,
+    exact_model: str = "alpha/atlas-secure",
     canonical_model: str = "alpha/atlas-secure-20260727",
 ) -> tuple[OpenRouterModelDiscoveryRunManifest, OpenRouterModelDiscoveryEvidence]:
-    exact_model = "alpha/atlas-secure"
-    endpoint_snapshot = _endpoint_snapshot()
+    endpoint_snapshot = _endpoint_snapshot(model=exact_model)
     catalog = {
         "data": [
             {
@@ -241,6 +284,7 @@ def _model_discovery_run(
     payload = validate_openrouter_model_discovery(
         exact_model_id=exact_model,
         models_payload=catalog,
+        single_model_payload={"data": dict(catalog["data"][0])},
         endpoint_snapshot=endpoint_snapshot,
     )
     route = DiscoveryCandidateRoute(
@@ -257,6 +301,15 @@ def _model_discovery_run(
         ).hexdigest(),
         zdr_snapshot_sha256="d" * 64,
         candidate_routes=(route,),
+        model_metadata_bindings=(
+            DiscoveryModelMetadataBinding(
+                exact_model_id=exact_model,
+                canonical_slug=canonical_model,
+                api_query=openrouter_model_query(canonical_model),
+                response_snapshot_sha256="f" * 64,
+                model_metadata_snapshot_sha256=payload.model_metadata_snapshot_sha256,
+            ),
+        ),
         endpoint_metadata_bindings=(
             DiscoveryEndpointMetadataBinding(
                 exact_model_id=exact_model,
@@ -623,6 +676,56 @@ async def test_real_completion_requires_durable_atomic_cost_ledger(config_factor
             )
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_real_completion_requires_frozen_identity_before_transport(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    config = config_factory(execution={"max_json_repair_attempts": 0})
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "identity-preflight-ledger.json",
+        cap_usd=Decimal("20"),
+    )
+    endpoint_snapshot = _endpoint_snapshot()
+    client = OpenRouterClient(
+        api_key="synthetic-key",
+        execution=config.execution,
+        privacy=config.privacy,
+        budget=BudgetManager(
+            total_usd=20,
+            max_output_tokens=config.execution.max_output_tokens_per_request,
+            conservative_usd_per_million_tokens=10,
+            max_requests_per_agent=2,
+            atomic_ledger=ledger,
+            require_endpoint_cost_bound=True,
+        ),
+        usage=UsageLedger(),
+        base_url=OPENROUTER_DEFAULT_BASE_URL,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(_qualification_routing_for_endpoint_snapshot(endpoint_snapshot),),
+    )
+    client.register_certification_endpoint_snapshot(evidence=endpoint_snapshot)
+    client._authentication_validated = True
+    try:
+        with pytest.raises(OpenRouterModelError, match="frozen model identity"):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await client.close()
+
+    assert ledger.snapshot().spent_usd == 0
+    assert ledger.snapshot().active_reserved_usd == 0
 
 
 @pytest.mark.asyncio
@@ -1174,6 +1277,27 @@ async def test_frozen_discovery_authorizes_and_records_exact_canonical_route(
         == evidence.catalog_identity_binding_sha256
     )
     assert record.routing["discovery_evidence_sha256"] == evidence.discovery_evidence_sha256
+    assert record.identity_strength is OpenRouterIdentityStrength.UNBOUND
+    assert record.routing["identity_binding_status"] == "generation_metadata_pending"
+    assert not is_creditable_usage_record(record, require_certification=True)
+
+    retrieved_at = datetime.now(UTC)
+    generation = validate_openrouter_generation_payload(
+        _generation_payload(model=canonical_model),
+        requested_generation_id="generation-test",
+        retrieved_at=retrieved_at,
+        execution_evidence=ExecutionEvidenceKind.MOCK,
+    )
+    binding = client.bind_generation_identity(
+        usage_record=record,
+        generation_evidence=generation,
+        evaluated_at=retrieved_at,
+    )
+    credited = client.usage_with_bound_identity(
+        usage_record=record,
+        identity_binding=binding,
+    )
+    assert is_creditable_usage_record(credited, require_certification=True)
 
 
 @pytest.mark.parametrize("fault", ["unbound", "wrong_canonical", "attempt_mismatch"])
@@ -1237,20 +1361,133 @@ async def test_canonical_route_must_match_one_frozen_identity(
 
 
 @pytest.mark.asyncio
-async def test_top_level_returned_model_cannot_use_the_canonical_alias(
+async def test_top_level_canonical_alias_is_accepted_as_provisional_bound_identity(
     config_factory,
     tmp_path: Path,
 ) -> None:
+    requested_model = "alpha/atlas-secure"
     canonical_model = "alpha/atlas-secure-20260727"
     manifest, evidence = _model_discovery_run(
         tmp_path,
         canonical_model=canonical_model,
     )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        payload = _completion(
+            '{"answer":"canonical alias accepted"}',
+            model=canonical_model,
+            selected_model=canonical_model,
+            provider="Approved Provider",
+        )
+        payload["openrouter_metadata"]["requested"] = requested_model
+        return httpx.Response(
+            200,
+            headers={"X-Generation-Id": "generation-test"},
+            json=payload,
+        )
+
+    client, http_client, usage = _client(
+        config_factory(execution={"max_json_repair_attempts": 0}),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(_qualification_routing_for_discovery(evidence),),
+    )
+    try:
+        client.register_certification_model_discovery(
+            evidence=evidence,
+            manifest=manifest,
+        )
+        result = await client.complete(
+            role="source_audit",
+            models=[requested_model],
+            system_prompt="system",
+            user_prompt="synthetic local input",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    record = usage.records[0]
+    assert result.answer == "canonical alias accepted"
+    assert record.requested_model == requested_model
+    assert record.returned_model == canonical_model
+    assert record.actual_model == canonical_model
+    assert record.routing["requested_model"] == requested_model
+    assert record.routing["selected_model"] == canonical_model
+    assert record.routing["canonical_model"] == canonical_model
+    assert record.routing["qualified_exact_model_id"] == requested_model
+    assert record.routing["endpoint_snapshot_sha256"] == (
+        evidence.endpoint_snapshot.snapshot_sha256
+    )
+    assert (
+        record.routing["catalog_identity_binding_sha256"]
+        == evidence.catalog_identity_binding_sha256
+    )
+    assert not record.fallback_used
+    assert not record.substitution_detected
+    # Completion metadata can prove this provisional binding, but certification
+    # credit remains UNBOUND until generation metadata is independently fetched.
+    assert record.identity_strength.value == "UNBOUND"
+    assert record.routing["provisional_identity_strength"] == ("CANONICAL_MODEL_AND_ENDPOINT_BOUND")
+    assert record.routing["identity_binding_status"] == "generation_metadata_pending"
+    assert not is_creditable_usage_record(record, require_certification=True)
+    retrieved_at = datetime.now(UTC)
+    generation = validate_openrouter_generation_payload(
+        _generation_payload(model=canonical_model),
+        requested_generation_id="generation-test",
+        retrieved_at=retrieved_at,
+        execution_evidence=ExecutionEvidenceKind.MOCK,
+    )
+    bound = client.bind_generation_identity(
+        usage_record=record,
+        generation_evidence=generation,
+        evaluated_at=retrieved_at,
+    )
+    assert bound.strength is OpenRouterIdentityStrength.CANONICAL_MODEL_AND_ENDPOINT_BOUND
+    assert bound.generation is not None
+    assert bound.generation.generation_id == record.openrouter_generation_id
+    credited = client.usage_with_bound_identity(
+        usage_record=record,
+        identity_binding=bound,
+    )
+    assert (
+        credited.identity_strength is OpenRouterIdentityStrength.CANONICAL_MODEL_AND_ENDPOINT_BOUND
+    )
+    assert is_creditable_usage_record(credited, require_certification=True)
+    tampered_routing = dict(credited.routing)
+    tampered_binding = dict(tampered_routing["identity_binding"])
+    tampered_binding["binding_sha256"] = "0" * 64
+    tampered_routing["identity_binding"] = tampered_binding
+    assert not is_creditable_usage_record(
+        credited.model_copy(update={"routing": tampered_routing}),
+        require_certification=True,
+    )
+
+    real_request_with_mock_generation = client.bind_generation_identity(
+        usage_record=record.model_copy(update={"execution_evidence": ExecutionEvidenceKind.REAL}),
+        generation_evidence=generation,
+        evaluated_at=retrieved_at,
+    )
+    assert real_request_with_mock_generation.strength is OpenRouterIdentityStrength.UNBOUND
+    assert real_request_with_mock_generation.diagnostic_codes == (
+        OpenRouterIdentityDiagnosticCode.GENERATION_EVIDENCE_UNTRUSTED,
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_generation_metadata_preserves_unbound_identity_result(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    manifest, evidence = _model_discovery_run(tmp_path)
     client, http_client, usage = _client(
         config_factory(execution={"max_json_repair_attempts": 0}),
         lambda _request: _completion_response(
-            '{"answer":"must reject"}',
-            model=canonical_model,
+            '{"answer":"valid response awaiting generation metadata"}',
             provider="Approved Provider",
         ),
         provider_policy=OpenRouterProviderPolicy(
@@ -1264,7 +1501,387 @@ async def test_top_level_returned_model_cannot_use_the_canonical_alias(
             evidence=evidence,
             manifest=manifest,
         )
-        with pytest.raises(OpenRouterModelError, match="exact configured model"):
+        await client.complete(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="synthetic local input",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    unbound = client.bind_generation_identity(
+        usage_record=usage.records[0],
+        generation_evidence=None,
+    )
+    assert unbound.strength is OpenRouterIdentityStrength.UNBOUND
+    assert unbound.generation is None
+    assert unbound.diagnostic_codes == (
+        OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_MISSING,
+    )
+    assert unbound.request.validated_response_sha256 == (usage.records[0].validated_response_sha256)
+    concluded = client._usage_with_unbound_identity(
+        usage_record=usage.records[0],
+        identity_binding=unbound,
+        trusted_issuer=None,
+    )
+    assert concluded.identity_strength is OpenRouterIdentityStrength.UNBOUND
+    assert concluded.routing["identity_binding_status"] == "generation_metadata_unbound"
+    assert concluded.routing["identity_binding_sha256"] == unbound.binding_sha256
+    assert concluded.routing["identity_binding"]["diagnostic_codes"] == [
+        OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_MISSING.value
+    ]
+    assert usage.records == [concluded]
+    assert not is_creditable_usage_record(concluded, require_certification=True)
+
+
+@pytest.mark.asyncio
+async def test_real_completion_dispatches_through_generation_binding_before_return(
+    config_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, evidence = _model_discovery_run(tmp_path)
+    client, http_client, _usage = _client(
+        config_factory(execution={"max_json_repair_attempts": 0}),
+        lambda _request: _completion_response(
+            '{"answer":"provisional"}',
+            provider="Approved Provider",
+        ),
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(_qualification_routing_for_discovery(evidence),),
+    )
+    client.register_certification_model_discovery(
+        evidence=evidence,
+        manifest=manifest,
+    )
+    provisional = await client.complete_with_evidence(
+        role="source_audit",
+        models=["alpha/atlas-secure"],
+        system_prompt="system",
+        user_prompt="synthetic local input",
+        response_model=Answer,
+        schema_name="answer",
+    )
+    calls: list[str] = []
+
+    async def completed_without_transport(**_kwargs: Any) -> Any:
+        return provisional
+
+    async def bind_before_return(completion: Any) -> Any:
+        calls.append(completion.usage_record.request_id)
+        return completion
+
+    client.execution_evidence = ExecutionEvidenceKind.REAL
+    client._owns_client = True
+    client._authentication_validated = True
+    monkeypatch.setattr(client, "_complete_one", completed_without_transport)
+    monkeypatch.setattr(client, "_bind_real_completion_identity", bind_before_return)
+    try:
+        result = await client.complete_with_evidence(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="synthetic local input",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert result is provisional
+    assert calls == [provisional.usage_record.request_id]
+
+
+@pytest.mark.asyncio
+async def test_real_unbound_generation_result_is_preserved_without_host_model_fallback(
+    config_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    primary_manifest, primary_evidence = _model_discovery_run(tmp_path)
+    fallback_manifest, fallback_evidence = _model_discovery_run(
+        tmp_path,
+        exact_model="bravo/borealis-secure",
+        canonical_model="bravo/borealis-secure-20260727",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        model = json.loads(request.content)["model"]
+        return _completion_response(
+            f'{{"answer":"{model}"}}',
+            model=model,
+            provider="Approved Provider",
+        )
+
+    client, http_client, _usage = _client(
+        config_factory(),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(only=("approved-provider",)),
+    )
+    client.register_model_discovery(
+        evidence=primary_evidence,
+        manifest=primary_manifest,
+    )
+    client.register_model_discovery(
+        evidence=fallback_evidence,
+        manifest=fallback_manifest,
+    )
+    primary = await client.complete_with_evidence(
+        role="source_audit",
+        models=["alpha/atlas-secure"],
+        system_prompt="system",
+        user_prompt="synthetic local input",
+        response_model=Answer,
+        schema_name="answer",
+    )
+    fallback = await client.complete_with_evidence(
+        role="source_audit",
+        models=["bravo/borealis-secure"],
+        system_prompt="system",
+        user_prompt="synthetic local input",
+        response_model=Answer,
+        schema_name="answer",
+    )
+    by_model = {
+        primary.usage_record.requested_model: primary,
+        fallback.usage_record.requested_model: fallback,
+    }
+    attempts: list[str] = []
+
+    async def completed_without_transport(*, model: str, **_kwargs: Any) -> Any:
+        attempts.append(model)
+        return by_model[model]
+
+    async def preserve_unbound(completion: Any) -> Any:
+        return completion
+
+    client.execution_evidence = ExecutionEvidenceKind.REAL
+    client._owns_client = True
+    client._authentication_validated = True
+    monkeypatch.setattr(client, "_complete_one", completed_without_transport)
+    monkeypatch.setattr(client, "_bind_real_completion_identity", preserve_unbound)
+    try:
+        result = await client.complete_with_evidence(
+            role="source_audit",
+            models=["alpha/atlas-secure", "bravo/borealis-secure"],
+            system_prompt="system",
+            user_prompt="synthetic local input",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert result is primary
+    assert result.usage_record.identity_strength is OpenRouterIdentityStrength.UNBOUND
+    assert attempts == ["alpha/atlas-secure"]
+
+
+@pytest.mark.asyncio
+async def test_response_identity_mismatch_retains_value_without_host_model_fallback(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    primary_manifest, primary_evidence = _model_discovery_run(tmp_path)
+    fallback_manifest, fallback_evidence = _model_discovery_run(
+        tmp_path,
+        exact_model="bravo/borealis-secure",
+        canonical_model="bravo/borealis-secure-20260727",
+    )
+    attempts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested = json.loads(request.content)["model"]
+        attempts.append(requested)
+        payload = _completion(
+            '{"answer":"schema-valid-primary-unbound-canary"}',
+            model=requested,
+            provider="Approved Provider",
+        )
+        if requested == "alpha/atlas-secure":
+            payload["model"] = "unrelated/vendor-model"
+        return httpx.Response(
+            200,
+            headers={"X-Generation-Id": "generation-test"},
+            json=payload,
+        )
+
+    client, http_client, _usage = _client(
+        config_factory(),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(only=("approved-provider",)),
+    )
+    client.register_model_discovery(evidence=primary_evidence, manifest=primary_manifest)
+    client.register_model_discovery(evidence=fallback_evidence, manifest=fallback_manifest)
+    try:
+        result = await client.complete_with_evidence(
+            role="source_audit",
+            models=["alpha/atlas-secure", "bravo/borealis-secure"],
+            system_prompt="system",
+            user_prompt="synthetic local input",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert attempts == ["alpha/atlas-secure"]
+    assert result.value.answer == "schema-valid-primary-unbound-canary"
+    assert result.usage_record.status == "unbound_identity"
+    assert result.usage_record.routing["identity_binding_status"] == ("response_identity_unbound")
+    assert result.usage_record.routing["identity_diagnostic"]["code"] == (
+        "returned_model_outside_frozen_identity"
+    )
+    assert not is_creditable_usage_record(result.usage_record)
+    assert client.retained_unbound_completions() == (result,)
+    client.clear_retained_unbound_completions()
+    assert client.retained_unbound_completions() == ()
+
+
+@pytest.mark.asyncio
+async def test_actual_real_identity_binding_retains_metadata_fetch_failure(
+    config_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = config_factory(execution={"max_json_repair_attempts": 0})
+    manifest, evidence = _model_discovery_run(tmp_path)
+    qualification = _qualification_routing_for_discovery(evidence)
+    mock_client, mock_http_client, _mock_usage = _client(
+        config,
+        lambda _request: _completion_response(
+            '{"answer":"real-metadata-fetch-failure-canary"}',
+            provider="Approved Provider",
+        ),
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(qualification,),
+    )
+    mock_client.register_certification_model_discovery(evidence=evidence, manifest=manifest)
+    try:
+        provisional = await mock_client.complete_with_evidence(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="synthetic local input",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await mock_http_client.aclose()
+
+    real_usage = UsageLedger()
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "unbound-metadata-ledger.json",
+        cap_usd=Decimal("20"),
+    )
+    client = OpenRouterClient(
+        api_key="synthetic-key",
+        execution=config.execution,
+        privacy=config.privacy,
+        budget=BudgetManager(
+            total_usd=20,
+            max_output_tokens=config.execution.max_output_tokens_per_request,
+            conservative_usd_per_million_tokens=10,
+            max_requests_per_agent=2,
+            atomic_ledger=ledger,
+            require_endpoint_cost_bound=True,
+        ),
+        usage=real_usage,
+        base_url=OPENROUTER_DEFAULT_BASE_URL,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(qualification,),
+    )
+    client.register_certification_model_discovery(evidence=evidence, manifest=manifest)
+    client._authentication_validated = True
+    real_record = UsageRecord.model_validate(
+        {
+            **provisional.usage_record.model_dump(mode="json"),
+            "execution_evidence": ExecutionEvidenceKind.REAL,
+        }
+    )
+    real_record = _attest_owned_real_usage_record(real_record)
+    real_usage.add(real_record)
+    real_completion = StructuredCompletion(value=provisional.value, usage_record=real_record)
+
+    async def return_provisional(**_kwargs: Any) -> Any:
+        return real_completion
+
+    monkeypatch.setattr(client, "_complete_one", return_provisional)
+    await client._client.aclose()
+    try:
+        result = await client.complete_with_evidence(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="synthetic local input",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        client.clear_credentials()
+
+    diagnostic_codes = result.usage_record.routing["identity_binding"]["diagnostic_codes"]
+    assert diagnostic_codes == [
+        OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_INVALID.value,
+        OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_MISSING.value,
+    ]
+    assert result.value.answer == "real-metadata-fetch-failure-canary"
+    assert result.usage_record.execution_evidence is ExecutionEvidenceKind.REAL
+    assert not is_creditable_usage_record(result.usage_record, require_real=True)
+    assert client.retained_unbound_completions() == (result,)
+    diagnostic_text = json.dumps(result.usage_record.routing, sort_keys=True)
+    assert "real-metadata-fetch-failure-canary" not in diagnostic_text
+
+
+@pytest.mark.asyncio
+async def test_value_only_real_caller_retains_unbound_completion_in_safe_typed_error(
+    config_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, evidence = _model_discovery_run(tmp_path)
+    client, http_client, _usage = _client(
+        config_factory(),
+        lambda _request: _completion_response(
+            '{"answer":"unbound-response-content-canary"}',
+            model="unrelated/vendor-model",
+            provider="Approved Provider",
+        ),
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(_qualification_routing_for_discovery(evidence),),
+    )
+    client.register_certification_model_discovery(evidence=evidence, manifest=manifest)
+    completion = await client.complete_with_evidence(
+        role="source_audit",
+        models=["alpha/atlas-secure"],
+        system_prompt="system",
+        user_prompt="synthetic local input",
+        response_model=Answer,
+        schema_name="answer",
+    )
+
+    async def return_unbound(**_kwargs: Any) -> Any:
+        return completion
+
+    client.execution_evidence = ExecutionEvidenceKind.REAL
+    monkeypatch.setattr(client, "complete_with_evidence", return_unbound)
+    try:
+        with pytest.raises(OpenRouterUnboundIdentityError) as caught:
             await client.complete(
                 role="source_audit",
                 models=["alpha/atlas-secure"],
@@ -1276,7 +1893,152 @@ async def test_top_level_returned_model_cannot_use_the_canonical_alias(
     finally:
         await http_client.aclose()
 
-    assert usage.records[0].status != "success"
+    assert caught.value.completion is completion
+    assert caught.value.completion.value.answer == "unbound-response-content-canary"
+    rendered = "".join(
+        traceback.format_exception(
+            type(caught.value),
+            caught.value,
+            caught.value.__traceback__,
+        )
+    )
+    assert "unbound-response-content-canary" not in str(caught.value)
+    assert "unbound-response-content-canary" not in repr(caught.value)
+    assert "unbound-response-content-canary" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_bound_real_caller_rejects_but_retains_unbound_completion(
+    config_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, evidence = _model_discovery_run(tmp_path)
+    client, http_client, _usage = _client(
+        config_factory(),
+        lambda _request: _completion_response(
+            '{"answer":"bound-caller-content-canary"}',
+            model="unrelated/vendor-model",
+            provider="Approved Provider",
+        ),
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(_qualification_routing_for_discovery(evidence),),
+    )
+    client.register_certification_model_discovery(evidence=evidence, manifest=manifest)
+    completion = await client.complete_with_evidence(
+        role="source_audit",
+        models=["alpha/atlas-secure"],
+        system_prompt="system",
+        user_prompt="synthetic local input",
+        response_model=Answer,
+        schema_name="answer",
+    )
+
+    async def return_unbound(**_kwargs: Any) -> Any:
+        return completion
+
+    client.execution_evidence = ExecutionEvidenceKind.REAL
+    client._owns_client = True
+    client._authentication_validated = True
+    monkeypatch.setattr(client, "complete_with_evidence", return_unbound)
+    try:
+        with pytest.raises(OpenRouterUnboundIdentityError) as caught:
+            await client.complete_with_bound_identity(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert caught.value.completion is completion
+    assert caught.value.completion.value.answer == "bound-caller-content-canary"
+    assert "bound-caller-content-canary" not in str(caught.value)
+    assert "bound-caller-content-canary" not in repr(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_unrelated_returned_model_preserves_valid_unbound_evidence_without_credit(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    requested_model = "alpha/atlas-secure"
+    canonical_model = "alpha/atlas-secure-20260727"
+    unrelated_model = "unrelated/vendor-model"
+    raw_content = '{"answer":"schema-valid-unrelated-output-canary"}'
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        canonical_model=canonical_model,
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        payload = _completion(
+            raw_content,
+            model=requested_model,
+            selected_model=canonical_model,
+            provider="Approved Provider",
+        )
+        payload["model"] = unrelated_model
+        return httpx.Response(
+            200,
+            headers={"X-Generation-Id": "generation-test"},
+            json=payload,
+        )
+
+    client, http_client, usage = _client(
+        config_factory(execution={"max_json_repair_attempts": 0}),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(_qualification_routing_for_discovery(evidence),),
+    )
+    try:
+        client.register_certification_model_discovery(
+            evidence=evidence,
+            manifest=manifest,
+        )
+        with pytest.raises(OpenRouterModelError):
+            await client.complete(
+                role="source_audit",
+                models=[requested_model],
+                system_prompt="system-prompt-canary",
+                user_prompt="user-prompt-canary",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    record = usage.records[0]
+    expected_response_sha256 = hashlib.sha256(raw_content.encode()).hexdigest()
+    assert record.requested_model == requested_model
+    assert record.returned_model == unrelated_model
+    assert record.response_sha256 == expected_response_sha256
+    assert record.validated_response_sha256 == expected_response_sha256
+    assert record.identity_strength.value == "UNBOUND"
+    assert record.status != "success"
+    assert record.validation_status.value == "model_mismatch"
+    assert record.substitution_detected
+    assert not is_creditable_usage_record(record, require_certification=True)
+
+    diagnostic = record.routing["identity_diagnostic"]
+    assert diagnostic["code"] == "returned_model_outside_frozen_identity"
+    assert diagnostic["requested_model"] == requested_model
+    assert diagnostic["canonical_model"] == canonical_model
+    assert diagnostic["returned_model"] == unrelated_model
+    diagnostic_text = json.dumps(diagnostic, sort_keys=True)
+    assert "system-prompt-canary" not in diagnostic_text
+    assert "user-prompt-canary" not in diagnostic_text
+    assert "schema-valid-unrelated-output-canary" not in diagnostic_text
+    assert "authorization" not in diagnostic_text.casefold()
 
 
 @pytest.mark.asyncio
@@ -2131,7 +2893,7 @@ async def test_unrelated_returned_model_is_rejected_and_recorded(config_factory)
 
     client, http_client, usage = _client(config_factory(), handler)
     try:
-        with pytest.raises(OpenRouterModelError, match="unrelated model"):
+        with pytest.raises(OpenRouterUnboundIdentityError, match="identity is unbound"):
             await client.complete(
                 role="source_audit",
                 models=["alpha/atlas-secure"],
@@ -2142,7 +2904,7 @@ async def test_unrelated_returned_model_is_rejected_and_recorded(config_factory)
             )
     finally:
         await http_client.aclose()
-    assert usage.records[0].status == "rejected_model_substitution"
+    assert usage.records[0].status == "unbound_identity"
     assert usage.records[0].returned_model == "unrelated/vendor-model"
 
 
@@ -2208,9 +2970,93 @@ async def test_complete_with_evidence_returns_successful_explicit_fallback_recor
     ]
     assert result.usage_record is usage.records[1]
     assert result.usage_record.fallback_used is True
+    assert result.usage_record.routing["host_model_fallback_used"] is True
+    assert result.usage_record.routing["provider_fallback_used"] is False
     assert all(
         record.user_prompt_sha256 == hashlib.sha256(b"user").hexdigest() for record in usage.records
     )
+
+
+@pytest.mark.asyncio
+async def test_explicit_host_model_fallback_can_bind_its_own_frozen_identity(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    primary_manifest, primary_evidence = _model_discovery_run(tmp_path)
+    fallback_manifest, fallback_evidence = _model_discovery_run(
+        tmp_path,
+        exact_model="bravo/borealis-secure",
+        canonical_model="bravo/borealis-secure-20260727",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        model = json.loads(request.content)["model"]
+        if model == "alpha/atlas-secure":
+            return httpx.Response(404)
+        payload = _completion(
+            '{"answer":"identity-bound fallback"}',
+            model="bravo/borealis-secure-20260727",
+            provider="Approved Provider",
+        )
+        payload["openrouter_metadata"]["requested"] = model
+        return httpx.Response(
+            200,
+            headers={"X-Generation-Id": "generation-test"},
+            json=payload,
+        )
+
+    client, http_client, usage = _client(
+        config_factory(),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("approved-provider",),
+            allow_fallbacks=False,
+        ),
+    )
+    client.register_model_discovery(
+        evidence=primary_evidence,
+        manifest=primary_manifest,
+    )
+    client.register_model_discovery(
+        evidence=fallback_evidence,
+        manifest=fallback_manifest,
+    )
+    try:
+        completion = await client.complete_with_evidence(
+            role="source_audit",
+            models=["alpha/atlas-secure", "bravo/borealis-secure"],
+            system_prompt="system",
+            user_prompt="synthetic local input",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    record = completion.usage_record
+    generation = validate_openrouter_generation_payload(
+        _generation_payload(
+            model="bravo/borealis-secure-20260727",
+        ),
+        requested_generation_id="generation-test",
+        retrieved_at=datetime.now(UTC),
+        execution_evidence=ExecutionEvidenceKind.MOCK,
+    )
+    binding = client.bind_generation_identity(
+        usage_record=record,
+        generation_evidence=generation,
+    )
+    credited = client.usage_with_bound_identity(
+        usage_record=record,
+        identity_binding=binding,
+    )
+
+    assert record.fallback_used is True
+    assert record.routing["host_model_fallback_used"] is True
+    assert record.routing["provider_fallback_used"] is False
+    assert binding.strength is OpenRouterIdentityStrength.CANONICAL_MODEL_AND_ENDPOINT_BOUND
+    assert usage.records[-1] == credited
+    assert is_creditable_usage_record(credited)
 
 
 @pytest.mark.asyncio
@@ -2686,7 +3532,7 @@ async def test_certification_rejects_returned_provider_name_outside_qualificatio
     )
     client.register_certification_endpoint_snapshot(evidence=endpoint_snapshot)
     try:
-        with pytest.raises(OpenRouterQualificationError, match="provider response"):
+        with pytest.raises(OpenRouterUnboundIdentityError, match="identity is unbound"):
             await client.complete(
                 role="source_audit",
                 models=["alpha/atlas-secure"],
@@ -2785,7 +3631,7 @@ async def test_same_family_model_alias_is_rejected_and_evidence_is_invalid(
 
     client, http_client, usage = _client(config_factory(), handler)
     try:
-        with pytest.raises(OpenRouterModelError, match="exact configured model"):
+        with pytest.raises(OpenRouterUnboundIdentityError, match="identity is unbound"):
             await client.complete(
                 role="source_audit",
                 models=["alpha/atlas-secure"],
@@ -2796,7 +3642,7 @@ async def test_same_family_model_alias_is_rejected_and_evidence_is_invalid(
             )
     finally:
         await http_client.aclose()
-    assert usage.records[0].status == "rejected_model_substitution"
+    assert usage.records[0].status == "unbound_identity"
     assert usage.records[0].substitution_detected
     assert usage.records[0].validation_status.value == "model_mismatch"
 
@@ -2853,7 +3699,7 @@ async def test_router_selected_provider_must_match_certification_policy(
         ),
     )
     try:
-        with pytest.raises(OpenRouterProviderPolicyError, match="outside"):
+        with pytest.raises(OpenRouterUnboundIdentityError, match="identity is unbound"):
             await client.complete(
                 role="source_audit",
                 models=["alpha/atlas-secure"],
@@ -2996,6 +3842,80 @@ async def test_model_endpoint_metadata_rejects_wrong_model_binding(config_factor
 
 
 @pytest.mark.asyncio
+async def test_single_model_metadata_uses_alias_resolving_documented_path(
+    config_factory,
+) -> None:
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "id": "alpha/atlas-secure",
+                    "canonical_slug": "alpha/atlas-secure-20260727",
+                }
+            },
+        )
+
+    client, http_client, _usage = _client(config_factory(), handler)
+    try:
+        metadata = await client.get_model_metadata("alpha/atlas-secure")
+    finally:
+        await http_client.aclose()
+
+    assert metadata["data"]["canonical_slug"] == "alpha/atlas-secure-20260727"
+    assert observed[0].url.path == "/api/v1/model/alpha/atlas-secure"
+
+
+@pytest.mark.asyncio
+async def test_single_model_metadata_rejects_cross_author_canonical_identity(
+    config_factory,
+) -> None:
+    client, http_client, _usage = _client(
+        config_factory(),
+        lambda _request: httpx.Response(
+            200,
+            json={
+                "data": {
+                    "id": "alpha/atlas-secure",
+                    "canonical_slug": "bravo/atlas-secure-20260727",
+                }
+            },
+        ),
+    )
+    try:
+        with pytest.raises(OpenRouterModelError, match="canonical identity"):
+            await client.get_model_metadata("alpha/atlas-secure")
+    finally:
+        await http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_single_model_metadata_rejects_unrelated_same_author_identity(
+    config_factory,
+) -> None:
+    client, http_client, _usage = _client(
+        config_factory(),
+        lambda _request: httpx.Response(
+            200,
+            json={
+                "data": {
+                    "id": "alpha/unrelated-model",
+                    "canonical_slug": "alpha/unrelated-model-20260727",
+                }
+            },
+        ),
+    )
+    try:
+        with pytest.raises(OpenRouterModelError, match="canonical identity"):
+            await client.get_model_metadata("alpha/atlas-secure")
+    finally:
+        await http_client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_malformed_initial_response_never_produces_success_usage(config_factory) -> None:
     calls = 0
 
@@ -3084,7 +4004,7 @@ async def test_error_inside_success_http_response_is_typed_and_never_credited(
 
 
 @pytest.mark.asyncio
-async def test_unvalidated_zero_cost_cannot_release_a_sent_reservation(
+async def test_valid_zero_cost_is_reconciled_for_an_unbound_identity_response(
     config_factory,
 ) -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -3101,7 +4021,7 @@ async def test_unvalidated_zero_cost_cannot_release_a_sent_reservation(
 
     client, http_client, usage = _client(config_factory(), handler)
     try:
-        with pytest.raises(OpenRouterModelError, match="exact configured model"):
+        with pytest.raises(OpenRouterUnboundIdentityError, match="identity is unbound"):
             await client.complete(
                 role="source_audit",
                 models=["alpha/atlas-secure"],
@@ -3114,15 +4034,15 @@ async def test_unvalidated_zero_cost_cannot_release_a_sent_reservation(
         await http_client.aclose()
 
     record = usage.records[0]
-    assert record.reported_cost_usd is None
-    assert record.accounted_cost_usd > 0
+    assert record.reported_cost_usd == 0.0
+    assert record.accounted_cost_usd == 0.0
     assert client.budget.spent_usd == pytest.approx(record.accounted_cost_usd)
 
 
 @pytest.mark.parametrize(
     ("fault", "expected_error"),
     [
-        ("mismatched_generation_header", OpenRouterSchemaError),
+        ("mismatched_generation_header", OpenRouterUnboundIdentityError),
         ("wrong_message_role", OpenRouterSchemaError),
         ("multiple_choices", OpenRouterSchemaError),
         ("inconsistent_usage", OpenRouterSchemaError),

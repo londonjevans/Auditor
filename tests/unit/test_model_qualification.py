@@ -19,11 +19,13 @@ from mmaudit.constants import ALL_MODEL_ROLES, ALL_SPECIALIST_ROLES
 from mmaudit.models.discovery import (
     DiscoveryCandidateRoute,
     DiscoveryEndpointMetadataBinding,
+    DiscoveryModelMetadataBinding,
     ModelDiscoveryArtifactBinding,
     OpenRouterDiscoveryRunProvenance,
     OpenRouterModelDiscoveryEvidence,
     OpenRouterModelDiscoveryRunManifest,
     openrouter_endpoint_query,
+    openrouter_model_query,
     seal_model_discovery_run_manifest,
     validate_openrouter_model_discovery,
 )
@@ -79,6 +81,10 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.models.usage import candidate_falsifier_role
 from mmaudit.orchestration.manifest import canonical_sha256
+from tests.identity_fixtures import (
+    bind_synthetic_usage_identity,
+    reattest_synthetic_real_usage,
+)
 from tests.qualification_support import synthetic_release_observation
 
 _NOW = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
@@ -147,29 +153,27 @@ def _discovery_run(
         zdr_payload={"data": [endpoint]},
         reasoning_requested=True,
     )
+    catalog_model = {
+        "id": model_id,
+        "canonical_slug": f"{model_id}-20260727",
+        "context_length": 100_000,
+        "top_provider": {
+            "context_length": 100_000,
+            "max_completion_tokens": 8_192,
+            "is_moderated": False,
+        },
+        "supported_parameters": [
+            "max_tokens",
+            "reasoning",
+            "response_format",
+            "structured_outputs",
+            "temperature",
+        ],
+    }
     payload = validate_openrouter_model_discovery(
         exact_model_id=model_id,
-        models_payload={
-            "data": [
-                {
-                    "id": model_id,
-                    "canonical_slug": f"{model_id}-20260727",
-                    "context_length": 100_000,
-                    "top_provider": {
-                        "context_length": 100_000,
-                        "max_completion_tokens": 8_192,
-                        "is_moderated": False,
-                    },
-                    "supported_parameters": [
-                        "max_tokens",
-                        "reasoning",
-                        "response_format",
-                        "structured_outputs",
-                        "temperature",
-                    ],
-                }
-            ]
-        },
+        models_payload={"data": [catalog_model]},
+        single_model_payload={"data": catalog_model},
         endpoint_snapshot=endpoint_snapshot,
     )
     route = DiscoveryCandidateRoute(
@@ -180,6 +184,13 @@ def _discovery_run(
         exact_model_id=model_id,
         api_query=openrouter_endpoint_query(model_id),
         response_snapshot_sha256=_sha(f"endpoint-response-{index}"),
+    )
+    model_binding = DiscoveryModelMetadataBinding(
+        exact_model_id=model_id,
+        canonical_slug=payload.canonical_slug,
+        api_query=openrouter_model_query(payload.canonical_slug),
+        response_snapshot_sha256=_sha(f"model-response-{index}"),
+        model_metadata_snapshot_sha256=payload.model_metadata_snapshot_sha256,
     )
     provenance_payload = {
         "schema_version": "1.0",
@@ -196,6 +207,7 @@ def _discovery_run(
         "zdr_snapshot_sha256": _sha(f"zdr-{index}"),
         "candidate_routes": [route.model_dump(mode="json")],
         "candidate_set_sha256": canonical_sha256([route.model_dump(mode="json")]),
+        "model_metadata_bindings": [model_binding.model_dump(mode="json")],
         "endpoint_metadata_bindings": [binding.model_dump(mode="json")],
     }
     provenance = OpenRouterDiscoveryRunProvenance.model_validate(
@@ -294,38 +306,40 @@ def _usage_record(
         routing["qualification_artifact_sha256"] = qualification_artifact_sha256
     if production_selection_sha256 is not None:
         routing["production_selection_sha256"] = production_selection_sha256
-    return UsageRecord(
-        request_id=request_id,
-        role=role,
-        execution_evidence=execution_evidence,
-        requested_model=candidate.exact_model_id,
-        returned_model=candidate.exact_model_id,
-        actual_model=candidate.canonical_model_slug,
-        provider="Approved Provider",
-        model_family=candidate.exact_model_id,
-        timestamp=_NOW,
-        prompt_tokens=100,
-        completion_tokens=25,
-        total_tokens=125,
-        reported_cost_usd=0.01,
-        accounted_cost_usd=0.01,
-        routing=routing,
-        prompt_sha256=_sha(f"prompt-{request_id}"),
-        response_sha256=_sha(f"response-{request_id}"),
-        validated_response_sha256=_sha(f"validated-response-{request_id}"),
-        request_body_sha256=_sha(f"request-{request_id}"),
-        schema_sha256=_sha("schema"),
-        openrouter_generation_id=generation_id,
-        configured_provider_endpoints=[candidate.approved_provider_endpoint],
-        actual_provider_endpoint=candidate.approved_provider_endpoint,
-        started_at=_NOW,
-        ended_at=ended_at,
-        latency_ms=1_000,
-        finish_reason="stop",
-        retry_count=0,
-        validation_status=ModelRequestValidationStatus.VALID,
-        status="success",
-        attempts=1,
+    return bind_synthetic_usage_identity(
+        UsageRecord(
+            request_id=request_id,
+            role=role,
+            execution_evidence=execution_evidence,
+            requested_model=candidate.exact_model_id,
+            returned_model=candidate.exact_model_id,
+            actual_model=candidate.canonical_model_slug,
+            provider="Approved Provider",
+            model_family=candidate.exact_model_id,
+            timestamp=_NOW,
+            prompt_tokens=100,
+            completion_tokens=25,
+            total_tokens=125,
+            reported_cost_usd=0.01,
+            accounted_cost_usd=0.01,
+            routing=routing,
+            prompt_sha256=_sha(f"prompt-{request_id}"),
+            response_sha256=_sha(f"response-{request_id}"),
+            validated_response_sha256=_sha(f"validated-response-{request_id}"),
+            request_body_sha256=_sha(f"request-{request_id}"),
+            schema_sha256=_sha("schema"),
+            openrouter_generation_id=generation_id,
+            configured_provider_endpoints=[candidate.approved_provider_endpoint],
+            actual_provider_endpoint=candidate.approved_provider_endpoint,
+            started_at=_NOW,
+            ended_at=ended_at,
+            latency_ms=1_000,
+            finish_reason="stop",
+            retry_count=0,
+            validation_status=ModelRequestValidationStatus.VALID,
+            status="success",
+            attempts=1,
+        )
     )
 
 
@@ -662,6 +676,7 @@ def _resolve_for_test(
         "expected_bindings": bundle.bindings,
         "benchmark_reports": (),
         "benchmark_corpus": None,
+        "trusted_campaign_verification": object(),
         "trusted_generation_verification": None,
         "trusted_release_observation": synthetic_release_observation(
             bundle.bindings,
@@ -671,9 +686,12 @@ def _resolve_for_test(
         "now": _NOW + timedelta(hours=3),
     }
     arguments.update(overrides)
-    with patch(
-        "mmaudit.models.qualification._freshly_reverify_production_benchmarks",
-        return_value=(bundle.benchmark_evidence if fresh_evidence is None else fresh_evidence),
+    with (
+        patch("mmaudit.models.qualification._require_live_campaign_content_provenance"),
+        patch(
+            "mmaudit.models.qualification._freshly_reverify_production_benchmarks",
+            return_value=(bundle.benchmark_evidence if fresh_evidence is None else fresh_evidence),
+        ),
     ):
         return resolve_verified_production_qualification(**arguments)  # type: ignore[arg-type]
 
@@ -866,8 +884,13 @@ def test_verified_qualification_capabilities_are_process_local_and_issuer_bound(
             pickle.dumps(value)
 
     forged = object.__new__(VerifiedProductionQualification)
-    with pytest.raises(ValueError, match="malformed bindings"):
+    with pytest.raises(ValueError, match="invalid capability type"):
         forged.require_current(now=_NOW + timedelta(hours=3))
+    reconstructed = object.__new__(VerifiedProductionQualification)
+    for field_name in capability.__dataclass_fields__:
+        object.__setattr__(reconstructed, field_name, getattr(capability, field_name))
+    with pytest.raises(ValueError, match="invalid capability type"):
+        reconstructed.require_current(now=_NOW + timedelta(hours=3))
 
     forged_model = object.__new__(VerifiedTierAModelQualification)
     object.__setattr__(capability, "models", (forged_model, *capability.models[1:]))
@@ -948,7 +971,6 @@ def test_fresh_production_reverification_replays_and_rescores_frozen_workflow() 
             requests=requests,
             attestations=attestations,
             verification_started_at=min(item.retrieved_at for item in attestations),
-            issuer=generation_evidence_module._TRUSTED_GENERATION_VERIFICATION_ISSUER,
         )
     )
     corpus = load_model_benchmark_corpus(_ROOT / "benchmarks" / "model_corpus" / "manifest.json")
@@ -985,7 +1007,6 @@ def test_fresh_production_reverification_replays_and_rescores_frozen_workflow() 
             requests=requests,
             attestations=tuple(refreshed_attestations),
             verification_started_at=min(item.retrieved_at for item in refreshed_attestations),
-            issuer=generation_evidence_module._TRUSTED_GENERATION_VERIFICATION_ISSUER,
         )
     )
     freshly_verified = _freshly_reverify_production_benchmarks(
@@ -1040,7 +1061,6 @@ def test_fresh_production_reverification_rejects_self_declared_benchmark_version
             requests=requests,
             attestations=attestations,
             verification_started_at=min(item.retrieved_at for item in attestations),
-            issuer=generation_evidence_module._TRUSTED_GENERATION_VERIFICATION_ISSUER,
         )
     )
     corpus = load_model_benchmark_corpus(_ROOT / "benchmarks" / "model_corpus" / "manifest.json")
@@ -1093,7 +1113,7 @@ def test_serialized_qualification_bundle_alone_cannot_mint_production_capability
     bundle = _bundle()
     corpus = load_model_benchmark_corpus(_ROOT / "benchmarks" / "model_corpus" / "manifest.json")
 
-    with pytest.raises(ValueError, match="fresh authenticated generation verification"):
+    with pytest.raises(ValueError, match="live response-content campaign provenance"):
         resolve_verified_production_qualification(
             artifact=bundle.artifact,
             registry=bundle.registry,
@@ -1101,6 +1121,7 @@ def test_serialized_qualification_bundle_alone_cannot_mint_production_capability
             expected_bindings=bundle.bindings,
             benchmark_reports=(),
             benchmark_corpus=corpus,
+            trusted_campaign_verification=None,
             trusted_generation_verification=None,  # type: ignore[arg-type]
             trusted_release_observation=synthetic_release_observation(
                 bundle.bindings,
@@ -1774,7 +1795,7 @@ def _bind_ensemble_usage(bundle: _Bundle, record: UsageRecord) -> UsageRecord:
         if result.exact_model_id == record.requested_model
     )
     assert result.expires_at is not None
-    return record.model_copy(
+    rebound = record.model_copy(
         update={
             "routing": {
                 **record.routing,
@@ -1802,6 +1823,7 @@ def _bind_ensemble_usage(bundle: _Bundle, record: UsageRecord) -> UsageRecord:
             }
         }
     )
+    return reattest_synthetic_real_usage(rebound)
 
 
 def _evaluate(bundle: _Bundle, **updates):

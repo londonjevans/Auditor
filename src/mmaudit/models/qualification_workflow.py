@@ -152,7 +152,11 @@ def candidate_generation_verification_requests(
                 )
             if (
                 record.requested_model != candidate.exact_model_id
-                or record.returned_model != candidate.exact_model_id
+                or record.returned_model
+                not in {
+                    candidate.exact_model_id,
+                    candidate.canonical_model_slug,
+                }
                 or record.actual_model
                 not in {
                     candidate.exact_model_id,
@@ -401,7 +405,7 @@ def run_qualification_workflow(
     benchmark_portfolio: ModelBenchmarkPortfolio,
     benchmark_reports: tuple[ModelBenchmarkReport, ...],
     release_bindings: QualificationReleaseBindings,
-    trusted_campaign_verification: TrustedCandidateBenchmarkCampaignVerification,
+    trusted_campaign_verification: TrustedCandidateBenchmarkCampaignVerification | None,
     trusted_generation_verification: TrustedGenerationVerification | None,
     trusted_release_observation: TrustedReleaseBindingObservation,
     evaluated_at: datetime,
@@ -464,13 +468,10 @@ def run_qualification_workflow(
         != benchmark_suite.ground_truth.schema_version
     ):
         raise ValueError("qualification release benchmark versions differ from the loaded suite")
-    if type(trusted_campaign_verification) is not TrustedCandidateBenchmarkCampaignVerification:
-        raise ValueError("qualification requires trusted campaign verification")
-    trusted_campaign_verification.require_for(
-        portfolio=benchmark_portfolio,
-        policy_sha256=policy.policy_sha256,
-        effective_config_sha256=release_bindings.effective_config_sha256,
-    )
+    if trusted_campaign_verification is not None and (
+        type(trusted_campaign_verification) is not TrustedCandidateBenchmarkCampaignVerification
+    ):
+        raise ValueError("trusted campaign verification has an invalid authority type")
     validate_candidate_registry_discovery(
         registry=candidate_registry,
         run_manifest=discovery_run_manifest,
@@ -494,6 +495,13 @@ def run_qualification_workflow(
         reports=reports,
         policy=policy,
     )
+    if trusted_campaign_verification is not None:
+        trusted_campaign_verification.require_for(
+            portfolio_sha256=benchmark_portfolio.portfolio_sha256,
+            reports=reports,
+            policy_sha256=policy.policy_sha256,
+            effective_config_sha256=release_bindings.effective_config_sha256,
+        )
     thresholds = {threshold.dimension: threshold for threshold in policy.thresholds}
     candidates_by_id = {
         candidate.exact_model_id: candidate for candidate in candidate_registry.candidates
@@ -508,6 +516,8 @@ def run_qualification_workflow(
         dimensions: tuple[QualificationDimensionResult, ...]
         failure_reasons: tuple[str, ...]
         try:
+            if trusted_campaign_verification is None:
+                raise ValueError("qualification requires live response-content campaign provenance")
             if trusted_generation_verification is None:
                 raise ValueError(
                     "qualification requires authenticated generation re-fetch evidence"
@@ -524,7 +534,11 @@ def run_qualification_workflow(
             )
             if any(
                 record.requested_model != candidate.exact_model_id
-                or record.returned_model != candidate.exact_model_id
+                or record.returned_model
+                not in {
+                    candidate.exact_model_id,
+                    candidate.canonical_model_slug,
+                }
                 or record.actual_model
                 not in {
                     candidate.exact_model_id,

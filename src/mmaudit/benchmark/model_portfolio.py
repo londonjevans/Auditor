@@ -15,6 +15,10 @@ import re
 import shutil
 import stat
 import tempfile
+import threading
+import weakref
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -36,6 +40,7 @@ from mmaudit.models.candidate_benchmark import (
 from mmaudit.models.identifiers import require_exact_openrouter_model_id
 from mmaudit.models.qualification import CandidateModel, CandidateRegistry
 from mmaudit.models.schemas import ExecutionEvidenceKind, StrictModel, UsageRecord
+from mmaudit.models.usage import is_creditable_usage_record
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.reporting.json_report import stable_json
@@ -51,59 +56,55 @@ _MAX_REPORT_BYTES = 50_000_000
 _MAX_MANIFEST_BYTES = 5_000_000
 _PRIVATE_DIRECTORY_MODE = 0o700
 _PRIVATE_FILE_MODE = 0o600
-_TRUSTED_CAMPAIGN_VERIFICATION_ISSUER = object()
+
+
+@dataclass(frozen=True, slots=True)
+class _TrustedCampaignCapabilityState:
+    portfolio_sha256: str
+    journal_sha256: str
+    policy_sha256: str
+    effective_config_sha256: str
+    cost_ledger_path_sha256: str
+    report_content_bindings: tuple[tuple[str, str], ...]
 
 
 class TrustedCandidateBenchmarkCampaignVerification:
-    """Opaque proof that an actual complete campaign backs one exact portfolio."""
+    """Opaque proof that one fresh complete campaign retains live response provenance."""
 
-    __slots__ = (
-        "__cost_ledger_path_sha256",
-        "__effective_config_sha256",
-        "__issuer",
-        "__journal_sha256",
-        "__policy_sha256",
-        "__portfolio_sha256",
-    )
+    __slots__ = ("__weakref__",)
+
+    def __new__(
+        cls,
+        *_args: object,
+        **_kwargs: object,
+    ) -> TrustedCandidateBenchmarkCampaignVerification:
+        del cls
+        raise TypeError("trusted campaign verification cannot be constructed directly")
 
     def __init__(
         self,
-        *,
-        portfolio_sha256: str,
-        journal_sha256: str,
-        policy_sha256: str,
-        effective_config_sha256: str,
-        cost_ledger_path_sha256: str,
-        issuer: object,
+        *_args: object,
+        **_kwargs: object,
     ) -> None:
-        if issuer is not _TRUSTED_CAMPAIGN_VERIFICATION_ISSUER:
-            raise TypeError("trusted campaign verification cannot be constructed directly")
-        self.__portfolio_sha256 = portfolio_sha256
-        self.__journal_sha256 = journal_sha256
-        self.__policy_sha256 = policy_sha256
-        self.__effective_config_sha256 = effective_config_sha256
-        self.__cost_ledger_path_sha256 = cost_ledger_path_sha256
-        self.__issuer = issuer
+        del self, _args, _kwargs
 
     def require_for(
         self,
         *,
-        portfolio: ModelBenchmarkPortfolio,
+        portfolio_sha256: str,
+        reports: tuple[ModelBenchmarkReport, ...],
         policy_sha256: str,
         effective_config_sha256: str,
     ) -> None:
-        """Reject reuse for any portfolio, policy, or effective configuration drift."""
+        """Reject reuse for any portfolio, report content, policy, or config drift."""
 
-        if (
-            type(self) is not TrustedCandidateBenchmarkCampaignVerification
-            or self.__issuer is not _TRUSTED_CAMPAIGN_VERIFICATION_ISSUER
-            or self.__portfolio_sha256 != portfolio.portfolio_sha256
-            or self.__journal_sha256 != portfolio.campaign_journal_sha256
-            or self.__policy_sha256 != policy_sha256
-            or self.__effective_config_sha256 != effective_config_sha256
-            or not self.__cost_ledger_path_sha256
-        ):
-            raise ValueError("trusted campaign verification does not bind qualification inputs")
+        _require_trusted_campaign_capability(
+            self,
+            portfolio_sha256=portfolio_sha256,
+            reports=reports,
+            policy_sha256=policy_sha256,
+            effective_config_sha256=effective_config_sha256,
+        )
 
     def __copy__(self) -> None:
         raise TypeError("trusted campaign verification cannot be copied")
@@ -116,6 +117,146 @@ class TrustedCandidateBenchmarkCampaignVerification:
 
     def __reduce_ex__(self, _protocol: SupportsIndex) -> Never:
         raise TypeError("trusted campaign verification cannot be serialized")
+
+
+def _build_campaign_runtime_authority() -> tuple[
+    Callable[[object], None],
+    Callable[[object, int, str], None],
+    Callable[[object], tuple[str, ...] | None],
+    Callable[
+        [TrustedCandidateBenchmarkCampaignVerification, _TrustedCampaignCapabilityState],
+        None,
+    ],
+    Callable[
+        [
+            TrustedCandidateBenchmarkCampaignVerification,
+            str,
+            tuple[ModelBenchmarkReport, ...],
+            str,
+            str,
+        ],
+        None,
+    ],
+]:
+    """Create process-local journal and capability registries hidden from data models."""
+
+    journal_registry: dict[
+        int,
+        tuple[weakref.ReferenceType[object], list[str]],
+    ] = {}
+    capability_registry: dict[
+        int,
+        tuple[
+            weakref.ReferenceType[TrustedCandidateBenchmarkCampaignVerification],
+            _TrustedCampaignCapabilityState,
+        ],
+    ] = {}
+    lock = threading.RLock()
+
+    def register_fresh_journal(journal: object) -> None:
+        key = id(journal)
+
+        def discard(reference: weakref.ReferenceType[object]) -> None:
+            with lock:
+                current = journal_registry.get(key)
+                if current is not None and current[0] is reference:
+                    journal_registry.pop(key, None)
+
+        reference = weakref.ref(journal, discard)
+        with lock:
+            journal_registry[key] = (reference, [])
+
+    def record_live_binding(journal: object, expected_prior_count: int, binding: str) -> None:
+        with lock:
+            registered = journal_registry.get(id(journal))
+            if registered is None:
+                return
+            reference, bindings = registered
+            if reference() is not journal or len(bindings) != expected_prior_count:
+                journal_registry.pop(id(journal), None)
+                raise ValueError("fresh campaign runtime authority became inconsistent")
+            bindings.append(binding)
+
+    def live_bindings(journal: object) -> tuple[str, ...] | None:
+        with lock:
+            registered = journal_registry.get(id(journal))
+            if registered is None or registered[0]() is not journal:
+                return None
+            return tuple(registered[1])
+
+    def register_capability(
+        capability: TrustedCandidateBenchmarkCampaignVerification,
+        state: _TrustedCampaignCapabilityState,
+    ) -> None:
+        key = id(capability)
+
+        def discard(
+            reference: weakref.ReferenceType[TrustedCandidateBenchmarkCampaignVerification],
+        ) -> None:
+            with lock:
+                current = capability_registry.get(key)
+                if current is not None and current[0] is reference:
+                    capability_registry.pop(key, None)
+
+        reference = weakref.ref(capability, discard)
+        with lock:
+            capability_registry[key] = (reference, state)
+
+    def require_capability(
+        capability: TrustedCandidateBenchmarkCampaignVerification,
+        portfolio_sha256: str,
+        reports: tuple[ModelBenchmarkReport, ...],
+        policy_sha256: str,
+        effective_config_sha256: str,
+    ) -> None:
+        with lock:
+            registered = capability_registry.get(id(capability))
+        state = registered[1] if registered is not None and registered[0]() is capability else None
+        if (
+            type(capability) is not TrustedCandidateBenchmarkCampaignVerification
+            or state is None
+            or state.portfolio_sha256 != portfolio_sha256
+            or state.policy_sha256 != policy_sha256
+            or state.effective_config_sha256 != effective_config_sha256
+            or not state.cost_ledger_path_sha256
+            or not state.journal_sha256
+            or state.report_content_bindings != _report_content_bindings(reports)
+        ):
+            raise ValueError("trusted campaign verification does not bind qualification inputs")
+
+    return (
+        register_fresh_journal,
+        record_live_binding,
+        live_bindings,
+        register_capability,
+        require_capability,
+    )
+
+
+(
+    _register_fresh_campaign_journal,
+    _record_live_campaign_binding,
+    _live_campaign_bindings,
+    _register_trusted_campaign_capability,
+    _require_trusted_campaign_capability_positional,
+) = _build_campaign_runtime_authority()
+
+
+def _require_trusted_campaign_capability(
+    capability: TrustedCandidateBenchmarkCampaignVerification,
+    *,
+    portfolio_sha256: str,
+    reports: tuple[ModelBenchmarkReport, ...],
+    policy_sha256: str,
+    effective_config_sha256: str,
+) -> None:
+    _require_trusted_campaign_capability_positional(
+        capability,
+        portfolio_sha256,
+        reports,
+        policy_sha256,
+        effective_config_sha256,
+    )
 
 
 class ModelBenchmarkPortfolioUsage(StrictModel):
@@ -449,10 +590,12 @@ class CandidateBenchmarkCampaignEntryPayload(StrictModel):
             for case in result.cases
             if case.usage_record is not None
         )
+        report_usage_projection = _usage_records_public_projection(report_usage)
+        observed_usage_projection = _usage_records_public_projection(self.observed_usage)
         if self.diagnostic.state is not CandidateBenchmarkRunState.UNVERIFIED_FAILURE:
-            if report_usage != self.observed_usage:
+            if report_usage_projection != observed_usage_projection:
                 raise ValueError("completed candidate report omits observed request usage")
-        elif any(item not in self.observed_usage for item in report_usage):
+        elif any(item not in observed_usage_projection for item in report_usage_projection):
             raise ValueError("failed candidate report contains unobserved request usage")
         if (
             self.diagnostic.requests_observed != len(self.observed_usage)
@@ -586,6 +729,10 @@ class CandidateBenchmarkCampaignJournal:
         current = candidate_cost_ledger_snapshot(self._cost_ledger.snapshot())
         if current != ledger_after:
             raise ValueError("candidate campaign cost-ledger snapshot is not current")
+        live_content_binding = _live_report_content_binding(
+            report=report,
+            observed_usage=observed_usage,
+        )
         payload = CandidateBenchmarkCampaignEntryPayload(
             campaign_manifest_sha256=self.manifest.campaign_manifest_sha256,
             candidate_index=index,
@@ -613,6 +760,7 @@ class CandidateBenchmarkCampaignJournal:
         if loaded != entry:
             raise ValueError("candidate campaign entry changed during persistence")
         self._entries.append(loaded)
+        _record_live_campaign_binding(self, index, live_content_binding)
 
     def validate_candidate_start(
         self,
@@ -705,7 +853,7 @@ def create_candidate_benchmark_campaign(
     finally:
         if not published:
             shutil.rmtree(temporary, ignore_errors=True)
-    return CandidateBenchmarkCampaignJournal(
+    journal = CandidateBenchmarkCampaignJournal(
         path=absolute,
         manifest=manifest,
         entries=(),
@@ -713,6 +861,8 @@ def create_candidate_benchmark_campaign(
         corpus=suite,
         cost_ledger=cost_ledger,
     )
+    _register_fresh_campaign_journal(journal)
+    return journal
 
 
 def resume_candidate_benchmark_campaign(
@@ -813,8 +963,8 @@ def verify_model_benchmark_portfolio_campaign(
     effective_config_sha256: str,
     qualification_policy_sha256: str,
     cost_ledger: AtomicCostLedger,
-) -> TrustedCandidateBenchmarkCampaignVerification:
-    """Reopen the actual campaign and ledger before issuing qualification trust."""
+) -> None:
+    """Structurally validate persisted campaign evidence without minting live trust."""
 
     campaign = resume_candidate_benchmark_campaign(
         path,
@@ -830,9 +980,11 @@ def verify_model_benchmark_portfolio_campaign(
         ModelBenchmarkReport.model_validate(report.model_dump(mode="json")) for report in reports
     )
     if (
-        campaign.reports != validated_reports
+        _reports_public_projection(campaign.reports)
+        != _reports_public_projection(validated_reports)
         or campaign.diagnostics != validated_portfolio.diagnostics
-        or campaign.observed_usage != validated_portfolio.observed_usage_records
+        or _usage_records_public_projection(campaign.observed_usage)
+        != _usage_records_public_projection(validated_portfolio.observed_usage_records)
         or campaign.journal_sha256 != validated_portfolio.campaign_journal_sha256
         or campaign.manifest.qualification_policy_sha256
         != validated_portfolio.qualification_policy_sha256
@@ -841,14 +993,51 @@ def verify_model_benchmark_portfolio_campaign(
         or campaign.final_cost_ledger_snapshot != validated_portfolio.cost_ledger_snapshot
     ):
         raise ValueError("benchmark portfolio differs from its actual campaign journal")
-    return TrustedCandidateBenchmarkCampaignVerification(
-        portfolio_sha256=validated_portfolio.portfolio_sha256,
-        journal_sha256=campaign.journal_sha256,
-        policy_sha256=campaign.manifest.qualification_policy_sha256,
-        effective_config_sha256=campaign.manifest.effective_config_sha256,
-        cost_ledger_path_sha256=campaign.manifest.cost_ledger_path_sha256,
-        issuer=_TRUSTED_CAMPAIGN_VERIFICATION_ISSUER,
+
+
+def issue_trusted_candidate_benchmark_campaign_verification(
+    *,
+    campaign: CandidateBenchmarkCampaignJournal,
+    portfolio: ModelBenchmarkPortfolio,
+    reports: tuple[ModelBenchmarkReport, ...],
+) -> TrustedCandidateBenchmarkCampaignVerification:
+    """Issue live content authority only from the original complete in-memory campaign."""
+
+    if type(campaign) is not CandidateBenchmarkCampaignJournal:
+        raise ValueError("trusted campaign verification requires the original campaign")
+    campaign.require_complete()
+    validated_reports = tuple(
+        ModelBenchmarkReport.model_validate(report.model_dump(mode="json")) for report in reports
     )
+    verify_model_benchmark_portfolio_campaign(
+        campaign.path,
+        portfolio=portfolio,
+        reports=validated_reports,
+        candidate_registry=campaign._candidate_registry,
+        corpus=campaign._corpus,
+        effective_config_sha256=campaign.manifest.effective_config_sha256,
+        qualification_policy_sha256=campaign.manifest.qualification_policy_sha256,
+        cost_ledger=campaign._cost_ledger,
+    )
+    expected_bindings = tuple(binding for _model_id, binding in _report_content_bindings(reports))
+    live_bindings = _live_campaign_bindings(campaign)
+    if live_bindings is None or live_bindings != expected_bindings:
+        raise ValueError(
+            "trusted campaign verification requires every original runtime-attested report"
+        )
+    capability = object.__new__(TrustedCandidateBenchmarkCampaignVerification)
+    _register_trusted_campaign_capability(
+        capability,
+        _TrustedCampaignCapabilityState(
+            portfolio_sha256=portfolio.portfolio_sha256,
+            journal_sha256=campaign.journal_sha256,
+            policy_sha256=campaign.manifest.qualification_policy_sha256,
+            effective_config_sha256=campaign.manifest.effective_config_sha256,
+            cost_ledger_path_sha256=campaign.manifest.cost_ledger_path_sha256,
+            report_content_bindings=_report_content_bindings(reports),
+        ),
+    )
+    return capability
 
 
 def seal_model_benchmark_portfolio_from_campaign(
@@ -1328,6 +1517,66 @@ def _report_usage_records(
         for case in result.cases
         if case.usage_record is not None
     )
+
+
+def _usage_records_public_projection(
+    records: tuple[UsageRecord, ...],
+) -> tuple[str, ...]:
+    """Project records onto their canonical public fields, excluding private provenance."""
+
+    return tuple(canonical_sha256(record.model_dump(mode="json")) for record in records)
+
+
+def _reports_public_projection(
+    reports: tuple[ModelBenchmarkReport, ...],
+) -> tuple[str, ...]:
+    """Return the canonical serialized content identity of each ordered report."""
+
+    return tuple(canonical_sha256(report.model_dump(mode="json")) for report in reports)
+
+
+def _report_content_bindings(
+    reports: tuple[ModelBenchmarkReport, ...],
+) -> tuple[tuple[str, str], ...]:
+    """Bind each exact model ID to all canonical serialized report content."""
+
+    bindings: list[tuple[str, str]] = []
+    for report in reports:
+        if len(report.results) != 1:
+            raise ValueError("trusted campaign reports must each contain one exact model")
+        bindings.append(
+            (
+                report.results[0].target.model_id,
+                canonical_sha256(report.model_dump(mode="json")),
+            )
+        )
+    return tuple(bindings)
+
+
+def _live_report_content_binding(
+    *,
+    report: ModelBenchmarkReport,
+    observed_usage: tuple[UsageRecord, ...],
+) -> str:
+    """Validate original REAL response provenance before caching a report binding."""
+
+    report_usage = _report_usage_records((report,))
+    observed_projection = _usage_records_public_projection(observed_usage)
+    report_projection = _usage_records_public_projection(report_usage)
+    if any(binding not in observed_projection for binding in report_projection):
+        raise ValueError("candidate report contains usage absent from its live execution")
+    for record in report_usage:
+        if record.execution_evidence is ExecutionEvidenceKind.REAL and not (
+            is_creditable_usage_record(
+                record,
+                require_real=True,
+                require_certification=True,
+            )
+        ):
+            raise ValueError(
+                "REAL candidate report content lacks owned runtime execution provenance"
+            )
+    return canonical_sha256(report.model_dump(mode="json"))
 
 
 def _cost_ledger_path_sha256(cost_ledger: AtomicCostLedger) -> str:

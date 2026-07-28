@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict
 from mmaudit.config import ExecutionConfig, PrivacyConfig
 from mmaudit.models.discovery import (
     DiscoveryCandidateRoute,
+    openrouter_catalog_canonical_slug,
     validate_openrouter_model_discovery,
 )
 from mmaudit.models.endpoint_snapshots import validate_openrouter_endpoint_snapshot
@@ -125,6 +126,11 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     item.get("id") for item in models if isinstance(item.get("id"), str)
                 }:
                     raise AssertionError("the exact allowlisted model is unavailable")
+                canonical_slug = openrouter_catalog_canonical_slug(
+                    exact_model_id=settings.model_id,
+                    models_payload=models_payload,
+                )
+                single_model_payload = await client.get_model_metadata(canonical_slug)
                 endpoint_payload = await client.get_model_endpoint_metadata(settings.model_id)
                 zdr_payload = await client.list_zdr_endpoints()
                 endpoint_snapshot = validate_openrouter_endpoint_snapshot(
@@ -138,6 +144,7 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                 discovery_payload = validate_openrouter_model_discovery(
                     exact_model_id=settings.model_id,
                     models_payload=models_payload,
+                    single_model_payload=single_model_payload,
                     endpoint_snapshot=endpoint_snapshot,
                 )
                 _provenance, discovery_evidence = client.seal_real_model_discovery_run(
@@ -145,6 +152,7 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     retrieved_at=datetime.now(UTC).replace(microsecond=0),
                     models_payload=models_payload,
                     zdr_payload=zdr_payload,
+                    single_model_payloads={settings.model_id: single_model_payload},
                     endpoint_payloads={settings.model_id: endpoint_payload},
                     candidate_routes=(
                         DiscoveryCandidateRoute(

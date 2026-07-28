@@ -6,18 +6,23 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import Mapping
+import threading
+import weakref
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from types import MappingProxyType
 from typing import Any, Literal, Never, SupportsIndex
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from mmaudit.models.identifiers import is_exact_openrouter_model_id
 from mmaudit.models.schemas import ExecutionEvidenceKind, UsageRecord
-from mmaudit.models.usage import is_creditable_usage_record
+from mmaudit.models.usage import (
+    _is_structurally_generation_bindable_usage_record,
+    _validated_usage_copy_preserving_owned_attestation,
+    is_generation_bindable_usage_record,
+)
 
 _MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
 _GENERATION_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
@@ -27,7 +32,6 @@ _SOURCE_API_IDENTITY = "openrouter:/api/v1/generation"
 _SCHEMA_VERSION = "1.0"
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _CASE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$")
-_TRUSTED_GENERATION_VERIFICATION_ISSUER = object()
 
 
 class GenerationEvidenceValidationError(ValueError):
@@ -73,7 +77,7 @@ class GenerationVerificationRequest:
                 "generation verification request usage is invalid"
             )
         try:
-            usage_record = UsageRecord.model_validate(self.usage_record.model_dump(mode="json"))
+            usage_record = _validated_usage_copy_preserving_owned_attestation(self.usage_record)
         except ValidationError:
             raise GenerationEvidenceValidationError(
                 "generation verification request usage is invalid"
@@ -84,7 +88,7 @@ class GenerationVerificationRequest:
             )
         if (
             usage_record.requested_model != self.exact_model_id
-            or usage_record.returned_model != self.exact_model_id
+            or usage_record.returned_model not in {self.exact_model_id, self.canonical_model_id}
             or usage_record.actual_model not in {self.exact_model_id, self.canonical_model_id}
             or usage_record.routing.get("selected_model") != usage_record.actual_model
             or usage_record.routing.get("canonical_model") != self.canonical_model_id
@@ -121,30 +125,22 @@ class TrustedGenerationVerification:
     queries.
     """
 
-    __slots__ = ("__bindings", "__issuer")
+    __slots__ = ("__weakref__",)
+
+    def __new__(
+        cls,
+        *_args: object,
+        **_kwargs: object,
+    ) -> TrustedGenerationVerification:
+        del cls
+        raise TypeError("trusted generation verification cannot be constructed directly")
 
     def __init__(
         self,
-        bindings: tuple[_TrustedGenerationBinding, ...],
-        *,
-        issuer: object,
+        *_args: object,
+        **_kwargs: object,
     ) -> None:
-        if issuer is not _TRUSTED_GENERATION_VERIFICATION_ISSUER:
-            raise TypeError("trusted generation verification cannot be constructed directly")
-        indexed = {
-            (
-                item.benchmark_report_sha256,
-                item.exact_model_id,
-                item.case_id,
-            ): item
-            for item in bindings
-        }
-        if not bindings or len(indexed) != len(bindings):
-            raise GenerationEvidenceValidationError(
-                "trusted generation verification bindings are empty or duplicate"
-            )
-        self.__bindings = MappingProxyType(indexed)
-        self.__issuer = issuer
+        del self, _args, _kwargs
 
     def attestation_for(
         self,
@@ -160,20 +156,18 @@ class TrustedGenerationVerification:
     ) -> OpenRouterGenerationEvidence:
         """Resolve only the exact report/case/usage tuple fetched by the issuer."""
 
-        if (
-            type(self) is not TrustedGenerationVerification
-            or self.__issuer is not _TRUSTED_GENERATION_VERIFICATION_ISSUER
-        ):
-            raise GenerationEvidenceValidationError(
-                "generation verification capability is not trusted"
-            )
         try:
-            validated_usage = UsageRecord.model_validate(usage_record.model_dump(mode="json"))
+            validated_usage = _validated_usage_copy_preserving_owned_attestation(usage_record)
         except (AttributeError, ValidationError):
             raise GenerationEvidenceValidationError(
                 "generation verification usage is invalid"
             ) from None
-        binding = self.__bindings.get((benchmark_report_sha256, exact_model_id, case_id))
+        binding = _trusted_generation_binding_for(
+            self,
+            benchmark_report_sha256,
+            exact_model_id,
+            case_id,
+        )
         if (
             binding is None
             or binding.canonical_model_id != canonical_model_id
@@ -185,7 +179,7 @@ class TrustedGenerationVerification:
             raise GenerationEvidenceValidationError(
                 "generation verification capability does not bind this report case"
             )
-        return reconcile_generation_evidence(
+        return _reconcile_generation_evidence_structural(
             binding.attestation,
             usage_record=validated_usage,
             expected_exact_model=exact_model_id,
@@ -206,6 +200,81 @@ class TrustedGenerationVerification:
 
     def __reduce_ex__(self, _protocol: SupportsIndex) -> Never:
         raise TypeError("trusted generation verification cannot be serialized")
+
+
+def _build_generation_capability_authority() -> tuple[
+    Callable[
+        [TrustedGenerationVerification, tuple[_TrustedGenerationBinding, ...]],
+        None,
+    ],
+    Callable[
+        [TrustedGenerationVerification, str, str, str],
+        _TrustedGenerationBinding | None,
+    ],
+]:
+    """Keep generation-capability bindings outside caller-mutable instances."""
+
+    registry: dict[
+        int,
+        tuple[
+            weakref.ReferenceType[TrustedGenerationVerification],
+            dict[tuple[str, str, str], _TrustedGenerationBinding],
+        ],
+    ] = {}
+    lock = threading.RLock()
+
+    def register(
+        capability: TrustedGenerationVerification,
+        bindings: tuple[_TrustedGenerationBinding, ...],
+    ) -> None:
+        indexed = {
+            (
+                item.benchmark_report_sha256,
+                item.exact_model_id,
+                item.case_id,
+            ): item
+            for item in bindings
+        }
+        if not bindings or len(indexed) != len(bindings):
+            raise GenerationEvidenceValidationError(
+                "trusted generation verification bindings are empty or duplicate"
+            )
+        key = id(capability)
+
+        def discard(reference: weakref.ReferenceType[TrustedGenerationVerification]) -> None:
+            with lock:
+                current = registry.get(key)
+                if current is not None and current[0] is reference:
+                    registry.pop(key, None)
+
+        reference = weakref.ref(capability, discard)
+        with lock:
+            registry[key] = (reference, indexed)
+
+    def binding_for(
+        capability: TrustedGenerationVerification,
+        report_sha256: str,
+        exact_model_id: str,
+        case_id: str,
+    ) -> _TrustedGenerationBinding | None:
+        with lock:
+            registered = registry.get(id(capability))
+        if (
+            type(capability) is not TrustedGenerationVerification
+            or registered is None
+            or registered[0]() is not capability
+        ):
+            raise GenerationEvidenceValidationError(
+                "generation verification capability is not trusted"
+            )
+        return registered[1].get((report_sha256, exact_model_id, case_id))
+
+    return register, binding_for
+
+
+_register_trusted_generation_capability, _trusted_generation_binding_for = (
+    _build_generation_capability_authority()
+)
 
 
 class OpenRouterGenerationEvidence(BaseModel):
@@ -422,7 +491,56 @@ def reconcile_generation_evidence(
     expected_discovery_evidence_sha256: str,
     expected_provider_name: str,
 ) -> OpenRouterGenerationEvidence:
-    """Require real certification usage and exact independent generation metadata."""
+    """Require owned REAL usage and exact independent generation metadata."""
+
+    return _reconcile_generation_evidence(
+        evidence,
+        usage_record=usage_record,
+        expected_exact_model=expected_exact_model,
+        expected_canonical_model=expected_canonical_model,
+        expected_catalog_identity_binding_sha256=(expected_catalog_identity_binding_sha256),
+        expected_discovery_evidence_sha256=expected_discovery_evidence_sha256,
+        expected_provider_name=expected_provider_name,
+        require_runtime_attestation=True,
+    )
+
+
+def _reconcile_generation_evidence_structural(
+    evidence: OpenRouterGenerationEvidence,
+    *,
+    usage_record: UsageRecord,
+    expected_exact_model: str,
+    expected_canonical_model: str,
+    expected_catalog_identity_binding_sha256: str,
+    expected_discovery_evidence_sha256: str,
+    expected_provider_name: str,
+) -> OpenRouterGenerationEvidence:
+    """Validate a serialized join without minting owned runtime provenance."""
+
+    return _reconcile_generation_evidence(
+        evidence,
+        usage_record=usage_record,
+        expected_exact_model=expected_exact_model,
+        expected_canonical_model=expected_canonical_model,
+        expected_catalog_identity_binding_sha256=(expected_catalog_identity_binding_sha256),
+        expected_discovery_evidence_sha256=expected_discovery_evidence_sha256,
+        expected_provider_name=expected_provider_name,
+        require_runtime_attestation=False,
+    )
+
+
+def _reconcile_generation_evidence(
+    evidence: OpenRouterGenerationEvidence,
+    *,
+    usage_record: UsageRecord,
+    expected_exact_model: str,
+    expected_canonical_model: str,
+    expected_catalog_identity_binding_sha256: str,
+    expected_discovery_evidence_sha256: str,
+    expected_provider_name: str,
+    require_runtime_attestation: bool,
+) -> OpenRouterGenerationEvidence:
+    """Reconcile exact fields under an explicit runtime-provenance policy."""
 
     _require_exact_model_id(expected_exact_model)
     _require_exact_model_id(expected_canonical_model)
@@ -446,7 +564,7 @@ def reconcile_generation_evidence(
         raise GenerationEvidenceValidationError("generation usage record has an invalid type")
     try:
         evidence = OpenRouterGenerationEvidence.model_validate(evidence.model_dump(mode="json"))
-        usage_record = UsageRecord.model_validate(usage_record.model_dump(mode="json"))
+        usage_record = _validated_usage_copy_preserving_owned_attestation(usage_record)
     except ValidationError:
         raise GenerationEvidenceValidationError(
             "generation reconciliation evidence is not schema-valid"
@@ -455,19 +573,27 @@ def reconcile_generation_evidence(
         raise GenerationEvidenceValidationError(
             "non-real generation metadata cannot attest a production request"
         )
-    if not is_creditable_usage_record(
-        usage_record,
-        require_real=True,
-        require_certification=True,
-    ):
+    usage_is_bindable = (
+        is_generation_bindable_usage_record(usage_record)
+        if require_runtime_attestation
+        else _is_structurally_generation_bindable_usage_record(usage_record)
+    )
+    if not usage_is_bindable:
         raise GenerationEvidenceValidationError(
-            "generation attestation requires one creditable real certification request"
+            "generation attestation requires one bindable real certification request"
         )
     routing = usage_record.routing
     actual_model = usage_record.actual_model
     if actual_model not in {expected_exact_model, expected_canonical_model}:
         raise GenerationEvidenceValidationError(
             "generation evidence does not reconcile approved actual model"
+        )
+    if usage_record.returned_model not in {
+        expected_exact_model,
+        expected_canonical_model,
+    }:
+        raise GenerationEvidenceValidationError(
+            "generation evidence does not reconcile approved returned model"
         )
     comparisons = (
         (
@@ -478,7 +604,6 @@ def reconcile_generation_evidence(
         (evidence.generation_id, routing.get("generation_id"), "routing generation ID"),
         (evidence.exact_model_id, actual_model, "actual provider model"),
         (usage_record.requested_model, expected_exact_model, "requested exact model"),
-        (usage_record.returned_model, expected_exact_model, "returned exact model"),
         (routing.get("selected_model"), actual_model, "routed actual model"),
         (routing.get("canonical_model"), expected_canonical_model, "routed canonical model"),
         (
@@ -577,12 +702,9 @@ def _issue_trusted_generation_verification(
     requests: tuple[GenerationVerificationRequest, ...],
     attestations: tuple[OpenRouterGenerationEvidence, ...],
     verification_started_at: datetime,
-    issuer: object,
 ) -> TrustedGenerationVerification:
     """Issue one opaque capability from an exact authenticated re-fetch set."""
 
-    if issuer is not _TRUSTED_GENERATION_VERIFICATION_ISSUER:
-        raise TypeError("trusted generation verification issuer is invalid")
     if verification_started_at.tzinfo is None or verification_started_at.utcoffset() is None:
         raise GenerationEvidenceValidationError(
             "generation verification start time must be timezone-aware"
@@ -644,7 +766,7 @@ def _issue_trusted_generation_verification(
             raise GenerationEvidenceValidationError(
                 "generation verification did not use a fresh provider re-fetch"
             )
-        reconcile_generation_evidence(
+        _reconcile_generation_evidence_structural(
             attestation,
             usage_record=request.usage_record,
             expected_exact_model=request.exact_model_id,
@@ -666,10 +788,9 @@ def _issue_trusted_generation_verification(
                 attestation=attestation,
             )
         )
-    return TrustedGenerationVerification(
-        tuple(bindings),
-        issuer=_TRUSTED_GENERATION_VERIFICATION_ISSUER,
-    )
+    capability = object.__new__(TrustedGenerationVerification)
+    _register_trusted_generation_capability(capability, tuple(bindings))
+    return capability
 
 
 def _usage_record_sha256(record: UsageRecord) -> str:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import pickle
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -11,6 +13,7 @@ from mmaudit.benchmark.model_portfolio import (
     ModelBenchmarkPortfolio,
     TrustedCandidateBenchmarkCampaignVerification,
     create_candidate_benchmark_campaign,
+    issue_trusted_candidate_benchmark_campaign_verification,
     seal_model_benchmark_portfolio_from_campaign,
     verify_model_benchmark_portfolio_campaign,
     write_model_benchmark_portfolio,
@@ -53,6 +56,10 @@ from mmaudit.models.schemas import ExecutionEvidenceKind, UsageRecord
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.reporting.json_report import stable_json
+from tests.identity_fixtures import (
+    bind_synthetic_usage_identity,
+    reattest_synthetic_real_usage,
+)
 from tests.qualification_support import synthetic_release_observation
 from tests.unit import test_model_benchmark as benchmark_fixtures
 from tests.unit import test_model_qualification as qualification_fixtures
@@ -195,7 +202,7 @@ def _as_real_report(
                 "routing": routing,
             }
         )
-        record = UsageRecord.model_validate(usage)
+        record = bind_synthetic_usage_identity(UsageRecord.model_validate(usage))
         case["usage_record"] = record.model_dump(mode="json")
         case["generation_evidence"] = benchmark_fixtures._forged_real_generation_evidence(
             record
@@ -255,7 +262,23 @@ def _portfolio_evidence(
             cost_ledger=ledger,
         )
         initial_snapshot = campaign.manifest.initial_cost_ledger_snapshot
-        result = report.results[0]
+        live_results = []
+        for report_result in report.results:
+            live_cases = [
+                case.model_copy(
+                    update={
+                        "usage_record": (
+                            reattest_synthetic_real_usage(case.usage_record)
+                            if case.usage_record is not None
+                            else None
+                        )
+                    }
+                )
+                for case in report_result.cases
+            ]
+            live_results.append(report_result.model_copy(update={"cases": live_cases}))
+        live_report = report.model_copy(update={"results": live_results})
+        result = live_report.results[0]
         usage = tuple(case.usage_record for case in result.cases if case.usage_record is not None)
         for record in usage:
             cost = Decimal(str(record.accounted_cost_usd))
@@ -298,7 +321,7 @@ def _portfolio_evidence(
         )
         campaign.persist_candidate(
             candidate=registry.candidates[0],
-            report=report,
+            report=live_report,
             diagnostic=diagnostic,
             observed_usage=usage,
             ledger_before=initial_snapshot,
@@ -308,7 +331,7 @@ def _portfolio_evidence(
             Path(directory) / "portfolio",
             campaign=campaign,
         )
-        verification = verify_model_benchmark_portfolio_campaign(
+        verify_model_benchmark_portfolio_campaign(
             campaign.path,
             portfolio=portfolio,
             reports=(report,),
@@ -317,6 +340,11 @@ def _portfolio_evidence(
             effective_config_sha256="3" * 64,
             qualification_policy_sha256=selected_policy.policy_sha256,
             cost_ledger=ledger,
+        )
+        verification = issue_trusted_candidate_benchmark_campaign_verification(
+            campaign=campaign,
+            portfolio=portfolio,
+            reports=(report,),
         )
         return portfolio, verification
 
@@ -414,6 +442,68 @@ async def test_deterministic_semantic_scoring_without_real_capability_is_inconcl
         is CandidateBenchmarkStatus.INCONCLUSIVE
     )
     assert bundle.trusted_benchmark_evidence == ()
+
+
+@pytest.mark.asyncio
+async def test_live_campaign_capability_rejects_same_generation_content_substitution() -> None:
+    _, _, registry = _candidate_inputs()
+    candidate = registry.candidates[0]
+    original = _as_real_report(
+        await _mock_report(semantic_failure=True),
+        candidate=candidate,
+    )
+    rewritten = _as_real_report(
+        await _mock_report(),
+        candidate=candidate,
+    )
+    original_generations = tuple(
+        case.generation_evidence.model_dump(mode="json")
+        for case in original.results[0].cases
+        if case.generation_evidence is not None
+    )
+    rewritten_generations = tuple(
+        case.generation_evidence.model_dump(mode="json")
+        for case in rewritten.results[0].cases
+        if case.generation_evidence is not None
+    )
+    assert original.results[0].overall_score < rewritten.results[0].overall_score
+    assert original_generations == rewritten_generations
+
+    portfolio, capability = _portfolio_evidence(registry=registry, report=original)
+    capability.require_for(
+        portfolio_sha256=portfolio.portfolio_sha256,
+        reports=(original,),
+        policy_sha256=_policy().policy_sha256,
+        effective_config_sha256="3" * 64,
+    )
+    with pytest.raises(ValueError, match="does not bind qualification inputs"):
+        capability.require_for(
+            portfolio_sha256=portfolio.portfolio_sha256,
+            reports=(rewritten,),
+            policy_sha256=_policy().policy_sha256,
+            effective_config_sha256="3" * 64,
+        )
+    for operation in (copy.copy, copy.deepcopy, pickle.dumps):
+        with pytest.raises(TypeError):
+            operation(capability)
+    with pytest.raises(TypeError, match="cannot be constructed directly"):
+        TrustedCandidateBenchmarkCampaignVerification(
+            portfolio_sha256=portfolio.portfolio_sha256,
+            journal_sha256="a" * 64,
+            policy_sha256=_policy().policy_sha256,
+            effective_config_sha256="3" * 64,
+            cost_ledger_path_sha256="b" * 64,
+            report_content_bindings=((candidate.exact_model_id, "c" * 64),),
+            issuer=object(),
+        )
+    forged = object.__new__(TrustedCandidateBenchmarkCampaignVerification)
+    with pytest.raises(ValueError, match="does not bind qualification inputs"):
+        forged.require_for(
+            portfolio_sha256=portfolio.portfolio_sha256,
+            reports=(original,),
+            policy_sha256=_policy().policy_sha256,
+            effective_config_sha256="3" * 64,
+        )
 
 
 @pytest.mark.asyncio

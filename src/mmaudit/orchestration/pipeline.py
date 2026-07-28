@@ -62,6 +62,7 @@ from mmaudit.isolation.dependencies import (
 from mmaudit.logging import JsonLineHandler, RedactingFilter
 from mmaudit.models.discovery import (
     DiscoveryCandidateRoute,
+    openrouter_catalog_canonical_slug,
     validate_openrouter_model_discovery,
 )
 from mmaudit.models.endpoint_snapshots import (
@@ -2324,14 +2325,13 @@ class AuditPipeline:
             raise OpenRouterError("source egress requires zero-data-retention provider routing")
         if source_egress_requested and not provider_policy.configured_endpoints:
             raise OpenRouterError("source egress requires an explicit provider endpoint allowlist")
-        real_certification_client = (
-            provider_policy.certification
-            and type(self.client) is OpenRouterClient
+        real_provider_client = (
+            type(self.client) is OpenRouterClient
             and self.client.execution_evidence is ExecutionEvidenceKind.REAL
         )
         models_payload: dict[str, Any] | None = None
-        models = None if refresh or provider_policy.certification else registry.load_cache()
-        if real_certification_client:
+        models = None if refresh or real_provider_client else registry.load_cache()
+        if real_provider_client:
             await self.client.validate_authentication()
             models_payload = await self.client.get_certification_model_metadata()
             raw_models = models_payload.get("data")
@@ -2364,8 +2364,10 @@ class AuditPipeline:
         if errors:
             raise OpenRouterError("; ".join(errors))
         endpoint_snapshots = []
+        single_model_payloads: dict[str, dict[str, Any]] = {}
         endpoint_payloads: dict[str, dict[str, Any]] = {}
         discovery_payloads = []
+        approved_endpoint_by_model: dict[str, str] = {}
         qualified_models = (
             {model.exact_model_id: model for model in self.production_qualification.models}
             if self.production_qualification is not None
@@ -2383,9 +2385,23 @@ class AuditPipeline:
                     if qualified_model is not None
                     else provider_policy.configured_endpoints
                 )
+                if real_provider_client and len(configured_endpoints) != 1:
+                    raise OpenRouterError(
+                        "identity-bound real execution requires one exact provider endpoint "
+                        f"per model: {model_id}"
+                    )
                 policy_mode: Literal["only", "order"] = (
                     "only" if qualified_model is not None or provider_policy.only else "order"
                 )
+                single_model_payload: dict[str, Any] | None = None
+                if real_provider_client:
+                    assert models_payload is not None
+                    canonical_slug = openrouter_catalog_canonical_slug(
+                        exact_model_id=model_id,
+                        models_payload=models_payload,
+                    )
+                    single_model_payload = await self.client.get_model_metadata(canonical_slug)
+                    single_model_payloads[model_id] = single_model_payload
                 endpoint_payload = await self.client.get_model_endpoint_metadata(model_id)
                 endpoint_payloads[model_id] = endpoint_payload
                 try:
@@ -2403,18 +2419,21 @@ class AuditPipeline:
                         f"exact provider endpoint validation failed for {model_id}: {exc}"
                     ) from None
                 endpoint_snapshots.append(snapshot)
-                if real_certification_client:
+                if real_provider_client:
                     assert models_payload is not None
+                    assert single_model_payload is not None
+                    approved_endpoint_by_model[model_id] = configured_endpoints[0]
                     discovery_payloads.append(
                         validate_openrouter_model_discovery(
                             exact_model_id=model_id,
                             models_payload=models_payload,
+                            single_model_payload=single_model_payload,
                             endpoint_snapshot=snapshot,
                         )
                     )
                 else:
                     self.client.register_endpoint_snapshot(evidence=snapshot)
-        if real_certification_client:
+        if real_provider_client:
             assert models_payload is not None
             assert zdr_payload is not None
             _provenance, discovery_evidence = self.client.seal_real_model_discovery_run(
@@ -2422,20 +2441,19 @@ class AuditPipeline:
                 retrieved_at=datetime.now(UTC).replace(microsecond=0),
                 models_payload=models_payload,
                 zdr_payload=zdr_payload,
+                single_model_payloads=single_model_payloads,
                 endpoint_payloads=endpoint_payloads,
                 candidate_routes=tuple(
                     DiscoveryCandidateRoute(
                         exact_model_id=model_id,
-                        approved_provider_endpoint=(
-                            qualified_models[model_id].approved_provider_endpoint
-                        ),
+                        approved_provider_endpoint=approved_endpoint_by_model[model_id],
                     )
-                    for model_id in sorted(qualified_models)
+                    for model_id in sorted(approved_endpoint_by_model)
                 ),
                 payloads=tuple(sorted(discovery_payloads, key=lambda item: item.exact_model_id)),
             )
             for evidence in discovery_evidence:
-                self.client.register_certification_model_discovery(evidence=evidence)
+                self.client.register_model_discovery(evidence=evidence)
         write_json(
             run_dir / "model-validation.json",
             {

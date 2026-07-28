@@ -10,7 +10,7 @@ from mmaudit.models.runtime import (
 from mmaudit.models.schemas import AuditProfile
 
 
-def test_standard_runtime_controls_preserve_explicit_routing_and_reasoning(
+def test_standard_runtime_controls_require_one_exact_endpoint_without_provider_fallback(
     config_factory,
 ) -> None:
     config = config_factory(
@@ -23,11 +23,22 @@ def test_standard_runtime_controls_preserve_explicit_routing_and_reasoning(
         }
     )
 
-    controls = build_openrouter_runtime_controls(config, certification=False)
+    with pytest.raises(ConfigError, match="one exact provider endpoint"):
+        build_openrouter_runtime_controls(config, certification=False)
 
+    exact = config_factory(
+        models={
+            "provider_policy": {
+                "only": ["anthropic"],
+                "allow_fallbacks": False,
+            },
+            "reasoning": {"effort": "high", "exclude": True},
+        }
+    )
+    controls = build_openrouter_runtime_controls(exact, certification=False)
     assert controls.provider_policy.certification is False
-    assert controls.provider_policy.only == ("anthropic", "google-vertex/us-east5")
-    assert controls.provider_policy.allow_fallbacks is True
+    assert controls.provider_policy.only == ("anthropic",)
+    assert controls.provider_policy.allow_fallbacks is False
     assert controls.reasoning is not None
     assert controls.reasoning.as_request_payload() == {
         "exclude": True,
@@ -87,17 +98,14 @@ def test_qualification_controls_require_endpoint_zdr_no_repair_and_no_provider_f
             ),
             certification=True,
         )
-    multi_endpoint = build_openrouter_runtime_controls(
-        config_factory(
-            execution={"max_json_repair_attempts": 0},
-            models={"provider_policy": {"only": ["anthropic", "google-vertex"]}},
-        ),
-        certification=True,
-    )
-    assert multi_endpoint.provider_policy.configured_endpoints == (
-        "anthropic",
-        "google-vertex",
-    )
+    with pytest.raises(ConfigError, match="one exact provider endpoint"):
+        build_openrouter_runtime_controls(
+            config_factory(
+                execution={"max_json_repair_attempts": 0},
+                models={"provider_policy": {"only": ["anthropic", "google-vertex"]}},
+            ),
+            certification=True,
+        )
     with pytest.raises(ConfigError, match="model-output repair"):
         build_openrouter_runtime_controls(
             config_factory(

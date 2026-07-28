@@ -10,7 +10,16 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
+
+from mmaudit.models.identity import OpenRouterIdentityStrength
 
 
 class StrictModel(BaseModel):
@@ -181,6 +190,9 @@ class ModelRequestValidationStatus(StrEnum):
     MODEL_MISMATCH = "model_mismatch"
     PROVIDER_MISMATCH = "provider_mismatch"
     PROVIDER_ERROR = "provider_error"
+
+
+ModelIdentityStrength = OpenRouterIdentityStrength
 
 
 class SolidityProjectType(StrEnum):
@@ -4515,6 +4527,7 @@ class UsageRecord(StrictModel):
     retry_count: int | None = Field(default=None, ge=0)
     provider_error_classification: str | None = Field(default=None, max_length=100)
     validation_status: ModelRequestValidationStatus = ModelRequestValidationStatus.NOT_VALIDATED
+    identity_strength: ModelIdentityStrength = ModelIdentityStrength.UNBOUND
     fallback_used: bool = False
     substitution_detected: bool = False
     status: str
@@ -4550,6 +4563,11 @@ class UsageRecord(StrictModel):
                 raise ValueError("validated provider request evidence is incomplete")
             if self.status != "success":
                 raise ValueError("validated provider request must have success status")
+        if (
+            self.identity_strength is not ModelIdentityStrength.UNBOUND
+            and self.validation_status is not ModelRequestValidationStatus.VALID
+        ):
+            raise ValueError("bound model identity requires a validated provider response")
         return self
 
 

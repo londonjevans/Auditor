@@ -2114,7 +2114,11 @@ def _is_real_model_usage(
             require_certification=True,
         )
         and record.requested_model in configured_models
-        and record.returned_model == qualified_model.exact_model_id
+        and record.returned_model
+        in {
+            qualified_model.exact_model_id,
+            qualified_model.canonical_model_slug,
+        }
         and record.actual_model
         in {
             qualified_model.exact_model_id,

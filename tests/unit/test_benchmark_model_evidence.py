@@ -24,6 +24,7 @@ from mmaudit.models.schemas import (
     MaximumAssuranceAssessment,
     MaximumAssuranceRequirement,
     MaximumAssuranceStatus,
+    ModelIdentityStrength,
     ModelRequestValidationStatus,
     ModelReviewCoverage,
     ModelReviewEvidenceReference,
@@ -33,6 +34,7 @@ from mmaudit.models.schemas import (
     RepositoryMap,
     UsageRecord,
 )
+from tests.identity_fixtures import bind_synthetic_usage_identity
 
 ROOT = Path(__file__).parents[2]
 SURFACE_ID = "model-surface:" + ("a" * 64)
@@ -114,39 +116,41 @@ def _usage(
         "selection_verification_sha256": "d" * 64,
         "qualification_result_sha256": "e" * 64,
     }
-    return UsageRecord(
-        request_id=request_id,
-        role=role,
-        execution_evidence=ExecutionEvidenceKind.REAL,
-        requested_model=model,
-        returned_model=model,
-        actual_model=model,
-        provider="Synthetic Provider",
-        model_family=model.split("/", maxsplit=1)[0],
-        timestamp=started_at,
-        prompt_tokens=10,
-        completion_tokens=5,
-        total_tokens=15,
-        reported_cost_usd=0.001,
-        accounted_cost_usd=0.001,
-        routing=routing,
-        prompt_sha256="f" * 64,
-        user_prompt_sha256="0" * 64,
-        response_sha256="1" * 64,
-        validated_response_sha256="2" * 64,
-        request_body_sha256="3" * 64,
-        schema_sha256=schema_sha256,
-        openrouter_generation_id=generation_id,
-        configured_provider_endpoints=[endpoint],
-        actual_provider_endpoint=endpoint,
-        started_at=started_at,
-        ended_at=ended_at,
-        latency_ms=25,
-        finish_reason="stop",
-        retry_count=0,
-        validation_status=ModelRequestValidationStatus.VALID,
-        status="success",
-        attempts=1,
+    return bind_synthetic_usage_identity(
+        UsageRecord(
+            request_id=request_id,
+            role=role,
+            execution_evidence=ExecutionEvidenceKind.REAL,
+            requested_model=model,
+            returned_model=model,
+            actual_model=model,
+            provider="Synthetic Provider",
+            model_family=model.split("/", maxsplit=1)[0],
+            timestamp=started_at,
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            reported_cost_usd=0.001,
+            accounted_cost_usd=0.001,
+            routing=routing,
+            prompt_sha256="f" * 64,
+            user_prompt_sha256="0" * 64,
+            response_sha256="1" * 64,
+            validated_response_sha256="2" * 64,
+            request_body_sha256="3" * 64,
+            schema_sha256=schema_sha256,
+            openrouter_generation_id=generation_id,
+            configured_provider_endpoints=[endpoint],
+            actual_provider_endpoint=endpoint,
+            started_at=started_at,
+            ended_at=ended_at,
+            latency_ms=25,
+            finish_reason="stop",
+            retry_count=0,
+            validation_status=ModelRequestValidationStatus.VALID,
+            status="success",
+            attempts=1,
+        )
     )
 
 
@@ -307,20 +311,39 @@ def _evaluate(
     references: list[ModelReviewEvidenceReference],
     *,
     critical: bool = False,
+    roundtrip_reports: bool = False,
+    stale_reports: bool = False,
 ) -> BenchmarkReport:
     manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
     repository_ids = sorted(item.repository_id for item in manifest.repositories)
+    reports = {
+        repository_id: _report(
+            repository_id,
+            usage,
+            references,
+            critical=critical,
+        )
+        for repository_id in repository_ids
+    }
+    if stale_reports:
+        reports = {
+            repository_id: report.model_copy(
+                update={
+                    "repository": report.repository.model_copy(
+                        update={"root_name": f"stale-{repository_id}"}
+                    )
+                }
+            )
+            for repository_id, report in reports.items()
+        }
+    if roundtrip_reports:
+        reports = {
+            repository_id: AuditReport.model_validate_json(report.model_dump_json())
+            for repository_id, report in reports.items()
+        }
     return evaluate_benchmark(
         manifest,
-        {
-            repository_id: _report(
-                repository_id,
-                usage,
-                references,
-                critical=critical,
-            )
-            for repository_id in repository_ids
-        },
+        reports,
         profile=AuditProfile.MAXIMUM_ASSURANCE,
     )
 
@@ -337,6 +360,89 @@ def test_exact_usage_reference_join_credits_valid_surface() -> None:
         == result.metrics.model_review_coverage.denominator
         == 2
     )
+
+
+def test_serialized_real_usage_without_runtime_authority_is_not_evaluable() -> None:
+    first = _usage("request-serialized-a")
+    second = _usage(
+        "request-serialized-b",
+        model=MODEL_B,
+        root_lineage=ROOT_B,
+    )
+
+    result = _evaluate(
+        [first, second],
+        [_reference(first), _reference(second)],
+        critical=True,
+        roundtrip_reports=True,
+    )
+
+    for metric in (
+        result.metrics.model_call_success_rate,
+        result.metrics.model_review_coverage,
+        result.metrics.critical_model_review_coverage,
+    ):
+        assert metric.denominator > 0
+        assert metric.evaluated == 0
+        assert metric.numerator == 0
+        assert metric.state is BenchmarkMetricState.NOT_EVALUABLE
+
+
+def test_stale_serialized_real_usage_remains_an_evaluated_failure() -> None:
+    usage = _usage("request-stale")
+
+    result = _evaluate(
+        [usage],
+        [_reference(usage)],
+        critical=True,
+        roundtrip_reports=True,
+        stale_reports=True,
+    )
+
+    for metric in (
+        result.metrics.model_call_success_rate,
+        result.metrics.model_review_coverage,
+        result.metrics.critical_model_review_coverage,
+    ):
+        assert metric.denominator > 0
+        assert metric.evaluated == metric.denominator
+        assert metric.numerator == 0
+        assert metric.state is BenchmarkMetricState.FAIL
+
+
+@pytest.mark.parametrize(
+    "attempt_kind",
+    ["invalid", "mock", "failed"],
+)
+def test_non_creditable_attempts_remain_evaluated_failures(attempt_kind: str) -> None:
+    live_usage = _usage(f"request-{attempt_kind}")
+    payload = live_usage.model_dump(mode="json")
+    if attempt_kind == "invalid":
+        routing = dict(payload["routing"])
+        routing["qualified_root_lineage"] = "invalid"
+        payload["routing"] = routing
+    elif attempt_kind == "mock":
+        payload["execution_evidence"] = ExecutionEvidenceKind.MOCK.value
+    else:
+        payload.update(
+            {
+                "identity_strength": ModelIdentityStrength.UNBOUND.value,
+                "status": "failed",
+                "validation_status": ModelRequestValidationStatus.INVALID_RESPONSE.value,
+            }
+        )
+    usage = UsageRecord.model_validate(payload)
+
+    result = _evaluate([usage], [_reference(live_usage)])
+
+    assert result.metrics.model_call_success_rate.evaluated == (
+        result.metrics.model_call_success_rate.denominator
+    )
+    assert result.metrics.model_call_success_rate.state is BenchmarkMetricState.FAIL
+    assert result.metrics.model_review_coverage.evaluated == (
+        result.metrics.model_review_coverage.denominator
+    )
+    assert result.metrics.model_review_coverage.state is BenchmarkMetricState.FAIL
 
 
 @pytest.mark.parametrize(

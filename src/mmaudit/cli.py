@@ -40,7 +40,6 @@ from mmaudit.benchmark.engine import (
 from mmaudit.benchmark.model_portfolio import (
     CandidateBenchmarkCampaignJournal,
     ModelBenchmarkPortfolio,
-    TrustedCandidateBenchmarkCampaignVerification,
     create_candidate_benchmark_campaign,
     load_model_benchmark_portfolio,
     resume_candidate_benchmark_campaign,
@@ -81,6 +80,7 @@ from mmaudit.models.candidate_benchmark import (
 from mmaudit.models.discovery import (
     DiscoveryCandidateRoute,
     load_model_discovery_run,
+    openrouter_catalog_canonical_slug,
     validate_openrouter_model_discovery,
     write_model_discovery_run,
 )
@@ -97,7 +97,6 @@ from mmaudit.models.qualification import (
     VerifiedProductionQualification,
     load_candidate_registry,
     load_qualification_policy,
-    resolve_verified_production_qualification,
     validate_candidate_registry_discovery,
     verify_model_qualification,
 )
@@ -644,9 +643,16 @@ def models_discover(
                 await client.validate_authentication()
                 models_payload = await client.get_certification_model_metadata()
                 zdr_payload = await client.list_zdr_endpoints()
+                single_model_payloads: dict[str, dict[str, Any]] = {}
                 endpoint_payloads: dict[str, dict[str, Any]] = {}
                 structural_payloads = []
                 for model_id, provider_endpoint in candidates:
+                    canonical_slug = openrouter_catalog_canonical_slug(
+                        exact_model_id=model_id,
+                        models_payload=models_payload,
+                    )
+                    single_model_payload = await client.get_model_metadata(canonical_slug)
+                    single_model_payloads[model_id] = single_model_payload
                     endpoint_payload = await client.get_model_endpoint_metadata(model_id)
                     endpoint_payloads[model_id] = endpoint_payload
                     endpoint_snapshot = validate_openrouter_endpoint_snapshot(
@@ -661,6 +667,7 @@ def models_discover(
                         validate_openrouter_model_discovery(
                             exact_model_id=model_id,
                             models_payload=models_payload,
+                            single_model_payload=single_model_payload,
                             endpoint_snapshot=endpoint_snapshot,
                         )
                     )
@@ -670,6 +677,7 @@ def models_discover(
                     retrieved_at=retrieved_at,
                     models_payload=models_payload,
                     zdr_payload=zdr_payload,
+                    single_model_payloads=single_model_payloads,
                     endpoint_payloads=endpoint_payloads,
                     candidate_routes=tuple(
                         DiscoveryCandidateRoute(
@@ -937,9 +945,16 @@ def models_benchmark(
                 policy_mode: Literal["only", "order"] = (
                     "only" if controls.provider_policy.only else "order"
                 )
+                single_model_payloads: dict[str, dict[str, Any]] = {}
                 endpoint_payloads: dict[str, dict[str, Any]] = {}
                 discovery_payloads = []
                 for target in targets:
+                    canonical_slug = openrouter_catalog_canonical_slug(
+                        exact_model_id=target.model_id,
+                        models_payload=models_payload,
+                    )
+                    single_model_payload = await client.get_model_metadata(canonical_slug)
+                    single_model_payloads[target.model_id] = single_model_payload
                     endpoint_payload = await client.get_model_endpoint_metadata(target.model_id)
                     endpoint_payloads[target.model_id] = endpoint_payload
                     endpoint_snapshot = validate_openrouter_endpoint_snapshot(
@@ -957,6 +972,7 @@ def models_benchmark(
                         validate_openrouter_model_discovery(
                             exact_model_id=target.model_id,
                             models_payload=models_payload,
+                            single_model_payload=single_model_payload,
                             endpoint_snapshot=endpoint_snapshot,
                         )
                     )
@@ -965,6 +981,7 @@ def models_benchmark(
                     retrieved_at=datetime.now(UTC).replace(microsecond=0),
                     models_payload=models_payload,
                     zdr_payload=zdr_payload,
+                    single_model_payloads=single_model_payloads,
                     endpoint_payloads=endpoint_payloads,
                     candidate_routes=tuple(
                         DiscoveryCandidateRoute(
@@ -1313,7 +1330,7 @@ def models_qualify(
             policy=qualification_policy,
         )
         bindings = load_qualification_release_bindings(release_bindings)
-        trusted_campaign_verification = _verify_qualification_campaign(
+        _verify_qualification_campaign(
             config=config,
             campaign_journal=campaign_journal,
             cost_ledger=cost_ledger,
@@ -1323,12 +1340,19 @@ def models_qualify(
             benchmark_suite=benchmark_suite,
             qualification_policy=qualification_policy,
         )
+        trusted_campaign_verification = None
         expiry = _parse_qualification_timestamp(qualification_expires_at)
-        trusted_generation_verification = await _refetch_qualification_generations(
-            config=config,
-            secrets_env_file=secrets_env_file,
-            registry=registry,
-            reports=reports,
+        # Persisted campaign JSON can be checked structurally, but cannot
+        # recreate the process-local authority over original provider content.
+        trusted_generation_verification = (
+            await _refetch_qualification_generations(
+                config=config,
+                secrets_env_file=secrets_env_file,
+                registry=registry,
+                reports=reports,
+            )
+            if trusted_campaign_verification is not None
+            else None
         )
         trusted_release_observation = _observe_qualification_release(
             config=config,
@@ -1461,7 +1485,7 @@ def models_verify_qualification(
             policy=qualification_policy,
         )
         bindings = load_qualification_release_bindings(release_bindings)
-        trusted_campaign_verification = _verify_qualification_campaign(
+        _verify_qualification_campaign(
             config=config,
             campaign_journal=campaign_journal,
             cost_ledger=cost_ledger,
@@ -1471,11 +1495,16 @@ def models_verify_qualification(
             benchmark_suite=benchmark_suite,
             qualification_policy=qualification_policy,
         )
-        trusted_generation_verification = await _refetch_qualification_generations(
-            config=config,
-            secrets_env_file=secrets_env_file,
-            registry=registry,
-            reports=reports,
+        trusted_campaign_verification = None
+        trusted_generation_verification = (
+            await _refetch_qualification_generations(
+                config=config,
+                secrets_env_file=secrets_env_file,
+                registry=registry,
+                reports=reports,
+            )
+            if trusted_campaign_verification is not None
+            else None
         )
         trusted_release_observation = _observe_qualification_release(
             config=config,
@@ -2999,29 +3028,9 @@ async def _load_audit_production_qualification(
     artifact_projection = {key: getattr(artifact_bindings, key) for key in release_projection}
     if artifact_projection != release_projection:
         raise ValueError("qualification artifact differs from current release bindings")
-
-    trusted_generation_verification = await _refetch_qualification_generations(
-        config=config,
-        secrets_env_file=secrets_env_file,
-        registry=bundle.updated_registry,
-        reports=bundle.benchmark_reports,
-    )
-    trusted_release_observation = _observe_qualification_release(
-        config=config,
-        release_bindings=release_bindings,
-        release_source_root=release_source_root,
-    )
-    return resolve_verified_production_qualification(
-        artifact=bundle.qualification_artifact,
-        registry=bundle.updated_registry,
-        policy=policy,
-        expected_bindings=artifact_bindings,
-        benchmark_reports=bundle.benchmark_reports,
-        benchmark_corpus=benchmark_corpus,
-        trusted_generation_verification=trusted_generation_verification,
-        trusted_release_observation=trusted_release_observation,
-        production_effective_config_sha256=config.stable_hash(),
-        now=trusted_release_observation.observed_at,
+    raise ValueError(
+        "persisted qualification artifacts cannot establish live response-content "
+        "campaign provenance; a same-process trusted qualification path is required"
     )
 
 
@@ -3035,7 +3044,7 @@ def _verify_qualification_campaign(
     registry: CandidateRegistry,
     benchmark_suite: ModelBenchmarkSuite,
     qualification_policy: QualificationPolicy,
-) -> TrustedCandidateBenchmarkCampaignVerification:
+) -> None:
     ledger_path = _selected_cost_ledger_path(config, cost_ledger)
     if ledger_path is None:
         raise ConfigError(
@@ -3045,7 +3054,7 @@ def _verify_qualification_campaign(
         ledger_path,
         cap_usd=Decimal(str(config.execution.budget_usd)),
     )
-    return verify_model_benchmark_portfolio_campaign(
+    verify_model_benchmark_portfolio_campaign(
         campaign_journal,
         portfolio=portfolio,
         reports=reports,

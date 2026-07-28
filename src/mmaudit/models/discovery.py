@@ -105,6 +105,31 @@ class DiscoveryEndpointMetadataBinding(BaseModel):
         return self
 
 
+class DiscoveryModelMetadataBinding(BaseModel):
+    """Hash binding for one canonical single-model metadata response."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    exact_model_id: str = Field(pattern=_MODEL_ID_PATTERN)
+    canonical_slug: str = Field(pattern=_MODEL_ID_PATTERN)
+    api_query: str = Field(
+        pattern=r"^/model/[a-z0-9][a-z0-9._-]{0,127}/"
+        r"[a-z0-9][a-z0-9._:%-]{0,767}$"
+    )
+    response_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
+    model_metadata_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @model_validator(mode="after")
+    def model_query_is_canonical_and_exact(self) -> DiscoveryModelMetadataBinding:
+        _validate_non_alias_model_id(self.exact_model_id, "single-model metadata model")
+        _validate_non_alias_model_id(self.canonical_slug, "single-model canonical slug")
+        if self.exact_model_id.split("/", 1)[0] != self.canonical_slug.split("/", 1)[0]:
+            raise ValueError("single-model metadata changes the requested model author")
+        if self.api_query != openrouter_model_query(self.canonical_slug):
+            raise ValueError("single-model metadata query is not bound to the canonical slug")
+        return self
+
+
 class OpenRouterDiscoveryRunProvenance(BaseModel):
     """Trusted, self-hashed provenance shared by one atomic discovery run."""
 
@@ -127,6 +152,10 @@ class OpenRouterDiscoveryRunProvenance(BaseModel):
         max_length=_MAX_DISCOVERY_CANDIDATES,
     )
     candidate_set_sha256: str = Field(pattern=_SHA256_PATTERN)
+    model_metadata_bindings: tuple[DiscoveryModelMetadataBinding, ...] = Field(
+        min_length=1,
+        max_length=_MAX_DISCOVERY_CANDIDATES,
+    )
     endpoint_metadata_bindings: tuple[DiscoveryEndpointMetadataBinding, ...] = Field(
         min_length=1,
         max_length=_MAX_DISCOVERY_CANDIDATES,
@@ -152,10 +181,24 @@ class OpenRouterDiscoveryRunProvenance(BaseModel):
             [route.model_dump(mode="json") for route in self.candidate_routes]
         ):
             raise ValueError("discovery candidate-set hash is inconsistent")
-        binding_ids = tuple(binding.exact_model_id for binding in self.endpoint_metadata_bindings)
         expected_ids = tuple(route.exact_model_id for route in self.candidate_routes)
-        if binding_ids != expected_ids:
+        model_binding_ids = tuple(
+            binding.exact_model_id for binding in self.model_metadata_bindings
+        )
+        endpoint_binding_ids = tuple(
+            binding.exact_model_id for binding in self.endpoint_metadata_bindings
+        )
+        if model_binding_ids != expected_ids:
+            raise ValueError(
+                "single-model metadata bindings do not exactly cover the candidate set"
+            )
+        if endpoint_binding_ids != expected_ids:
             raise ValueError("endpoint metadata bindings do not exactly cover the candidate set")
+        canonical_slugs = tuple(binding.canonical_slug for binding in self.model_metadata_bindings)
+        if len(canonical_slugs) != len(set(canonical_slugs)):
+            raise ValueError(
+                "single-model metadata bindings must resolve to unique canonical slugs"
+            )
         expected = _canonical_sha256(self.model_dump(mode="json", exclude={"provenance_sha256"}))
         if self.provenance_sha256 != expected:
             raise ValueError("discovery provenance hash is inconsistent")
@@ -315,6 +358,20 @@ class OpenRouterModelDiscoveryEvidence(OpenRouterModelDiscoveryPayload):
             matching_routes[0].approved_provider_endpoint != self.approved_provider_endpoint
         ):
             raise ValueError("discovery provenance does not bind the exact candidate route")
+        matching_models = [
+            binding
+            for binding in self.provenance.model_metadata_bindings
+            if binding.exact_model_id == self.exact_model_id
+        ]
+        if (
+            len(matching_models) != 1
+            or matching_models[0].canonical_slug != self.canonical_slug
+            or matching_models[0].model_metadata_snapshot_sha256
+            != self.model_metadata_snapshot_sha256
+        ):
+            raise ValueError(
+                "discovery provenance does not bind the canonical single-model metadata response"
+            )
         matching_endpoints = [
             binding
             for binding in self.provenance.endpoint_metadata_bindings
@@ -391,47 +448,44 @@ class OpenRouterModelDiscoveryRunManifest(BaseModel):
         return self
 
 
+def openrouter_catalog_canonical_slug(
+    *,
+    exact_model_id: str,
+    models_payload: Any,
+) -> str:
+    """Return the catalog's exact canonical slug for one requested model."""
+
+    selected = _select_catalog_model(
+        exact_model_id=exact_model_id,
+        models_payload=models_payload,
+    )
+    canonical_slug = _required_model_id(selected.get("canonical_slug"), "canonical model slug")
+    _validate_catalog_identity(
+        exact_model_id=exact_model_id,
+        canonical_slug=canonical_slug,
+    )
+    return canonical_slug
+
+
 def validate_openrouter_model_discovery(
     *,
     exact_model_id: str,
     models_payload: Any,
+    single_model_payload: Any,
     endpoint_snapshot: OpenRouterEndpointSnapshotEvidence,
 ) -> OpenRouterModelDiscoveryPayload:
     """Validate untrusted metadata without claiming provider execution provenance."""
 
-    _validate_non_alias_model_id(exact_model_id, "requested model")
-    envelope = _required_mapping(models_payload, "model catalog")
-    items = _required_model_list(envelope.get("data"))
-    indexed: dict[str, Mapping[str, Any]] = {}
-    for item in items:
-        model_id = item.get("id")
-        if not isinstance(model_id, str) or re.fullmatch(_MODEL_ID_PATTERN, model_id) is None:
-            raise ModelDiscoveryValidationError(
-                "model catalog contains a missing or invalid exact model identifier"
-            )
-        if not is_exact_openrouter_model_id(model_id):
-            # OpenRouter's public catalog includes routed aliases. They remain
-            # visible provider metadata but can never enter an exact candidate set.
-            continue
-        if model_id in indexed:
-            raise ModelDiscoveryValidationError(
-                f"model catalog contains a duplicate exact model identifier: {model_id}"
-            )
-        indexed[model_id] = item
-    selected = indexed.get(exact_model_id)
-    if selected is None:
-        raise ModelDiscoveryValidationError(
-            "requested exact model is unavailable in the public model catalog"
-        )
+    selected = _select_catalog_model(
+        exact_model_id=exact_model_id,
+        models_payload=models_payload,
+    )
 
     canonical_slug = _required_model_id(selected.get("canonical_slug"), "canonical model slug")
-    _validate_non_alias_model_id(canonical_slug, "canonical model slug")
-    requested_author, _requested_model = exact_model_id.split("/", 1)
-    canonical_author, _canonical_model = canonical_slug.split("/", 1)
-    if canonical_author != requested_author:
-        raise ModelDiscoveryValidationError(
-            "catalog canonical model changes the requested model author"
-        )
+    _validate_catalog_identity(
+        exact_model_id=exact_model_id,
+        canonical_slug=canonical_slug,
+    )
     catalog_identity_binding_sha256 = _canonical_sha256(
         {
             "canonical_slug": canonical_slug,
@@ -455,6 +509,17 @@ def validate_openrouter_model_discovery(
         label="catalog output limit",
     )
     model_supported_parameters = _supported_parameters(selected.get("supported_parameters"))
+    _validate_single_model_metadata(
+        exact_model_id=exact_model_id,
+        canonical_slug=canonical_slug,
+        catalog_context_size=catalog_context_size,
+        catalog_provider_context_size=catalog_provider_context_size,
+        catalog_provider_context_size_source=provider_context_source,
+        catalog_output_limit=catalog_output_limit,
+        catalog_output_limit_source=output_limit_source,
+        model_supported_parameters=model_supported_parameters,
+        single_model_payload=single_model_payload,
+    )
 
     if len(endpoint_snapshot.endpoints) != 1:
         raise ModelDiscoveryValidationError(
@@ -541,6 +606,7 @@ def _issue_real_openrouter_discovery_run(
     catalog_snapshot_sha256: str,
     zdr_snapshot_sha256: str,
     candidate_routes: tuple[DiscoveryCandidateRoute, ...],
+    model_metadata_bindings: tuple[DiscoveryModelMetadataBinding, ...],
     endpoint_metadata_bindings: tuple[DiscoveryEndpointMetadataBinding, ...],
     payloads: tuple[OpenRouterModelDiscoveryPayload, ...],
     issuer: object,
@@ -563,6 +629,9 @@ def _issue_real_openrouter_discovery_run(
             ),
         )
     )
+    ordered_model_bindings = tuple(
+        sorted(model_metadata_bindings, key=lambda item: item.exact_model_id)
+    )
     ordered_bindings = tuple(
         sorted(endpoint_metadata_bindings, key=lambda item: item.exact_model_id)
     )
@@ -582,6 +651,20 @@ def _issue_real_openrouter_discovery_run(
             raise ModelDiscoveryValidationError(
                 "validated discovery payload changes its candidate endpoint"
             )
+    model_binding_ids = tuple(binding.exact_model_id for binding in ordered_model_bindings)
+    if model_binding_ids != route_ids:
+        raise ModelDiscoveryValidationError(
+            "single-model metadata bindings do not exactly cover the candidate set"
+        )
+    for binding in ordered_model_bindings:
+        payload = payload_by_model[binding.exact_model_id]
+        if (
+            binding.canonical_slug != payload.canonical_slug
+            or binding.model_metadata_snapshot_sha256 != payload.model_metadata_snapshot_sha256
+        ):
+            raise ModelDiscoveryValidationError(
+                "single-model metadata binding differs from its frozen model snapshot"
+            )
     provenance_values: dict[str, Any] = {
         "schema_version": _RUN_SCHEMA_VERSION,
         "run_id": run_id,
@@ -599,6 +682,9 @@ def _issue_real_openrouter_discovery_run(
         "candidate_set_sha256": _canonical_sha256(
             [route.model_dump(mode="json") for route in ordered_routes]
         ),
+        "model_metadata_bindings": [
+            binding.model_dump(mode="json") for binding in ordered_model_bindings
+        ],
         "endpoint_metadata_bindings": [
             binding.model_dump(mode="json") for binding in ordered_bindings
         ],
@@ -909,6 +995,121 @@ def _model_metadata_projection(
     }
 
 
+def _select_catalog_model(
+    *,
+    exact_model_id: str,
+    models_payload: Any,
+) -> Mapping[str, Any]:
+    _validate_non_alias_model_id(exact_model_id, "requested model")
+    envelope = _required_mapping(models_payload, "model catalog")
+    items = _required_model_list(envelope.get("data"))
+    indexed: dict[str, Mapping[str, Any]] = {}
+    for item in items:
+        model_id = item.get("id")
+        if not isinstance(model_id, str) or re.fullmatch(_MODEL_ID_PATTERN, model_id) is None:
+            raise ModelDiscoveryValidationError(
+                "model catalog contains a missing or invalid exact model identifier"
+            )
+        if not is_exact_openrouter_model_id(model_id):
+            # OpenRouter's public catalog includes routed aliases. They remain
+            # visible provider metadata but can never enter an exact candidate set.
+            continue
+        if model_id in indexed:
+            raise ModelDiscoveryValidationError(
+                f"model catalog contains a duplicate exact model identifier: {model_id}"
+            )
+        indexed[model_id] = item
+    selected = indexed.get(exact_model_id)
+    if selected is None:
+        raise ModelDiscoveryValidationError(
+            "requested exact model is unavailable in the public model catalog"
+        )
+    return selected
+
+
+def _validate_catalog_identity(*, exact_model_id: str, canonical_slug: str) -> None:
+    _validate_non_alias_model_id(canonical_slug, "canonical model slug")
+    if canonical_slug.split("/", 1)[0] != exact_model_id.split("/", 1)[0]:
+        raise ModelDiscoveryValidationError(
+            "catalog canonical model changes the requested model author"
+        )
+
+
+def _validate_single_model_metadata(
+    *,
+    exact_model_id: str,
+    canonical_slug: str,
+    catalog_context_size: int,
+    catalog_provider_context_size: int,
+    catalog_provider_context_size_source: Literal[
+        "metadata",
+        "catalog_context",
+        "provider_context",
+    ],
+    catalog_output_limit: int,
+    catalog_output_limit_source: Literal[
+        "metadata",
+        "catalog_context",
+        "provider_context",
+    ],
+    model_supported_parameters: tuple[str, ...],
+    single_model_payload: Any,
+) -> None:
+    envelope = _required_mapping(single_model_payload, "single-model metadata response")
+    selected = _required_mapping(envelope.get("data"), "single-model metadata data")
+    observed_id = _required_model_id(selected.get("id"), "single-model metadata model id")
+    observed_canonical_slug = _required_model_id(
+        selected.get("canonical_slug"),
+        "single-model metadata canonical slug",
+    )
+    if (
+        observed_id not in {exact_model_id, canonical_slug}
+        or observed_canonical_slug != canonical_slug
+    ):
+        raise ModelDiscoveryValidationError(
+            "single-model metadata identity differs from the model catalog"
+        )
+
+    observed_context_size = _positive_integer(
+        selected.get("context_length"),
+        "single-model metadata context",
+    )
+    top_provider = _required_mapping(
+        selected.get("top_provider"),
+        "single-model metadata top provider",
+    )
+    observed_provider_context_size, observed_provider_context_source = _effective_limit(
+        top_provider.get("context_length"),
+        fallback=observed_context_size,
+        label="single-model metadata provider context",
+    )
+    observed_output_limit, observed_output_limit_source = _effective_limit(
+        top_provider.get("max_completion_tokens"),
+        fallback=observed_provider_context_size,
+        fallback_source="provider_context",
+        label="single-model metadata output limit",
+    )
+    observed_supported_parameters = _supported_parameters(selected.get("supported_parameters"))
+    if (
+        observed_context_size,
+        observed_provider_context_size,
+        observed_provider_context_source,
+        observed_output_limit,
+        observed_output_limit_source,
+        observed_supported_parameters,
+    ) != (
+        catalog_context_size,
+        catalog_provider_context_size,
+        catalog_provider_context_size_source,
+        catalog_output_limit,
+        catalog_output_limit_source,
+        model_supported_parameters,
+    ):
+        raise ModelDiscoveryValidationError(
+            "single-model metadata differs from the frozen catalog projection"
+        )
+
+
 def _validate_non_alias_model_id(value: str, label: str) -> None:
     if not is_exact_openrouter_model_id(value):
         raise ModelDiscoveryValidationError(
@@ -928,6 +1129,14 @@ def openrouter_endpoint_query(exact_model_id: str) -> str:
     _validate_non_alias_model_id(exact_model_id, "endpoint metadata model")
     author, slug = exact_model_id.split("/", 1)
     return f"/models/{quote(author, safe='')}/{quote(slug, safe=':._-')}/endpoints"
+
+
+def openrouter_model_query(exact_model_id: str) -> str:
+    """Return the official single-model metadata query for an exact slug."""
+
+    _validate_non_alias_model_id(exact_model_id, "single-model metadata model")
+    author, slug = exact_model_id.split("/", 1)
+    return f"/model/{quote(author, safe='')}/{quote(slug, safe=':._-')}"
 
 
 def _required_mapping(value: Any, label: str) -> Mapping[str, Any]:

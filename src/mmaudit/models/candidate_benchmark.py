@@ -22,6 +22,7 @@ from mmaudit.models.discovery import (
     OpenRouterModelDiscoveryEvidence,
     OpenRouterModelDiscoveryPayload,
     OpenRouterModelDiscoveryRunManifest,
+    openrouter_catalog_canonical_slug,
     validate_openrouter_model_discovery,
 )
 from mmaudit.models.endpoint_snapshots import validate_openrouter_endpoint_snapshot
@@ -556,6 +557,11 @@ async def _execute_candidate(
             )
         try:
             models_payload = await client.get_certification_model_metadata()
+            canonical_slug = openrouter_catalog_canonical_slug(
+                exact_model_id=candidate.exact_model_id,
+                models_payload=models_payload,
+            )
+            single_model_payload = await client.get_model_metadata(canonical_slug)
             endpoint_payload = await client.get_model_endpoint_metadata(candidate.exact_model_id)
             zdr_payload = await client.list_zdr_endpoints()
             current_endpoint_evidence = validate_openrouter_endpoint_snapshot(
@@ -572,6 +578,7 @@ async def _execute_candidate(
             current_model_evidence = validate_openrouter_model_discovery(
                 exact_model_id=candidate.exact_model_id,
                 models_payload=models_payload,
+                single_model_payload=single_model_payload,
                 endpoint_snapshot=current_endpoint_evidence,
             )
             frozen_model_evidence = OpenRouterModelDiscoveryPayload.model_validate(
@@ -638,12 +645,20 @@ def _require_exact_candidate_usage_binding(
         for case in result.cases
         if case.usage_record is not None
     )
-    if failure_stage is None and report_records != observed_records:
+    report_projection = _usage_records_public_projection(report_records)
+    observed_projection = _usage_records_public_projection(observed_records)
+    if failure_stage is None and report_projection != observed_projection:
         raise ValueError("candidate benchmark produced request usage not bound to its exact report")
     if failure_stage is not None and any(
-        record not in observed_records for record in report_records
+        record_sha256 not in observed_projection for record_sha256 in report_projection
     ):
         raise ValueError("failed candidate report contains unobserved request usage")
+
+
+def _usage_records_public_projection(records: tuple[UsageRecord, ...]) -> tuple[str, ...]:
+    """Return ordered canonical bindings for serializable usage evidence only."""
+
+    return tuple(canonical_sha256(record.model_dump(mode="json")) for record in records)
 
 
 def _candidate_reasoning(

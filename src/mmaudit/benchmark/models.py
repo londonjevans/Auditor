@@ -23,7 +23,10 @@ from mmaudit.models.openrouter import (
     strict_json_schema,
 )
 from mmaudit.models.schemas import ExecutionEvidenceKind, StrictModel, UsageRecord
-from mmaudit.models.usage import is_creditable_usage_record
+from mmaudit.models.usage import (
+    _is_structurally_creditable_usage_record,
+    is_creditable_usage_record,
+)
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.reporting.json_report import stable_json
 from mmaudit.repository.ignore import normalize_relative_path
@@ -714,7 +717,7 @@ class ModelBenchmarkModelResult(StrictModel):
                 continue
             if record.role != "model_benchmark" or record.requested_model != self.target.model_id:
                 raise ValueError("model benchmark usage is not bound to its target")
-            if case.error_kind is None and not is_creditable_usage_record(
+            if case.error_kind is None and not _is_structurally_creditable_usage_record(
                 record,
                 require_real=(case.execution_evidence is ExecutionEvidenceKind.REAL),
                 require_certification=(case.execution_evidence is ExecutionEvidenceKind.REAL),
@@ -1028,6 +1031,7 @@ def verify_model_benchmark_report_structure(
                     system_prompt=_SYSTEM_PROMPT,
                     user_prompt=blinded_model_benchmark_request(case),
                     response=response,
+                    require_runtime_attestation=False,
                 )
                 if expected_error is None and response.case_id != case.case_id:
                     expected_error = "CaseIdentityMismatch"
@@ -1354,6 +1358,7 @@ def _successful_usage_error(
     system_prompt: str,
     user_prompt: str,
     response: ModelBenchmarkResponse,
+    require_runtime_attestation: bool = True,
 ) -> str | None:
     evidence = record.execution_evidence
     if evidence not in {ExecutionEvidenceKind.REAL, ExecutionEvidenceKind.MOCK}:
@@ -1362,7 +1367,12 @@ def _successful_usage_error(
         return "UsageTargetBindingError"
     if record.validated_response_sha256 != _validated_response_sha256(response):
         return "UsageResponseBindingError"
-    if not is_creditable_usage_record(
+    credit_check = (
+        is_creditable_usage_record
+        if require_runtime_attestation
+        else _is_structurally_creditable_usage_record
+    )
+    if not credit_check(
         record,
         require_real=evidence is ExecutionEvidenceKind.REAL,
         require_certification=evidence is ExecutionEvidenceKind.REAL,

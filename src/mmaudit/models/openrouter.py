@@ -32,12 +32,14 @@ from mmaudit.models.discovery import (
     OPENROUTER_ZDR_QUERY,
     DiscoveryCandidateRoute,
     DiscoveryEndpointMetadataBinding,
+    DiscoveryModelMetadataBinding,
     OpenRouterDiscoveryRunProvenance,
     OpenRouterModelDiscoveryEvidence,
     OpenRouterModelDiscoveryPayload,
     OpenRouterModelDiscoveryRunManifest,
     _issue_real_openrouter_discovery_run,
     openrouter_endpoint_query,
+    openrouter_model_query,
     validate_openrouter_model_discovery,
 )
 from mmaudit.models.endpoint_snapshots import (
@@ -45,7 +47,6 @@ from mmaudit.models.endpoint_snapshots import (
     validate_openrouter_endpoint_snapshot,
 )
 from mmaudit.models.generation_evidence import (
-    _TRUSTED_GENERATION_VERIFICATION_ISSUER,
     GenerationEvidenceValidationError,
     GenerationVerificationRequest,
     OpenRouterGenerationEvidence,
@@ -55,12 +56,31 @@ from mmaudit.models.generation_evidence import (
     validate_openrouter_generation_payload,
 )
 from mmaudit.models.identifiers import is_exact_openrouter_model_id
+from mmaudit.models.identity import (
+    OpenRouterGenerationIdentityEvidence,
+    OpenRouterIdentityBindingResult,
+    OpenRouterIdentityDiagnosticCode,
+    OpenRouterIdentityEndpointCapabilities,
+    OpenRouterIdentityPricingEntry,
+    OpenRouterModelEndpointIdentitySnapshot,
+    OpenRouterRequestIdentityEvidence,
+    seal_bound_openrouter_identity,
+    seal_openrouter_identity_provider_policy,
+    seal_openrouter_model_endpoint_identity_snapshot,
+    seal_unbound_openrouter_identity,
+)
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
+    ModelIdentityStrength,
     ModelRequestValidationStatus,
     UsageRecord,
 )
-from mmaudit.models.usage import UsageLedger
+from mmaudit.models.usage import (
+    UsageLedger,
+    _attest_owned_real_usage_record,
+    _has_owned_real_usage_attestation,
+    _validated_usage_copy_preserving_owned_attestation,
+)
 from mmaudit.orchestration.budgets import (
     BudgetExhaustedError,
     BudgetManager,
@@ -110,6 +130,8 @@ _SUPPORTED_TEXT_PRICING_FIELDS = frozenset(
 )
 _ROUTER_MAX_PRICE_FIELDS = frozenset({"completion", "image", "prompt", "request"})
 _PER_MILLION_ROUTER_PRICE_FIELDS = frozenset({"completion", "prompt"})
+_MUTABLE_IDENTITY_TTL = timedelta(days=7)
+_MAX_RETAINED_UNBOUND_COMPLETIONS = 512
 _UNENFORCEABLE_VARIABLE_PRICING_FIELDS = frozenset(
     {
         "input_cache_read",
@@ -351,6 +373,7 @@ class OpenRouterReasoning:
 
 @dataclass(frozen=True)
 class CompletionEnvelope:
+    requested_model: str
     generation_id: str
     returned_model: str
     selected_model: str
@@ -413,10 +436,11 @@ class _RegisteredModelIdentity:
     catalog_snapshot_sha256: str
     discovery_provenance_sha256: str
     discovery_evidence_sha256: str
+    snapshot: OpenRouterModelEndpointIdentitySnapshot
 
     @property
     def accepted_response_models(self) -> frozenset[str]:
-        return frozenset((self.exact_model_id, self.canonical_slug))
+        return frozenset(self.snapshot.frozen_aliases)
 
 
 class OpenRouterError(RuntimeError):
@@ -459,12 +483,38 @@ class OpenRouterModelError(OpenRouterError):
     pass
 
 
+class OpenRouterUnboundIdentityError(OpenRouterModelError):
+    """A valid structured completion that lacks qualifying identity evidence."""
+
+    def __init__(self, completion: StructuredCompletion[Any]) -> None:
+        self.completion = completion
+        super().__init__(
+            "structured completion identity is unbound; preserve the evidence and retry only "
+            "after correcting the relevant frozen or generation identity metadata"
+        )
+
+
 class OpenRouterQualificationError(OpenRouterModelError):
     """Raised when certification lacks current exact qualification routing evidence."""
 
 
 class OpenRouterProviderPolicyError(OpenRouterModelError):
     pass
+
+
+class OpenRouterResponseIdentityError(OpenRouterProviderPolicyError):
+    """A structurally valid response whose provider identity is contradictory."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        diagnostic_code: str,
+        validation_status: ModelRequestValidationStatus,
+    ) -> None:
+        self.diagnostic_code = diagnostic_code
+        self.validation_status = validation_status
+        super().__init__(message)
 
 
 class OpenRouterRequestLimitError(OpenRouterError):
@@ -561,6 +611,7 @@ class OpenRouterClient:
             binding.exact_model_id: binding for binding in qualification_routing
         }
         self._metadata_observations: dict[str, str] = {}
+        self._unbound_completions: dict[str, StructuredCompletion[Any]] = {}
         self._authentication_validated = False
         if self.provider_policy.certification and not self.privacy.require_zdr:
             raise OpenRouterPrivacyError("certification requires zero-data-retention routing")
@@ -629,6 +680,34 @@ class OpenRouterClient:
         if self._owned_client_identity is not None:
             await self._owned_client_identity.aclose()
 
+    def retained_unbound_completions(self) -> tuple[StructuredCompletion[Any], ...]:
+        """Return bounded in-memory unbound evidence without serializing its values."""
+
+        return tuple(
+            self._unbound_completions[request_id]
+            for request_id in sorted(self._unbound_completions)
+        )
+
+    def clear_retained_unbound_completions(self) -> None:
+        """Release all retained unbound structured values after operator handling."""
+
+        self._unbound_completions.clear()
+
+    def _retain_unbound_completion(self, completion: StructuredCompletion[Any]) -> None:
+        if not _is_concluded_unbound_completion(completion):
+            raise OpenRouterModelError("only concluded unbound evidence may be retained")
+        request_id = completion.usage_record.request_id
+        existing = self._unbound_completions.get(request_id)
+        if existing is completion:
+            return
+        if existing is not None:
+            raise OpenRouterModelError("unbound evidence request identity is duplicated")
+        if len(self._unbound_completions) >= _MAX_RETAINED_UNBOUND_COMPLETIONS:
+            raise OpenRouterRequestLimitError(
+                "unbound evidence retention is full; inspect and clear it before retrying"
+            )
+        self._unbound_completions[request_id] = completion
+
     def clear_credentials(self) -> None:
         """Drop retained authorization values without serializing them."""
 
@@ -695,6 +774,30 @@ class OpenRouterClient:
             raise OpenRouterModelError("OpenRouter returned invalid endpoint metadata")
         return response
 
+    async def get_model_metadata(self, model: str) -> dict[str, Any]:
+        """Resolve one exact slug through OpenRouter's canonical model lookup."""
+
+        _require_exact_model_id(model)
+        response = await self._request_metadata(openrouter_model_query(model))
+        data = response.get("data")
+        if not isinstance(data, dict):
+            raise OpenRouterModelError("OpenRouter returned invalid single-model metadata")
+        observed_id = data.get("id")
+        canonical_slug = data.get("canonical_slug")
+        if (
+            not isinstance(observed_id, str)
+            or not is_exact_openrouter_model_id(observed_id)
+            or not isinstance(canonical_slug, str)
+            or not is_exact_openrouter_model_id(canonical_slug)
+            or observed_id.split("/", 1)[0] != model.split("/", 1)[0]
+            or canonical_slug.split("/", 1)[0] != model.split("/", 1)[0]
+            or model not in {observed_id, canonical_slug}
+        ):
+            raise OpenRouterModelError(
+                "OpenRouter single-model metadata has an invalid canonical identity"
+            )
+        return response
+
     async def list_model_endpoints(self, model: str) -> list[dict[str, Any]]:
         """Return endpoint records for one exact author/model slug."""
 
@@ -723,6 +826,7 @@ class OpenRouterClient:
         retrieved_at: datetime,
         models_payload: dict[str, Any],
         zdr_payload: dict[str, Any],
+        single_model_payloads: Mapping[str, dict[str, Any]],
         endpoint_payloads: Mapping[str, dict[str, Any]],
         candidate_routes: tuple[DiscoveryCandidateRoute, ...],
         payloads: tuple[OpenRouterModelDiscoveryPayload, ...],
@@ -751,8 +855,13 @@ class OpenRouterClient:
             raise OpenRouterPrivacyError(
                 "discovery payloads do not match trusted transport observations"
             )
+        model_bindings: list[DiscoveryModelMetadataBinding] = []
         endpoint_bindings: list[DiscoveryEndpointMetadataBinding] = []
         route_ids = tuple(route.exact_model_id for route in candidate_routes)
+        if set(single_model_payloads) != set(route_ids):
+            raise OpenRouterPrivacyError(
+                "single-model payloads do not exactly cover the discovery candidate set"
+            )
         if set(endpoint_payloads) != set(route_ids):
             raise OpenRouterPrivacyError(
                 "endpoint payloads do not exactly cover the discovery candidate set"
@@ -763,17 +872,36 @@ class OpenRouterClient:
                 "validated payloads do not exactly cover the discovery candidate set"
             )
         for model_id in sorted(route_ids):
-            query = openrouter_endpoint_query(model_id)
+            supplied_discovery = supplied_payloads[model_id]
+            model_query = openrouter_model_query(supplied_discovery.canonical_slug)
+            single_model_payload = single_model_payloads[model_id]
+            single_model_response_hash = _canonical_sha256(single_model_payload)
+            if self._metadata_observations.get(model_query) != single_model_response_hash:
+                raise OpenRouterPrivacyError(
+                    "single-model payload does not match its trusted transport observation"
+                )
+            model_bindings.append(
+                DiscoveryModelMetadataBinding(
+                    exact_model_id=model_id,
+                    canonical_slug=supplied_discovery.canonical_slug,
+                    api_query=model_query,
+                    response_snapshot_sha256=single_model_response_hash,
+                    model_metadata_snapshot_sha256=(
+                        supplied_discovery.model_metadata_snapshot_sha256
+                    ),
+                )
+            )
+            endpoint_query = openrouter_endpoint_query(model_id)
             payload = endpoint_payloads[model_id]
             response_hash = _canonical_sha256(payload)
-            if self._metadata_observations.get(query) != response_hash:
+            if self._metadata_observations.get(endpoint_query) != response_hash:
                 raise OpenRouterPrivacyError(
                     "endpoint payload does not match its trusted transport observation"
                 )
             endpoint_bindings.append(
                 DiscoveryEndpointMetadataBinding(
                     exact_model_id=model_id,
-                    api_query=query,
+                    api_query=endpoint_query,
                     response_snapshot_sha256=response_hash,
                 )
             )
@@ -790,6 +918,7 @@ class OpenRouterClient:
                 observed_payload = validate_openrouter_model_discovery(
                     exact_model_id=model_id,
                     models_payload=models_payload,
+                    single_model_payload=single_model_payload,
                     endpoint_snapshot=observed_endpoint_snapshot,
                 )
             except (ValueError, ValidationError):
@@ -821,6 +950,7 @@ class OpenRouterClient:
             catalog_snapshot_sha256=expected_catalog_hash,
             zdr_snapshot_sha256=expected_zdr_hash,
             candidate_routes=candidate_routes,
+            model_metadata_bindings=tuple(model_bindings),
             endpoint_metadata_bindings=tuple(endpoint_bindings),
             payloads=payloads,
             issuer=_TRUSTED_OPENROUTER_DISCOVERY_ISSUER,
@@ -913,7 +1043,6 @@ class OpenRouterClient:
                 requests=normalized,
                 attestations=attestations,
                 verification_started_at=verification_started_at,
-                issuer=_TRUSTED_GENERATION_VERIFICATION_ISSUER,
             )
         except GenerationEvidenceValidationError:
             raise OpenRouterSchemaError(
@@ -945,12 +1074,30 @@ class OpenRouterClient:
             raise OpenRouterCostControlError(
                 "model discovery may only be registered for certification"
             )
+        self.register_model_discovery(evidence=evidence, manifest=manifest)
+
+    def register_model_discovery(
+        self,
+        *,
+        evidence: OpenRouterModelDiscoveryEvidence,
+        manifest: OpenRouterModelDiscoveryRunManifest | None = None,
+    ) -> None:
+        """Bind one exact requested/canonical identity from frozen REAL discovery."""
+
         if not isinstance(evidence, OpenRouterModelDiscoveryEvidence):
             raise OpenRouterModelError("model discovery evidence has an invalid type")
         if evidence.provenance.execution_evidence is not ExecutionEvidenceKind.REAL:
             raise OpenRouterModelError("model discovery evidence is not REAL")
         if manifest is None:
             OpenRouterClient._validate_transport_provenance(self)
+            model_binding = next(
+                (
+                    item
+                    for item in evidence.provenance.model_metadata_bindings
+                    if item.exact_model_id == evidence.exact_model_id
+                ),
+                None,
+            )
             endpoint_binding = next(
                 (
                     item
@@ -964,11 +1111,14 @@ class OpenRouterClient:
                 or self.execution_evidence is not ExecutionEvidenceKind.REAL
                 or not self._owns_client
                 or not self._authentication_validated
+                or model_binding is None
                 or endpoint_binding is None
                 or self._metadata_observations.get(OPENROUTER_CATALOG_QUERY)
                 != evidence.provenance.catalog_snapshot_sha256
                 or self._metadata_observations.get(OPENROUTER_ZDR_QUERY)
                 != evidence.provenance.zdr_snapshot_sha256
+                or self._metadata_observations.get(model_binding.api_query)
+                != model_binding.response_snapshot_sha256
                 or self._metadata_observations.get(endpoint_binding.api_query)
                 != endpoint_binding.response_snapshot_sha256
             ):
@@ -1007,6 +1157,10 @@ class OpenRouterClient:
             catalog_snapshot_sha256=evidence.provenance.catalog_snapshot_sha256,
             discovery_provenance_sha256=evidence.provenance.provenance_sha256,
             discovery_evidence_sha256=evidence.discovery_evidence_sha256,
+            snapshot=_identity_snapshot_from_discovery(
+                evidence,
+                allow_fallbacks=self.provider_policy.allow_fallbacks,
+            ),
         )
         existing = self._model_identities.get(evidence.exact_model_id)
         if existing is not None and existing != identity:
@@ -1015,6 +1169,234 @@ class OpenRouterClient:
             )
         self.register_endpoint_snapshot(evidence=evidence.endpoint_snapshot)
         self._model_identities[evidence.exact_model_id] = identity
+
+    def registered_model_identity_snapshot(
+        self,
+        exact_model_id: str,
+    ) -> OpenRouterModelEndpointIdentitySnapshot:
+        """Return the frozen non-secret identity snapshot for one registered model."""
+
+        _require_exact_model_id(exact_model_id)
+        identity = self._model_identities.get(exact_model_id)
+        if identity is None:
+            raise OpenRouterModelError("model identity metadata is not registered")
+        return identity.snapshot
+
+    def bind_generation_identity(
+        self,
+        *,
+        usage_record: UsageRecord,
+        generation_evidence: OpenRouterGenerationEvidence | None,
+        evaluated_at: datetime | None = None,
+    ) -> OpenRouterIdentityBindingResult:
+        """Classify one valid response using freshly retrieved generation metadata."""
+
+        return self._bind_generation_identity(
+            usage_record=usage_record,
+            generation_evidence=generation_evidence,
+            evaluated_at=evaluated_at,
+            trusted_issuer=None,
+        )
+
+    def _bind_generation_identity(
+        self,
+        *,
+        usage_record: UsageRecord,
+        generation_evidence: OpenRouterGenerationEvidence | None,
+        evaluated_at: datetime | None,
+        trusted_issuer: object | None,
+        missing_diagnostic_codes: tuple[OpenRouterIdentityDiagnosticCode, ...] | None = None,
+    ) -> OpenRouterIdentityBindingResult:
+        try:
+            usage = _validated_usage_copy_preserving_owned_attestation(usage_record)
+        except (AttributeError, ValidationError):
+            raise OpenRouterModelError("model identity usage evidence is invalid") from None
+        identity = self._model_identities.get(usage.requested_model)
+        if identity is None:
+            raise OpenRouterModelError("model identity metadata is not registered")
+        request = _request_identity_evidence(usage)
+        evaluation_time = _whole_second_utc(evaluated_at or datetime.now(UTC))
+        if (
+            usage.execution_evidence is ExecutionEvidenceKind.REAL
+            and trusted_issuer is not _TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER
+        ):
+            return seal_unbound_openrouter_identity(
+                snapshot=identity.snapshot,
+                request=request,
+                diagnostic_codes=(OpenRouterIdentityDiagnosticCode.GENERATION_EVIDENCE_UNTRUSTED,),
+                evaluated_at=max(evaluation_time, request.completed_at),
+            )
+        if generation_evidence is None:
+            return seal_unbound_openrouter_identity(
+                snapshot=identity.snapshot,
+                request=request,
+                diagnostic_codes=missing_diagnostic_codes
+                or (OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_MISSING,),
+                evaluated_at=max(evaluation_time, request.completed_at),
+            )
+        try:
+            generation = OpenRouterGenerationEvidence.model_validate(
+                generation_evidence.model_dump(mode="json")
+            )
+        except (AttributeError, ValidationError):
+            raise OpenRouterModelError("generation identity evidence is invalid") from None
+        generation_identity = OpenRouterGenerationIdentityEvidence(
+            generation_id=generation.generation_id,
+            execution_evidence=generation.execution_evidence.value,
+            generation_model_slug=generation.exact_model_id,
+            provider_name=generation.provider_name,
+            provider_version_id=None,
+            provider_request_id=generation.request_id,
+            retrieved_at=_whole_second_utc(generation.retrieved_at),
+            generation_evidence_sha256=generation.evidence_sha256,
+        )
+        try:
+            return seal_bound_openrouter_identity(
+                snapshot=identity.snapshot,
+                request=request,
+                generation=generation_identity,
+                evaluated_at=max(
+                    evaluation_time,
+                    generation_identity.retrieved_at,
+                    request.completed_at,
+                ),
+            )
+        except ValidationError:
+            diagnostics = _identity_binding_diagnostics(
+                snapshot=identity.snapshot,
+                request=request,
+                generation=generation_identity,
+                evaluated_at=evaluation_time,
+            )
+            return seal_unbound_openrouter_identity(
+                snapshot=identity.snapshot,
+                request=request,
+                diagnostic_codes=diagnostics,
+                evaluated_at=max(
+                    evaluation_time,
+                    generation_identity.retrieved_at,
+                    request.completed_at,
+                ),
+            )
+
+    def usage_with_bound_identity(
+        self,
+        *,
+        usage_record: UsageRecord,
+        identity_binding: OpenRouterIdentityBindingResult,
+    ) -> UsageRecord:
+        """Return an immutable validated usage copy carrying its full identity proof."""
+
+        return self._usage_with_bound_identity(
+            usage_record=usage_record,
+            identity_binding=identity_binding,
+            trusted_issuer=None,
+        )
+
+    def _usage_with_bound_identity(
+        self,
+        *,
+        usage_record: UsageRecord,
+        identity_binding: OpenRouterIdentityBindingResult,
+        trusted_issuer: object | None,
+    ) -> UsageRecord:
+        return self._usage_with_identity_result(
+            usage_record=usage_record,
+            identity_binding=identity_binding,
+            trusted_issuer=trusted_issuer,
+            require_bound=True,
+        )
+
+    def _usage_with_unbound_identity(
+        self,
+        *,
+        usage_record: UsageRecord,
+        identity_binding: OpenRouterIdentityBindingResult,
+        trusted_issuer: object | None,
+    ) -> UsageRecord:
+        return self._usage_with_identity_result(
+            usage_record=usage_record,
+            identity_binding=identity_binding,
+            trusted_issuer=trusted_issuer,
+            require_bound=False,
+        )
+
+    def _usage_with_identity_result(
+        self,
+        *,
+        usage_record: UsageRecord,
+        identity_binding: OpenRouterIdentityBindingResult,
+        trusted_issuer: object | None,
+        require_bound: bool,
+    ) -> UsageRecord:
+        if (
+            usage_record.execution_evidence is ExecutionEvidenceKind.REAL
+            and not _has_owned_real_usage_attestation(usage_record)
+        ):
+            raise OpenRouterModelError(
+                "REAL model identity binding requires owned runtime provenance"
+            )
+        try:
+            usage = _validated_usage_copy_preserving_owned_attestation(usage_record)
+            binding = OpenRouterIdentityBindingResult.model_validate(
+                identity_binding.model_dump(mode="json")
+            )
+        except (AttributeError, ValidationError):
+            raise OpenRouterModelError("model identity binding evidence is invalid") from None
+        identity = self._model_identities.get(usage.requested_model)
+        if (
+            identity is None
+            or (
+                usage.execution_evidence is ExecutionEvidenceKind.REAL
+                and trusted_issuer is not _TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER
+            )
+            or binding.snapshot != identity.snapshot
+            or binding.request != _request_identity_evidence(usage)
+            or (
+                require_bound
+                and (
+                    binding.strength is ModelIdentityStrength.UNBOUND or binding.generation is None
+                )
+            )
+            or (
+                not require_bound
+                and (
+                    binding.strength is not ModelIdentityStrength.UNBOUND
+                    or binding.generation is not None
+                )
+            )
+        ):
+            raise OpenRouterModelError(
+                "model identity binding does not match the completed request"
+            )
+        binding_status = (
+            "generation_metadata_bound" if require_bound else "generation_metadata_unbound"
+        )
+        routing = {
+            **usage.routing,
+            "identity_binding": binding.model_dump(mode="json"),
+            "identity_binding_sha256": binding.binding_sha256,
+            "identity_binding_status": binding_status,
+        }
+        concluded_usage = UsageRecord.model_validate(
+            {
+                **usage.model_dump(mode="json"),
+                "routing": routing,
+                "identity_strength": binding.strength,
+            }
+        )
+        if concluded_usage.execution_evidence is ExecutionEvidenceKind.REAL:
+            concluded_usage = _attest_owned_real_usage_record(concluded_usage)
+        try:
+            if require_bound:
+                self.usage.replace_with_bound_identity(concluded_usage)
+            else:
+                self.usage.replace_with_unbound_identity(concluded_usage)
+        except ValueError:
+            raise OpenRouterModelError(
+                "model identity binding cannot replace its owned usage evidence"
+            ) from None
+        return concluded_usage
 
     def register_endpoint_snapshot(
         self,
@@ -1323,6 +1705,8 @@ class OpenRouterClient:
             response_model=response_model,
             schema_name=schema_name,
         )
+        if _is_concluded_unbound_completion(completion):
+            raise OpenRouterUnboundIdentityError(completion)
         return completion.value
 
     async def complete_with_evidence(
@@ -1339,6 +1723,10 @@ class OpenRouterClient:
 
         if not models:
             raise OpenRouterModelError(f"no model configured for role {role}")
+        if len(self._unbound_completions) >= _MAX_RETAINED_UNBOUND_COMPLETIONS:
+            raise OpenRouterRequestLimitError(
+                "unbound evidence retention is full; inspect and clear it before retrying"
+            )
         if self.execution_evidence is ExecutionEvidenceKind.UNVERIFIED:
             raise OpenRouterPrivacyError(
                 "network-capable injected provider clients are not permitted"
@@ -1366,6 +1754,20 @@ class OpenRouterClient:
             if unbound_models:
                 raise OpenRouterCostControlError(
                     "real provider completion lacks validated endpoint pricing"
+                )
+        if self.execution_evidence is ExecutionEvidenceKind.REAL:
+            if (
+                type(self) is not _TRUSTED_OPENROUTER_CLIENT_TYPE
+                or not self._owns_client
+                or not self._authentication_validated
+            ):
+                raise OpenRouterPrivacyError(
+                    "real provider completion requires an authenticated owned provider client"
+                )
+            missing_identities = [model for model in models if model not in self._model_identities]
+            if missing_identities:
+                raise OpenRouterModelError(
+                    "real provider completion requires frozen model identity metadata"
                 )
         if self.provider_policy.certification and len(models) != 1:
             raise OpenRouterModelError(
@@ -1407,7 +1809,7 @@ class OpenRouterClient:
         last_error: OpenRouterError | None = None
         for index, model in enumerate(models):
             try:
-                return await self._complete_one(
+                completion = await self._complete_one(
                     role=role,
                     model=model,
                     system_prompt=system_prompt,
@@ -1427,8 +1829,135 @@ class OpenRouterClient:
                     "Configured model failed; considering the next explicit fallback",
                     extra={"role": role, "status": "fallback"},
                 )
+                continue
+            if _is_concluded_unbound_completion(completion):
+                self._retain_unbound_completion(completion)
+                self.logger.warning(
+                    "Completed response identity is unbound; preserving evidence without "
+                    "automatic fallback",
+                    extra={"role": role, "status": "identity_unbound"},
+                )
+                return completion
+            if self.execution_evidence is ExecutionEvidenceKind.REAL:
+                completion = await self._bind_real_completion_identity(completion)
+                if _is_concluded_unbound_completion(completion):
+                    self._retain_unbound_completion(completion)
+                    self.logger.warning(
+                        "Completed response identity is unbound; preserving evidence without "
+                        "automatic fallback",
+                        extra={"role": role, "status": "identity_unbound"},
+                    )
+                return completion
+            return completion
         assert last_error is not None
         raise last_error
+
+    async def complete_with_bound_identity(
+        self,
+        *,
+        role: str,
+        models: list[str],
+        system_prompt: str,
+        user_prompt: str,
+        response_model: type[ResponseT],
+        schema_name: str,
+    ) -> StructuredCompletion[ResponseT]:
+        """Complete one owned REAL request and require fresh generation identity."""
+
+        if (
+            len(models) != 1
+            or models[0] not in self._model_identities
+            or not self.provider_policy.certification
+        ):
+            raise OpenRouterModelError(
+                "bound completion requires one certification model with frozen identity metadata"
+            )
+        if (
+            type(self) is not _TRUSTED_OPENROUTER_CLIENT_TYPE
+            or self.execution_evidence is not ExecutionEvidenceKind.REAL
+            or not self._owns_client
+            or not self._authentication_validated
+        ):
+            raise OpenRouterPrivacyError(
+                "bound completion requires an authenticated owned REAL provider client"
+            )
+        completion = await self.complete_with_evidence(
+            role=role,
+            models=models,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=response_model,
+            schema_name=schema_name,
+        )
+        if _is_concluded_unbound_completion(completion):
+            raise OpenRouterUnboundIdentityError(completion)
+        return completion
+
+    async def _bind_real_completion_identity(
+        self,
+        completion: StructuredCompletion[ResponseT],
+    ) -> StructuredCompletion[ResponseT]:
+        """Fetch generation metadata and upgrade one owned REAL completion atomically."""
+
+        if (
+            type(self) is not _TRUSTED_OPENROUTER_CLIENT_TYPE
+            or self.execution_evidence is not ExecutionEvidenceKind.REAL
+            or not self._owns_client
+            or not self._authentication_validated
+            or not _openrouter_generation_verification_callables_are_pristine()
+        ):
+            raise OpenRouterPrivacyError(
+                "REAL identity binding requires an authenticated owned provider client"
+            )
+        OpenRouterClient._validate_transport_provenance(self)
+        generation_id = completion.usage_record.openrouter_generation_id
+        if generation_id is None:
+            raise OpenRouterModelError("REAL provider completion lacks a generation identity")
+        try:
+            generation = await OpenRouterClient.get_generation_evidence(self, generation_id)
+        except OpenRouterError as exc:
+            diagnostic_codes = tuple(
+                sorted(
+                    {
+                        OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_MISSING,
+                        _generation_metadata_failure_diagnostic(exc),
+                    },
+                    key=lambda item: item.value,
+                )
+            )
+            missing_binding = self._bind_generation_identity(
+                usage_record=completion.usage_record,
+                generation_evidence=None,
+                evaluated_at=None,
+                trusted_issuer=_TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER,
+                missing_diagnostic_codes=diagnostic_codes,
+            )
+            unbound_usage = self._usage_with_unbound_identity(
+                usage_record=completion.usage_record,
+                identity_binding=missing_binding,
+                trusted_issuer=_TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER,
+            )
+            return StructuredCompletion(value=completion.value, usage_record=unbound_usage)
+        OpenRouterClient._validate_transport_provenance(self)
+        binding = self._bind_generation_identity(
+            usage_record=completion.usage_record,
+            generation_evidence=generation,
+            evaluated_at=None,
+            trusted_issuer=_TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER,
+        )
+        if binding.strength is ModelIdentityStrength.UNBOUND:
+            unbound_usage = self._usage_with_unbound_identity(
+                usage_record=completion.usage_record,
+                identity_binding=binding,
+                trusted_issuer=_TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER,
+            )
+            return StructuredCompletion(value=completion.value, usage_record=unbound_usage)
+        bound_usage = self._usage_with_bound_identity(
+            usage_record=completion.usage_record,
+            identity_binding=binding,
+            trusted_issuer=_TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER,
+        )
+        return StructuredCompletion(value=completion.value, usage_record=bound_usage)
 
     async def _complete_one(
         self,
@@ -1470,6 +1999,11 @@ class OpenRouterClient:
             request_metadata["mmaudit_endpoint_pricing_sha256"] = (
                 endpoint_policy.policy_pricing_sha256
             )
+        model_identity = self._model_identities.get(model)
+        if model_identity is not None:
+            request_metadata["mmaudit_identity_snapshot_sha256"] = (
+                model_identity.snapshot.snapshot_sha256
+            )
         if qualification_binding is not None:
             request_metadata.update(qualification_binding.request_metadata())
         body = self.build_request(
@@ -1506,6 +2040,8 @@ class OpenRouterClient:
         initial_usage: dict[str, Any] = {}
         initial_cost: Decimal | None = None
         response_hash: str | None = None
+        validated_response_hash: str | None = None
+        preserved_unbound_response: ResponseT | None = None
         raw_payload: dict[str, Any] | None = None
         response_headers: Mapping[str, str] = {}
 
@@ -1625,6 +2161,10 @@ class OpenRouterClient:
             raw_content = _response_content_if_string(payload)
             if raw_content is not None:
                 response_hash = hashlib.sha256(raw_content.encode()).hexdigest()
+            initial_usage = _validate_usage(payload.get("usage"))
+            initial_cost = _optional_cost_decimal(initial_usage.get("cost"))
+            assert initial_cost is not None
+            active_actual_cost = initial_cost
             envelope = _validate_completion_envelope(
                 payload,
                 response.headers,
@@ -1634,9 +2174,6 @@ class OpenRouterClient:
                 model_identity=self._model_identities.get(model),
             )
             initial_usage = envelope.usage
-            initial_cost = _optional_cost_decimal(initial_usage.get("cost"))
-            assert initial_cost is not None
-            active_actual_cost = initial_cost
             response_hash = hashlib.sha256(envelope.content.encode()).hexdigest()
             if self.privacy.store_raw_responses:
                 self._store_debug(request_id, "response.json", payload)
@@ -1661,6 +2198,7 @@ class OpenRouterClient:
                 repair_used=False,
                 qualification_binding=qualification_binding,
                 provider_policy=request_provider_policy,
+                host_model_fallback_used=fallback_used,
             )
             usage_record = UsageRecord(
                 request_id=request_id,
@@ -1695,13 +2233,19 @@ class OpenRouterClient:
                 cached_tokens=_cached_tokens(initial_usage),
                 retry_count=attempts - 1,
                 validation_status=ModelRequestValidationStatus.VALID,
-                fallback_used=fallback_used
-                or envelope.router_attempt > 1
-                or envelope.router_attempt_count > 1,
+                identity_strength=ModelIdentityStrength.UNBOUND,
+                fallback_used=(
+                    fallback_used
+                    or envelope.router_attempt > 1
+                    or envelope.router_attempt_count > 1
+                    or envelope.router_metadata["strategy"] == "fallback"
+                ),
                 substitution_detected=False,
                 status="success",
                 attempts=attempts,
             )
+            if usage_record.execution_evidence is ExecutionEvidenceKind.REAL:
+                usage_record = _attest_owned_real_usage_record(usage_record)
             self.usage.add(usage_record)
             usage_recorded = True
             self.logger.info(
@@ -1724,6 +2268,38 @@ class OpenRouterClient:
                 except Exception as budget_error:
                     terminal_error = budget_error
             if not usage_recorded:
+                raw_content = (
+                    _response_content_if_string(raw_payload) if raw_payload is not None else None
+                )
+                if (
+                    isinstance(terminal_error, OpenRouterResponseIdentityError)
+                    and raw_payload is not None
+                ):
+                    try:
+                        preserved_unbound_response = _validate_preservable_structured_response(
+                            raw_payload,
+                            response_model=response_model,
+                        )
+                    except OpenRouterSchemaError as preservation_error:
+                        terminal_error = preservation_error
+                    if preserved_unbound_response is not None:
+                        validated_response_hash = _canonical_sha256(
+                            preserved_unbound_response.model_dump(mode="json")
+                        )
+                if (
+                    preserved_unbound_response is None
+                    and validated_response_hash is None
+                    and raw_content is not None
+                ):
+                    try:
+                        hash_only_response = response_model.model_validate_json(raw_content)
+                        _ensure_all_fields_supplied(hash_only_response)
+                    except (ValidationError, ValueError):
+                        pass
+                    else:
+                        validated_response_hash = _canonical_sha256(
+                            hash_only_response.model_dump(mode="json")
+                        )
                 ended_at = datetime.now(UTC)
                 latency_ms = max(0, round((time.perf_counter() - started_clock) * 1_000))
                 returned_model = (
@@ -1734,65 +2310,92 @@ class OpenRouterClient:
                     if raw_payload is not None
                     else None
                 )
-                self.usage.add(
-                    UsageRecord(
-                        request_id=request_id,
-                        role=role,
-                        execution_evidence=self.execution_evidence,
-                        requested_model=model,
-                        returned_model=returned_model,
-                        provider=actual_provider,
-                        model_family=model_family(model),
-                        timestamp=started_at,
-                        prompt_tokens=_nonnegative_int(initial_usage.get("prompt_tokens")),
-                        completion_tokens=_nonnegative_int(initial_usage.get("completion_tokens")),
-                        total_tokens=_nonnegative_int(initial_usage.get("total_tokens")),
-                        reported_cost_usd=(
-                            float(initial_cost) if initial_cost is not None else None
-                        ),
-                        accounted_cost_usd=accounted_cost_usd,
-                        routing=self._failure_routing_evidence(
-                            payload=raw_payload,
-                            response_headers=response_headers,
-                            schema_hash=schema_hash,
-                            started_at=started_at,
-                            ended_at=ended_at,
-                            latency_ms=latency_ms,
-                            error=terminal_error,
-                            qualification_binding=qualification_binding,
-                            provider_policy=request_provider_policy,
-                        ),
-                        prompt_sha256=prompt_hash,
-                        user_prompt_sha256=user_prompt_hash,
-                        response_sha256=response_hash,
-                        request_body_sha256=request_body_hash,
-                        schema_sha256=schema_hash,
-                        openrouter_generation_id=_response_generation_id(
-                            raw_payload, response_headers
-                        ),
-                        configured_provider_endpoints=list(
-                            request_provider_policy.configured_endpoints
-                        ),
-                        actual_provider_endpoint=actual_provider,
+                failed_usage = UsageRecord(
+                    request_id=request_id,
+                    role=role,
+                    execution_evidence=self.execution_evidence,
+                    requested_model=model,
+                    returned_model=returned_model,
+                    provider=actual_provider,
+                    model_family=model_family(model),
+                    timestamp=started_at,
+                    prompt_tokens=_nonnegative_int(initial_usage.get("prompt_tokens")),
+                    completion_tokens=_nonnegative_int(initial_usage.get("completion_tokens")),
+                    total_tokens=_nonnegative_int(initial_usage.get("total_tokens")),
+                    reported_cost_usd=(float(initial_cost) if initial_cost is not None else None),
+                    accounted_cost_usd=accounted_cost_usd,
+                    routing=self._failure_routing_evidence(
+                        payload=raw_payload,
+                        response_headers=response_headers,
+                        schema_hash=schema_hash,
                         started_at=started_at,
                         ended_at=ended_at,
                         latency_ms=latency_ms,
-                        finish_reason=_optional_finish_reason(raw_payload),
-                        reasoning_tokens=_reasoning_tokens(initial_usage),
-                        cached_tokens=_cached_tokens(initial_usage),
-                        retry_count=max(0, attempts - 1),
-                        provider_error_classification=_provider_error_classification(
-                            terminal_error
+                        error=terminal_error,
+                        qualification_binding=qualification_binding,
+                        provider_policy=request_provider_policy,
+                        requested_model=model,
+                        model_identity=self._model_identities.get(model),
+                    ),
+                    prompt_sha256=prompt_hash,
+                    user_prompt_sha256=user_prompt_hash,
+                    response_sha256=response_hash,
+                    validated_response_sha256=validated_response_hash,
+                    request_body_sha256=request_body_hash,
+                    schema_sha256=schema_hash,
+                    openrouter_generation_id=_response_generation_id(raw_payload, response_headers),
+                    configured_provider_endpoints=list(
+                        request_provider_policy.configured_endpoints
+                    ),
+                    actual_provider_endpoint=actual_provider,
+                    started_at=started_at,
+                    ended_at=ended_at,
+                    latency_ms=latency_ms,
+                    finish_reason=_optional_finish_reason(raw_payload),
+                    reasoning_tokens=_reasoning_tokens(initial_usage),
+                    cached_tokens=_cached_tokens(initial_usage),
+                    retry_count=max(0, attempts - 1),
+                    provider_error_classification=_provider_error_classification(terminal_error),
+                    validation_status=_failure_validation_status(terminal_error),
+                    fallback_used=fallback_used,
+                    substitution_detected=(
+                        returned_model is not None
+                        and returned_model
+                        not in _accepted_response_models(
+                            model,
+                            self._model_identities.get(model),
+                        )
+                    ),
+                    status=_failure_status(
+                        terminal_error,
+                        model,
+                        raw_payload,
+                        accepted_response_models=_accepted_response_models(
+                            model,
+                            self._model_identities.get(model),
                         ),
-                        validation_status=_failure_validation_status(terminal_error),
-                        fallback_used=fallback_used,
-                        substitution_detected=(
-                            returned_model is not None and returned_model != model
-                        ),
-                        status=_failure_status(terminal_error, model, raw_payload),
-                        attempts=max(1, attempts),
-                    )
+                    ),
+                    attempts=max(1, attempts),
                 )
+                if failed_usage.execution_evidence is ExecutionEvidenceKind.REAL:
+                    failed_usage = _attest_owned_real_usage_record(failed_usage)
+                self.usage.add(failed_usage)
+                if preserved_unbound_response is not None and isinstance(
+                    terminal_error, OpenRouterResponseIdentityError
+                ):
+                    completion = StructuredCompletion(
+                        value=preserved_unbound_response,
+                        usage_record=failed_usage,
+                    )
+                    self.logger.warning(
+                        "Structured model response retained with unbound identity",
+                        extra={
+                            "request_id": request_id,
+                            "role": role,
+                            "status": "identity_unbound",
+                        },
+                    )
+                    return completion
             self.logger.warning(
                 "Structured model request failed",
                 extra={
@@ -1876,29 +2479,39 @@ class OpenRouterClient:
         repair_used: bool,
         qualification_binding: OpenRouterQualificationRoutingEvidence | None,
         provider_policy: OpenRouterProviderPolicy,
+        host_model_fallback_used: bool,
         repair_request: bool = False,
     ) -> dict[str, Any]:
         usage = envelope.usage
-        endpoint_policy = self._endpoint_pricing.get(envelope.returned_model)
+        endpoint_policy = self._endpoint_pricing.get(envelope.requested_model)
         endpoint_pricing = (
             endpoint_policy.endpoint(envelope.selected_provider)
             if endpoint_policy is not None
             else None
         )
+        model_identity = self._model_identities.get(envelope.requested_model)
+        provider_fallback_used = (
+            envelope.router_attempt > 1
+            or envelope.router_attempt_count > 1
+            or envelope.router_metadata["strategy"] == "fallback"
+        )
         if (
             qualification_binding is not None
             and envelope.selected_provider_name != qualification_binding.approved_provider_name
         ):
-            raise OpenRouterQualificationError(
-                "provider response differs from the qualification provider binding"
+            raise OpenRouterResponseIdentityError(
+                "provider response differs from the qualification provider binding",
+                diagnostic_code="qualification_provider_mismatch",
+                validation_status=ModelRequestValidationStatus.PROVIDER_MISMATCH,
             )
-        evidence = {
+        evidence: dict[str, Any] = {
             "generation_id": envelope.generation_id,
+            "requested_model": envelope.requested_model,
             "provider": envelope.provider,
             "selected_model": envelope.selected_model,
             "canonical_model": (
-                self._model_identities[envelope.returned_model].canonical_slug
-                if envelope.returned_model in self._model_identities
+                model_identity.canonical_slug
+                if model_identity is not None
                 else envelope.returned_model
             ),
             "selected_provider_endpoint": envelope.selected_provider,
@@ -1924,33 +2537,55 @@ class OpenRouterClient:
                 endpoint_pricing.pricing_sha256 if endpoint_pricing is not None else None
             ),
             "catalog_identity_binding_sha256": (
-                self._model_identities[envelope.returned_model].catalog_identity_binding_sha256
-                if envelope.returned_model in self._model_identities
+                model_identity.catalog_identity_binding_sha256
+                if model_identity is not None
                 else None
             ),
             "model_metadata_snapshot_sha256": (
-                self._model_identities[envelope.returned_model].model_metadata_snapshot_sha256
-                if envelope.returned_model in self._model_identities
+                model_identity.model_metadata_snapshot_sha256
+                if model_identity is not None
                 else None
             ),
             "catalog_snapshot_sha256": (
-                self._model_identities[envelope.returned_model].catalog_snapshot_sha256
-                if envelope.returned_model in self._model_identities
-                else None
+                model_identity.catalog_snapshot_sha256 if model_identity is not None else None
             ),
             "discovery_provenance_sha256": (
-                self._model_identities[envelope.returned_model].discovery_provenance_sha256
-                if envelope.returned_model in self._model_identities
-                else None
+                model_identity.discovery_provenance_sha256 if model_identity is not None else None
             ),
             "discovery_evidence_sha256": (
-                self._model_identities[envelope.returned_model].discovery_evidence_sha256
-                if envelope.returned_model in self._model_identities
+                model_identity.discovery_evidence_sha256 if model_identity is not None else None
+            ),
+            "accepted_model_aliases": (
+                sorted(model_identity.accepted_response_models)
+                if model_identity is not None
+                else [envelope.requested_model]
+            ),
+            "identity_snapshot_sha256": (
+                model_identity.snapshot.snapshot_sha256 if model_identity is not None else None
+            ),
+            "identity_snapshot_expires_at": (
+                model_identity.snapshot.expires_at.isoformat()
+                if model_identity is not None and model_identity.snapshot.expires_at is not None
                 else None
+            ),
+            "identity_model_author": (
+                model_identity.snapshot.model_author if model_identity is not None else None
+            ),
+            "provisional_identity_strength": (
+                ModelIdentityStrength.CANONICAL_MODEL_AND_ENDPOINT_BOUND.value
+                if model_identity is not None
+                else ModelIdentityStrength.UNBOUND.value
+            ),
+            "identity_binding_status": (
+                "generation_metadata_pending"
+                if model_identity is not None
+                else "identity_metadata_unregistered"
             ),
             "configured_provider_only": list(provider_policy.only),
             "configured_provider_order": list(provider_policy.order),
             "provider_fallbacks_allowed": provider_policy.allow_fallbacks,
+            "host_model_fallback_used": host_model_fallback_used,
+            "provider_fallback_used": provider_fallback_used,
             "certification_request": provider_policy.certification,
             "zdr_requested": self.privacy.require_zdr,
             "data_collection": "deny",
@@ -1977,10 +2612,12 @@ class OpenRouterClient:
         error: Exception,
         qualification_binding: OpenRouterQualificationRoutingEvidence | None,
         provider_policy: OpenRouterProviderPolicy,
+        requested_model: str,
+        model_identity: _RegisteredModelIdentity | None,
     ) -> dict[str, Any]:
         router_metadata = payload.get("openrouter_metadata") if isinstance(payload, dict) else None
         finish_reason = _optional_finish_reason(payload)
-        evidence = {
+        evidence: dict[str, Any] = {
             "generation_id": (_optional_string(payload.get("id")) if payload is not None else None),
             "generation_header_id": _header_value(response_headers, "x-generation-id"),
             "provider": (
@@ -2005,7 +2642,18 @@ class OpenRouterClient:
             "latency_ms": round(latency_ms, 3),
             "validation_status": "rejected",
             "provider_error_classification": _provider_error_classification(error),
+            "identity_strength": ModelIdentityStrength.UNBOUND.value,
         }
+        identity_diagnostic = _identity_failure_diagnostic(
+            payload=payload,
+            requested_model=requested_model,
+            model_identity=model_identity,
+            error=error,
+        )
+        if identity_diagnostic is not None:
+            evidence["identity_diagnostic"] = identity_diagnostic
+        if isinstance(error, OpenRouterResponseIdentityError):
+            evidence["identity_binding_status"] = "response_identity_unbound"
         if qualification_binding is not None:
             evidence.update(qualification_binding.routing_evidence())
         return evidence
@@ -2052,7 +2700,167 @@ class OpenRouterClient:
             raise OpenRouterPrivacyError("operator credential appeared in provider data")
 
 
+def _identity_snapshot_from_discovery(
+    evidence: OpenRouterModelDiscoveryEvidence,
+    *,
+    allow_fallbacks: bool,
+) -> OpenRouterModelEndpointIdentitySnapshot:
+    endpoint = evidence.endpoint_snapshot.endpoint(evidence.approved_provider_endpoint)
+    provider_policy = seal_openrouter_identity_provider_policy(
+        mode=evidence.endpoint_snapshot.provider_policy_mode,
+        configured_endpoints=evidence.endpoint_snapshot.configured_provider_endpoints,
+        allow_fallbacks=allow_fallbacks,
+        zdr_required=evidence.endpoint_snapshot.require_zdr,
+    )
+    capabilities = OpenRouterIdentityEndpointCapabilities(
+        operational=True,
+        context_tokens=endpoint.context_length,
+        output_tokens=endpoint.max_completion_tokens,
+        supported_parameters=endpoint.supported_parameters,
+        required_parameters=endpoint.required_request_parameters,
+        structured_output_parameters=endpoint.structured_output_parameters,
+        reasoning_parameters=evidence.reasoning_parameters,
+        structured_output_supported=bool(endpoint.structured_output_parameters),
+        reasoning_supported=bool(evidence.reasoning_parameters),
+        zdr_eligible=endpoint.zdr_eligible is True,
+        data_collection_deny_eligible=evidence.data_collection_deny_eligible,
+    )
+    pricing = tuple(
+        OpenRouterIdentityPricingEntry(unit=unit, usd_per_unit=value)
+        for unit, value in sorted(endpoint.pricing.items())
+    )
+    retrieved_at = evidence.provenance.retrieved_at
+    return seal_openrouter_model_endpoint_identity_snapshot(
+        requested_slug=evidence.exact_model_id,
+        canonical_slug=evidence.canonical_slug,
+        frozen_aliases=tuple(sorted({evidence.exact_model_id, evidence.canonical_slug})),
+        model_author=evidence.canonical_slug.split("/", 1)[0],
+        model_context_tokens=max(
+            evidence.catalog_context_size,
+            evidence.catalog_provider_context_size,
+        ),
+        model_output_tokens=max(
+            evidence.catalog_output_limit,
+            endpoint.max_completion_tokens,
+        ),
+        model_supported_parameters=evidence.model_supported_parameters,
+        approved_provider_endpoint=evidence.approved_provider_endpoint,
+        endpoint_tag=endpoint.endpoint_tag,
+        endpoint_slug=endpoint.endpoint_slug,
+        provider_name=endpoint.provider_name,
+        provider_policy=provider_policy,
+        endpoint_capabilities=capabilities,
+        pricing=pricing,
+        canonical_slug_mutable=True,
+        immutable_provider_version=None,
+        immutable_provider_version_evidence_sha256=None,
+        retrieved_at=retrieved_at,
+        expires_at=retrieved_at + _MUTABLE_IDENTITY_TTL,
+        catalog_identity_binding_sha256=evidence.catalog_identity_binding_sha256,
+        catalog_snapshot_sha256=evidence.provenance.catalog_snapshot_sha256,
+        model_metadata_snapshot_sha256=evidence.model_metadata_snapshot_sha256,
+        discovery_provenance_sha256=evidence.provenance.provenance_sha256,
+        discovery_evidence_sha256=evidence.discovery_evidence_sha256,
+        endpoint_snapshot_sha256=evidence.endpoint_snapshot.snapshot_sha256,
+        pricing_snapshot_sha256=endpoint.pricing_sha256,
+    )
+
+
+def _request_identity_evidence(usage: UsageRecord) -> OpenRouterRequestIdentityEvidence:
+    required = {
+        "returned model": usage.returned_model,
+        "actual model": usage.actual_model,
+        "provider endpoint": usage.actual_provider_endpoint,
+        "generation ID": usage.openrouter_generation_id,
+        "request body hash": usage.request_body_sha256,
+        "response hash": usage.response_sha256,
+        "validated response hash": usage.validated_response_sha256,
+        "start time": usage.started_at,
+        "completion time": usage.ended_at,
+    }
+    if any(value is None for value in required.values()):
+        raise OpenRouterModelError("completed response lacks identity evidence")
+    provider_name = usage.routing.get("selected_provider_name")
+    if not isinstance(provider_name, str):
+        raise OpenRouterModelError("completed response lacks provider identity evidence")
+    host_model_fallback_used = usage.routing.get("host_model_fallback_used")
+    provider_fallback_used = usage.routing.get("provider_fallback_used")
+    if (
+        not isinstance(host_model_fallback_used, bool)
+        or not isinstance(provider_fallback_used, bool)
+        or usage.fallback_used != (host_model_fallback_used or provider_fallback_used)
+    ):
+        raise OpenRouterModelError("completed response lacks coherent fallback identity evidence")
+    assert usage.returned_model is not None
+    assert usage.actual_model is not None
+    assert usage.actual_provider_endpoint is not None
+    assert usage.openrouter_generation_id is not None
+    assert usage.request_body_sha256 is not None
+    assert usage.response_sha256 is not None
+    assert usage.validated_response_sha256 is not None
+    assert usage.started_at is not None
+    assert usage.ended_at is not None
+    return OpenRouterRequestIdentityEvidence(
+        internal_request_id=usage.request_id,
+        execution_evidence=usage.execution_evidence.value,
+        requested_slug=usage.requested_model,
+        returned_slug=usage.returned_model,
+        selected_model_slug=usage.actual_model,
+        actual_provider_endpoint=usage.actual_provider_endpoint,
+        actual_provider_name=provider_name,
+        openrouter_generation_id=usage.openrouter_generation_id,
+        request_body_sha256=usage.request_body_sha256,
+        response_sha256=usage.response_sha256,
+        validated_response_sha256=usage.validated_response_sha256,
+        started_at=_whole_second_utc(usage.started_at),
+        completed_at=_whole_second_utc(usage.ended_at),
+        fallback_used=provider_fallback_used,
+    )
+
+
+def _identity_binding_diagnostics(
+    *,
+    snapshot: OpenRouterModelEndpointIdentitySnapshot,
+    request: OpenRouterRequestIdentityEvidence,
+    generation: OpenRouterGenerationIdentityEvidence,
+    evaluated_at: datetime,
+) -> tuple[OpenRouterIdentityDiagnosticCode, ...]:
+    codes: set[OpenRouterIdentityDiagnosticCode] = set()
+    if snapshot.expires_at is not None and snapshot.expires_at <= evaluated_at:
+        codes.add(OpenRouterIdentityDiagnosticCode.IDENTITY_SNAPSHOT_EXPIRED)
+    if not snapshot.resolves_to_canonical(request.returned_slug):
+        codes.add(OpenRouterIdentityDiagnosticCode.MODEL_ALIAS_UNRECOGNIZED)
+    if not snapshot.resolves_to_canonical(request.selected_model_slug):
+        codes.add(OpenRouterIdentityDiagnosticCode.MODEL_CANONICAL_MISMATCH)
+    if request.actual_provider_endpoint != snapshot.approved_provider_endpoint:
+        codes.add(OpenRouterIdentityDiagnosticCode.ENDPOINT_VARIANT_MISMATCH)
+    if request.actual_provider_name != snapshot.provider_name:
+        codes.add(OpenRouterIdentityDiagnosticCode.PROVIDER_MISMATCH)
+    if request.fallback_used:
+        codes.add(OpenRouterIdentityDiagnosticCode.UNAPPROVED_FALLBACK)
+    if generation.generation_id != request.openrouter_generation_id:
+        codes.add(OpenRouterIdentityDiagnosticCode.GENERATION_ID_MISMATCH)
+    if generation.execution_evidence != request.execution_evidence:
+        codes.add(OpenRouterIdentityDiagnosticCode.GENERATION_EXECUTION_EVIDENCE_MISMATCH)
+    if not snapshot.resolves_to_canonical(generation.generation_model_slug):
+        codes.add(OpenRouterIdentityDiagnosticCode.GENERATION_MODEL_MISMATCH)
+    if generation.provider_name != snapshot.provider_name:
+        codes.add(OpenRouterIdentityDiagnosticCode.GENERATION_PROVIDER_MISMATCH)
+    if generation.retrieved_at < request.completed_at:
+        codes.add(OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_MISSING)
+    if not codes:
+        codes.add(OpenRouterIdentityDiagnosticCode.MODEL_CANONICAL_MISMATCH)
+    return tuple(sorted(codes, key=lambda item: item.value))
+
+
+def _whole_second_utc(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise OpenRouterModelError("identity timestamp is not timezone-aware")
+    return value.astimezone(UTC).replace(microsecond=0)
+
+
 _TRUSTED_OPENROUTER_CLIENT_TYPE = OpenRouterClient
+_TRUSTED_OPENROUTER_IDENTITY_BINDING_ISSUER = object()
 _TRUSTED_VALIDATE_AUTHENTICATION = OpenRouterClient.validate_authentication
 _TRUSTED_GET_GENERATION_EVIDENCE = OpenRouterClient.get_generation_evidence
 _TRUSTED_CREATE_GENERATION_VERIFICATION = OpenRouterClient.create_trusted_generation_verification
@@ -2302,6 +3110,99 @@ def _raise_provider_payload_error(
     raise OpenRouterModelError("OpenRouter returned a rejected provider response")
 
 
+def _validate_preservable_structured_response[ValueT: BaseModel](
+    payload: dict[str, Any],
+    *,
+    response_model: type[ValueT],
+) -> ValueT:
+    """Validate non-identity envelope structure before retaining an unbound value."""
+
+    _required_safe_string(payload.get("id"), field="generation ID")
+    _required_safe_string(payload.get("model"), field="returned model")
+    response_provider = payload.get("provider")
+    if response_provider is not None:
+        _required_safe_string(response_provider, field="provider endpoint")
+
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
+        raise OpenRouterSchemaError("model response must contain exactly one choice")
+    choice = choices[0]
+    if choice.get("index") != 0:
+        raise OpenRouterSchemaError("model response choice index is invalid")
+    finish_reason = _required_safe_string(
+        choice.get("finish_reason"),
+        field="finish reason",
+        max_length=100,
+    )
+    if finish_reason != "stop":
+        if finish_reason.casefold() in _TRUNCATED_FINISH_REASONS:
+            raise OpenRouterTruncatedResponseError("model response was incomplete or truncated")
+        raise OpenRouterSchemaError("model response did not finish normally")
+    message = choice.get("message")
+    if not isinstance(message, dict) or message.get("role") != "assistant":
+        raise OpenRouterSchemaError("model response omitted the assistant message role")
+    if message.get("tool_calls") or message.get("function_call"):
+        raise OpenRouterSchemaError("model response unexpectedly requested a tool")
+    if message.get("refusal") not in (None, ""):
+        raise OpenRouterSchemaError("model response refused the structured request")
+    content = message.get("content")
+    if not isinstance(content, str):
+        raise OpenRouterSchemaError("model response omitted structured text content")
+    _validate_usage(payload.get("usage"))
+    _validate_preservable_router_shape(payload.get("openrouter_metadata"))
+    try:
+        parsed = response_model.model_validate_json(content)
+        _ensure_all_fields_supplied(parsed)
+    except (ValidationError, ValueError):
+        raise OpenRouterSchemaError("model returned invalid structured data") from None
+    return parsed
+
+
+def _validate_preservable_router_shape(value: Any) -> None:
+    if not isinstance(value, dict):
+        raise OpenRouterSchemaError("model response omitted OpenRouter routing metadata")
+    _required_safe_string(value.get("requested"), field="requested model")
+    _required_safe_string(value.get("strategy"), field="router strategy")
+    attempt = value.get("attempt")
+    if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
+        raise OpenRouterSchemaError("router metadata has an invalid attempt number")
+    endpoints = value.get("endpoints")
+    if not isinstance(endpoints, dict):
+        raise OpenRouterSchemaError("router metadata omitted endpoint evidence")
+    available = endpoints.get("available")
+    total = endpoints.get("total")
+    if (
+        not isinstance(available, list)
+        or not available
+        or any(not isinstance(item, dict) for item in available)
+        or not isinstance(total, int)
+        or isinstance(total, bool)
+        or total < len(available)
+    ):
+        raise OpenRouterSchemaError("router metadata has invalid endpoint evidence")
+    for endpoint in available:
+        _required_safe_string(endpoint.get("provider"), field="selected provider")
+        _required_safe_string(endpoint.get("model"), field="selected model")
+        if not isinstance(endpoint.get("selected"), bool):
+            raise OpenRouterSchemaError("router metadata has invalid endpoint selection evidence")
+    attempts = value.get("attempts")
+    if attempts is not None:
+        if not isinstance(attempts, list) or any(not isinstance(item, dict) for item in attempts):
+            raise OpenRouterSchemaError("router metadata has invalid provider-attempt evidence")
+        for provider_attempt in attempts:
+            _required_safe_string(provider_attempt.get("provider"), field="attempt provider")
+            _required_safe_string(provider_attempt.get("model"), field="attempt model")
+            status = provider_attempt.get("status")
+            if not isinstance(status, int) or isinstance(status, bool) or not 100 <= status <= 599:
+                raise OpenRouterSchemaError("router metadata provider attempt is invalid")
+    pipeline = value.get("pipeline", [])
+    if not isinstance(pipeline, list) or any(not isinstance(stage, dict) for stage in pipeline):
+        raise OpenRouterSchemaError("router metadata pipeline is invalid")
+    for stage in pipeline:
+        _required_safe_string(stage.get("type"), field="pipeline stage type")
+        _required_safe_string(stage.get("name"), field="pipeline stage name")
+
+
 def _validate_completion_envelope(
     payload: dict[str, Any],
     headers: Mapping[str, str],
@@ -2319,14 +3220,19 @@ def _validate_completion_envelope(
             field="X-Generation-Id header",
         )
         if generation_id != header_generation_id:
-            raise OpenRouterSchemaError(
-                "generation header does not match the response generation ID"
+            raise OpenRouterResponseIdentityError(
+                "generation header does not match the response generation ID",
+                diagnostic_code="generation_id_mismatch",
+                validation_status=ModelRequestValidationStatus.MODEL_MISMATCH,
             )
 
     returned_model = _required_safe_string(payload.get("model"), field="returned model")
-    if returned_model != requested_model:
-        raise OpenRouterModelError(
-            "provider returned an unrelated model or alias instead of the exact configured model"
+    accepted_response_models = _accepted_response_models(requested_model, model_identity)
+    if returned_model not in accepted_response_models:
+        raise OpenRouterResponseIdentityError(
+            "provider returned an unrelated model outside the frozen exact configured model identity",
+            diagnostic_code="returned_model_outside_frozen_identity",
+            validation_status=ModelRequestValidationStatus.MODEL_MISMATCH,
         )
     response_provider = _optional_string(payload.get("provider"))
     if response_provider is not None:
@@ -2384,6 +3290,7 @@ def _validate_completion_envelope(
     )
     provider = response_provider or selected_provider_name
     return CompletionEnvelope(
+        requested_model=requested_model,
         generation_id=generation_id,
         returned_model=returned_model,
         selected_model=selected_model,
@@ -2457,15 +3364,27 @@ def _validate_router_metadata(
     if not isinstance(value, dict):
         raise OpenRouterSchemaError("model response omitted OpenRouter routing metadata")
     if value.get("requested") != requested_model:
-        raise OpenRouterModelError("router metadata does not bind the exact configured model")
+        raise OpenRouterResponseIdentityError(
+            "router metadata does not bind the exact configured model",
+            diagnostic_code="router_request_model_mismatch",
+            validation_status=ModelRequestValidationStatus.MODEL_MISMATCH,
+        )
     strategy = _required_safe_string(value.get("strategy"), field="router strategy")
     permitted_strategies = {"direct"}
     if provider_policy.allow_fallbacks:
         permitted_strategies.add("fallback")
     if strategy in _NON_DIRECT_ROUTING_STRATEGIES and strategy not in permitted_strategies:
-        raise OpenRouterModelError("router used an unapproved model or fallback strategy")
+        raise OpenRouterResponseIdentityError(
+            "router used an unapproved model or fallback strategy",
+            diagnostic_code="unapproved_fallback",
+            validation_status=ModelRequestValidationStatus.PROVIDER_MISMATCH,
+        )
     if strategy not in permitted_strategies:
-        raise OpenRouterModelError("router used an unknown or unapproved routing strategy")
+        raise OpenRouterResponseIdentityError(
+            "router used an unknown or unapproved routing strategy",
+            diagnostic_code="router_strategy_unapproved",
+            validation_status=ModelRequestValidationStatus.PROVIDER_MISMATCH,
+        )
     router_attempt = value.get("attempt")
     if (
         not isinstance(router_attempt, int)
@@ -2474,7 +3393,11 @@ def _validate_router_metadata(
     ):
         raise OpenRouterSchemaError("router metadata has an invalid attempt number")
     if not provider_policy.allow_fallbacks and router_attempt != 1:
-        raise OpenRouterProviderPolicyError("router attempted an unapproved provider fallback")
+        raise OpenRouterResponseIdentityError(
+            "router attempted an unapproved provider fallback",
+            diagnostic_code="unapproved_fallback",
+            validation_status=ModelRequestValidationStatus.PROVIDER_MISMATCH,
+        )
 
     endpoints = value.get("endpoints")
     if not isinstance(endpoints, dict):
@@ -2492,8 +3415,10 @@ def _validate_router_metadata(
         raise OpenRouterSchemaError("router metadata has invalid endpoint evidence")
     selected = [item for item in available if item.get("selected") is True]
     if len(selected) != 1:
-        raise OpenRouterProviderPolicyError(
-            "router metadata does not identify exactly one selected provider"
+        raise OpenRouterResponseIdentityError(
+            "router metadata does not identify exactly one selected provider",
+            diagnostic_code="provider_selection_ambiguous",
+            validation_status=ModelRequestValidationStatus.PROVIDER_MISMATCH,
         )
     selected_model = _required_safe_string(selected[0].get("model"), field="selected model")
     selected_provider_name = _required_safe_string(
@@ -2503,10 +3428,18 @@ def _validate_router_metadata(
     accepted_response_models = frozenset((requested_model,))
     if model_identity is not None:
         if model_identity.exact_model_id != requested_model:
-            raise OpenRouterModelError("registered model identity does not match the request")
+            raise OpenRouterResponseIdentityError(
+                "registered model identity does not match the request",
+                diagnostic_code="registered_model_identity_mismatch",
+                validation_status=ModelRequestValidationStatus.MODEL_MISMATCH,
+            )
         accepted_response_models = model_identity.accepted_response_models
     if selected_model not in accepted_response_models:
-        raise OpenRouterModelError("selected provider used a different exact model")
+        raise OpenRouterResponseIdentityError(
+            "selected provider used a different exact model",
+            diagnostic_code="selected_model_outside_frozen_identity",
+            validation_status=ModelRequestValidationStatus.MODEL_MISMATCH,
+        )
     selected_provider = _resolve_provider_endpoint(
         selected_provider_name,
         provider_policy=provider_policy,
@@ -2519,8 +3452,10 @@ def _validate_router_metadata(
             endpoint_policy=endpoint_policy,
         )
         if response_provider_endpoint != selected_provider:
-            raise OpenRouterProviderPolicyError(
-                "selected provider does not match the response provider"
+            raise OpenRouterResponseIdentityError(
+                "selected provider does not match the response provider",
+                diagnostic_code="provider_identity_mismatch",
+                validation_status=ModelRequestValidationStatus.PROVIDER_MISMATCH,
             )
 
     attempts = value.get("attempts")
@@ -2549,12 +3484,13 @@ def _validate_router_metadata(
                 field="attempt provider",
             )
             status = attempt.get("status")
-            if (
-                attempt_model != selected_model
-                or not isinstance(status, int)
-                or isinstance(status, bool)
-                or not 100 <= status <= 599
-            ):
+            if attempt_model != selected_model:
+                raise OpenRouterResponseIdentityError(
+                    "router metadata provider attempt used a different model",
+                    diagnostic_code="provider_attempt_model_mismatch",
+                    validation_status=ModelRequestValidationStatus.MODEL_MISMATCH,
+                )
+            if not isinstance(status, int) or isinstance(status, bool) or not 100 <= status <= 599:
                 raise OpenRouterSchemaError("router metadata provider attempt is invalid")
             attempt_provider = _resolve_provider_endpoint(
                 attempt_provider_name,
@@ -2564,11 +3500,17 @@ def _validate_router_metadata(
             if index == len(attempts) - 1 and (
                 status != 200 or attempt_provider != selected_provider
             ):
-                raise OpenRouterSchemaError(
-                    "router success attempt does not match selected provider"
+                raise OpenRouterResponseIdentityError(
+                    "router success attempt does not match selected provider",
+                    diagnostic_code="provider_success_route_mismatch",
+                    validation_status=ModelRequestValidationStatus.PROVIDER_MISMATCH,
                 )
         if not provider_policy.allow_fallbacks and len(attempts) != 1:
-            raise OpenRouterProviderPolicyError("router performed an unapproved provider fallback")
+            raise OpenRouterResponseIdentityError(
+                "router performed an unapproved provider fallback",
+                diagnostic_code="unapproved_fallback",
+                validation_status=ModelRequestValidationStatus.PROVIDER_MISMATCH,
+            )
         attempt_count = len(attempts)
 
     raw_pipeline = value.get("pipeline", [])
@@ -2582,8 +3524,10 @@ def _validate_router_metadata(
         stage_name = _required_safe_string(stage.get("name"), field="pipeline stage name")
         pipeline.append({"type": stage_type, "name": stage_name})
     if provider_policy.certification and pipeline:
-        raise OpenRouterProviderPolicyError(
-            "certification forbids provider-side pipeline transformations"
+        raise OpenRouterResponseIdentityError(
+            "certification forbids provider-side pipeline transformations",
+            diagnostic_code="provider_pipeline_unapproved",
+            validation_status=ModelRequestValidationStatus.PROVIDER_MISMATCH,
         )
     return (
         value,
@@ -2606,8 +3550,10 @@ def _resolve_provider_endpoint(
     if endpoint_policy is not None:
         endpoint = endpoint_policy.endpoint(provider_identity)
         if endpoint is None:
-            raise OpenRouterProviderPolicyError(
-                "provider response identity is outside or ambiguous under the endpoint snapshot"
+            raise OpenRouterResponseIdentityError(
+                "provider response identity is outside or ambiguous under the endpoint snapshot",
+                diagnostic_code="endpoint_variant_mismatch",
+                validation_status=ModelRequestValidationStatus.PROVIDER_MISMATCH,
             )
         return endpoint.provider_endpoint
     configured = {
@@ -2616,8 +3562,10 @@ def _resolve_provider_endpoint(
     if configured:
         configured_endpoint = configured.get(provider_identity.casefold())
         if configured_endpoint is None:
-            raise OpenRouterProviderPolicyError(
-                "selected provider is outside the configured endpoint policy"
+            raise OpenRouterResponseIdentityError(
+                "selected provider is outside the configured endpoint policy",
+                diagnostic_code="provider_outside_approved_route",
+                validation_status=ModelRequestValidationStatus.PROVIDER_MISMATCH,
             )
         return configured_endpoint
     return provider_identity
@@ -2691,6 +3639,77 @@ def _cached_tokens(usage: Mapping[str, Any]) -> int:
     return 0
 
 
+def _accepted_response_models(
+    requested_model: str,
+    model_identity: _RegisteredModelIdentity | None,
+) -> frozenset[str]:
+    if model_identity is None or model_identity.exact_model_id != requested_model:
+        return frozenset((requested_model,))
+    return model_identity.accepted_response_models
+
+
+def _is_concluded_unbound_completion(completion: StructuredCompletion[Any]) -> bool:
+    return (
+        completion.usage_record.identity_strength is ModelIdentityStrength.UNBOUND
+        and completion.usage_record.routing.get("identity_binding_status")
+        in {"generation_metadata_unbound", "response_identity_unbound"}
+    )
+
+
+def _identity_failure_diagnostic(
+    *,
+    payload: dict[str, Any] | None,
+    requested_model: str,
+    model_identity: _RegisteredModelIdentity | None,
+    error: Exception,
+) -> dict[str, str] | None:
+    """Return a bounded non-secret reason why provider identity stayed unbound."""
+
+    returned_model = (
+        _safe_identity_diagnostic_string(payload.get("model")) if payload is not None else None
+    )
+    accepted = _accepted_response_models(requested_model, model_identity)
+    canonical_model = (
+        model_identity.canonical_slug if model_identity is not None else requested_model
+    )
+    if isinstance(error, OpenRouterResponseIdentityError):
+        diagnostic = {
+            "code": error.diagnostic_code,
+            "requested_model": requested_model,
+            "canonical_model": canonical_model,
+        }
+        if returned_model is not None:
+            diagnostic["returned_model"] = returned_model
+        return diagnostic
+    if returned_model is not None and returned_model not in accepted:
+        return {
+            "code": "returned_model_outside_frozen_identity",
+            "requested_model": requested_model,
+            "canonical_model": canonical_model,
+            "returned_model": returned_model,
+        }
+    if isinstance(error, OpenRouterProviderPolicyError):
+        return {
+            "code": "provider_endpoint_outside_frozen_identity",
+            "requested_model": requested_model,
+            "canonical_model": canonical_model,
+        }
+    if isinstance(error, OpenRouterModelError):
+        return {
+            "code": "model_identity_unbound",
+            "requested_model": requested_model,
+            "canonical_model": canonical_model,
+        }
+    return None
+
+
+def _safe_identity_diagnostic_string(value: Any) -> str | None:
+    try:
+        return _required_safe_string(value, field="identity diagnostic", max_length=300)
+    except OpenRouterSchemaError:
+        return None
+
+
 def _usage_dict(payload: dict[str, Any]) -> dict[str, Any]:
     usage = payload.get("usage", {})
     return usage if isinstance(usage, dict) else {}
@@ -2714,6 +3733,8 @@ def _response_generation_id(
 
 
 def _provider_error_classification(error: Exception) -> str:
+    if isinstance(error, OpenRouterResponseIdentityError):
+        return "identity_unbound"
     if isinstance(error, OpenRouterAuthenticationError):
         return "authentication"
     if isinstance(error, BudgetExhaustedError):
@@ -2741,7 +3762,27 @@ def _provider_error_classification(error: Exception) -> str:
     return "internal"
 
 
+def _generation_metadata_failure_diagnostic(
+    error: OpenRouterError,
+) -> OpenRouterIdentityDiagnosticCode:
+    if isinstance(error, OpenRouterAuthenticationError):
+        return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_AUTHENTICATION_FAILED
+    if isinstance(error, OpenRouterTimeoutError):
+        return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_TIMEOUT
+    if isinstance(error, OpenRouterRateLimitError):
+        return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_RATE_LIMITED
+    if isinstance(error, OpenRouterProviderUnavailableError):
+        return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_PROVIDER_UNAVAILABLE
+    if isinstance(error, OpenRouterPrivacyError):
+        return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_INTEGRITY_REJECTED
+    if isinstance(error, OpenRouterSchemaError):
+        return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_INVALID
+    return OpenRouterIdentityDiagnosticCode.GENERATION_METADATA_RETRIEVAL_FAILED
+
+
 def _failure_validation_status(error: Exception) -> ModelRequestValidationStatus:
+    if isinstance(error, OpenRouterResponseIdentityError):
+        return error.validation_status
     if isinstance(error, OpenRouterTruncatedResponseError):
         return ModelRequestValidationStatus.TRUNCATED
     if isinstance(error, OpenRouterProviderPolicyError):
@@ -2757,9 +3798,14 @@ def _failure_status(
     error: Exception,
     requested_model: str,
     payload: dict[str, Any] | None,
+    *,
+    accepted_response_models: frozenset[str] | None = None,
 ) -> str:
     returned_model = _optional_string(payload.get("model")) if payload is not None else None
-    if returned_model is not None and returned_model != requested_model:
+    accepted = accepted_response_models or frozenset((requested_model,))
+    if isinstance(error, OpenRouterResponseIdentityError):
+        return "unbound_identity"
+    if returned_model is not None and returned_model not in accepted:
         return "rejected_model_substitution"
     if isinstance(error, OpenRouterProviderPolicyError):
         return "rejected_provider_substitution"

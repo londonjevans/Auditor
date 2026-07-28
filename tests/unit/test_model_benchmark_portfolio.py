@@ -51,6 +51,7 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.reporting.json_report import stable_json
+from tests.identity_fixtures import bind_synthetic_usage_identity
 
 ROOT = Path(__file__).parents[2]
 CORPUS_PATH = ROOT / "benchmarks" / "model_corpus" / "manifest.json"
@@ -276,6 +277,7 @@ def _as_structural_real(report: ModelBenchmarkReport) -> ModelBenchmarkReport:
         case["usage_record"]["execution_evidence"] = ExecutionEvidenceKind.REAL.value
         case["usage_record"]["routing"]["certification_request"] = True
         case["usage_record"]["routing"]["canonical_model"] = record.requested_model
+        case["usage_record"]["routing"]["selected_provider_name"] = "Synthetic"
         case["usage_record"]["routing"]["endpoint_snapshot_sha256"] = "1" * 64
         case["usage_record"]["routing"]["endpoint_pricing_sha256"] = "2" * 64
         case["usage_record"]["routing"]["catalog_identity_binding_sha256"] = canonical_sha256(
@@ -287,30 +289,34 @@ def _as_structural_real(report: ModelBenchmarkReport) -> ModelBenchmarkReport:
         case["usage_record"]["routing"]["catalog_snapshot_sha256"] = "3" * 64
         case["usage_record"]["routing"]["discovery_provenance_sha256"] = "4" * 64
         case["usage_record"]["routing"]["discovery_evidence_sha256"] = "5" * 64
+        bound_record = bind_synthetic_usage_identity(
+            UsageRecord.model_validate(case["usage_record"])
+        )
+        case["usage_record"] = bound_record.model_dump(mode="json")
         case["generation_evidence"] = validate_openrouter_generation_payload(
             {
                 "data": {
-                    "id": record.openrouter_generation_id,
-                    "model": record.actual_model,
+                    "id": bound_record.openrouter_generation_id,
+                    "model": bound_record.actual_model,
                     "provider_name": "Synthetic",
                     "finish_reason": "stop",
                     "native_finish_reason": None,
-                    "tokens_prompt": record.prompt_tokens,
-                    "tokens_completion": record.completion_tokens,
-                    "native_tokens_prompt": record.prompt_tokens,
-                    "native_tokens_completion": record.completion_tokens,
+                    "tokens_prompt": bound_record.prompt_tokens,
+                    "tokens_completion": bound_record.completion_tokens,
+                    "native_tokens_prompt": bound_record.prompt_tokens,
+                    "native_tokens_completion": bound_record.completion_tokens,
                     "native_tokens_reasoning": 0,
                     "native_tokens_cached": 0,
                     "total_cost": "0.01",
                     "usage": "0.01",
                     "cancelled": False,
-                    "created_at": record.started_at,
-                    "request_id": record.request_id,
+                    "created_at": bound_record.started_at,
+                    "request_id": bound_record.request_id,
                     "latency": "125",
                     "generation_time": None,
                 }
             },
-            requested_generation_id=record.openrouter_generation_id,
+            requested_generation_id=bound_record.openrouter_generation_id,
             retrieved_at=NOW + timedelta(hours=2),
             execution_evidence=ExecutionEvidenceKind.REAL,
         ).model_dump(mode="json")

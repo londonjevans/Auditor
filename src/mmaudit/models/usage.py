@@ -6,10 +6,18 @@ import hashlib
 import json
 import math
 import re
+import threading
+import weakref
+from collections.abc import Callable
+from datetime import UTC
 from typing import Any
 
+from pydantic import ValidationError
+
+from mmaudit.models.identity import OpenRouterIdentityBindingResult
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
+    ModelIdentityStrength,
     ModelRequestValidationStatus,
     UsageRecord,
 )
@@ -42,6 +50,33 @@ def is_creditable_usage_record(
 ) -> bool:
     """Return whether one completed provider request has strict, coherent evidence."""
 
+    return _is_strict_usage_record(
+        record,
+        require_real=require_real,
+        require_certification=require_certification,
+        allow_unbound_real=False,
+    )
+
+
+def is_generation_bindable_usage_record(record: UsageRecord) -> bool:
+    """Return whether REAL certification transport evidence may fetch generation metadata."""
+
+    return _is_strict_usage_record(
+        record,
+        require_real=True,
+        require_certification=True,
+        allow_unbound_real=True,
+    )
+
+
+def _is_strict_usage_record(
+    record: UsageRecord,
+    *,
+    require_real: bool,
+    require_certification: bool,
+    allow_unbound_real: bool,
+    require_runtime_attestation: bool = True,
+) -> bool:
     if record.execution_evidence not in {
         ExecutionEvidenceKind.REAL,
         ExecutionEvidenceKind.MOCK,
@@ -50,9 +85,14 @@ def is_creditable_usage_record(
     if require_real and record.execution_evidence is not ExecutionEvidenceKind.REAL:
         return False
     if (
+        record.execution_evidence is ExecutionEvidenceKind.REAL
+        and require_runtime_attestation
+        and not _has_owned_real_usage_attestation(record)
+    ):
+        return False
+    if (
         record.status != "success"
         or record.validation_status is not ModelRequestValidationStatus.VALID
-        or record.returned_model != record.requested_model
         or record.substitution_detected
         or record.provider_error_classification is not None
         or record.finish_reason != "stop"
@@ -133,11 +173,25 @@ def is_creditable_usage_record(
     )
     if not base_valid:
         return False
+    aliases = routing.get("accepted_model_aliases")
+    if record.returned_model != record.requested_model and (
+        not isinstance(aliases, list)
+        or aliases != sorted(set(aliases))
+        or record.returned_model not in aliases
+        or record.actual_model not in aliases
+        or routing.get("provisional_identity_strength")
+        != ModelIdentityStrength.CANONICAL_MODEL_AND_ENDPOINT_BOUND.value
+    ):
+        return False
     certification_request = routing.get("certification_request") is True
     if require_certification and not certification_request:
         return False
     if not certification_request:
-        return True
+        return (
+            allow_unbound_real
+            or record.execution_evidence is not ExecutionEvidenceKind.REAL
+            or _has_valid_bound_identity(record)
+        )
     canonical_model = routing.get("canonical_model")
     actual_model = record.actual_model
     expected_identity_hash = (
@@ -156,6 +210,7 @@ def is_creditable_usage_record(
     )
     return (
         not record.fallback_used
+        and (allow_unbound_real or _has_valid_bound_identity(record))
         and actual_model in {record.requested_model, canonical_model}
         and routing.get("catalog_identity_binding_sha256") == expected_identity_hash
         and len(record.configured_provider_endpoints) == 1
@@ -177,6 +232,178 @@ def _is_sha256(value: Any) -> bool:
     return isinstance(value, str) and _SHA256.fullmatch(value) is not None
 
 
+def _build_owned_real_usage_authority() -> tuple[
+    Callable[[UsageRecord], UsageRecord],
+    Callable[[UsageRecord], bool],
+]:
+    """Keep REAL runtime authority outside caller-mutable Pydantic state."""
+
+    registry: dict[int, tuple[weakref.ReferenceType[UsageRecord], str]] = {}
+    lock = threading.RLock()
+
+    def attest(record: UsageRecord) -> UsageRecord:
+        if type(record) is not UsageRecord:
+            raise ValueError("REAL usage attestation requires an exact usage record")
+        if record.execution_evidence is not ExecutionEvidenceKind.REAL:
+            raise ValueError("REAL usage attestation rejects non-REAL evidence")
+        key = id(record)
+        digest = _usage_record_sha256(record)
+
+        def discard(reference: weakref.ReferenceType[UsageRecord]) -> None:
+            with lock:
+                current = registry.get(key)
+                if current is not None and current[0] is reference:
+                    registry.pop(key, None)
+
+        reference = weakref.ref(record, discard)
+        with lock:
+            registry[key] = (reference, digest)
+        return record
+
+    def contains(record: UsageRecord) -> bool:
+        key = id(record)
+        with lock:
+            registered = registry.get(key)
+        return (
+            registered is not None
+            and registered[0]() is record
+            and registered[1] == _usage_record_sha256(record)
+        )
+
+    return attest, contains
+
+
+_attest_owned_real_usage_record, _has_owned_real_usage_attestation = (
+    _build_owned_real_usage_authority()
+)
+
+
+def _validated_usage_copy_preserving_owned_attestation(
+    record: UsageRecord,
+) -> UsageRecord:
+    """Schema-normalize a trusted in-memory record without dropping its capability."""
+
+    trusted_real = (
+        record.execution_evidence is ExecutionEvidenceKind.REAL
+        and _has_owned_real_usage_attestation(record)
+    )
+    normalized = UsageRecord.model_validate(record.model_dump(mode="json"))
+    if trusted_real:
+        normalized = _attest_owned_real_usage_record(normalized)
+    return normalized
+
+
+def _is_structurally_generation_bindable_usage_record(record: UsageRecord) -> bool:
+    """Validate serialized transport shape without granting REAL runtime credit."""
+
+    return _is_strict_usage_record(
+        record,
+        require_real=True,
+        require_certification=True,
+        allow_unbound_real=True,
+        require_runtime_attestation=False,
+    )
+
+
+def _is_structurally_creditable_usage_record(
+    record: UsageRecord,
+    *,
+    require_real: bool = False,
+    require_certification: bool = False,
+) -> bool:
+    """Validate serialized evidence shape without granting runtime execution credit."""
+
+    return _is_strict_usage_record(
+        record,
+        require_real=require_real,
+        require_certification=require_certification,
+        allow_unbound_real=False,
+        require_runtime_attestation=False,
+    )
+
+
+def _usage_record_sha256(record: UsageRecord) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            record.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _has_valid_bound_identity(record: UsageRecord) -> bool:
+    binding = _validated_identity_binding(record)
+    return (
+        binding is not None
+        and binding.strength is not ModelIdentityStrength.UNBOUND
+        and binding.generation is not None
+        and record.routing.get("identity_binding_status") == "generation_metadata_bound"
+        and _identity_binding_matches_record(record, binding)
+        and binding.generation.generation_id == record.openrouter_generation_id
+        and binding.generation.execution_evidence == record.execution_evidence.value
+    )
+
+
+def _has_valid_unbound_identity_conclusion(record: UsageRecord) -> bool:
+    binding = _validated_identity_binding(record)
+    return (
+        binding is not None
+        and binding.strength is ModelIdentityStrength.UNBOUND
+        and binding.generation is None
+        and record.identity_strength is ModelIdentityStrength.UNBOUND
+        and record.routing.get("identity_binding_status") == "generation_metadata_unbound"
+        and _identity_binding_matches_record(record, binding)
+    )
+
+
+def _validated_identity_binding(
+    record: UsageRecord,
+) -> OpenRouterIdentityBindingResult | None:
+    raw_binding = record.routing.get("identity_binding")
+    if not isinstance(raw_binding, dict):
+        return None
+    try:
+        return OpenRouterIdentityBindingResult.model_validate(raw_binding)
+    except ValidationError:
+        return None
+
+
+def _identity_binding_matches_record(
+    record: UsageRecord,
+    binding: OpenRouterIdentityBindingResult,
+) -> bool:
+    request = binding.request
+    started_at = record.started_at
+    ended_at = record.ended_at
+    if started_at is None or ended_at is None:
+        return False
+    return (
+        binding.strength is record.identity_strength
+        and record.routing.get("identity_binding_sha256") == binding.binding_sha256
+        and request.internal_request_id == record.request_id
+        and request.execution_evidence == record.execution_evidence.value
+        and request.requested_slug == record.requested_model
+        and request.returned_slug == record.returned_model
+        and request.selected_model_slug == record.actual_model
+        and request.actual_provider_endpoint == record.actual_provider_endpoint
+        and request.actual_provider_name == record.routing.get("selected_provider_name")
+        and request.openrouter_generation_id == record.openrouter_generation_id
+        and request.request_body_sha256 == record.request_body_sha256
+        and request.response_sha256 == record.response_sha256
+        and request.validated_response_sha256 == record.validated_response_sha256
+        and request.started_at == started_at.astimezone(UTC).replace(microsecond=0)
+        and request.completed_at == ended_at.astimezone(UTC).replace(microsecond=0)
+        and request.fallback_used == record.routing.get("provider_fallback_used")
+        and binding.snapshot.snapshot_sha256 == record.routing.get("identity_snapshot_sha256")
+        and binding.snapshot.catalog_identity_binding_sha256
+        == record.routing.get("catalog_identity_binding_sha256")
+        and binding.snapshot.endpoint_snapshot_sha256
+        == record.routing.get("endpoint_snapshot_sha256")
+    )
+
+
 class UsageLedger:
     """Collect immutable request records without global state."""
 
@@ -185,6 +412,61 @@ class UsageLedger:
 
     def add(self, record: UsageRecord) -> None:
         self._records.append(record)
+
+    def replace_with_bound_identity(self, record: UsageRecord) -> None:
+        """Replace one owned provisional record only with its sealed identity upgrade."""
+
+        if not _has_valid_bound_identity(record):
+            raise ValueError("usage identity replacement requires a valid bound identity")
+        self._replace_with_identity_result(record)
+
+    def replace_with_unbound_identity(self, record: UsageRecord) -> None:
+        """Retain one owned fail-closed identity conclusion and bounded diagnostics."""
+
+        if not _has_valid_unbound_identity_conclusion(record):
+            raise ValueError("usage identity replacement requires a valid unbound conclusion")
+        self._replace_with_identity_result(record)
+
+    def _replace_with_identity_result(self, record: UsageRecord) -> None:
+        """Replace a provisional record without changing immutable request evidence."""
+
+        matching = [
+            (index, existing)
+            for index, existing in enumerate(self._records)
+            if existing.request_id == record.request_id
+        ]
+        if len(matching) != 1:
+            raise ValueError("usage identity replacement requires one owned request record")
+        index, existing = matching[0]
+        if existing == record:
+            return
+        if existing.execution_evidence is ExecutionEvidenceKind.REAL and (
+            not _has_owned_real_usage_attestation(existing)
+            or not _has_owned_real_usage_attestation(record)
+        ):
+            raise ValueError("REAL usage identity replacement requires owned runtime provenance")
+        if (
+            existing.identity_strength is not ModelIdentityStrength.UNBOUND
+            or existing.routing.get("identity_binding_status") != "generation_metadata_pending"
+        ):
+            raise ValueError("usage identity replacement cannot overwrite a concluded record")
+        existing_core = existing.model_dump(
+            mode="json",
+            exclude={"identity_strength", "routing"},
+        )
+        replacement_core = record.model_dump(
+            mode="json",
+            exclude={"identity_strength", "routing"},
+        )
+        expected_routing = {
+            **existing.routing,
+            "identity_binding": record.routing.get("identity_binding"),
+            "identity_binding_sha256": record.routing.get("identity_binding_sha256"),
+            "identity_binding_status": record.routing.get("identity_binding_status"),
+        }
+        if replacement_core != existing_core or record.routing != expected_routing:
+            raise ValueError("usage identity replacement changed immutable request evidence")
+        self._records[index] = record
 
     @property
     def records(self) -> list[UsageRecord]:

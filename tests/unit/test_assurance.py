@@ -118,6 +118,7 @@ from mmaudit.traceability import (
     TraceabilityRequirement,
     build_traceability_matrix,
 )
+from tests.identity_fixtures import bind_synthetic_usage_identity
 from tests.qualification_support import (
     bind_usage_to_qualification as _bind_base_usage_to_qualification,
 )
@@ -133,26 +134,30 @@ def _bind_usage_to_qualification(
 ) -> UsageRecord:
     bound = _bind_base_usage_to_qualification(record, qualification, now)
     model = qualification.model_for(record.requested_model, now=now)
-    return bound.model_copy(
-        update={
-            "routing": {
-                **bound.routing,
-                "qualified_exact_model_id": model.exact_model_id,
-                "qualified_canonical_model_slug": model.canonical_model_slug,
-                "qualified_root_lineage": model.root_lineage,
-                "qualified_provider_endpoint": model.approved_provider_endpoint,
-                "qualified_provider_name": model.approved_provider_name,
-                "qualified_endpoint_snapshot_sha256": model.endpoint_snapshot_sha256,
-                "qualified_model_metadata_snapshot_sha256": (model.model_metadata_snapshot_sha256),
-                "qualified_pricing_snapshot_sha256": model.pricing_snapshot_sha256,
-                "qualified_roles": list(model.approved_roles),
-                "qualification_verified_at": qualification.verified_at.isoformat(),
-                "qualification_expires_at": model.expires_at.isoformat(),
-                "endpoint_snapshot_sha256": model.endpoint_snapshot_sha256,
-                "endpoint_pricing_sha256": model.pricing_snapshot_sha256,
-                "model_metadata_snapshot_sha256": model.model_metadata_snapshot_sha256,
+    return bind_synthetic_usage_identity(
+        bound.model_copy(
+            update={
+                "routing": {
+                    **bound.routing,
+                    "qualified_exact_model_id": model.exact_model_id,
+                    "qualified_canonical_model_slug": model.canonical_model_slug,
+                    "qualified_root_lineage": model.root_lineage,
+                    "qualified_provider_endpoint": model.approved_provider_endpoint,
+                    "qualified_provider_name": model.approved_provider_name,
+                    "qualified_endpoint_snapshot_sha256": model.endpoint_snapshot_sha256,
+                    "qualified_model_metadata_snapshot_sha256": (
+                        model.model_metadata_snapshot_sha256
+                    ),
+                    "qualified_pricing_snapshot_sha256": model.pricing_snapshot_sha256,
+                    "qualified_roles": list(model.approved_roles),
+                    "qualification_verified_at": qualification.verified_at.isoformat(),
+                    "qualification_expires_at": model.expires_at.isoformat(),
+                    "endpoint_snapshot_sha256": model.endpoint_snapshot_sha256,
+                    "endpoint_pricing_sha256": model.pricing_snapshot_sha256,
+                    "model_metadata_snapshot_sha256": model.model_metadata_snapshot_sha256,
+                }
             }
-        }
+        )
     )
 
 
@@ -507,74 +512,77 @@ def _real_model_usage(now: datetime) -> list[UsageRecord]:
     )
     role_models = {**base_models, **specialist_models}
     return [
-        UsageRecord(
-            request_id=f"request-{index:02d}",
-            role=role,
-            execution_evidence=ExecutionEvidenceKind.REAL,
-            requested_model=(model_id := role_models[role]),
-            returned_model=model_id,
-            actual_model=model_id,
-            provider="approved-provider",
-            model_family=model_id,
-            timestamp=now,
-            prompt_tokens=100,
-            completion_tokens=100,
-            total_tokens=200,
-            reported_cost_usd=0.01,
-            accounted_cost_usd=0.01,
-            routing={
-                "generation_id": f"generation-{index:02d}",
-                "selected_model": model_id,
-                "canonical_model": model_id,
-                "selected_provider_endpoint": "approved-provider",
-                "router_strategy": "direct",
-                "router_attempt": 1,
-                "router_attempt_count": 1,
-                "router_pipeline": [],
-                "finish_reason": "stop",
-                "schema_sha256": "d" * 64,
-                "router_metadata_sha256": "e" * 64,
-                "provider_policy_sha256": "f" * 64,
-                "provider_fallbacks_allowed": False,
-                "certification_request": True,
-                "endpoint_snapshot_sha256": "1" * 64,
-                "endpoint_pricing_sha256": "2" * 64,
-                "catalog_identity_binding_sha256": canonical_sha256(
-                    {
-                        "canonical_slug": model_id,
-                        "id": model_id,
-                    }
-                ),
-                "catalog_snapshot_sha256": "3" * 64,
-                "discovery_provenance_sha256": "4" * 64,
-                "discovery_evidence_sha256": "5" * 64,
-                "validation_status": "valid",
-                "zdr_requested": True,
-                "data_collection": "deny",
-                "repair_used": False,
-                "repair_request": False,
-                "request_started_at": now.isoformat(),
-                "request_ended_at": now.isoformat(),
-                "latency_ms": 0,
-            },
-            prompt_sha256=hashlib.sha256(f"{role}:prompt".encode()).hexdigest(),
-            response_sha256=hashlib.sha256(f"{role}:response".encode()).hexdigest(),
-            validated_response_sha256=hashlib.sha256(
-                f"{role}:validated-response".encode()
-            ).hexdigest(),
-            request_body_sha256=hashlib.sha256(f"{role}:request".encode()).hexdigest(),
-            schema_sha256="d" * 64,
-            openrouter_generation_id=f"generation-{index:02d}",
-            configured_provider_endpoints=["approved-provider"],
-            actual_provider_endpoint="approved-provider",
-            started_at=now,
-            ended_at=now,
-            latency_ms=0,
-            finish_reason="stop",
-            retry_count=0,
-            validation_status=ModelRequestValidationStatus.VALID,
-            status="success",
-            attempts=1,
+        bind_synthetic_usage_identity(
+            UsageRecord(
+                request_id=f"request-{index:02d}",
+                role=role,
+                execution_evidence=ExecutionEvidenceKind.REAL,
+                requested_model=(model_id := role_models[role]),
+                returned_model=model_id,
+                actual_model=model_id,
+                provider="approved-provider",
+                model_family=model_id,
+                timestamp=now,
+                prompt_tokens=100,
+                completion_tokens=100,
+                total_tokens=200,
+                reported_cost_usd=0.01,
+                accounted_cost_usd=0.01,
+                routing={
+                    "generation_id": f"generation-{index:02d}",
+                    "selected_model": model_id,
+                    "canonical_model": model_id,
+                    "selected_provider_endpoint": "approved-provider",
+                    "selected_provider_name": "approved-provider",
+                    "router_strategy": "direct",
+                    "router_attempt": 1,
+                    "router_attempt_count": 1,
+                    "router_pipeline": [],
+                    "finish_reason": "stop",
+                    "schema_sha256": "d" * 64,
+                    "router_metadata_sha256": "e" * 64,
+                    "provider_policy_sha256": "f" * 64,
+                    "provider_fallbacks_allowed": False,
+                    "certification_request": True,
+                    "endpoint_snapshot_sha256": "1" * 64,
+                    "endpoint_pricing_sha256": "2" * 64,
+                    "catalog_identity_binding_sha256": canonical_sha256(
+                        {
+                            "canonical_slug": model_id,
+                            "id": model_id,
+                        }
+                    ),
+                    "catalog_snapshot_sha256": "3" * 64,
+                    "discovery_provenance_sha256": "4" * 64,
+                    "discovery_evidence_sha256": "5" * 64,
+                    "validation_status": "valid",
+                    "zdr_requested": True,
+                    "data_collection": "deny",
+                    "repair_used": False,
+                    "repair_request": False,
+                    "request_started_at": now.isoformat(),
+                    "request_ended_at": now.isoformat(),
+                    "latency_ms": 0,
+                },
+                prompt_sha256=hashlib.sha256(f"{role}:prompt".encode()).hexdigest(),
+                response_sha256=hashlib.sha256(f"{role}:response".encode()).hexdigest(),
+                validated_response_sha256=hashlib.sha256(
+                    f"{role}:validated-response".encode()
+                ).hexdigest(),
+                request_body_sha256=hashlib.sha256(f"{role}:request".encode()).hexdigest(),
+                schema_sha256="d" * 64,
+                openrouter_generation_id=f"generation-{index:02d}",
+                configured_provider_endpoints=["approved-provider"],
+                actual_provider_endpoint="approved-provider",
+                started_at=now,
+                ended_at=now,
+                latency_ms=0,
+                finish_reason="stop",
+                retry_count=0,
+                validation_status=ModelRequestValidationStatus.VALID,
+                status="success",
+                attempts=1,
+            )
         )
         for index, role in enumerate(roles)
     ]
@@ -1333,7 +1341,8 @@ def test_mismatched_qualified_usage_projection_revokes_runtime_credit(
             continue
         routing = dict(record.routing)
         if fault == "canonical_model":
-            mismatched_canonical = "synthetic/canonical-mismatch"
+            requested_author = record.requested_model.split("/", 1)[0]
+            mismatched_canonical = f"{requested_author}/canonical-mismatch"
             routing.update(
                 {
                     "selected_model": mismatched_canonical,
@@ -1349,6 +1358,7 @@ def test_mismatched_qualified_usage_projection_revokes_runtime_credit(
             record = record.model_copy(
                 update={
                     "actual_model": mismatched_canonical,
+                    "returned_model": mismatched_canonical,
                     "routing": routing,
                 }
             )
@@ -1371,6 +1381,7 @@ def test_mismatched_qualified_usage_projection_revokes_runtime_credit(
             }
             routing[fault] = mismatched_values[fault]
             record = record.model_copy(update={"routing": routing})
+        record = bind_synthetic_usage_identity(record)
         assert is_creditable_usage_record(
             record,
             require_real=True,

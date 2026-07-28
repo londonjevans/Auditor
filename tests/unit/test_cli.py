@@ -242,7 +242,7 @@ def test_scanner_only_rejects_model_qualification_inputs(
     )
 
 
-def test_audit_qualification_loader_keeps_benchmark_and_production_config_hashes_distinct(
+def test_audit_qualification_loader_rejects_disk_only_content_provenance_before_provider(
     tmp_path: Path,
     monkeypatch,
     config_factory,
@@ -259,8 +259,7 @@ def test_audit_qualification_loader_keeps_benchmark_and_production_config_hashes
         ground_truth=SimpleNamespace(schema_version=pins.ground_truth_version),
         ground_truth_sha256=pins.ground_truth_sha256,
     )
-    resolved = object()
-    resolver_arguments: dict[str, Any] = {}
+    provider_called = False
 
     def inputs(effective_config_sha256: str) -> tuple[SimpleNamespace, SimpleNamespace]:
         release = SimpleNamespace(
@@ -295,15 +294,13 @@ def test_audit_qualification_loader_keeps_benchmark_and_production_config_hashes
         lambda _path: release,
     )
     monkeypatch.setattr(
-        "mmaudit.cli.resolve_verified_production_qualification",
-        lambda **kwargs: resolver_arguments.update(kwargs) or resolved,
-    )
-    monkeypatch.setattr(
         "mmaudit.cli.load_model_benchmark_corpus",
         lambda _path, *, ground_truth_path: benchmark_suite,
     )
 
     async def refetch(**_kwargs):
+        nonlocal provider_called
+        provider_called = True
         return object()
 
     monkeypatch.setattr("mmaudit.cli._refetch_qualification_generations", refetch)
@@ -323,19 +320,18 @@ def test_audit_qualification_loader_keeps_benchmark_and_production_config_hashes
         "secrets_env_file": None,
     }
 
-    loaded = asyncio.run(
-        _load_audit_production_qualification(
-            config=config,
-            scanner_only=False,
-            **paths,
+    with pytest.raises(ValueError, match="live response-content campaign provenance"):
+        asyncio.run(
+            _load_audit_production_qualification(
+                config=config,
+                scanner_only=False,
+                **paths,
+            )
         )
-    )
 
-    assert loaded is resolved
     assert release.effective_config_sha256 == benchmark_hash
-    assert resolver_arguments["expected_bindings"] is release
-    assert resolver_arguments["production_effective_config_sha256"] == production_hash
-    assert resolver_arguments["trusted_generation_verification"] is not None
+    assert production_hash != benchmark_hash
+    assert not provider_called
 
 
 def test_audit_qualification_loader_rejects_alternate_policy_before_provider_work(
@@ -454,7 +450,11 @@ def test_audit_qualification_loader_resolves_derived_production_config_without_r
         lambda **_kwargs: None,
     )
 
+    provider_called = False
+
     async def refetch(**_kwargs):
+        nonlocal provider_called
+        provider_called = True
         return object()
 
     monkeypatch.setattr("mmaudit.cli._refetch_qualification_generations", refetch)
@@ -470,27 +470,23 @@ def test_audit_qualification_loader_resolves_derived_production_config_without_r
         lambda **_kwargs: qualification.benchmark_evidence,
     )
 
-    resolved = asyncio.run(
-        _load_audit_production_qualification(
-            config=config,
-            scanner_only=False,
-            bundle_path=tmp_path / "bundle.json",
-            policy_path=tmp_path / "policy.toml",
-            release_bindings_path=tmp_path / "bindings.json",
-            release_source_root=tmp_path,
-            corpus_path=tmp_path / "corpus.json",
-            ground_truth_path=tmp_path / "ground-truth.json",
-            secrets_env_file=None,
+    with pytest.raises(ValueError, match="live response-content campaign provenance"):
+        asyncio.run(
+            _load_audit_production_qualification(
+                config=config,
+                scanner_only=False,
+                bundle_path=tmp_path / "bundle.json",
+                policy_path=tmp_path / "policy.toml",
+                release_bindings_path=tmp_path / "bindings.json",
+                release_source_root=tmp_path,
+                corpus_path=tmp_path / "corpus.json",
+                ground_truth_path=tmp_path / "ground-truth.json",
+                secrets_env_file=None,
+            )
         )
-    )
 
-    assert resolved is not None
-    assert resolved.artifact_sha256 == artifact.artifact_sha256
-    assert resolved.bindings.effective_config_sha256 != config.stable_hash()
-    assert resolved.production_effective_config_sha256 == config.stable_hash()
-    assert {model.quality_measurement for model in resolved.models} == {
-        lineage.quality_measurement for lineage in config.models.registry
-    }
+    assert artifact.bindings.effective_config_sha256 != config.stable_hash()
+    assert not provider_called
 
 
 def test_models_benchmark_help_lists_blinded_corpus_and_egress_controls() -> None:

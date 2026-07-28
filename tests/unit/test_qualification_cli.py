@@ -205,19 +205,17 @@ def _patch_refetch(
     return trusted_capability
 
 
-def test_models_qualify_uses_atomic_portfolio_and_mocked_refetch_boundary(
+def test_models_qualify_keeps_disk_only_campaign_inconclusive_without_refetch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fixture = _workflow_fixture()
     _patch_external_inputs(monkeypatch, fixture)
     captured: dict[str, object] = {}
     events: list[str] = []
-    trusted_capability = object()
 
-    async def refetch(**kwargs: object) -> object:
+    async def refetch(**_kwargs: object) -> object:
         events.append("refetch")
-        captured["refetch"] = kwargs
-        return trusted_capability
+        raise AssertionError("disk-only campaign must not trigger paid provider work")
 
     monkeypatch.setattr(cli_module, "_refetch_qualification_generations", refetch)
 
@@ -234,10 +232,10 @@ def test_models_qualify_uses_atomic_portfolio_and_mocked_refetch_boundary(
         events.append("workflow")
         assert kwargs["benchmark_portfolio"] == fixture["portfolio"]
         assert kwargs["benchmark_reports"] == (fixture["report"],)
-        assert kwargs["trusted_campaign_verification"] is fixture["campaign_verification"]
-        assert kwargs["trusted_generation_verification"] is trusted_capability
+        assert kwargs["trusted_campaign_verification"] is None
+        assert kwargs["trusted_generation_verification"] is None
         captured["workflow_called"] = True
-        return fixture["ready_bundle"]
+        return fixture["bundle"]
 
     monkeypatch.setattr(cli_module, "run_qualification_workflow", run_workflow)
     monkeypatch.setattr(
@@ -248,14 +246,11 @@ def test_models_qualify_uses_atomic_portfolio_and_mocked_refetch_boundary(
 
     result = runner.invoke(cli_module.app, _qualify_args())
 
-    assert result.exit_code == ExitCode.SUCCESS
+    assert result.exit_code == ExitCode.INCOMPLETE
     assert captured["workflow_called"] is True
-    assert captured["written"] == fixture["ready_bundle"]
-    refetch = captured["refetch"]
-    assert isinstance(refetch, dict)
-    assert refetch["secrets_env_file"].name == "secrets.env"
-    assert events == ["refetch", "observe", "workflow"]
-    assert "production_selection_ready=true" in result.output
+    assert captured["written"] == fixture["bundle"]
+    assert events == ["observe", "workflow"]
+    assert "production_selection_ready=false" in result.output
     assert "source_excerpt" not in result.output
 
 

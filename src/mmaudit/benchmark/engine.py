@@ -37,7 +37,10 @@ from mmaudit.models.schemas import (
     StrictModel,
     UsageRecord,
 )
-from mmaudit.models.usage import is_creditable_usage_record
+from mmaudit.models.usage import (
+    _is_structurally_creditable_usage_record,
+    is_creditable_usage_record,
+)
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_path
@@ -2812,30 +2815,48 @@ def _model_review_metrics(
     usage_denominator = 0
     usage_evaluated = 0
     creditable_usage: dict[str, dict[str, tuple[UsageRecord, str]]] = {}
+    authority_pending_usage: dict[str, dict[str, tuple[UsageRecord, str]]] = {}
     for report_input in report_inputs:
         report = reports.get(report_input.repository_id)
         records = report.usage if report is not None and report_input.parsed else []
         if not records:
             usage_denominator += 1
+            if _report_input_is_failed_evaluation(report_input):
+                usage_evaluated += 1
             continue
         usage_denominator += len(records)
-        usage_evaluated += len(records)
         records_by_request: dict[str, list[UsageRecord]] = {}
         for record in records:
             records_by_request.setdefault(record.request_id, []).append(record)
         repository_usage: dict[str, tuple[UsageRecord, str]] = {}
-        if report_input.usable:
-            for request_id, candidates in records_by_request.items():
-                if len(candidates) != 1:
-                    continue
-                record = candidates[0]
-                lineage = _qualified_usage_lineage(
-                    record,
-                    require_certification=require_certification,
-                )
-                if lineage is not None:
+        repository_pending_usage: dict[str, tuple[UsageRecord, str]] = {}
+        for request_id, candidates in records_by_request.items():
+            if len(candidates) != 1:
+                usage_evaluated += len(candidates)
+                continue
+            record = candidates[0]
+            lineage = _qualified_usage_lineage(
+                record,
+                require_certification=require_certification,
+            )
+            if lineage is not None:
+                usage_evaluated += 1
+                if report_input.usable:
                     repository_usage[request_id] = (record, lineage)
+                continue
+            pending_lineage = _authority_pending_usage_lineage(
+                record,
+                require_certification=require_certification,
+            )
+            if pending_lineage is not None:
+                if report_input.usable:
+                    repository_pending_usage[request_id] = (record, pending_lineage)
+                else:
+                    usage_evaluated += 1
+                continue
+            usage_evaluated += 1
         creditable_usage[report_input.repository_id] = repository_usage
+        authority_pending_usage[report_input.repository_id] = repository_pending_usage
     real_request_count = sum(len(values) for values in creditable_usage.values())
     model_call_metric = _rate_metric(
         numerator=real_request_count,
@@ -2858,17 +2879,22 @@ def _model_review_metrics(
         if report is None or report.model_review_coverage is None:
             surface_denominator += 1
             critical_denominator += 1
+            if _report_input_is_failed_evaluation(report_input):
+                surface_evaluated += 1
+                critical_evaluated += 1
             continue
         coverage = report.model_review_coverage
         usage_by_request = creditable_usage.get(repository_id, {})
+        pending_usage_by_request = authority_pending_usage.get(repository_id, {})
         surfaces = coverage.surfaces
         if not surfaces:
             surface_denominator += 1
             critical_denominator += 1
+            if _report_input_is_failed_evaluation(report_input):
+                surface_evaluated += 1
+                critical_evaluated += 1
             continue
         surface_denominator += len(surfaces)
-        if report_input.usable:
-            surface_evaluated += len(surfaces)
         artifact_hashes_by_request: dict[str, set[str]] = {}
         for surface in surfaces:
             for reference in surface.evidence_references:
@@ -2878,24 +2904,36 @@ def _model_review_metrics(
                     )
         for surface in surfaces:
             credited_lineages: set[str] = set()
+            has_evaluated_evidence = not surface.evidence_references
             for reference in surface.evidence_references:
                 joined = usage_by_request.get(reference.request_id)
-                if (
-                    not reference.credited
-                    or joined is None
-                    or len(artifact_hashes_by_request.get(reference.request_id, set())) != 1
-                ):
+                pending = pending_usage_by_request.get(reference.request_id)
+                if not reference.credited:
+                    has_evaluated_evidence = True
                     continue
-                usage, lineage = joined
-                if not _model_reference_matches_usage(reference, usage, lineage=lineage):
+                if len(artifact_hashes_by_request.get(reference.request_id, set())) != 1:
+                    has_evaluated_evidence = True
                     continue
-                credited_lineages.add(lineage)
+                if joined is not None:
+                    has_evaluated_evidence = True
+                    usage, lineage = joined
+                    if _model_reference_matches_usage(reference, usage, lineage=lineage):
+                        credited_lineages.add(lineage)
+                    continue
+                if pending is not None:
+                    usage, lineage = pending
+                    if _model_reference_matches_usage(reference, usage, lineage=lineage):
+                        continue
+                has_evaluated_evidence = True
+            input_failed = _report_input_is_failed_evaluation(report_input)
+            if input_failed or (report_input.usable and has_evaluated_evidence):
+                surface_evaluated += 1
             if credited_lineages:
                 reviewed_surfaces += 1
             if not surface.critical:
                 continue
             critical_denominator += 1
-            if report_input.usable:
+            if input_failed or (report_input.usable and has_evaluated_evidence):
                 critical_evaluated += 1
             if len(credited_lineages) >= coverage.minimum_critical_root_lineages:
                 reviewed_critical += 1
@@ -2931,6 +2969,38 @@ def _qualified_usage_lineage(
         require_certification=require_certification,
     ):
         return None
+    return _validated_qualified_usage_lineage(record)
+
+
+def _report_input_is_failed_evaluation(report_input: BenchmarkReportInput) -> bool:
+    return report_input.status in {
+        BenchmarkReportInputStatus.MALFORMED,
+        BenchmarkReportInputStatus.STALE,
+        BenchmarkReportInputStatus.FAILED,
+    }
+
+
+def _authority_pending_usage_lineage(
+    record: UsageRecord,
+    *,
+    require_certification: bool,
+) -> str | None:
+    """Return lineage only for coherent REAL evidence missing live runtime authority."""
+
+    if is_creditable_usage_record(
+        record,
+        require_real=True,
+        require_certification=require_certification,
+    ) or not _is_structurally_creditable_usage_record(
+        record,
+        require_real=True,
+        require_certification=require_certification,
+    ):
+        return None
+    return _validated_qualified_usage_lineage(record)
+
+
+def _validated_qualified_usage_lineage(record: UsageRecord) -> str | None:
     routing = record.routing
     lineage = routing.get("qualified_root_lineage")
     qualified_roles = routing.get("qualified_roles")

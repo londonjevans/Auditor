@@ -18,12 +18,12 @@ from mmaudit.config import (
 )
 from mmaudit.constants import ALL_MODEL_ROLES
 from mmaudit.models.qualification import (
-    _VERIFIED_QUALIFICATION_ISSUER,
     QualificationBindings,
     QualificationDisposition,
     VerifiedProductionQualification,
     VerifiedTierAModelQualification,
     _canonical_json_sha256,
+    _register_verified_production_capability,
     _verified_production_qualification_payload,
 )
 from mmaudit.models.qualification_workflow import (
@@ -37,6 +37,7 @@ from mmaudit.models.release_attestation import (
 )
 from mmaudit.models.schemas import UsageRecord
 from mmaudit.orchestration.manifest import canonical_sha256
+from tests.identity_fixtures import reattest_synthetic_real_usage
 
 
 def synthetic_release_observation(
@@ -125,8 +126,7 @@ def synthetic_production_qualification(
             if configured_lineage is not None
             else f"sha256:{hashlib.sha256(f'lineage:{model_id}'.encode()).hexdigest()}"
         )
-        model = VerifiedTierAModelQualification(_VERIFIED_QUALIFICATION_ISSUER)
-        object.__setattr__(model, "_issuer", _VERIFIED_QUALIFICATION_ISSUER)
+        model = object.__new__(VerifiedTierAModelQualification)
         object.__setattr__(model, "exact_model_id", model_id)
         object.__setattr__(model, "canonical_model_slug", model_id)
         object.__setattr__(model, "root_lineage", root_lineage)
@@ -196,8 +196,7 @@ def synthetic_production_qualification(
         object.__setattr__(model, "benchmark_case_count", 1)
         models.append(model)
 
-    capability = VerifiedProductionQualification(_VERIFIED_QUALIFICATION_ISSUER)
-    object.__setattr__(capability, "_issuer", _VERIFIED_QUALIFICATION_ISSUER)
+    capability = object.__new__(VerifiedProductionQualification)
     bindings = QualificationBindings(
         source_commit="1" * 40,
         source_tree_sha256="2" * 64,
@@ -244,6 +243,7 @@ def synthetic_production_qualification(
         "capability_sha256",
         _canonical_json_sha256(_verified_production_qualification_payload(capability)),
     )
+    _register_verified_production_capability(capability)
     return capability.require_current(now=now)
 
 
@@ -255,7 +255,7 @@ def bind_usage_to_qualification(
     """Attach the exact synthetic capability joins used by assurance tests."""
 
     model = qualification.model_for(record.requested_model, now=now)
-    return record.model_copy(
+    rebound = record.model_copy(
         update={
             "routing": {
                 **record.routing,
@@ -270,3 +270,4 @@ def bind_usage_to_qualification(
             }
         }
     )
+    return reattest_synthetic_real_usage(rebound)

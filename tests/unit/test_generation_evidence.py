@@ -32,7 +32,12 @@ from mmaudit.models.schemas import (
     ModelRequestValidationStatus,
     UsageRecord,
 )
-from mmaudit.models.usage import UsageLedger, is_creditable_usage_record
+from mmaudit.models.usage import (
+    UsageLedger,
+    _attest_owned_real_usage_record,
+    is_creditable_usage_record,
+    is_generation_bindable_usage_record,
+)
 from mmaudit.orchestration.budgets import BudgetManager
 
 _MODEL = "alpha/atlas-secure"
@@ -138,7 +143,7 @@ def _usage_record(
         "repair_used": False,
         "repair_request": False,
     }
-    return UsageRecord(
+    usage = UsageRecord(
         request_id="mmaudit-request-123",
         role="accounting",
         execution_evidence=execution_evidence,
@@ -175,6 +180,9 @@ def _usage_record(
         status="success",
         attempts=1,
     )
+    if execution_evidence is ExecutionEvidenceKind.REAL:
+        usage = _attest_owned_real_usage_record(usage)
+    return usage
 
 
 def _reconcile(
@@ -325,13 +333,10 @@ def test_optional_native_token_metadata_rejects_invalid_non_null_values(field: s
         _evidence(payload=payload)
 
 
-def test_real_generation_evidence_reconciles_creditable_certification_usage() -> None:
+def test_real_generation_evidence_reconciles_bindable_uncredited_certification_usage() -> None:
     usage = _usage_record()
-    assert is_creditable_usage_record(
-        usage,
-        require_real=True,
-        require_certification=True,
-    )
+    assert is_generation_bindable_usage_record(usage)
+    assert not is_creditable_usage_record(usage, require_real=True, require_certification=True)
 
     evidence = _reconcile(_evidence(), usage_record=usage)
 
@@ -703,5 +708,21 @@ def test_generation_verification_request_rejects_missing_generation_identity() -
 def test_trusted_generation_capability_cannot_be_constructed_or_serialized() -> None:
     with pytest.raises(TypeError, match="cannot be constructed"):
         TrustedGenerationVerification((), issuer=object())
+    forged = object.__new__(TrustedGenerationVerification)
+    usage = _usage_record()
+    with pytest.raises(
+        GenerationEvidenceValidationError,
+        match="capability is not trusted",
+    ):
+        forged.attestation_for(
+            benchmark_report_sha256="1" * 64,
+            case_id="case-synthetic",
+            exact_model_id=_MODEL,
+            canonical_model_id=_CANONICAL_MODEL,
+            catalog_identity_binding_sha256=_catalog_identity_binding(),
+            discovery_evidence_sha256=_DISCOVERY_EVIDENCE_SHA256,
+            usage_record=usage,
+            expected_provider_name=_PROVIDER_NAME,
+        )
     assert not hasattr(TrustedGenerationVerification, "model_validate")
     assert not hasattr(TrustedGenerationVerification, "model_dump")

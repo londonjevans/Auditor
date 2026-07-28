@@ -37,6 +37,12 @@ def build_openrouter_runtime_controls(
     """Build fail-closed request controls without accessing operator secrets."""
 
     policy = config.models.provider_policy
+    configured_endpoints = policy.only or policy.order
+    if len(configured_endpoints) > 1 or policy.allow_fallbacks:
+        raise ConfigError(
+            "identity-bound model execution currently requires one exact provider endpoint "
+            "and forbids provider fallback routing"
+        )
     if certification:
         if not config.privacy.require_zdr:
             raise ConfigError("OpenRouter certification requires zero-data-retention routing")
