@@ -9,8 +9,8 @@ CURRENT_MILESTONE: Capability-adaptive structured output
 CURRENT_TICKET: V3-OUTPUT-001
 LAST_COMPLETED_TICKET: V3-PRIVACY-001
 NEXT_ACTION: On operator resume, add failing V3-OUTPUT-001 regressions for strict JSON parsing and endpoint-bound output-mode negotiation before implementation.
-LAST_COMMAND: git status --short && rg -n persistent-state fields and V3-OUTPUT-001 in the v3 worklog and queue
-LAST_RESULT: PAUSED safely before production implementation; only the v3 queue/worklog contain uncommitted ticket-state changes.
+LAST_COMMAND: git push origin main
+LAST_RESULT: PASS; SSH origin advanced from d6a7a58 to pause checkpoint e7c7dcf on main.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 4da4fa08b66d0ebd04a2a8ae7d3bd181e140db33
+LAST_CHECKPOINT_COMMIT: e7c7dcfc8cb85249caea29f271fb6f75308b0311
 
 ## 2026-07-29 — V3-OUTPUT-001
 
