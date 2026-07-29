@@ -308,6 +308,9 @@ LAST_CHECKPOINT_COMMIT: 41a3cf5977c33a66d8286f100c32d6c31dd7f23d
   `41a3cf5977c33a66d8286f100c32d6c31dd7f23d` (`Stabilize fork differential
   replay`) contains the completed ticket implementation, regressions, and
   evidence.
+- **SSH publication:** Implementation checkpoint `41a3cf5` and state checkpoint
+  `915911c` were pushed successfully at `2026-07-29T23:57:28Z` on `main` to
+  `git@github.com:londonjevans/Auditor.git`.
 - **Defensive objective:** Execute the same bounded audited-repository suite
   against a clean local state and one or more operator-pinned fork states, then
   classify only repeated fresh-workspace agreement as typed divergence while a
