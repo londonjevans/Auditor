@@ -623,6 +623,7 @@ class TrustedCleanAnvilLauncher:
                 "trusted clean Anvil process-group isolation requires a POSIX host"
             )
         trusted_executable.validate()
+        trusted_executable.workspace.validate_ancestor_controls()
         try:
             process = self._process_factory(
                 tuple(command),
@@ -654,6 +655,7 @@ class TrustedCleanAnvilLauncher:
             raise
         try:
             trusted_executable.validate()
+            trusted_executable.workspace.validate_ancestor_controls()
             if _hash_descriptor(trusted_executable) != trusted_executable.sha256:
                 raise CleanAnvilConfigurationError(
                     "spawned clean Anvil executable changed across process creation"
@@ -682,6 +684,7 @@ class TrustedCleanAnvilLauncher:
         while self._clock() < deadline:
             if capture.process.poll() is not None:
                 raise _RetryableEarlyExit
+            executable.workspace.validate_ancestor_controls()
             if not capture.output_is_valid():
                 raise CleanAnvilUnavailableError(
                     "clean Anvil exceeded its bounded diagnostic output policy"
@@ -747,6 +750,7 @@ class TrustedCleanAnvilLauncher:
                 raise CleanAnvilUnavailableError(
                     "spawned clean Anvil ceased to own its loopback listener"
                 )
+            executable.workspace.validate_ancestor_controls()
             return pristine
         raise CleanAnvilUnavailableError(
             "spawned clean Anvil did not own and expose its pristine listener before the "
@@ -1125,6 +1129,7 @@ class RunningCleanAnvil:
             raise CleanAnvilUnavailableError(
                 "clean Anvil exceeded its bounded diagnostic output policy"
             )
+        executable.workspace.validate_ancestor_controls()
         executable.validate()
         if not self._listener_owner_verifier(
             capture.process,
@@ -1172,6 +1177,7 @@ class RunningCleanAnvil:
             raise CleanAnvilIdentityError(
                 "clean Anvil process lost listener ownership during observation"
             )
+        executable.workspace.validate_ancestor_controls()
         return pristine
 
 
@@ -1241,6 +1247,12 @@ class _PrivateWorkspace:
             opened = os.fstat(descriptor)
             if not expected.matches(named) or not expected.matches(opened):
                 raise CleanAnvilConfigurationError("clean Anvil private directory identity changed")
+
+    def validate_ancestor_controls(self) -> None:
+        """Reject newly introduced control files before evidence can be credited."""
+
+        self.validate()
+        _reject_ancestor_control_files(self.parent)
 
     def lock(self, executable: Path) -> None:
         """Remove pathname write access and apply Darwin user-immutable guards."""

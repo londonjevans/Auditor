@@ -750,6 +750,78 @@ def test_clean_stop_removes_private_executable_and_workspace(tmp_path: Path) -> 
     assert not (private / "clean-anvil").exists()
 
 
+def test_late_ancestor_control_file_prevents_clean_attestation(tmp_path: Path) -> None:
+    executable = _fake_anvil_source(tmp_path)
+    repository, private = _roots(tmp_path)
+    injected_control = tmp_path / "foundry.toml"
+
+    class _InjectingProcessFactory(_RecordingProcessFactory):
+        def __call__(self, args: Sequence[str], **kwargs: Any) -> subprocess.Popen[bytes]:
+            process = super().__call__(args, **kwargs)
+            if not injected_control.exists():
+                injected_control.write_text(
+                    '[profile.default]\neth_rpc_url = "http://127.0.0.1:1"\n',
+                    encoding="utf-8",
+                )
+            return process
+
+    factory = _InjectingProcessFactory()
+    launcher = _launcher(
+        executable,
+        factory=factory,
+        observer=_ObservationSequence(default=_observation()),
+    )
+    lease = None
+    try:
+        with pytest.raises(CleanAnvilConfigurationError, match="ancestor"):
+            lease = launcher.start(
+                _config(executable),
+                repository,
+                private,
+                time.monotonic() + 2,
+            )
+    finally:
+        if lease is not None:
+            lease.stop(time.monotonic() + 1)
+        injected_control.unlink(missing_ok=True)
+
+    assert len(factory.calls) == 1
+    assert factory.calls[0][2].poll() is not None
+    assert not (private / "clean-anvil").exists()
+
+
+def test_ancestor_control_file_added_during_lease_prevents_attestation(
+    tmp_path: Path,
+) -> None:
+    executable = _fake_anvil_source(tmp_path)
+    repository, private = _roots(tmp_path)
+    factory = _RecordingProcessFactory()
+    launcher = _launcher(
+        executable,
+        factory=factory,
+        observer=_ObservationSequence(default=_observation()),
+    )
+    lease = launcher.start(
+        _config(executable),
+        repository,
+        private,
+        time.monotonic() + 2,
+    )
+    injected_control = tmp_path / ".env.synthetic"
+    injected_control.write_text("SYNTHETIC_CANARY=untrusted\n", encoding="utf-8")
+    try:
+        with pytest.raises(CleanAnvilIdentityError, match="unchanged pre/post"):
+            lease.stop(time.monotonic() + 1)
+    finally:
+        injected_control.unlink(missing_ok=True)
+
+    assert factory.calls[1][2].poll() is not None
+    assert not _process_group_exists(factory.calls[1][2].pid)
+    assert not (private / "clean-anvil").exists()
+    with pytest.raises(CleanAnvilUnavailableError, match="unavailable before"):
+        lease.attestation()
+
+
 def _scalar_leaves(value: object) -> list[object]:
     if isinstance(value, dict):
         return [leaf for item in value.values() for leaf in _scalar_leaves(item)]
