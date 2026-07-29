@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Endpoint-aware token budgets and context manifests
 CURRENT_TICKET: V3-TOKENS-001
 LAST_COMPLETED_TICKET: V3-OUTPUT-001
-NEXT_ACTION: On operator resume, add a permanent negative regression for peer-role-count coupling, then implement endpoint-bound token planning and context-manifest evidence.
-LAST_COMMAND: git status --short --branch && git rev-parse HEAD && git rev-parse @{u}
-LAST_RESULT: PASS; main is clean and synchronized with origin/main at 740a3fa696beab7d442bdb3762bc6dd67d7ec282.
+NEXT_ACTION: On operator resume, integrate the typed token plan with OpenRouter request construction and usage evidence, then add the fail-closed context manifest.
+LAST_COMMAND: .venv/bin/ruff check src/mmaudit/agents/base.py src/mmaudit/agents/invariant_review.py src/mmaudit/agents/judge.py src/mmaudit/agents/reproduction.py src/mmaudit/agents/specialists.py src/mmaudit/agents/verifier.py src/mmaudit/config.py src/mmaudit/models/openrouter.py src/mmaudit/models/token_planning.py src/mmaudit/orchestration/budgets.py src/mmaudit/orchestration/context.py tests/unit/test_budgets.py tests/unit/test_context.py tests/unit/test_openrouter_qualification_config.py tests/unit/test_token_planning.py
+LAST_RESULT: PASS; affected Ruff checks passed. The immediately preceding focused pytest command passed 48 tests in 0.54s.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -215,6 +215,36 @@ LAST_CHECKPOINT_COMMIT: 4f04a6fd79ff96466b48bc14ddc7557bb3a809b5
   or test files changed, and no provider call, network access, secret access,
   or spend occurred. The pre-pause branch was clean and synchronized with
   `origin/main` at `740a3fa696beab7d442bdb3762bc6dd67d7ec282`.
+- **Resume checkpoint:** Automatic goal continuation resumed from clean,
+  synchronized pause checkpoint
+  `8e813c24ffb5a935e2f4a8d60e78bfede4a9983b`. The authoritative `1417`-line
+  objective, repository instructions, active v3 queue/worklog state, Git status,
+  and diff were reread. Implementation remains local and deterministic; this
+  ticket does not authorize provider calls, network access, or secret access.
+- **Permanent negative regression:** Before production changes,
+  `.venv/bin/pytest -q
+  tests/unit/test_context.py::test_specialist_context_budget_is_independent_of_unrelated_peer_roles`
+  failed `1` test: the same `access_control` role received `256000` bytes with
+  `7` planned packages and `64516` with `31`. This proves the current global
+  equal-share architecture couples one review's context to unrelated roles.
+- **Partial local remediation:** Removed peer-role-count coupling from context
+  allocation, added exact rendered-category byte accounting, introduced typed
+  endpoint-route token planning and scoped global/model/role budget evidence,
+  preserved endpoint capacity-source metadata, and added request-context
+  propagation call sites. The request planner and budget components are not yet
+  integrated into OpenRouter request construction or emitted as a fail-closed
+  context manifest, so this ticket remains `IN_PROGRESS`.
+- **Focused validation:** `.venv/bin/pytest -q
+  tests/unit/test_token_planning.py tests/unit/test_budgets.py
+  tests/unit/test_context.py
+  tests/unit/test_openrouter_qualification_config.py` passed `48` tests in
+  `0.54s`. Affected Ruff checks passed after correcting two test regexes. No
+  provider call, network access, secret access, generated runtime artifact, or
+  spend occurred.
+- **Pause checkpoint:** The operator requested a pause at the first safe
+  filesystem boundary. All delegated workers are complete, the partial
+  implementation is preserved, and the next action is the explicit integration
+  step above. No ticket-completion or production-readiness claim is made.
 
 ## 2026-07-28 — V3-SMOKE-001
 

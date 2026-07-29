@@ -70,6 +70,7 @@ class ThreatModelAgent(AgentBase):
             models=self.configured_models,
             system_prompt=self.system_prompt,
             user_prompt=render_context(context),
+            context_package=context,
             response_model=ThreatModel,
             schema_name="mmaudit_threat_model",
         )
@@ -84,6 +85,7 @@ class FindingAgent(AgentBase):
             models=self.configured_models,
             system_prompt=self.system_prompt,
             user_prompt=rendered_user_context,
+            context_package=request_context,
             response_model=CandidateReviewBatch,
             schema_name=f"mmaudit_{self.role}_findings",
         )

@@ -311,7 +311,6 @@ class ContextBuilder:
         self.formal_runs = formal_runs or []
         self.solidity_coverage = solidity_coverage
         self.planned_packages = max(1, planned_packages)
-        self._remaining_bytes = repository_config.max_total_context_bytes
 
     def _redact_every_file(self, files: Iterable[DiscoveredFile]) -> tuple[DiscoveredFile, ...]:
         safe: list[DiscoveredFile] = []
@@ -418,7 +417,9 @@ class ContextBuilder:
 
     @property
     def remaining_bytes(self) -> int:
-        return self._remaining_bytes
+        """Return the per-package serialization ceiling kept for compatibility."""
+
+        return self.repository_config.max_total_context_bytes
 
     def build(
         self,
@@ -430,16 +431,17 @@ class ContextBuilder:
         requested_model_surfaces: list[ModelSurfaceReviewRequest] | None = None,
         request_model_surface_reviews: bool = False,
     ) -> ContextPackage:
-        """Allocate a package; allocations across a run cannot exceed the total."""
+        """Allocate one independently bounded package."""
 
         if request_model_surface_reviews and requested_model_surfaces is not None:
             raise ContextBudgetError("model surface requests cannot be both derived and supplied")
-        default_share = max(
-            1, self.repository_config.max_total_context_bytes // self.planned_packages
+        default_share = self.repository_config.max_total_context_bytes
+        budget = min(
+            requested_budget or default_share,
+            self.repository_config.max_total_context_bytes,
         )
-        budget = min(requested_budget or default_share, self._remaining_bytes)
         if budget <= 0:
-            raise ContextBudgetError("total repository context budget is exhausted")
+            raise ContextBudgetError("repository context package budget is invalid")
         omissions: list[str] = []
         file_limit = min(300, len(self.repository_map.files))
         scanner_limit = min(200, len(self.scanner_findings))
@@ -643,7 +645,6 @@ class ContextBuilder:
                 f"serialized metadata for role {role} exceeds its {budget}-byte allocation"
             )
         package = package.model_copy(update={"bytes_used": actual_bytes})
-        self._remaining_bytes -= actual_bytes
         return package
 
 
@@ -750,3 +751,69 @@ def render_context(package: ContextPackage) -> str:
             ]
         )
     return "\n".join(parts)
+
+
+def context_category_byte_counts(package: ContextPackage) -> dict[str, int]:
+    """Account rendered context bytes without persisting source or prompt material."""
+
+    rendered_bytes = len(render_context(package).encode("utf-8"))
+    source_bytes = sum(len(excerpt.content.encode("utf-8")) for excerpt in package.excerpts)
+    scanner_bytes = len(
+        json.dumps(
+            [finding.model_dump(mode="json") for finding in package.scanner_findings],
+            sort_keys=True,
+        ).encode("utf-8")
+    )
+    framework_payload = {
+        "projects": [project.model_dump(mode="json") for project in package.solidity_projects],
+        "compilations": [
+            result.model_dump(mode="json") for result in package.solidity_compilations
+        ],
+        "symbol_index": (
+            package.solidity_index.model_dump(mode="json") if package.solidity_index else None
+        ),
+        "coverage": (
+            package.solidity_coverage.model_dump(mode="json")
+            if package.solidity_coverage
+            else None
+        ),
+    }
+    graph_payload = (
+        package.solidity_graphs.model_dump(mode="json") if package.solidity_graphs else None
+    )
+    invariant_payload = {
+        "invariants": (
+            package.solidity_invariants.model_dump(mode="json")
+            if package.solidity_invariants
+            else None
+        ),
+        "invariant_executions": [
+            result.model_dump(mode="json") for result in package.invariant_executions
+        ],
+        "economic_simulations": [
+            plan.model_dump(mode="json") for plan in package.economic_simulations
+        ],
+        "formal_runs": [run.model_dump(mode="json") for run in package.formal_runs],
+    }
+
+    def payload_bytes(value: Any) -> int:
+        if value is None or value == [] or value == {}:
+            return 0
+        return len(json.dumps(value, sort_keys=True).encode("utf-8"))
+
+    framework_bytes = payload_bytes(framework_payload) if any(framework_payload.values()) else 0
+    graph_bytes = payload_bytes(graph_payload)
+    invariant_bytes = payload_bytes(invariant_payload) if any(invariant_payload.values()) else 0
+    accounted = source_bytes + scanner_bytes + framework_bytes + graph_bytes + invariant_bytes
+    if accounted > rendered_bytes:
+        raise ContextBudgetError("context category accounting exceeds rendered context")
+    return {
+        "framework": framework_bytes,
+        "graph": graph_bytes,
+        "invariant": invariant_bytes,
+        "metadata": rendered_bytes - accounted,
+        "prior_audit": 0,
+        "scanner": scanner_bytes,
+        "source": source_bytes,
+        "workflow": 0,
+    }

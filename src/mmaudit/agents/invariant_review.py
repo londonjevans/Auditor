@@ -36,6 +36,7 @@ class InvariantReviewAgent:
                 )
             ),
             user_prompt=render_context(context),
+            context_package=context,
             response_model=InvariantReviewBatch,
             schema_name=definition.effective_schema_name(),
         )

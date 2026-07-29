@@ -112,6 +112,7 @@ class ExploitTestPlannerAgent:
                     render_context(context),
                 )
             ),
+            context_package=context,
             response_model=GeneratedFoundryTestBatch,
             schema_name=definition.effective_schema_name(),
         )
@@ -187,6 +188,7 @@ class FalsifierAgent:
                     render_context(context),
                 )
             ),
+            context_package=context,
             response_model=FalsificationBatch,
             schema_name=definition.effective_schema_name(),
         )

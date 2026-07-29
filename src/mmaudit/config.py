@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import tomllib
@@ -154,7 +155,7 @@ class ExecutionConfig(ConfigModel):
     budget_usd: float = Field(default=20.0, gt=0, le=250.0)
     cost_ledger_path: str | None = None
     max_request_bytes: int = Field(default=4_000_000, ge=1_024)
-    max_output_tokens_per_request: int = Field(default=4_096, ge=256, le=65_536)
+    max_output_tokens_per_request: int = Field(default=32_768, ge=256, le=65_536)
     max_requests_per_agent: int = Field(default=2, ge=1, le=512)
     conservative_usd_per_million_tokens: float = Field(default=60.0, gt=0)
 
@@ -173,6 +174,72 @@ class ExecutionConfig(ConfigModel):
         ):
             raise ValueError("execution cost ledger path must be an absolute file path")
         return value
+
+
+class TokenBudgetConfig(ConfigModel):
+    """Endpoint-aware request planning and aggregate model-resource ceilings."""
+
+    usable_input_fraction: float = Field(default=0.70, ge=0.65, le=0.75)
+    reserved_output_tokens: int = Field(default=32_768, ge=256, le=65_536)
+    reserved_system_tokens: int = Field(default=8_192, ge=0, le=65_536)
+    reserved_schema_tokens: int = Field(default=8_192, ge=0, le=65_536)
+    reserved_protocol_tokens: int = Field(default=2_048, ge=0, le=65_536)
+    maximum_source_tokens_per_request: int = Field(
+        default=200_000,
+        ge=1_024,
+        le=1_000_000,
+    )
+    global_input_token_budget: int = Field(
+        default=8_000_000,
+        ge=1_024,
+        le=1_000_000_000,
+    )
+    global_output_token_budget: int = Field(
+        default=2_000_000,
+        ge=256,
+        le=1_000_000_000,
+    )
+    per_model_cost_budget_usd: dict[str, float] = Field(
+        default_factory=dict,
+        max_length=256,
+    )
+    per_role_cost_budget_usd: dict[str, float] = Field(
+        default_factory=dict,
+        max_length=256,
+    )
+
+    @field_validator("per_model_cost_budget_usd")
+    @classmethod
+    def model_cost_budgets_are_exact_and_positive(
+        cls,
+        value: dict[str, float],
+    ) -> dict[str, float]:
+        if any(
+            not _MODEL_IDENTIFIER.fullmatch(model)
+            or isinstance(cap, bool)
+            or not math.isfinite(cap)
+            or not 0 < cap <= 250
+            for model, cap in value.items()
+        ):
+            raise ValueError("per-model cost budgets require exact model IDs and positive caps")
+        return dict(sorted(value.items()))
+
+    @field_validator("per_role_cost_budget_usd")
+    @classmethod
+    def role_cost_budgets_are_safe_and_positive(
+        cls,
+        value: dict[str, float],
+    ) -> dict[str, float]:
+        role_pattern = re.compile(r"[a-z][a-z0-9_:-]{0,199}\Z")
+        if any(
+            not role_pattern.fullmatch(role)
+            or isinstance(cap, bool)
+            or not math.isfinite(cap)
+            or not 0 < cap <= 250
+            for role, cap in value.items()
+        ):
+            raise ValueError("per-role cost budgets require safe role IDs and positive caps")
+        return dict(sorted(value.items()))
 
 
 class DependencyPreparationConfig(ConfigModel):
@@ -929,6 +996,7 @@ class AuditConfig(ConfigModel):
     repository: RepositoryConfig = Field(default_factory=RepositoryConfig)
     privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
+    token_budgets: TokenBudgetConfig = Field(default_factory=TokenBudgetConfig)
     dependency_preparation: DependencyPreparationConfig = Field(
         default_factory=DependencyPreparationConfig
     )

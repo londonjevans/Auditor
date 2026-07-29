@@ -53,9 +53,23 @@ budget_usd = 20.0
 # Initialize it once with `mmaudit models init-cost-ledger`.
 # cost_ledger_path = "/absolute/operator/control/mmaudit-cost-ledger.json"
 max_request_bytes = 4000000
-max_output_tokens_per_request = 4096
+max_output_tokens_per_request = 32768
 max_requests_per_agent = 2
 conservative_usd_per_million_tokens = 60.0
+
+[token_budgets]
+# Endpoint snapshots remain authoritative. These values are request-planning
+# targets and aggregate run ceilings, never substitutes for a missing endpoint limit.
+usable_input_fraction = 0.70
+reserved_output_tokens = 32768
+reserved_system_tokens = 8192
+reserved_schema_tokens = 8192
+reserved_protocol_tokens = 2048
+maximum_source_tokens_per_request = 200000
+global_input_token_budget = 8000000
+global_output_token_budget = 2000000
+per_model_cost_budget_usd = {}
+per_role_cost_budget_usd = {}
 
 [smart_contracts]
 enabled = true

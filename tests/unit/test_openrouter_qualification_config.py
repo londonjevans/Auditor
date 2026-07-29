@@ -9,6 +9,7 @@ from mmaudit.config import (
     ConfigError,
     ExecutionConfig,
     ModelReasoningConfig,
+    TokenBudgetConfig,
     configured_model_ids,
     load_config,
     model_lineage_index,
@@ -74,10 +75,30 @@ def test_unbound_qualification_config_cannot_qualify_an_ordinary_audit() -> None
 
 
 def test_qualification_request_limit_is_explicitly_bounded() -> None:
+    assert ExecutionConfig().max_output_tokens_per_request == 32_768
     assert ExecutionConfig().max_requests_per_agent == 2
     assert ExecutionConfig(max_requests_per_agent=512).max_requests_per_agent == 512
     with pytest.raises(ValidationError, match="less than or equal to 512"):
         ExecutionConfig(max_requests_per_agent=513)
+
+
+def test_endpoint_token_budget_defaults_are_high_capacity_and_bounded() -> None:
+    budgets = TokenBudgetConfig()
+
+    assert budgets.usable_input_fraction == 0.70
+    assert budgets.maximum_source_tokens_per_request == 200_000
+    assert budgets.reserved_output_tokens == 32_768
+    assert budgets.global_input_token_budget == 8_000_000
+    assert budgets.global_output_token_budget == 2_000_000
+
+    with pytest.raises(ValidationError, match=r"greater than or equal to 0\.65"):
+        TokenBudgetConfig(usable_input_fraction=0.64)
+    with pytest.raises(ValidationError, match=r"less than or equal to 0\.75"):
+        TokenBudgetConfig(usable_input_fraction=0.76)
+    with pytest.raises(ValidationError, match="exact model IDs"):
+        TokenBudgetConfig(per_model_cost_budget_usd={"not-exact": 1})
+    with pytest.raises(ValidationError, match="safe role IDs"):
+        TokenBudgetConfig(per_role_cost_budget_usd={"role with spaces": 1})
 
 
 def test_reasoning_effort_and_token_budget_are_mutually_exclusive_at_config_load() -> None:

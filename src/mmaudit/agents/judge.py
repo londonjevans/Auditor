@@ -39,6 +39,7 @@ class JudgeAgent(AgentBase):
             models=self.configured_models,
             system_prompt=self.system_prompt,
             user_prompt=prompt,
+            context_package=context,
             response_model=JudgeDecisionBatch,
             schema_name="mmaudit_judgment",
         )

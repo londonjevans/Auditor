@@ -435,11 +435,12 @@ def specialist_context_budget(
     total_context_bytes: int,
     planned_packages: int,
 ) -> int:
-    """Return the run-share budget capped by the specialist's fixed role limit."""
+    """Return one role's local serialization cap without peer-count coupling."""
 
     definition = SPECIALIST_ROLE_REGISTRY[role]
-    run_share = max(1, total_context_bytes // max(1, planned_packages))
-    return min(definition.max_context_bytes, run_share)
+    if planned_packages < 1:
+        raise ValueError("planned package count must be positive")
+    return min(definition.max_context_bytes, max(1, total_context_bytes))
 
 
 def canonical_specialist_role(request_role: str) -> str | None:
@@ -539,6 +540,7 @@ class SpecialistFindingAgent:
                 )
             ),
             user_prompt=rendered_user_context,
+            context_package=request_context,
             response_model=CandidateReviewBatch,
             schema_name=self.definition.effective_schema_name(),
         )
@@ -665,6 +667,7 @@ class ReportQualityAgent:
                     render_context(context),
                 )
             ),
+            context_package=context,
             response_model=ReportQualityReview,
             schema_name=definition.effective_schema_name(),
         )

@@ -531,8 +531,11 @@ class _RegisteredEndpointPricing:
     pricing: tuple[tuple[str, str], ...]
     pricing_sha256: str
     snapshot_sha256: str
+    context_length: int
     max_prompt_tokens: int
+    max_prompt_tokens_source: Literal["metadata", "context_limit"]
     max_completion_tokens: int
+    max_completion_tokens_source: Literal["metadata", "context_limit"]
     supported_parameters: tuple[str, ...]
     required_request_parameters: tuple[str, ...]
     structured_output_parameters: tuple[str, ...]
@@ -2320,8 +2323,11 @@ class OpenRouterClient:
                     pricing=tuple(pricing.items()),
                     pricing_sha256=endpoint.pricing_sha256,
                     snapshot_sha256=evidence.snapshot_sha256,
+                    context_length=endpoint.context_length,
                     max_prompt_tokens=endpoint.max_prompt_tokens,
+                    max_prompt_tokens_source=endpoint.max_prompt_tokens_source,
                     max_completion_tokens=endpoint.max_completion_tokens,
+                    max_completion_tokens_source=endpoint.max_completion_tokens_source,
                     supported_parameters=endpoint.supported_parameters,
                     required_request_parameters=endpoint.required_request_parameters,
                     structured_output_parameters=endpoint.structured_output_parameters,

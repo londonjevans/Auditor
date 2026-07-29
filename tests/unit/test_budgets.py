@@ -12,6 +12,7 @@ from mmaudit.orchestration.budgets import (
     BudgetReservationStateError,
     EndpointRequestCostBound,
     Reservation,
+    TokenReservationOverrunError,
     UnprovenCostBoundError,
 )
 from mmaudit.orchestration.cost_ledger import (
@@ -330,3 +331,403 @@ async def test_endpoint_bound_concurrency_cannot_cross_persistent_cap(tmp_path) 
     assert sum(not isinstance(result, Exception) for result in results) == 1
     assert sum(isinstance(result, BudgetExhaustedError) for result in results) == 1
     assert ledger.snapshot().active_reserved_usd == Decimal("0.123")
+
+
+def _scoped_manager(
+    *,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    model_caps: dict[str, str] | None = None,
+    role_caps: dict[str, str] | None = None,
+) -> BudgetManager:
+    return BudgetManager(
+        total_usd=1,
+        max_output_tokens=10,
+        conservative_usd_per_million_tokens=1,
+        max_requests_per_agent=10,
+        global_input_token_budget=input_tokens,
+        global_output_token_budget=output_tokens,
+        per_model_usd_caps=model_caps,
+        per_role_usd_caps=role_caps,
+    )
+
+
+@pytest.mark.asyncio
+async def test_scoped_concurrent_reservations_are_all_or_nothing() -> None:
+    manager = _scoped_manager(
+        input_tokens=10,
+        output_tokens=10,
+        model_caps={"alpha/atlas-secure": "0.000015"},
+        role_caps={"review": "0.000015"},
+    )
+
+    results = await asyncio.gather(
+        manager.reserve(
+            "request-a",
+            "review",
+            "x",
+            exact_model_id="alpha/atlas-secure",
+            planned_prompt_tokens=6,
+            planned_completion_tokens=6,
+        ),
+        manager.reserve(
+            "request-b",
+            "review",
+            "x",
+            exact_model_id="alpha/atlas-secure",
+            planned_prompt_tokens=6,
+            planned_completion_tokens=6,
+        ),
+        return_exceptions=True,
+    )
+
+    assert sum(isinstance(result, Reservation) for result in results) == 1
+    assert sum(isinstance(result, BudgetExhaustedError) for result in results) == 1
+    assert manager.reserved_usd == pytest.approx(0.000011)
+    assert manager.reserved_input_tokens == 6
+    assert manager.reserved_output_tokens == 6
+    assert manager.reserved_model_usd("alpha/atlas-secure") == Decimal("0.000011")
+    assert manager.reserved_role_usd("review") == Decimal("0.000011")
+
+
+@pytest.mark.asyncio
+async def test_per_model_usd_cap_blocks_only_the_exhausted_model() -> None:
+    manager = _scoped_manager(
+        model_caps={
+            "alpha/atlas-secure": "0.000015",
+            "beta/beacon-secure": "0.000015",
+        }
+    )
+    await manager.reserve(
+        "request-a",
+        "review-a",
+        "x",
+        exact_model_id="alpha/atlas-secure",
+        planned_prompt_tokens=1,
+        planned_completion_tokens=10,
+    )
+
+    with pytest.raises(BudgetExhaustedError, match="model USD budget"):
+        await manager.reserve(
+            "request-b",
+            "review-b",
+            "x",
+            exact_model_id="alpha/atlas-secure",
+            planned_prompt_tokens=1,
+            planned_completion_tokens=10,
+        )
+    other = await manager.reserve(
+        "request-c",
+        "review-c",
+        "x",
+        exact_model_id="beta/beacon-secure",
+        planned_prompt_tokens=1,
+        planned_completion_tokens=10,
+    )
+
+    assert other.exact_model_id == "beta/beacon-secure"
+
+
+@pytest.mark.asyncio
+async def test_per_role_usd_cap_blocks_only_the_exhausted_role() -> None:
+    manager = _scoped_manager(
+        role_caps={
+            "review-a": "0.000015",
+            "review-b": "0.000015",
+        }
+    )
+    await manager.reserve(
+        "request-a",
+        "review-a",
+        "x",
+        exact_model_id="alpha/atlas-secure",
+        planned_prompt_tokens=1,
+        planned_completion_tokens=10,
+    )
+
+    with pytest.raises(BudgetExhaustedError, match="role USD budget"):
+        await manager.reserve(
+            "request-b",
+            "review-a",
+            "x",
+            exact_model_id="alpha/atlas-secure",
+            planned_prompt_tokens=1,
+            planned_completion_tokens=10,
+        )
+    other = await manager.reserve(
+        "request-c",
+        "review-b",
+        "x",
+        exact_model_id="alpha/atlas-secure",
+        planned_prompt_tokens=1,
+        planned_completion_tokens=10,
+    )
+
+    assert other.role == "review-b"
+
+
+@pytest.mark.asyncio
+async def test_release_restores_every_scoped_reservation() -> None:
+    manager = _scoped_manager(
+        input_tokens=5,
+        output_tokens=5,
+        model_caps={"alpha/atlas-secure": "0.000011"},
+        role_caps={"review": "0.000011"},
+    )
+    first = await manager.reserve(
+        "request-a",
+        "review",
+        "x",
+        exact_model_id="alpha/atlas-secure",
+        planned_prompt_tokens=5,
+        planned_completion_tokens=5,
+    )
+
+    await manager.release(first)
+    await manager.release(first)
+
+    assert manager.reserved_usd == 0
+    assert manager.reserved_input_tokens == 0
+    assert manager.reserved_output_tokens == 0
+    assert manager.reserved_model_usd("alpha/atlas-secure") == 0
+    assert manager.reserved_role_usd("review") == 0
+    second = await manager.reserve(
+        "request-b",
+        "review",
+        "x",
+        exact_model_id="alpha/atlas-secure",
+        planned_prompt_tokens=5,
+        planned_completion_tokens=5,
+    )
+    assert second.identifier == "request-b"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_replaces_scoped_reservations_with_actual_usage() -> None:
+    manager = _scoped_manager(
+        input_tokens=20,
+        output_tokens=10,
+        model_caps={"alpha/atlas-secure": "0.001"},
+        role_caps={"review": "0.001"},
+    )
+    reservation = await manager.reserve(
+        "request-a",
+        "review",
+        "x",
+        exact_model_id="alpha/atlas-secure",
+        planned_prompt_tokens=10,
+        planned_completion_tokens=5,
+    )
+
+    accounted = await manager.reconcile(
+        reservation,
+        Decimal("0.000005"),
+        actual_prompt_tokens=7,
+        actual_completion_tokens=3,
+    )
+
+    assert accounted == 0.000005
+    assert manager.reserved_input_tokens == 0
+    assert manager.reserved_output_tokens == 0
+    assert manager.spent_input_tokens == 7
+    assert manager.spent_output_tokens == 3
+    assert manager.spent_model_usd("alpha/atlas-secure") == Decimal("0.000005")
+    assert manager.spent_role_usd("review") == Decimal("0.000005")
+
+
+@pytest.mark.asyncio
+async def test_unknown_actual_usage_conservatively_charges_reservation() -> None:
+    manager = _scoped_manager(input_tokens=20, output_tokens=10)
+    reservation = await manager.reserve(
+        "request-a",
+        "review",
+        "x",
+        exact_model_id="alpha/atlas-secure",
+        planned_prompt_tokens=9,
+        planned_completion_tokens=4,
+    )
+
+    accounted = await manager.reconcile(reservation, None)
+
+    assert accounted == pytest.approx(0.000011)
+    assert manager.spent_input_tokens == 9
+    assert manager.spent_output_tokens == 4
+    assert manager.spent_model_usd("alpha/atlas-secure") == Decimal("0.000011")
+
+
+@pytest.mark.asyncio
+async def test_token_overrun_is_terminal_and_does_not_double_count() -> None:
+    manager = _scoped_manager(input_tokens=5, output_tokens=2)
+    reservation = await manager.reserve(
+        "request-a",
+        "review",
+        "x",
+        exact_model_id="alpha/atlas-secure",
+        planned_prompt_tokens=5,
+        planned_completion_tokens=2,
+    )
+
+    with pytest.raises(TokenReservationOverrunError):
+        await manager.reconcile(
+            reservation,
+            Decimal("0.000005"),
+            actual_prompt_tokens=6,
+            actual_completion_tokens=3,
+        )
+    with pytest.raises(TokenReservationOverrunError):
+        await manager.reconcile(
+            reservation,
+            Decimal("0.000005"),
+            actual_prompt_tokens=6,
+            actual_completion_tokens=3,
+        )
+
+    assert manager.spent_input_tokens == 6
+    assert manager.spent_output_tokens == 3
+    assert manager.spent_usd == 0.000005
+    assert manager.reserved_input_tokens == 0
+    assert manager.reserved_output_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_scoped_cost_overrun_is_terminal_and_does_not_double_count() -> None:
+    manager = _scoped_manager(model_caps={"alpha/atlas-secure": "0.001"})
+    reservation = await manager.reserve(
+        "request-a",
+        "review",
+        "x",
+        exact_model_id="alpha/atlas-secure",
+        planned_prompt_tokens=1,
+        planned_completion_tokens=10,
+    )
+
+    with pytest.raises(CostReservationOverrunError):
+        await manager.reconcile(
+            reservation,
+            Decimal("0.00002"),
+            actual_prompt_tokens=1,
+            actual_completion_tokens=10,
+        )
+    with pytest.raises(CostReservationOverrunError):
+        await manager.reconcile(
+            reservation,
+            Decimal("0.00002"),
+            actual_prompt_tokens=1,
+            actual_completion_tokens=10,
+        )
+
+    assert manager.spent_usd == 0.00002
+    assert manager.spent_model_usd("alpha/atlas-secure") == Decimal("0.00002")
+    assert manager.reserved_model_usd("alpha/atlas-secure") == 0
+
+
+@pytest.mark.asyncio
+async def test_legacy_reservation_api_remains_valid_without_scoped_budgets() -> None:
+    manager = _scoped_manager()
+
+    reservation = await manager.reserve("request-a", "review", "legacy prompt")
+    accounted = await manager.reconcile(reservation, None)
+
+    assert reservation.exact_model_id is None
+    assert reservation.planned_prompt_tokens is None
+    assert reservation.planned_completion_tokens is None
+    assert accounted == reservation.estimated_cost_usd
+    assert manager.spent_input_tokens == 0
+    assert manager.spent_output_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_scoped_counters_are_process_local_while_global_ledger_is_durable(
+    tmp_path,
+) -> None:
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "model-cost-ledger.json",
+        cap_usd=Decimal("1"),
+    )
+    manager = BudgetManager(
+        total_usd=1,
+        max_output_tokens=10,
+        conservative_usd_per_million_tokens=1,
+        max_requests_per_agent=10,
+        atomic_ledger=ledger,
+        per_model_usd_caps={"alpha/atlas-secure": "1"},
+    )
+    reservation = await manager.reserve(
+        "request-a",
+        "review",
+        "x",
+        exact_model_id="alpha/atlas-secure",
+        planned_prompt_tokens=1,
+        planned_completion_tokens=10,
+    )
+    await manager.reconcile(
+        reservation,
+        Decimal("0.000005"),
+        actual_prompt_tokens=1,
+        actual_completion_tokens=2,
+    )
+
+    reopened = BudgetManager(
+        total_usd=1,
+        max_output_tokens=10,
+        conservative_usd_per_million_tokens=1,
+        max_requests_per_agent=10,
+        atomic_ledger=ledger,
+        per_model_usd_caps={"alpha/atlas-secure": "1"},
+    )
+
+    assert reopened.spent_usd == 0.000005
+    assert reopened.spent_model_usd("alpha/atlas-secure") == 0
+    assert reopened.spent_input_tokens == 0
+    assert reopened.spent_output_tokens == 0
+
+
+def test_scoped_budget_configuration_rejects_ambiguous_keys_and_caps() -> None:
+    with pytest.raises(ValueError, match="model budget key"):
+        _scoped_manager(model_caps={"not-an-exact-model": "1"})
+    with pytest.raises(ValueError, match="role budget key"):
+        _scoped_manager(role_caps={"invalid role": "1"})
+    with pytest.raises(ValueError, match="Decimal-safe"):
+        BudgetManager(
+            total_usd=1,
+            max_output_tokens=10,
+            conservative_usd_per_million_tokens=1,
+            max_requests_per_agent=10,
+            per_model_usd_caps={"alpha/atlas-secure": 0.1},  # type: ignore[dict-item]
+        )
+    with pytest.raises(ValueError, match="finite"):
+        _scoped_manager(role_caps={"review": "NaN"})
+
+
+@pytest.mark.asyncio
+async def test_scoped_reservation_requires_a_complete_exact_token_plan() -> None:
+    manager = _scoped_manager(input_tokens=10)
+
+    with pytest.raises(BudgetReservationStateError, match="supplied together"):
+        await manager.reserve(
+            "request-a",
+            "review",
+            "x",
+            exact_model_id="alpha/atlas-secure",
+            planned_prompt_tokens=1,
+        )
+    with pytest.raises(BudgetReservationStateError, match="exact model"):
+        await manager.reserve(
+            "request-b",
+            "review",
+            "x",
+            planned_prompt_tokens=1,
+            planned_completion_tokens=1,
+        )
+    with pytest.raises(ValueError, match="model budget key"):
+        await manager.reserve(
+            "request-c",
+            "review",
+            "x",
+            exact_model_id="not-exact",
+            planned_prompt_tokens=1,
+            planned_completion_tokens=1,
+        )
+
+    assert manager.reserved_usd == 0
+    assert manager.reserved_input_tokens == 0

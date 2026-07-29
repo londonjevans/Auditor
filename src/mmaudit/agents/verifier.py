@@ -186,6 +186,7 @@ class CandidateCrossExaminerAgent:
                     render_context(context),
                 )
             ),
+            context_package=context,
             response_model=CandidateCrossExaminationResponse,
             schema_name=(f"mmaudit_candidate_cross_examination_{self.reviewer_index}"),
         )
@@ -236,6 +237,7 @@ class VerifierAgent(AgentBase):
             models=self.configured_models,
             system_prompt=self.system_prompt,
             user_prompt=prompt,
+            context_package=context,
             response_model=VerificationBatch,
             schema_name="mmaudit_verification",
         )
