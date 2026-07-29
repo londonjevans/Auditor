@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Differential and multi-state fork matrix
 CURRENT_TICKET: V3-FORKDIFF-001
 LAST_COMPLETED_TICKET: V3-FLOOR-001
-NEXT_ACTION: Resume V3-FORKDIFF-001 by remediating the recorded matrix-runner fail-closed gaps (per-test state-read provenance, real workspace binding, finite monotonic deadline/lifecycle cleanup, canonical private-root custody, limitation preservation, and child tool pinning), then add the conditional real local Anvil/Foundry integration and default replay wiring.
-LAST_COMMAND: .venv/bin/ruff format src/mmaudit/config.py tests/integration/test_pipeline.py tests/unit/test_fork_matrix.py && .venv/bin/ruff check src/mmaudit/config.py src/mmaudit/models/schemas.py src/mmaudit/orchestration/manifest.py src/mmaudit/orchestration/pipeline.py src/mmaudit/orchestration/replay.py src/mmaudit/reporting/markdown.py src/mmaudit/scanners/foundry.py src/mmaudit/scanners/clean_chain.py src/mmaudit/scanners/fork_matrix.py src/mmaudit/scanners/read_only_rpc.py tests/integration/test_pipeline.py tests/unit/test_manifest.py tests/unit/test_replay.py tests/unit/test_repository_suite_config.py tests/unit/test_scanners_reporting.py tests/unit/test_clean_chain.py tests/unit/test_fork_matrix.py tests/unit/test_read_only_rpc_bridge.py tests/unit/test_repository_fork_differential_schema.py && .venv/bin/mypy src/mmaudit/config.py src/mmaudit/models/schemas.py src/mmaudit/orchestration/manifest.py src/mmaudit/orchestration/pipeline.py src/mmaudit/orchestration/replay.py src/mmaudit/reporting/markdown.py src/mmaudit/scanners/foundry.py src/mmaudit/scanners/clean_chain.py src/mmaudit/scanners/fork_matrix.py src/mmaudit/scanners/read_only_rpc.py && .venv/bin/python scripts/generate_release_schemas.py
-LAST_RESULT: PASS — Ruff formatted 3 files, affected Ruff passed, strict mypy passed 10 source files, and committed-schema synchronization passed. Immediately before this, the non-socket focused gate passed 329 tests in 81.24s. The local-socket bridge suite was not rerun because the managed sandbox denied loopback bind; its last accepted capability-granted result remains 66 passing tests.
+NEXT_ACTION: On explicit resume, complete the interrupted `_execute_state` custody/clock/tool-pin join and the `_remove_ephemeral_run_data` call-site join until the 19 expected-red matrix failures and 7 mypy errors are green; then continue the still-open per-test state-read provenance, actual workspace lifecycle, baseline-policy equivalence, default replay, and real local matrix integration work.
+LAST_COMMAND: .venv/bin/mypy src/mmaudit/scanners/fork_matrix.py
+LAST_RESULT: EXPECTED_RED — strict mypy reported 7 exact unfinished-join errors: five new `_execute_state` keyword arguments are not yet accepted and two `_remove_ephemeral_run_data` call sites do not yet pass their new custody roots. The immediately preceding focused matrix run reported 19 failed and 13 passed; this work is checkpointed only as unvalidated WIP. The independently validated clean-chain command passed 23 tests.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 6d23d16d872d69902d176a3de8ea89c30633e4c4
+LAST_CHECKPOINT_COMMIT: 74768911f6e98ac6587786ba718a658470cb85e4
 
 ## 2026-07-29 — V3-FORKDIFF-001
 
@@ -296,6 +296,49 @@ LAST_CHECKPOINT_COMMIT: 6d23d16d872d69902d176a3de8ea89c30633e4c4
   scaffolding plus regressions. This is deliberately an `IN_PROGRESS`
   checkpoint, not accepted real differential evidence and not a release
   candidate.
+- **Goal continuation after pause:** At `2026-07-29T19:16:09Z`, persisted
+  autorun resumed from clean synchronized `main` at state checkpoint
+  `a0957dddf6191cf379c92f94916e391fd4cf4acf`. The 1,417-line objective was
+  reread completely and its SHA-256 reverified; repository instructions,
+  current queues, worklog, runtime state, Git status, and diff were reloaded.
+  The same bounded ticket remains active. Work is limited to local synthetic
+  regressions and trusted local Anvil/Foundry integration; no provider, public
+  RPC, credential, wallet, signing, transaction, or paid path is involved.
+- **Trusted clean-chain closure:** The exact pinned local Anvil integration ran
+  against `/Users/josevans/.foundry/bin/anvil` version
+  `anvil Version: 1.3.2-stable`, SHA-256
+  `80ff77a2dfe71fac6bd9810d942c4f1b0447e42f4c086956417d9e63f5f7f0d3`.
+  It validated PID-bound loopback ownership, runtime executable identity,
+  pristine block-zero hash/state root before and after use, sanitized child
+  inputs, and process-group/private-workspace removal. Two regressions also
+  prove that an ancestor control file introduced after admission prevents
+  attestation and still triggers cleanup. The exact capability-granted command
+  `.venv/bin/pytest -q tests/unit/test_clean_chain.py
+  tests/integration/test_clean_chain_integration.py -rs` passed `23` tests in
+  `7.05s`; affected Ruff, format, and strict mypy passed. A post-run read-only
+  process query found no copied clean-Anvil process. This is local clean-chain
+  lifecycle evidence, not a completed differential matrix.
+- **Validated clean-chain checkpoint:** Commit
+  `8bda5f8f0b11032d9d3b85b428e9091b448d9a4a` contains only the clean-launcher
+  hardening and its unit/real-local integration coverage.
+- **Matrix hardening expected-red checkpoint:** The interrupted hardening slice
+  introduces initial finite/regression-detecting clock handling, descriptor-held
+  private-directory custody, overlap/link/permission checks, recursive private
+  path and loopback-URI detection, baseline Forge trust-pin validation, and
+  limitation-preserving intent. It is deliberately not accepted: the exact
+  `.venv/bin/pytest -q tests/unit/test_fork_matrix.py` result is `19 failed, 13
+  passed`, because `_execute_state` has not yet been joined to the new
+  custody/clock/tool-pin inputs. After trivial formatting/import cleanup,
+  affected Ruff and `git diff --check` pass, while exact strict mypy reports `7`
+  corresponding unfinished-call-interface errors. Commit
+  `74768911f6e98ac6587786ba718a658470cb85e4` preserves this expected-red state
+  without crediting it as product evidence.
+- **Operator pause:** At `2026-07-29T19:30:36Z`, autorun is
+  `PAUSED_BY_OPERATOR` at the requested safe handoff. `V3-FORKDIFF-001` remains
+  `IN_PROGRESS`; no next ticket was started. No listener, child process,
+  provider request, public RPC, secret access, wallet, signing, transaction,
+  budget reservation, or paid operation remains active. OpenRouter spend
+  remains `0.0033415625 USD`.
 
 ## 2026-07-29 — V3-FORKSUITE-001
 
