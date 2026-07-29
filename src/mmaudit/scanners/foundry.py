@@ -32,6 +32,7 @@ from mmaudit.isolation.provenance import (
     isolation_execution_evidence,
 )
 from mmaudit.models.schemas import (
+    REPOSITORY_SUITE_WORKSPACE_COPY_POLICY_SHA256,
     EvidenceStrength,
     ExecutionEvidenceKind,
     ForkRpcMethodCount,
@@ -42,6 +43,7 @@ from mmaudit.models.schemas import (
     RepositorySuiteInventoryPhase,
     RepositorySuiteSelection,
     RepositorySuiteTestDescriptor,
+    RepositorySuiteWorkspaceCopyEvidence,
     RepositoryTestExecution,
     RepositoryTestExecutionStatus,
     RepositoryTestForkRpcScopeEvidence,
@@ -57,8 +59,10 @@ from mmaudit.models.schemas import (
 from mmaudit.scanners.base import (
     ScannerAdapter,
     ScannerIsolationBackend,
+    ScannerWorkspaceCopyCustody,
+    ScannerWorkspaceCopyObservation,
     _file_sha256,
-    copy_scanner_workspace,
+    copy_scanner_workspace_with_custody,
     isolated_executable_version,
     make_finding,
     sanitized_scanner_environment,
@@ -518,6 +522,43 @@ class FoundryForkScanner(ScannerAdapter):
         expected_version: str | None = None,
         expected_sha256: str | None = None,
     ) -> ScannerRun:
+        workspace_custody_guard: list[ScannerWorkspaceCopyCustody] = []
+        primary_error: BaseException | None = None
+        try:
+            return self._run_repository_suite(
+                root,
+                private_dir,
+                timeout_seconds,
+                backend=backend,
+                expected_version=expected_version,
+                expected_sha256=expected_sha256,
+                workspace_custody_guard=workspace_custody_guard,
+            )
+        except BaseException as exc:
+            primary_error = exc
+            raise
+        finally:
+            close_error: OSError | None = None
+            for custody in workspace_custody_guard:
+                try:
+                    custody.close()
+                except OSError as exc:
+                    if close_error is None:
+                        close_error = exc
+            if close_error is not None and primary_error is None:
+                raise close_error
+
+    def _run_repository_suite(
+        self,
+        root: Path,
+        private_dir: Path,
+        timeout_seconds: float,
+        *,
+        backend: ScannerIsolationBackend | None,
+        expected_version: str | None,
+        expected_sha256: str | None,
+        workspace_custody_guard: list[ScannerWorkspaceCopyCustody],
+    ) -> ScannerRun:
         private_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         start = datetime.now(UTC)
         monotonic_start = time.monotonic()
@@ -532,6 +573,7 @@ class FoundryForkScanner(ScannerAdapter):
         execution_policy: RepositorySuiteExecutionPolicy | None = None
         inventory: RepositorySuiteInventoryEvidence | None = None
         post_inventory: RepositorySuiteInventoryEvidence | None = None
+        workspace_copy_custody: ScannerWorkspaceCopyCustody | None = None
         compiler_path: Path | None = None
         repository_sha256: str | None = None
         repository_exclusion_root = self.repository_exclusion_root or private_dir
@@ -552,6 +594,9 @@ class FoundryForkScanner(ScannerAdapter):
         )
 
         def finish(status: ScannerStatus, error: str | None) -> ScannerRun:
+            nonlocal workspace_copy_custody
+            custody = workspace_copy_custody
+            workspace_copy_custody = None
             return _finalize_foundry_repository_suite(
                 root=root,
                 private_dir=private_dir,
@@ -574,6 +619,7 @@ class FoundryForkScanner(ScannerAdapter):
                 post_inventory=post_inventory,
                 fuzz_seed=self.config.repository_suite.fuzz_seed,
                 repository_test_fork_rpc_scopes=test_fork_rpc_scopes,
+                repository_suite_workspace_custody=custody,
             )
 
         if not self.config.enabled:
@@ -763,10 +809,18 @@ class FoundryForkScanner(ScannerAdapter):
         environment = sanitized_scanner_environment(private_dir)
         copied_compiler = private_dir / "toolchain" / "solc"
         try:
-            copy_scanner_workspace(root, workspace, repository_exclusion_root)
+            workspace_copy_custody = copy_scanner_workspace_with_custody(
+                root,
+                workspace,
+                repository_exclusion_root,
+            )
+            workspace_custody_guard.append(workspace_copy_custody)
             if repository_sha256 is None:
                 raise ValueError("repository suite workspace identity is absent")
-            if scanner_workspace_sha256(workspace) != repository_sha256:
+            if (
+                workspace_copy_custody.source_inventory_sha256_before != repository_sha256
+                or workspace_copy_custody.workspace_inventory_sha256_after_copy != repository_sha256
+            ):
                 raise ValueError("disposable scanner workspace differs from the selected source")
             version = isolated_executable_version(
                 executable_path,
@@ -3216,6 +3270,43 @@ def _write_repository_suite_manifest(
     return path
 
 
+def _sealed_workspace_copy_evidence(
+    observation: ScannerWorkspaceCopyObservation,
+    *,
+    attempt_binding_sha256: str,
+    selection: RepositorySuiteSelection,
+) -> RepositorySuiteWorkspaceCopyEvidence:
+    return RepositorySuiteWorkspaceCopyEvidence.sealed(
+        attempt_binding_sha256=attempt_binding_sha256,
+        selection_sha256=selection.selection_sha256,
+        repository_sha256=selection.repository_sha256,
+        copy_policy_sha256=REPOSITORY_SUITE_WORKSPACE_COPY_POLICY_SHA256,
+        source_inventory_sha256_before=observation.source_inventory_sha256_before,
+        source_inventory_sha256_after=observation.source_inventory_sha256_after,
+        workspace_inventory_sha256_after_copy=(observation.workspace_inventory_sha256_after_copy),
+        workspace_inventory_sha256_after_execution=(
+            observation.workspace_inventory_sha256_after_execution
+        ),
+        source_root_device_before=observation.source_root_device_before,
+        source_root_inode_before=observation.source_root_inode_before,
+        source_root_device_after=observation.source_root_device_after,
+        source_root_inode_after=observation.source_root_inode_after,
+        workspace_root_device_before=observation.workspace_root_device_before,
+        workspace_root_inode_before=observation.workspace_root_inode_before,
+        workspace_root_device_after=observation.workspace_root_device_after,
+        workspace_root_inode_after=observation.workspace_root_inode_after,
+        workspace_created_exclusively=observation.workspace_created_exclusively,
+        workspace_direct_child=observation.workspace_direct_child,
+        audited_inventory_symlink_free=observation.audited_inventory_symlink_free,
+        source_descriptor_custody_validated=(observation.source_descriptor_custody_validated),
+        workspace_descriptor_custody_validated=(observation.workspace_descriptor_custody_validated),
+        copy_matches_source=observation.copy_matches_source,
+        source_identity_stable=observation.source_identity_stable,
+        workspace_identity_stable=observation.workspace_identity_stable,
+        workspace_removed=observation.workspace_removed,
+    )
+
+
 def _finalize_foundry_repository_suite(
     *,
     root: Path,
@@ -3239,6 +3330,8 @@ def _finalize_foundry_repository_suite(
     post_inventory: RepositorySuiteInventoryEvidence | None,
     fuzz_seed: str,
     repository_test_fork_rpc_scopes: Sequence[RepositoryTestForkRpcScopeEvidence] = (),
+    repository_suite_workspace_copy: RepositorySuiteWorkspaceCopyEvidence | None = None,
+    repository_suite_workspace_custody: ScannerWorkspaceCopyCustody | None = None,
 ) -> ScannerRun:
     timeout_error = f"repository fork suite exceeded {total_timeout_seconds:.0f}s total timeout"
     cleanup_error = _cleanup_error(backend, private_dir)
@@ -3249,6 +3342,31 @@ def _finalize_foundry_repository_suite(
     elif cleanup_error is not None:
         status = ScannerStatus.FAILED
         error = cleanup_error
+    matrix_scoped = bool(repository_test_fork_rpc_scopes)
+    if repository_suite_workspace_custody is not None:
+        try:
+            observation = repository_suite_workspace_custody.finalize()
+            if repository_suite_workspace_copy is not None:
+                raise ValueError("workspace copy evidence and live custody are mutually exclusive")
+            if status is ScannerStatus.SUCCESS and matrix_scoped:
+                if selection is None:
+                    raise ValueError("matrix-scoped workspace evidence lacks its selection")
+                attempt_bindings = {
+                    scope.attempt_binding_sha256 for scope in repository_test_fork_rpc_scopes
+                }
+                if len(attempt_bindings) != 1 or "0" * 64 in attempt_bindings:
+                    raise ValueError("matrix-scoped workspace evidence lacks one attempt binding")
+                repository_suite_workspace_copy = _sealed_workspace_copy_evidence(
+                    observation,
+                    attempt_binding_sha256=next(iter(attempt_bindings)),
+                    selection=selection,
+                )
+        except (OSError, ValueError) as exc:
+            if status is not ScannerStatus.TIMED_OUT:
+                status = ScannerStatus.FAILED
+                error = (
+                    f"repository suite workspace custody validation failed: {type(exc).__name__}"
+                )
     attestation = isolation_attestation_sha256(backend)
     if time.monotonic() >= deadline:
         deadline_crossed = True
@@ -3272,6 +3390,11 @@ def _finalize_foundry_repository_suite(
     ):
         status = ScannerStatus.TIMED_OUT
         error = "one repository fork test exceeded its complete per-test deadline"
+    if not matrix_scoped or status is not ScannerStatus.SUCCESS:
+        repository_suite_workspace_copy = None
+    elif repository_suite_workspace_copy is None:
+        status = ScannerStatus.FAILED
+        error = "successful matrix-scoped repository suite lacks workspace copy evidence"
     repository_code_execution = (
         RepositoryCodeExecutionState.ISOLATED
         if attempted
@@ -3487,6 +3610,11 @@ def _finalize_foundry_repository_suite(
             repository_suite_inventory=inventory,
             repository_suite_post_inventory=post_inventory,
             repository_suite_execution_policy=execution_policy,
+            repository_suite_workspace_copy=(
+                repository_suite_workspace_copy
+                if status is ScannerStatus.SUCCESS and matrix_scoped
+                else None
+            ),
             repository_test_fork_rpc_scopes=list(repository_test_fork_rpc_scopes),
             repository_test_executions=executions,
             repository_code_execution=repository_code_execution,

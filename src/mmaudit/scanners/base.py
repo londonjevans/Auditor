@@ -133,6 +133,149 @@ class _ScannerWorkspaceInventory:
         ).hexdigest()
 
 
+@dataclass(frozen=True, slots=True)
+class ScannerWorkspaceCopyObservation:
+    """Path-free facts observed while retaining both source-root descriptors."""
+
+    source_inventory_sha256_before: str
+    source_inventory_sha256_after: str
+    workspace_inventory_sha256_after_copy: str
+    workspace_inventory_sha256_after_execution: str
+    source_root_device_before: int
+    source_root_inode_before: int
+    source_root_device_after: int
+    source_root_inode_after: int
+    workspace_root_device_before: int
+    workspace_root_inode_before: int
+    workspace_root_device_after: int
+    workspace_root_inode_after: int
+    workspace_created_exclusively: bool = True
+    workspace_direct_child: bool = True
+    audited_inventory_symlink_free: bool = True
+    source_descriptor_custody_validated: bool = True
+    workspace_descriptor_custody_validated: bool = True
+    copy_matches_source: bool = True
+    source_identity_stable: bool = True
+    workspace_identity_stable: bool = True
+    workspace_removed: bool = False
+
+
+@dataclass(slots=True)
+class ScannerWorkspaceCopyCustody:
+    """Retain no-follow source/workspace root custody until final validation."""
+
+    _source_root: Path
+    _workspace_root: Path
+    _source_private_dir: Path
+    _source_fd: int
+    _workspace_fd: int
+    _source_before: _ScannerWorkspaceInventory
+    _workspace_after_copy: _ScannerWorkspaceInventory
+    _closed: bool = False
+
+    @property
+    def closed(self) -> bool:
+        """Report whether both retained descriptors have been released."""
+
+        return self._closed
+
+    @property
+    def source_inventory_sha256_before(self) -> str:
+        """Return the audited source identity captured before copying."""
+
+        return self._source_before.sha256()
+
+    @property
+    def workspace_inventory_sha256_after_copy(self) -> str:
+        """Return the copied audited inventory identity before execution."""
+
+        return self._workspace_after_copy.sha256()
+
+    def finalize(self) -> ScannerWorkspaceCopyObservation:
+        """Validate pre/post identity and audited inventory, then close custody."""
+
+        if self._closed:
+            raise ValueError("scanner workspace copy custody is already closed")
+        primary_error: BaseException | None = None
+        try:
+            _require_retained_workspace_root(
+                self._source_root,
+                self._source_fd,
+                self._source_before.root_identity,
+                label="source",
+            )
+            _require_retained_workspace_root(
+                self._workspace_root,
+                self._workspace_fd,
+                self._workspace_after_copy.root_identity,
+                label="workspace",
+            )
+            source_after = _build_scanner_workspace_inventory_from_descriptor(
+                self._source_root,
+                self._source_fd,
+                self._source_private_dir,
+            )
+            workspace_after = _build_scanner_workspace_inventory_from_descriptor(
+                self._workspace_root,
+                self._workspace_fd,
+                self._workspace_root / ".mmaudit",
+            )
+            _require_retained_workspace_root(
+                self._source_root,
+                self._source_fd,
+                self._source_before.root_identity,
+                label="source",
+            )
+            _require_retained_workspace_root(
+                self._workspace_root,
+                self._workspace_fd,
+                self._workspace_after_copy.root_identity,
+                label="workspace",
+            )
+            if not _workspace_inventory_identity_stable(self._source_before, source_after):
+                raise ValueError("scanner workspace source inventory changed during execution")
+            if not _workspace_inventory_identity_stable(
+                self._workspace_after_copy,
+                workspace_after,
+            ):
+                raise ValueError("scanner workspace inventory changed during execution")
+            return ScannerWorkspaceCopyObservation(
+                source_inventory_sha256_before=self._source_before.sha256(),
+                source_inventory_sha256_after=source_after.sha256(),
+                workspace_inventory_sha256_after_copy=self._workspace_after_copy.sha256(),
+                workspace_inventory_sha256_after_execution=workspace_after.sha256(),
+                source_root_device_before=self._source_before.root_identity.device,
+                source_root_inode_before=self._source_before.root_identity.inode,
+                source_root_device_after=source_after.root_identity.device,
+                source_root_inode_after=source_after.root_identity.inode,
+                workspace_root_device_before=self._workspace_after_copy.root_identity.device,
+                workspace_root_inode_before=self._workspace_after_copy.root_identity.inode,
+                workspace_root_device_after=workspace_after.root_identity.device,
+                workspace_root_inode_after=workspace_after.root_identity.inode,
+            )
+        except BaseException as exc:
+            primary_error = exc
+            raise
+        finally:
+            try:
+                self.close()
+            except OSError:
+                if primary_error is None:
+                    raise
+
+    def close(self) -> None:
+        """Idempotently release retained descriptors without removing the workspace."""
+
+        if self._closed:
+            return
+        self._closed = True
+        workspace_fd = self._workspace_fd
+        source_fd = self._source_fd
+        self._workspace_fd = -1
+        self._source_fd = -1
+        _close_workspace_descriptors(workspace_fd, source_fd)
+
+
 class ScannerIsolationBackend(Protocol):
     """Structural isolation interface shared with the execution subsystem."""
 
@@ -569,20 +712,74 @@ def scanner_trust_pin_error(
 def copy_scanner_workspace(root: Path, workspace: Path, private_dir: Path) -> None:
     """Copy exactly one bounded, pruned, no-follow source inventory."""
 
-    inventory = _build_scanner_workspace_inventory(root, private_dir)
+    custody = copy_scanner_workspace_with_custody(root, workspace, private_dir)
+    custody.finalize()
+
+
+def copy_scanner_workspace_with_custody(
+    root: Path,
+    workspace: Path,
+    private_dir: Path,
+) -> ScannerWorkspaceCopyCustody:
+    """Exclusively copy one audited inventory and retain both root descriptors."""
+
+    source_root, source_identity = _openable_workspace_root(root)
+    source_fd = _open_workspace_directory(source_root)
+    workspace_fd = -1
+    primary_error: BaseException | None = None
     try:
-        workspace.lstat()
-    except FileNotFoundError:
-        pass
-    else:
-        raise OSError("scanner workspace already exists")
-    workspace.mkdir(mode=0o700)
-    _copy_scanner_workspace_inventory(inventory, workspace)
-    copied = _build_scanner_workspace_inventory(workspace, workspace / ".mmaudit")
-    source_directories = tuple(item.relative_path for item in inventory.directories)
-    copied_directories = tuple(item.relative_path for item in copied.directories)
-    if copied.bindings() != inventory.bindings() or copied_directories != source_directories:
-        raise ValueError("scanner workspace copy does not match its hashed source inventory")
+        _require_workspace_identity(os.fstat(source_fd), source_identity)
+        source_inventory = _build_scanner_workspace_inventory_from_descriptor(
+            source_root,
+            source_fd,
+            private_dir,
+        )
+        workspace_root, workspace_fd = _create_exclusive_workspace_root(workspace)
+        _copy_scanner_workspace_inventory_with_descriptors(
+            source_inventory,
+            source_fd,
+            workspace_fd,
+        )
+        workspace_inventory = _build_scanner_workspace_inventory_from_descriptor(
+            workspace_root,
+            workspace_fd,
+            workspace_root / ".mmaudit",
+        )
+        _require_retained_workspace_root(
+            source_root,
+            source_fd,
+            source_inventory.root_identity,
+            label="source",
+        )
+        _require_retained_workspace_root(
+            workspace_root,
+            workspace_fd,
+            workspace_inventory.root_identity,
+            label="workspace",
+        )
+        if not _workspace_copy_matches(source_inventory, workspace_inventory):
+            raise ValueError("scanner workspace copy does not match its hashed source inventory")
+        custody = ScannerWorkspaceCopyCustody(
+            _source_root=source_root,
+            _workspace_root=workspace_root,
+            _source_private_dir=private_dir,
+            _source_fd=source_fd,
+            _workspace_fd=workspace_fd,
+            _source_before=source_inventory,
+            _workspace_after_copy=workspace_inventory,
+        )
+        source_fd = -1
+        workspace_fd = -1
+        return custody
+    except BaseException as exc:
+        primary_error = exc
+        raise
+    finally:
+        try:
+            _close_workspace_descriptors(workspace_fd, source_fd)
+        except OSError:
+            if primary_error is None:
+                raise
 
 
 def scanner_workspace_sha256(root: Path, private_dir: Path | None = None) -> str:
@@ -613,12 +810,31 @@ def _build_scanner_workspace_inventory(
     """Inventory a pruned tree through retained no-follow directory descriptors."""
 
     repository_root, root_identity = _openable_workspace_root(root)
+    root_fd = _open_workspace_directory(repository_root)
+    try:
+        _require_workspace_identity(os.fstat(root_fd), root_identity)
+        return _build_scanner_workspace_inventory_from_descriptor(
+            repository_root,
+            root_fd,
+            private_dir,
+        )
+    finally:
+        os.close(root_fd)
+
+
+def _build_scanner_workspace_inventory_from_descriptor(
+    repository_root: Path,
+    root_fd: int,
+    private_dir: Path,
+) -> _ScannerWorkspaceInventory:
+    """Inventory through an already-custodied no-follow root descriptor."""
+
+    root_identity = _WorkspaceIdentity.from_stat(os.fstat(root_fd))
     private_relative = _workspace_private_relative(repository_root, private_dir)
     directories: list[_WorkspaceDirectory] = []
     files: list[_WorkspaceFile] = []
     entries_seen = 0
     total_bytes = 0
-    root_fd = _open_workspace_directory(repository_root)
 
     try:
         _require_workspace_identity(os.fstat(root_fd), root_identity)
@@ -701,8 +917,6 @@ def _build_scanner_workspace_inventory(
         )
     except (TypeError, UnicodeError) as exc:
         raise ValueError("scanner workspace source could not be safely inventoried") from exc
-    finally:
-        os.close(root_fd)
 
     return _ScannerWorkspaceInventory(
         repository_root=repository_root,
@@ -712,55 +926,93 @@ def _build_scanner_workspace_inventory(
     )
 
 
-def _copy_scanner_workspace_inventory(
+def _copy_scanner_workspace_inventory_with_descriptors(
     inventory: _ScannerWorkspaceInventory,
-    workspace: Path,
-) -> None:
-    source_fd = _open_workspace_directory(inventory.repository_root)
-    try:
-        _require_workspace_identity(os.fstat(source_fd), inventory.root_identity)
-        for directory in sorted(
-            inventory.directories,
-            key=lambda item: (
-                len(PurePosixPath(item.relative_path).parts),
-                item.relative_path,
-            ),
-        ):
-            target = workspace.joinpath(*PurePosixPath(directory.relative_path).parts)
-            target.mkdir(mode=0o700)
-        directory_identities = {item.relative_path: item.identity for item in inventory.directories}
-        for item in inventory.files:
-            _copy_workspace_file(
-                source_fd,
-                workspace,
-                item,
-                directory_identities,
-            )
-        _verify_workspace_source(inventory, source_fd, directory_identities)
-        for directory in sorted(
-            inventory.directories,
-            key=lambda item: len(PurePosixPath(item.relative_path).parts),
-            reverse=True,
-        ):
-            target = workspace.joinpath(*PurePosixPath(directory.relative_path).parts)
-            target.chmod(stat.S_IMODE(directory.identity.mode))
-    finally:
-        os.close(source_fd)
-
-
-def _copy_workspace_file(
     source_root_fd: int,
-    workspace: Path,
+    workspace_root_fd: int,
+) -> None:
+    """Populate an exclusive workspace solely through retained root descriptors."""
+
+    _require_workspace_identity(os.fstat(source_root_fd), inventory.root_identity)
+    source_directories = {item.relative_path: item.identity for item in inventory.directories}
+    destination_directories: dict[str, _WorkspaceIdentity] = {}
+    for directory in sorted(
+        inventory.directories,
+        key=lambda item: (
+            len(PurePosixPath(item.relative_path).parts),
+            item.relative_path,
+        ),
+    ):
+        parts = PurePosixPath(directory.relative_path).parts
+        parent_fd = _open_workspace_relative_directory_by_identity(
+            workspace_root_fd,
+            parts[:-1],
+            destination_directories,
+        )
+        child_fd = -1
+        try:
+            os.mkdir(parts[-1], mode=0o700, dir_fd=parent_fd)
+            metadata = os.stat(parts[-1], dir_fd=parent_fd, follow_symlinks=False)
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise ValueError("scanner workspace destination directory is invalid")
+            destination_identity = _WorkspaceIdentity.from_stat(metadata)
+            child_fd = os.open(
+                parts[-1],
+                _workspace_directory_flags(),
+                dir_fd=parent_fd,
+            )
+            _require_workspace_node_identity(os.fstat(child_fd), destination_identity)
+            destination_directories[directory.relative_path] = destination_identity
+        finally:
+            if child_fd >= 0:
+                os.close(child_fd)
+            os.close(parent_fd)
+
+    for item in inventory.files:
+        _copy_workspace_file_with_descriptors(
+            source_root_fd,
+            workspace_root_fd,
+            item,
+            source_directories,
+            destination_directories,
+        )
+
+    _verify_workspace_source(inventory, source_root_fd, source_directories)
+    for directory in sorted(
+        inventory.directories,
+        key=lambda item: len(PurePosixPath(item.relative_path).parts),
+        reverse=True,
+    ):
+        parts = PurePosixPath(directory.relative_path).parts
+        directory_fd = _open_workspace_relative_directory_by_identity(
+            workspace_root_fd,
+            parts,
+            destination_directories,
+        )
+        try:
+            os.fchmod(directory_fd, stat.S_IMODE(directory.identity.mode))
+        finally:
+            os.close(directory_fd)
+
+
+def _copy_workspace_file_with_descriptors(
+    source_root_fd: int,
+    workspace_root_fd: int,
     item: _WorkspaceFile,
-    directory_identities: dict[str, _WorkspaceIdentity],
+    source_directory_identities: dict[str, _WorkspaceIdentity],
+    destination_directory_identities: dict[str, _WorkspaceIdentity],
 ) -> None:
     parts = PurePosixPath(item.relative_path).parts
     source_parent_fd = _open_workspace_relative_directory(
         source_root_fd,
         parts[:-1],
-        directory_identities,
+        source_directory_identities,
     )
-    destination = workspace.joinpath(*parts)
+    destination_parent_fd = _open_workspace_relative_directory_by_identity(
+        workspace_root_fd,
+        parts[:-1],
+        destination_directory_identities,
+    )
     source_fd = -1
     destination_fd = -1
     try:
@@ -775,13 +1027,14 @@ def _copy_workspace_file(
         )
         _require_workspace_identity(os.fstat(source_fd), item.identity)
         destination_fd = os.open(
-            destination,
+            parts[-1],
             os.O_WRONLY
             | os.O_CREAT
             | os.O_EXCL
             | _required_no_follow_flag()
             | getattr(os, "O_CLOEXEC", 0),
             0o600,
+            dir_fd=destination_parent_fd,
         )
         digest = hashlib.sha256()
         remaining = item.identity.size
@@ -807,6 +1060,7 @@ def _copy_workspace_file(
             os.close(destination_fd)
         if source_fd >= 0:
             os.close(source_fd)
+        os.close(destination_parent_fd)
         os.close(source_parent_fd)
 
 
@@ -960,6 +1214,194 @@ def _open_workspace_relative_directory(
         raise
 
 
+def _open_workspace_relative_directory_by_identity(
+    root_fd: int,
+    parts: tuple[str, ...],
+    directory_identities: dict[str, _WorkspaceIdentity],
+) -> int:
+    """Traverse a destination while allowing expected parent metadata changes."""
+
+    current_fd = os.dup(root_fd)
+    traversed: list[str] = []
+    try:
+        for part in parts:
+            traversed.append(part)
+            relative = PurePosixPath(*traversed).as_posix()
+            identity = directory_identities[relative]
+            _require_workspace_node_identity(
+                os.stat(part, dir_fd=current_fd, follow_symlinks=False),
+                identity,
+            )
+            child_fd = os.open(
+                part,
+                _workspace_directory_flags(),
+                dir_fd=current_fd,
+            )
+            try:
+                _require_workspace_node_identity(os.fstat(child_fd), identity)
+            except BaseException:
+                os.close(child_fd)
+                raise
+            os.close(current_fd)
+            current_fd = child_fd
+        return current_fd
+    except BaseException:
+        os.close(current_fd)
+        raise
+
+
+def _create_exclusive_workspace_root(workspace: Path) -> tuple[Path, int]:
+    requested_parent = workspace.parent.absolute()
+    parent_root, parent_identity = _openable_workspace_root(requested_parent)
+    if requested_parent != parent_root or workspace.name in {"", ".", ".."}:
+        raise ValueError("scanner workspace must be a canonical direct child")
+    parent_fd = _open_workspace_directory(parent_root)
+    workspace_fd = -1
+    created_identity: _WorkspaceIdentity | None = None
+    try:
+        _require_workspace_identity(os.fstat(parent_fd), parent_identity)
+        try:
+            os.mkdir(workspace.name, mode=0o700, dir_fd=parent_fd)
+        except FileExistsError as exc:
+            raise OSError("scanner workspace already exists") from exc
+        metadata = os.stat(workspace.name, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError("scanner workspace destination root is not a directory")
+        identity = _WorkspaceIdentity.from_stat(metadata)
+        created_identity = identity
+        workspace_fd = os.open(
+            workspace.name,
+            _workspace_directory_flags(),
+            dir_fd=parent_fd,
+        )
+        _require_workspace_identity(os.fstat(workspace_fd), identity)
+        _require_workspace_identity(
+            os.stat(workspace.name, dir_fd=parent_fd, follow_symlinks=False),
+            identity,
+        )
+        return parent_root / workspace.name, workspace_fd
+    except BaseException:
+        if workspace_fd >= 0:
+            os.close(workspace_fd)
+        if created_identity is not None:
+            try:
+                current = os.stat(
+                    workspace.name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+                _require_workspace_identity(current, created_identity)
+                os.rmdir(workspace.name, dir_fd=parent_fd)
+            except (OSError, ValueError):
+                pass
+        raise
+    finally:
+        os.close(parent_fd)
+
+
+def _require_retained_workspace_root(
+    path: Path,
+    descriptor: int,
+    expected: _WorkspaceIdentity,
+    *,
+    label: str,
+) -> None:
+    descriptor_metadata = os.fstat(descriptor)
+    try:
+        named_metadata = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise ValueError(f"scanner workspace {label} root identity changed") from exc
+    if not (
+        stat.S_ISDIR(descriptor_metadata.st_mode)
+        and stat.S_ISDIR(named_metadata.st_mode)
+        and descriptor_metadata.st_dev == expected.device == named_metadata.st_dev
+        and descriptor_metadata.st_ino == expected.inode == named_metadata.st_ino
+        and stat.S_IMODE(descriptor_metadata.st_mode) == stat.S_IMODE(expected.mode)
+        and stat.S_IMODE(named_metadata.st_mode) == stat.S_IMODE(expected.mode)
+    ):
+        raise ValueError(f"scanner workspace {label} root identity changed")
+
+
+def _workspace_copy_matches(
+    source: _ScannerWorkspaceInventory,
+    workspace: _ScannerWorkspaceInventory,
+) -> bool:
+    source_directories = tuple(
+        (item.relative_path, stat.S_IMODE(item.identity.mode)) for item in source.directories
+    )
+    workspace_directories = tuple(
+        (item.relative_path, stat.S_IMODE(item.identity.mode)) for item in workspace.directories
+    )
+    source_files = tuple(
+        (
+            item.relative_path,
+            item.sha256,
+            item.identity.size,
+            stat.S_IMODE(item.identity.mode),
+        )
+        for item in source.files
+    )
+    workspace_files = tuple(
+        (
+            item.relative_path,
+            item.sha256,
+            item.identity.size,
+            stat.S_IMODE(item.identity.mode),
+        )
+        for item in workspace.files
+    )
+    return (
+        source.sha256() == workspace.sha256()
+        and source_directories == workspace_directories
+        and source_files == workspace_files
+    )
+
+
+def _workspace_inventory_identity_stable(
+    before: _ScannerWorkspaceInventory,
+    after: _ScannerWorkspaceInventory,
+) -> bool:
+    before_directories = tuple(
+        (
+            item.relative_path,
+            item.identity.device,
+            item.identity.inode,
+            stat.S_IMODE(item.identity.mode),
+        )
+        for item in before.directories
+    )
+    after_directories = tuple(
+        (
+            item.relative_path,
+            item.identity.device,
+            item.identity.inode,
+            stat.S_IMODE(item.identity.mode),
+        )
+        for item in after.directories
+    )
+    before_files = tuple(
+        (
+            item.relative_path,
+            item.identity,
+            item.sha256,
+        )
+        for item in before.files
+    )
+    after_files = tuple(
+        (
+            item.relative_path,
+            item.identity,
+            item.sha256,
+        )
+        for item in after.files
+    )
+    return (
+        before.sha256() == after.sha256()
+        and before_directories == after_directories
+        and before_files == after_files
+    )
+
+
 def _open_workspace_directory(path: Path) -> int:
     return os.open(path, _workspace_directory_flags())
 
@@ -988,6 +1430,33 @@ def _require_workspace_identity(
 ) -> None:
     if _WorkspaceIdentity.from_stat(metadata) != expected:
         raise ValueError("scanner workspace source identity changed during access")
+
+
+def _require_workspace_node_identity(
+    metadata: os.stat_result,
+    expected: _WorkspaceIdentity,
+) -> None:
+    actual = _WorkspaceIdentity.from_stat(metadata)
+    if (
+        actual.device != expected.device
+        or actual.inode != expected.inode
+        or stat.S_IFMT(actual.mode) != stat.S_IFMT(expected.mode)
+    ):
+        raise ValueError("scanner workspace destination identity changed during access")
+
+
+def _close_workspace_descriptors(*descriptors: int) -> None:
+    first_error: OSError | None = None
+    for descriptor in descriptors:
+        if descriptor < 0:
+            continue
+        try:
+            os.close(descriptor)
+        except OSError as exc:
+            if first_error is None:
+                first_error = exc
+    if first_error is not None:
+        raise first_error
 
 
 def _write_all(descriptor: int, value: bytes) -> None:

@@ -19,6 +19,7 @@ from mmaudit.config import (
     SmartContractsConfig,
 )
 from mmaudit.models.schemas import (
+    REPOSITORY_SUITE_WORKSPACE_COPY_POLICY_SHA256,
     EvidenceStrength,
     ExecutionEvidenceKind,
     ForkRpcMethodCount,
@@ -42,6 +43,7 @@ from mmaudit.models.schemas import (
     RepositorySuiteFramework,
     RepositorySuiteSelection,
     RepositorySuiteTestDescriptor,
+    RepositorySuiteWorkspaceCopyEvidence,
     RepositoryTestExecution,
     RepositoryTestExecutionStatus,
     RepositoryTestForkRpcScopeEvidence,
@@ -53,6 +55,7 @@ from mmaudit.models.schemas import (
     Severity,
     SolidityProjectMetadata,
 )
+from mmaudit.scanners import fork_matrix as fork_matrix_module
 from mmaudit.scanners.base import ScannerIsolationBackend
 from mmaudit.scanners.fork_matrix import (
     CleanStateLease,
@@ -643,9 +646,33 @@ class _Scanner:
         expected_version: str | None = None,
         expected_sha256: str | None = None,
     ) -> ScannerRun:
-        del root, timeout_seconds, backend
+        del timeout_seconds, backend
         assert private_dir.is_dir()
         self._harness.attempt_directories.append(private_dir)
+        workspace = private_dir / "workspace"
+        workspace.mkdir(mode=0o700)
+        source_stat = root.stat()
+        workspace_stat = workspace.stat()
+        workspace_copy = RepositorySuiteWorkspaceCopyEvidence.sealed(
+            attempt_binding_sha256=self._attempt_binding_sha256,
+            selection_sha256=self._harness.selection.selection_sha256,
+            repository_sha256=HASH_B,
+            copy_policy_sha256=REPOSITORY_SUITE_WORKSPACE_COPY_POLICY_SHA256,
+            source_inventory_sha256_before=HASH_B,
+            source_inventory_sha256_after=HASH_B,
+            workspace_inventory_sha256_after_copy=HASH_B,
+            workspace_inventory_sha256_after_execution=HASH_B,
+            source_root_device_before=source_stat.st_dev,
+            source_root_inode_before=source_stat.st_ino,
+            source_root_device_after=source_stat.st_dev,
+            source_root_inode_after=source_stat.st_ino,
+            workspace_root_device_before=workspace_stat.st_dev,
+            workspace_root_inode_before=workspace_stat.st_ino,
+            workspace_root_device_after=workspace_stat.st_dev,
+            workspace_root_inode_after=workspace_stat.st_ino,
+        )
+        if self._harness.scanner_private_callback is not None:
+            self._harness.scanner_private_callback(private_dir)
         self._harness.scanner_endpoints.append(self._endpoint)
         self._harness.scanner_trust_pins.append((expected_version, expected_sha256))
         if self._harness.scanner_failure is not None:
@@ -688,6 +715,7 @@ class _Scanner:
             test_status=test_status,
             machine_result_sha256=result_hash,
             scope=scope,
+            workspace_copy=workspace_copy,
         )
         if self._harness.child_tool_mismatch:
             run = run.model_copy(
@@ -777,6 +805,7 @@ class _Harness:
         )
         self.clock = _Clock()
         self.clean_start_callback: Callable[[Path], None] | None = None
+        self.scanner_private_callback: Callable[[Path], None] | None = None
         self.clean_stop_failure: BaseException | None = None
         self.clean_provider = _CleanProvider(self)
         self.environment = {
@@ -874,6 +903,7 @@ class _Harness:
         test_status: RepositoryTestExecutionStatus,
         machine_result_sha256: str,
         scope: RepositoryTestForkRpcScopeEvidence | None = None,
+        workspace_copy: RepositorySuiteWorkspaceCopyEvidence | None = None,
     ) -> ScannerRun:
         policy = self.policy(
             chain_id=chain_id,
@@ -968,6 +998,7 @@ class _Harness:
             ),
             repository_suite_selection=self.selection,
             repository_suite_execution_policy=policy,
+            repository_suite_workspace_copy=workspace_copy,
             repository_test_executions=[execution],
             repository_test_fork_rpc_scopes=[] if scope is None else [scope],
             repository_code_execution=RepositoryCodeExecutionState.ISOLATED,
@@ -1115,11 +1146,220 @@ def test_runner_emits_repeated_real_divergence_without_top_level_child_runs(
     assert all(attempt.scanner_run.scanner == "foundry_fork" for attempt in result.matrix.attempts)
     assert harness.baseline.fork_rpc_egress is None
     assert len({path for path in harness.attempt_directories}) == 4
-    assert all(path.is_dir() for path in harness.attempt_directories)
+    assert all(not path.exists() for path in harness.attempt_directories)
     assert all(lease.stopped for lease in harness.clean_provider.leases)
     serialized = result.model_dump_json()
     for prohibited in ("http://", "127.0.0.1", str(tmp_path)):
         assert prohibited not in serialized
+
+
+def test_runner_reuses_same_nonce_after_removing_prior_matrix_tree(tmp_path: Path) -> None:
+    harness = _Harness()
+    private_root = tmp_path / ".private"
+
+    first = harness.run(tmp_path, private_root=private_root)
+    second = harness.run(tmp_path, private_root=private_root)
+
+    assert first.status is RepositoryDifferentialRunStatus.COMPLETE
+    assert second.status is RepositoryDifferentialRunStatus.COMPLETE
+    assert all(not path.exists() for path in harness.attempt_directories)
+    assert not any(private_root.iterdir())
+
+
+def test_runner_removes_symlink_without_following_external_sentinel(tmp_path: Path) -> None:
+    harness = _Harness()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_text("operator-owned\n", encoding="utf-8")
+
+    def add_external_symlink(private_dir: Path) -> None:
+        (private_dir / "external").symlink_to(outside, target_is_directory=True)
+
+    harness.scanner_private_callback = add_external_symlink
+
+    result = harness.run(tmp_path)
+
+    assert result.status is RepositoryDifferentialRunStatus.COMPLETE
+    assert sentinel.read_text(encoding="utf-8") == "operator-owned\n"
+    assert all(not path.exists() for path in harness.attempt_directories)
+
+
+def test_runner_refuses_replaced_attempt_without_deleting_foreign_tree(tmp_path: Path) -> None:
+    harness = _Harness()
+    displaced: list[Path] = []
+    foreign_sentinels: list[Path] = []
+
+    def replace_attempt(private_dir: Path) -> None:
+        displaced_path = private_dir.with_name(private_dir.name + "-displaced")
+        private_dir.rename(displaced_path)
+        private_dir.mkdir(mode=0o700)
+        foreign_sentinel = private_dir / "foreign-sentinel.txt"
+        foreign_sentinel.write_text("do-not-delete\n", encoding="utf-8")
+        displaced.append(displaced_path)
+        foreign_sentinels.append(foreign_sentinel)
+
+    harness.scanner_private_callback = replace_attempt
+
+    result = harness.run(tmp_path)
+
+    assert result.status is RepositoryDifferentialRunStatus.FAILED
+    assert result.matrix is None
+    assert displaced and all(path.is_dir() for path in displaced)
+    assert foreign_sentinels
+    assert all(path.read_text(encoding="utf-8") == "do-not-delete\n" for path in foreign_sentinels)
+
+
+def test_runner_cleanup_failure_prevents_complete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _Harness()
+    real_rmdir = fork_matrix_module.os.rmdir
+
+    def fail_attempt_removal(
+        path: str | bytes,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        if str(path).endswith("attempt-1"):
+            raise PermissionError("synthetic descriptor-anchored removal failure")
+        real_rmdir(path, dir_fd=dir_fd)
+
+    monkeypatch.setattr(fork_matrix_module.os, "rmdir", fail_attempt_removal)
+
+    result = harness.run(tmp_path)
+
+    assert result.status is RepositoryDifferentialRunStatus.FAILED
+    assert result.matrix is None
+
+
+def test_runner_cleanup_entry_ceiling_prevents_complete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _Harness()
+
+    def add_two_entries(private_dir: Path) -> None:
+        (private_dir / "one").write_text("1", encoding="utf-8")
+        (private_dir / "two").write_text("2", encoding="utf-8")
+
+    harness.scanner_private_callback = add_two_entries
+    real_start = fork_matrix_module._DirectoryRemovalBudget.start
+
+    def constrained_start() -> fork_matrix_module._DirectoryRemovalBudget:
+        budget = real_start()
+        budget.entry_limit = 1
+        return budget
+
+    monkeypatch.setattr(
+        fork_matrix_module._DirectoryRemovalBudget,
+        "start",
+        staticmethod(constrained_start),
+    )
+
+    result = harness.run(tmp_path)
+
+    assert result.status is RepositoryDifferentialRunStatus.FAILED
+    assert result.matrix is None
+
+
+def test_runner_cleanup_time_ceiling_prevents_complete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _Harness()
+    first = True
+
+    def expired_cleanup_clock() -> float:
+        nonlocal first
+        if first:
+            first = False
+            return 0.0
+        return fork_matrix_module.REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS + 1.0
+
+    monkeypatch.setattr(fork_matrix_module.time, "monotonic", expired_cleanup_clock)
+
+    result = harness.run(tmp_path)
+
+    assert result.status is RepositoryDifferentialRunStatus.FAILED
+    assert result.matrix is None
+
+
+def test_runner_close_failure_does_not_abort_later_owned_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _Harness()
+    real_close = fork_matrix_module._DirectoryCustody.close
+    failure_reported = False
+
+    def report_one_close_failure(
+        custody: fork_matrix_module._DirectoryCustody,
+    ) -> bool:
+        nonlocal failure_reported
+        closed = real_close(custody)
+        if not failure_reported and custody.name == "clean-local-attempt-2":
+            failure_reported = True
+            return False
+        return closed
+
+    monkeypatch.setattr(
+        fork_matrix_module._DirectoryCustody,
+        "close",
+        report_one_close_failure,
+    )
+
+    result = harness.run(tmp_path)
+
+    assert failure_reported is True
+    assert result.status is RepositoryDifferentialRunStatus.FAILED
+    assert result.matrix is None
+    assert len(harness.attempt_directories) == 2
+    assert all(not path.exists() for path in harness.attempt_directories)
+
+
+@pytest.mark.parametrize("failure_point", ["open", "fstat"])
+def test_runner_transactionally_removes_child_after_post_mkdir_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_point: str,
+) -> None:
+    harness = _Harness()
+    private_root = tmp_path / ".private"
+    real_open = fork_matrix_module.os.open
+    real_fstat = fork_matrix_module.os.fstat
+    matrix_descriptors: set[int] = set()
+
+    def guarded_open(
+        path: str | bytes | int,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if failure_point == "open" and str(path).startswith("repository-fork-matrix-"):
+            raise OSError("synthetic child open failure")
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if str(path).startswith("repository-fork-matrix-"):
+            matrix_descriptors.add(descriptor)
+        return descriptor
+
+    def guarded_fstat(descriptor: int) -> object:
+        if failure_point == "fstat" and descriptor in matrix_descriptors:
+            matrix_descriptors.remove(descriptor)
+            raise OSError("synthetic child fstat failure")
+        return real_fstat(descriptor)
+
+    monkeypatch.setattr(fork_matrix_module.os, "open", guarded_open)
+    monkeypatch.setattr(fork_matrix_module.os, "fstat", guarded_fstat)
+
+    result = harness.run(tmp_path, private_root=private_root)
+
+    assert result.status is RepositoryDifferentialRunStatus.FAILED
+    assert result.matrix is None
+    assert private_root.is_dir()
+    assert not any(private_root.iterdir())
 
 
 def test_runner_consistent_control_is_not_reported_as_divergent(tmp_path: Path) -> None:
@@ -1286,6 +1526,7 @@ def test_runner_absolute_deadline_stops_new_attempts_and_still_cleans_up(
     assert any(
         attempt.scanner_run.status is ScannerStatus.TIMED_OUT for attempt in result.matrix.attempts
     )
+    assert all(not path.exists() for path in harness.attempt_directories)
     clean = next(state for state in result.matrix.states if state.state_id == "clean-local")
     assert clean.observation_status is RepositoryExecutionStateObservationStatus.FAILED
 
@@ -1416,6 +1657,7 @@ def test_runner_typed_failure_after_clean_acquisition_cleans_every_lease(
     assert harness.clean_provider.leases
     assert all(lease.stopped for lease in harness.clean_provider.leases)
     assert all(bridge.stopped for bridge in harness.bridges)
+    assert all(not path.exists() for path in harness.attempt_directories)
 
 
 def test_runner_failed_clean_stop_cannot_preserve_complete_status(tmp_path: Path) -> None:
@@ -1443,6 +1685,7 @@ def test_runner_keyboard_interrupt_propagates_after_lifecycle_cleanup(tmp_path: 
     assert all(lease.stopped for lease in harness.clean_provider.leases)
     assert harness.bridges
     assert all(bridge.stopped for bridge in harness.bridges)
+    assert all(not path.exists() for path in harness.attempt_directories)
 
 
 def test_runner_preserves_original_interrupt_when_clean_stop_also_interrupts(
@@ -1459,6 +1702,7 @@ def test_runner_preserves_original_interrupt_when_clean_stop_also_interrupts(
     assert all(lease.stop_attempted for lease in harness.clean_provider.leases)
     assert harness.bridges
     assert all(bridge.stopped for bridge in harness.bridges)
+    assert all(not path.exists() for path in harness.attempt_directories)
 
 
 def test_runner_passes_baseline_forge_trust_pin_to_every_child(tmp_path: Path) -> None:

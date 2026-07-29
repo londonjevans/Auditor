@@ -16,6 +16,7 @@ import mmaudit.scanners.foundry as foundry_module
 from mmaudit.config import SmartContractsConfig
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
+    FoundryTestExecutionSummary,
     RepositorySuiteExecutionPolicy,
     RepositorySuiteFramework,
     RepositorySuiteSelection,
@@ -23,6 +24,10 @@ from mmaudit.models.schemas import (
     RepositoryTestExecutionStatus,
     ScannerRun,
     ScannerStatus,
+)
+from mmaudit.scanners.base import (
+    ScannerWorkspaceCopyCustody,
+    copy_scanner_workspace_with_custody,
 )
 from mmaudit.scanners.fork_rpc import PinnedForkObservation
 from mmaudit.scanners.foundry import (
@@ -71,11 +76,13 @@ def _descriptor() -> RepositorySuiteTestDescriptor:
 
 def _selection(
     descriptors: tuple[RepositorySuiteTestDescriptor, ...] | None = None,
+    *,
+    repository_sha256: str = HASH_B,
 ) -> RepositorySuiteSelection:
     selected = descriptors or (_descriptor(),)
     return RepositorySuiteSelection.sealed(
         profile="explicit",
-        repository_sha256=HASH_B,
+        repository_sha256=repository_sha256,
         repository_exclusion_path=".mmaudit",
         configuration_sha256=HASH_C,
         candidate_file_count=len({descriptor.path for descriptor in selected}),
@@ -210,6 +217,223 @@ def _test_observation(
 
 def _test_usage() -> _PrivateArtifactUsage:
     return _PrivateArtifactUsage(entries=0, bytes=0, artifact_sha256=HASH_A)
+
+
+def test_workspace_copy_custody_proves_stable_copy_without_claiming_removal(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    (repository / "src").mkdir()
+    (repository / "src" / "Example.sol").write_text(
+        "contract Example {}\n",
+        encoding="utf-8",
+    )
+    private_dir = tmp_path / "private"
+    private_dir.mkdir()
+    workspace = private_dir / "workspace"
+
+    custody = copy_scanner_workspace_with_custody(
+        repository,
+        workspace,
+        private_dir,
+    )
+    observation = custody.finalize()
+
+    assert custody.closed
+    assert observation.workspace_created_exclusively
+    assert observation.workspace_direct_child
+    assert observation.audited_inventory_symlink_free
+    assert observation.source_descriptor_custody_validated
+    assert observation.workspace_descriptor_custody_validated
+    assert observation.copy_matches_source
+    assert observation.source_identity_stable
+    assert observation.workspace_identity_stable
+    assert not observation.workspace_removed
+    assert observation.source_inventory_sha256_before == observation.source_inventory_sha256_after
+    assert (
+        observation.source_inventory_sha256_before
+        == observation.workspace_inventory_sha256_after_copy
+        == observation.workspace_inventory_sha256_after_execution
+    )
+    assert observation.source_root_device_before == observation.source_root_device_after
+    assert observation.source_root_inode_before == observation.source_root_inode_after
+    assert observation.workspace_root_device_before == observation.workspace_root_device_after
+    assert observation.workspace_root_inode_before == observation.workspace_root_inode_after
+    assert workspace.is_dir()
+
+
+def test_workspace_copy_custody_requires_exclusive_direct_child(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    (repository / "Example.sol").write_text("contract Example {}\n", encoding="utf-8")
+    private_dir = tmp_path / "private"
+    private_dir.mkdir()
+    workspace = private_dir / "workspace"
+    workspace.mkdir()
+
+    with pytest.raises(OSError, match="already exists"):
+        copy_scanner_workspace_with_custody(repository, workspace, private_dir)
+
+
+def test_workspace_copy_custody_removes_only_its_empty_root_when_open_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    (repository / "Example.sol").write_text("contract Example {}\n", encoding="utf-8")
+    private_dir = tmp_path / "private"
+    private_dir.mkdir()
+    workspace = private_dir / "workspace"
+    real_open = os.open
+
+    def fail_workspace_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if path == "workspace" and dir_fd is not None:
+            raise OSError("synthetic workspace open failure")
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", fail_workspace_open)
+
+    with pytest.raises(OSError, match="synthetic workspace open failure"):
+        copy_scanner_workspace_with_custody(repository, workspace, private_dir)
+
+    assert not workspace.exists()
+
+
+@pytest.mark.parametrize("replaced_root", ["source", "workspace"])
+def test_workspace_copy_custody_detects_root_replacement_and_closes_descriptors(
+    tmp_path: Path,
+    replaced_root: str,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    (repository / "Example.sol").write_text("contract Example {}\n", encoding="utf-8")
+    private_dir = tmp_path / "private"
+    private_dir.mkdir()
+    workspace = private_dir / "workspace"
+    custody = copy_scanner_workspace_with_custody(repository, workspace, private_dir)
+
+    target = repository if replaced_root == "source" else workspace
+    retained = target.with_name(f"{target.name}-retained")
+    target.rename(retained)
+    target.mkdir()
+    (target / "Example.sol").write_text("contract Example {}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="root identity changed"):
+        custody.finalize()
+
+    assert custody.closed
+
+
+@pytest.mark.parametrize("drifted_root", ["source", "workspace"])
+def test_workspace_copy_custody_detects_inventory_drift_and_closes_descriptors(
+    tmp_path: Path,
+    drifted_root: str,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    (repository / "Example.sol").write_text("contract Example {}\n", encoding="utf-8")
+    private_dir = tmp_path / "private"
+    private_dir.mkdir()
+    workspace = private_dir / "workspace"
+    custody = copy_scanner_workspace_with_custody(repository, workspace, private_dir)
+
+    drifted = repository if drifted_root == "source" else workspace
+    (drifted / "Example.sol").write_text(
+        "contract Example { uint256 changed; }\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="inventory changed"):
+        custody.finalize()
+
+    assert custody.closed
+
+
+def test_workspace_copy_custody_closes_both_descriptors_when_one_close_reports_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    (repository / "Example.sol").write_text("contract Example {}\n", encoding="utf-8")
+    private_dir = tmp_path / "private"
+    private_dir.mkdir()
+    custody = copy_scanner_workspace_with_custody(
+        repository,
+        private_dir / "workspace",
+        private_dir,
+    )
+    source_fd = custody._source_fd
+    workspace_fd = custody._workspace_fd
+    real_close = os.close
+
+    def close_then_report_error(descriptor: int) -> None:
+        real_close(descriptor)
+        if descriptor == workspace_fd:
+            raise OSError("synthetic close error")
+
+    monkeypatch.setattr(os, "close", close_then_report_error)
+
+    with pytest.raises(OSError, match="synthetic close error"):
+        custody.close()
+
+    assert custody.closed
+    with pytest.raises(OSError):
+        os.fstat(source_fd)
+    with pytest.raises(OSError):
+        os.fstat(workspace_fd)
+
+
+def test_foundry_run_closes_workspace_custody_after_unexpected_base_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    (repository / "Example.sol").write_text("contract Example {}\n", encoding="utf-8")
+    private_dir = tmp_path / "private"
+    captured_descriptors: list[int] = []
+    scanner = FoundryForkScanner(SmartContractsConfig())
+
+    def interrupt_after_copy(
+        root: Path,
+        supplied_private_dir: Path,
+        timeout_seconds: float,
+        *,
+        backend: object,
+        expected_version: str | None,
+        expected_sha256: str | None,
+        workspace_custody_guard: list[ScannerWorkspaceCopyCustody],
+    ) -> ScannerRun:
+        del timeout_seconds, backend, expected_version, expected_sha256
+        supplied_private_dir.mkdir()
+        custody = copy_scanner_workspace_with_custody(
+            root,
+            supplied_private_dir / "workspace",
+            supplied_private_dir,
+        )
+        captured_descriptors.extend((custody._source_fd, custody._workspace_fd))
+        workspace_custody_guard.append(custody)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(scanner, "_run_repository_suite", interrupt_after_copy)
+
+    with pytest.raises(KeyboardInterrupt):
+        scanner.run(repository, private_dir, 10.0)
+
+    assert len(captured_descriptors) == 2
+    for descriptor in captured_descriptors:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
 
 
 def test_foundry_scope_context_is_all_or_none_and_runtime_context_preserves_it() -> None:
@@ -1303,6 +1527,157 @@ def test_manifest_serializes_bound_per_test_rpc_scope(tmp_path: Path) -> None:
     serialized_scopes = json.dumps(scopes, sort_keys=True)
     assert "http://" not in serialized_scopes
     assert "https://" not in serialized_scopes
+
+
+def test_finalizer_attaches_copy_evidence_only_to_successful_matrix_scoped_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    (repository / "Example.sol").write_text("contract Example {}\n", encoding="utf-8")
+    matrix_private = tmp_path / "matrix-private"
+    matrix_private.mkdir()
+    custody = copy_scanner_workspace_with_custody(
+        repository,
+        matrix_private / "workspace",
+        matrix_private,
+    )
+    selection = _selection(repository_sha256=custody.source_inventory_sha256_before)
+    policy = RepositorySuiteExecutionPolicy.sealed(
+        selection_sha256=selection.selection_sha256,
+        selection_configuration_sha256=selection.configuration_sha256,
+        chain_id=31_337,
+        block_number=0,
+        block_hash="0x" + HASH_C,
+        tool_version="forge 1.3.2",
+        tool_sha256=HASH_A,
+        compiler_version="solc 0.8.30",
+        compiler_sha256=HASH_B,
+        isolation_backend="synthetic-isolation",
+        isolation_attestation_sha256=HASH_C,
+        fuzz_seed=SEED,
+        fuzz_runs=256,
+        invariant_runs=64,
+        per_test_timeout_seconds=10.0,
+        total_timeout_seconds=60.0,
+        max_output_bytes_per_test=1_024,
+        max_total_output_bytes=10_240,
+    )
+    summary = FoundryTestExecutionSummary(
+        unit_tests=1,
+        fuzz_tests=0,
+        invariant_tests=0,
+        passed_tests=1,
+        failed_tests=0,
+        skipped_tests=0,
+        fuzz_cases=0,
+        invariant_runs=0,
+        invariant_calls=0,
+    )
+    observation = _FoundryTestObservation(
+        descriptor=selection.tests[0],
+        status=RepositoryTestExecutionStatus.PASSED,
+        terminal_detail=None,
+        duration_seconds=0.1,
+        command_sha256=HASH_A,
+        output_sha256=HASH_B,
+        output_bytes=1,
+        process_exit_code=0,
+        machine_output_validated=True,
+        machine_result_sha256=HASH_C,
+        summary=summary,
+    )
+    recorder = _ScopeRecorder()
+    scoped = _execute_foundry_test_with_scope(
+        recorder=recorder,
+        attempt_binding_sha256=HASH_A,
+        selection=selection,
+        descriptor=selection.tests[0],
+        sequence_index=1,
+        execute=lambda: (observation, _test_usage()),
+    )
+    assert scoped.scope is not None
+    backend = SimpleNamespace(name="synthetic-isolation")
+    monkeypatch.setattr(foundry_module, "_cleanup_error", lambda *_args: None)
+    monkeypatch.setattr(
+        foundry_module,
+        "isolation_attestation_sha256",
+        lambda _backend: HASH_C,
+    )
+
+    matrix_run = _finalize_foundry_repository_suite(
+        root=repository,
+        private_dir=matrix_private,
+        backend=backend,
+        start=datetime.now(UTC),
+        monotonic_start=time.monotonic(),
+        deadline=time.monotonic() + 10.0,
+        total_timeout_seconds=10.0,
+        status=ScannerStatus.SUCCESS,
+        error=None,
+        selection=selection,
+        observations=[observation],
+        fork=PinnedForkObservation(
+            chain_id=31_337,
+            block_number=0,
+            block_hash="0x" + HASH_C,
+        ),
+        executable_sha256=HASH_A,
+        version="forge 1.3.2",
+        compiler_version="solc 0.8.30",
+        compiler_sha256=HASH_B,
+        execution_policy=policy,
+        inventory=None,
+        post_inventory=None,
+        fuzz_seed=SEED,
+        repository_test_fork_rpc_scopes=[scoped.scope],
+        repository_suite_workspace_custody=custody,
+    )
+
+    assert matrix_run.status is ScannerStatus.SUCCESS
+    copy_evidence = matrix_run.repository_suite_workspace_copy
+    assert copy_evidence is not None
+    assert copy_evidence.copy_evidence_sha256 == copy_evidence.expected_copy_evidence_sha256()
+    assert copy_evidence.attempt_binding_sha256 == HASH_A
+    assert copy_evidence.selection_sha256 == selection.selection_sha256
+    assert copy_evidence.repository_sha256 == selection.repository_sha256
+    assert matrix_run.execution_observation_sha256_is_valid()
+
+    legacy_private = tmp_path / "legacy-private"
+    legacy_private.mkdir()
+    legacy_run = _finalize_foundry_repository_suite(
+        root=repository,
+        private_dir=legacy_private,
+        backend=backend,
+        start=datetime.now(UTC),
+        monotonic_start=time.monotonic(),
+        deadline=time.monotonic() + 10.0,
+        total_timeout_seconds=10.0,
+        status=ScannerStatus.SUCCESS,
+        error=None,
+        selection=selection,
+        observations=[observation],
+        fork=PinnedForkObservation(
+            chain_id=31_337,
+            block_number=0,
+            block_hash="0x" + HASH_C,
+        ),
+        executable_sha256=HASH_A,
+        version="forge 1.3.2",
+        compiler_version="solc 0.8.30",
+        compiler_sha256=HASH_B,
+        execution_policy=policy,
+        inventory=None,
+        post_inventory=None,
+        fuzz_seed=SEED,
+        repository_suite_workspace_copy=copy_evidence,
+    )
+
+    assert legacy_run.status is ScannerStatus.SUCCESS
+    assert legacy_run.repository_suite_workspace_copy is None
+    assert "repository_suite_workspace_copy" not in legacy_run.model_dump(mode="json")
+    assert legacy_run.execution_observation_sha256_is_valid()
 
 
 @pytest.mark.parametrize(

@@ -163,6 +163,19 @@ def _write_report_artifacts(run_dir: Path, report: AuditReport) -> None:
         + "\n",
         encoding="utf-8",
     )
+    (run_dir / "scanner-results.json").write_text(
+        json.dumps(
+            {
+                "schema_version": report.schema_version,
+                "run_id": report.run_id,
+                "runs": [run.model_dump(mode="json") for run in report.scanner_runs],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def _write_run(

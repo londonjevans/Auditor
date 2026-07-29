@@ -9,6 +9,11 @@ from pydantic import ValidationError
 
 from mmaudit.models.schemas import (
     _TRUSTED_READ_ONLY_FORK_RPC_METHODS,
+    REPOSITORY_SUITE_WORKSPACE_COPY_POLICY_SHA256,
+    REPOSITORY_SUITE_WORKSPACE_DISPOSAL_POLICY_SHA256,
+    REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT,
+    REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT,
+    REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS,
     AuditReport,
     EvidenceStrength,
     ExecutionEvidenceKind,
@@ -41,6 +46,9 @@ from mmaudit.models.schemas import (
     RepositorySuiteTestComparison,
     RepositorySuiteTestDescriptor,
     RepositorySuiteTestStateConsensus,
+    RepositorySuiteWorkspaceCopyEvidence,
+    RepositorySuiteWorkspaceLifecycleEvidence,
+    RepositorySuiteWorkspaceLifecycleStatus,
     RepositoryTestExecution,
     RepositoryTestExecutionStatus,
     RepositoryTestForkRpcScopeEvidence,
@@ -118,6 +126,131 @@ def _selection(
         omitted_test_count=0,
         limit_reached=False,
         tests=(descriptor,),
+    )
+
+
+def _workspace_copy_evidence(
+    selection: RepositorySuiteSelection,
+    attempt_binding_sha256: str,
+) -> RepositorySuiteWorkspaceCopyEvidence:
+    identity_offset = int(attempt_binding_sha256[0], 16)
+    return RepositorySuiteWorkspaceCopyEvidence.sealed(
+        attempt_binding_sha256=attempt_binding_sha256,
+        selection_sha256=selection.selection_sha256,
+        repository_sha256=selection.repository_sha256,
+        copy_policy_sha256=REPOSITORY_SUITE_WORKSPACE_COPY_POLICY_SHA256,
+        source_inventory_sha256_before=selection.repository_sha256,
+        source_inventory_sha256_after=selection.repository_sha256,
+        workspace_inventory_sha256_after_copy=selection.repository_sha256,
+        workspace_inventory_sha256_after_execution=selection.repository_sha256,
+        source_root_device_before=10,
+        source_root_inode_before=11,
+        source_root_device_after=10,
+        source_root_inode_after=11,
+        workspace_root_device_before=20 + identity_offset,
+        workspace_root_inode_before=30 + identity_offset,
+        workspace_root_device_after=20 + identity_offset,
+        workspace_root_inode_after=30 + identity_offset,
+        workspace_created_exclusively=True,
+        workspace_direct_child=True,
+        audited_inventory_symlink_free=True,
+        source_descriptor_custody_validated=True,
+        workspace_descriptor_custody_validated=True,
+        copy_matches_source=True,
+        source_identity_stable=True,
+        workspace_identity_stable=True,
+        workspace_removed=False,
+    )
+
+
+def _workspace_lifecycle_evidence(
+    selection: RepositorySuiteSelection,
+    attempt_binding_sha256: str,
+    *,
+    attempt_root_device: int,
+    attempt_root_inode: int,
+    run: ScannerRun | None,
+    status: RepositorySuiteWorkspaceLifecycleStatus = (
+        RepositorySuiteWorkspaceLifecycleStatus.VALIDATED
+    ),
+) -> RepositorySuiteWorkspaceLifecycleEvidence:
+    freshness = _canonical_sha256(
+        {
+            "workspace_identity_sha256": attempt_binding_sha256,
+            "created_with_exist_ok_false": True,
+            "device": attempt_root_device,
+            "inode": attempt_root_inode,
+        }
+    )
+    copy = run.repository_suite_workspace_copy if run is not None else None
+    return RepositorySuiteWorkspaceLifecycleEvidence.sealed(
+        status=status,
+        attempt_binding_sha256=attempt_binding_sha256,
+        selection_sha256=selection.selection_sha256,
+        repository_sha256=selection.repository_sha256,
+        workspace_copy_evidence_sha256=(copy.copy_evidence_sha256 if copy is not None else None),
+        scanner_execution_observation_sha256=(
+            run.execution_observation_sha256 if run is not None else None
+        ),
+        freshness_attestation_sha256=freshness,
+        disposal_policy_sha256=REPOSITORY_SUITE_WORKSPACE_DISPOSAL_POLICY_SHA256,
+        attempt_root_device=attempt_root_device,
+        attempt_root_inode=attempt_root_inode,
+        attempt_root_created_exclusively=True,
+        attempt_root_direct_child=True,
+        removal_entry_limit=REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT,
+        removed_entry_count=7 if run is not None else 0,
+        removal_depth_limit=REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT,
+        maximum_removed_depth=3 if run is not None else 0,
+        removal_timeout_seconds=REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS,
+        removal_duration_seconds=0.05,
+        attempt_descriptor_closed=True,
+        workspace_path_absent=True,
+        attempt_path_absent=True,
+        private_path_retained=False,
+        rpc_endpoint_retained=False,
+    )
+
+
+def _state_attempt_with_lifecycle(
+    selection: RepositorySuiteSelection,
+    state: RepositorySuiteExecutionStateEvidence,
+    *,
+    attempt_index: int,
+    workspace_identity_sha256: str,
+    run: ScannerRun,
+    lifecycle_status: RepositorySuiteWorkspaceLifecycleStatus = (
+        RepositorySuiteWorkspaceLifecycleStatus.VALIDATED
+    ),
+    attempt_root_device: int | None = None,
+    attempt_root_inode: int | None = None,
+) -> RepositorySuiteStateAttempt:
+    identity_offset = int(workspace_identity_sha256[0], 16)
+    lifecycle = _workspace_lifecycle_evidence(
+        selection,
+        workspace_identity_sha256,
+        attempt_root_device=(
+            40 + identity_offset if attempt_root_device is None else attempt_root_device
+        ),
+        attempt_root_inode=(
+            50 + identity_offset if attempt_root_inode is None else attempt_root_inode
+        ),
+        run=run if lifecycle_status is RepositorySuiteWorkspaceLifecycleStatus.VALIDATED else None,
+        status=lifecycle_status,
+    )
+    return RepositorySuiteStateAttempt.sealed(
+        state_id=state.state_id,
+        state_sha256=state.state_sha256,
+        attempt_index=attempt_index,
+        workspace_kind="fresh_disposable_copy",
+        workspace_identity_sha256=workspace_identity_sha256,
+        workspace_freshness_attestation_sha256=(lifecycle.freshness_attestation_sha256),
+        workspace_disposal_policy_sha256=lifecycle.disposal_policy_sha256,
+        workspace_lifecycle=lifecycle,
+        fork_rpc_egress_sha256=(
+            run.fork_rpc_egress.evidence_sha256 if run.fork_rpc_egress is not None else None
+        ),
+        scanner_run=run,
     )
 
 
@@ -401,6 +534,7 @@ def _run(
         status=egress_status,
         selected_test_scope_snapshot_sha256s=(test_rpc_scope.bridge_scope_snapshot_sha256,),
     )
+    workspace_copy = _workspace_copy_evidence(selection, attempt_binding_sha256)
     observed_at = BASE_TIME + timedelta(seconds=attempt_index)
     run = ScannerRun(
         scanner="foundry_fork",
@@ -435,6 +569,7 @@ def _run(
         ),
         repository_suite_selection=selection,
         repository_suite_execution_policy=policy,
+        repository_suite_workspace_copy=workspace_copy,
         repository_test_executions=[execution],
         repository_test_fork_rpc_scopes=[test_rpc_scope],
         repository_code_execution=RepositoryCodeExecutionState.ISOLATED,
@@ -474,18 +609,14 @@ def _attempt(
         evidence=evidence,
         egress_status=egress_status,
     )
-    return RepositorySuiteStateAttempt.sealed(
-        state_id=state.state_id,
-        state_sha256=state.state_sha256,
+    return _state_attempt_with_lifecycle(
+        selection,
+        state,
         attempt_index=attempt_index,
-        workspace_kind="fresh_disposable_copy",
         workspace_identity_sha256=workspace_identity_sha256,
-        workspace_freshness_attestation_sha256=(f"{workspace_digit + 4:x}" * 64),
-        workspace_disposal_policy_sha256=(f"{workspace_digit + 8:x}" * 64),
-        fork_rpc_egress_sha256=(
-            run.fork_rpc_egress.evidence_sha256 if run.fork_rpc_egress is not None else None
-        ),
-        scanner_run=run,
+        run=run,
+        attempt_root_device=40 + workspace_digit,
+        attempt_root_inode=50 + workspace_digit,
     )
 
 
@@ -592,15 +723,12 @@ def _matrix(
         )
     else:
         pinned_attempts = tuple(
-            RepositorySuiteStateAttempt.sealed(
-                state_id=pinned.state_id,
-                state_sha256=pinned.state_sha256,
+            _state_attempt_with_lifecycle(
+                selection,
+                pinned,
                 attempt_index=index,
-                workspace_kind="fresh_disposable_copy",
                 workspace_identity_sha256=(str(index + 6) * 64),
-                workspace_freshness_attestation_sha256=(f"{index + 7:x}" * 64),
-                workspace_disposal_policy_sha256=(f"{index + 10:x}" * 64),
-                scanner_run=ScannerRun(
+                run=ScannerRun(
                     scanner="foundry_fork",
                     status=ScannerStatus.UNAVAILABLE,
                     started_at=BASE_TIME,
@@ -608,6 +736,7 @@ def _matrix(
                     duration_seconds=0,
                     error="Configured local state endpoint was unavailable.",
                 ),
+                lifecycle_status=(RepositorySuiteWorkspaceLifecycleStatus.DISPOSED_UNCREDITED),
             )
             for index in (1, 2)
         )
@@ -700,6 +829,7 @@ def test_single_qualifying_observation_cannot_claim_conclusive_state() -> None:
             "execution_evidence": ExecutionEvidenceKind.UNVERIFIED,
             "repository_suite_selection": None,
             "repository_suite_execution_policy": None,
+            "repository_suite_workspace_copy": None,
             "repository_test_executions": [],
             "repository_test_fork_rpc_scopes": [],
             "foundry_summary": None,
@@ -708,15 +838,18 @@ def test_single_qualifying_observation_cannot_claim_conclusive_state() -> None:
             "execution_observation_sha256": None,
         }
     )
-    broken_attempt = RepositorySuiteStateAttempt.sealed(
-        **{
-            **pinned_attempt.model_dump(
-                mode="python",
-                exclude={"attempt_sha256", "scanner_run", "fork_rpc_egress_sha256"},
-            ),
-            "fork_rpc_egress_sha256": None,
-            "scanner_run": broken_run,
-        }
+    selection = pinned_attempt.scanner_run.repository_suite_selection
+    pinned_state = next(
+        state for state in matrix.states if state.state_id == pinned_attempt.state_id
+    )
+    assert selection is not None
+    broken_attempt = _state_attempt_with_lifecycle(
+        selection,
+        pinned_state,
+        attempt_index=pinned_attempt.attempt_index,
+        workspace_identity_sha256=pinned_attempt.workspace_identity_sha256,
+        run=broken_run,
+        lifecycle_status=RepositorySuiteWorkspaceLifecycleStatus.DISPOSED_UNCREDITED,
     )
     attempts = [
         broken_attempt if attempt.attempt_sha256 == pinned_attempt.attempt_sha256 else attempt
@@ -1433,6 +1566,11 @@ def _scanner_run_with_test_rpc_scopes(
     *,
     status: ScannerStatus = ScannerStatus.SUCCESS,
 ) -> ScannerRun:
+    workspace_copy = (
+        _workspace_copy_evidence(selection, scopes[0].attempt_binding_sha256)
+        if scopes and scopes[0].attempt_binding_sha256 != "0" * 64
+        else None
+    )
     executions = [
         RepositoryTestExecution.sealed(
             selection_sha256=selection.selection_sha256,
@@ -1492,6 +1630,7 @@ def _scanner_run_with_test_rpc_scopes(
         ),
         repository_suite_selection=selection,
         repository_suite_execution_policy=policy,
+        repository_suite_workspace_copy=workspace_copy,
         repository_test_executions=executions,
         repository_test_fork_rpc_scopes=list(scopes),
         repository_code_execution=RepositoryCodeExecutionState.ISOLATED,
@@ -1645,16 +1784,17 @@ def _two_descriptor_attempt_fixture(
                 }
             )
             attempts.append(
-                RepositorySuiteStateAttempt.sealed(
-                    state_id=state.state_id,
-                    state_sha256=state.state_sha256,
+                _state_attempt_with_lifecycle(
+                    selection,
+                    state,
                     attempt_index=attempt_index,
-                    workspace_kind="fresh_disposable_copy",
                     workspace_identity_sha256=workspace_identity,
-                    workspace_freshness_attestation_sha256=(f"{identity_digit + 4:x}" * 64),
-                    workspace_disposal_policy_sha256=f"{identity_digit + 8:x}" * 64,
-                    fork_rpc_egress_sha256=egress.evidence_sha256,
-                    scanner_run=run,
+                    run=run,
+                    lifecycle_status=(
+                        RepositorySuiteWorkspaceLifecycleStatus.VALIDATED
+                        if run.status is ScannerStatus.SUCCESS
+                        else RepositorySuiteWorkspaceLifecycleStatus.DISPOSED_UNCREDITED
+                    ),
                 )
             )
     return (
@@ -1837,11 +1977,13 @@ def test_matrix_marks_interrupted_scope_prefix_inconclusive_per_descriptor(
     assert consensus_by_descriptor[descriptors[0].descriptor_sha256].inconclusive_reasons == (
         RepositoryStateInconclusiveReason.ATTEMPT_UNAVAILABLE,
         RepositoryStateInconclusiveReason.SINGLE_OBSERVATION,
+        RepositoryStateInconclusiveReason.WORKSPACE_LIFECYCLE_UNPROVEN,
     )
     assert consensus_by_descriptor[descriptors[1].descriptor_sha256].inconclusive_reasons == (
         RepositoryStateInconclusiveReason.ATTEMPT_UNAVAILABLE,
         RepositoryStateInconclusiveReason.SINGLE_OBSERVATION,
         RepositoryStateInconclusiveReason.STATE_READ_UNPROVEN,
+        RepositoryStateInconclusiveReason.WORKSPACE_LIFECYCLE_UNPROVEN,
     )
     assert all(
         comparison.classification is RepositoryDifferentialClassification.INCONCLUSIVE
@@ -2357,16 +2499,12 @@ def test_state_attempt_rejects_one_aggregate_read_credited_to_two_tests() -> Non
     )
 
     with pytest.raises(ValidationError, match="counters exceed aggregate"):
-        RepositorySuiteStateAttempt.sealed(
-            state_id=pinned.state_id,
-            state_sha256=pinned.state_sha256,
+        _state_attempt_with_lifecycle(
+            selection,
+            pinned,
             attempt_index=1,
-            workspace_kind="fresh_disposable_copy",
             workspace_identity_sha256=HASH_F,
-            workspace_freshness_attestation_sha256=HASH_A,
-            workspace_disposal_policy_sha256=HASH_B,
-            fork_rpc_egress_sha256=egress.evidence_sha256,
-            scanner_run=run_with_egress,
+            run=run_with_egress,
         )
 
 
@@ -2381,6 +2519,7 @@ def test_pre_scope_scanner_run_accepts_exact_omitted_field_legacy_digest() -> No
     payload = _legacy_scanner_payload(run)
 
     assert "repository_test_fork_rpc_scopes" not in payload
+    assert "repository_suite_workspace_copy" not in payload
     restored = ScannerRun.model_validate_json(json.dumps(payload, sort_keys=True))
 
     assert restored.repository_test_fork_rpc_scopes == []
@@ -2391,6 +2530,320 @@ def test_pre_scope_scanner_run_accepts_exact_omitted_field_legacy_digest() -> No
     assert restored.execution_observation_sha256 == (
         restored.expected_execution_observation_sha256()
     )
+
+
+def test_workspace_copy_evidence_requires_stable_bound_inventories_and_root_identities() -> None:
+    descriptor = _descriptor()
+    selection = _selection(descriptor)
+    evidence = RepositorySuiteWorkspaceCopyEvidence.sealed(
+        attempt_binding_sha256=HASH_F,
+        selection_sha256=selection.selection_sha256,
+        repository_sha256=selection.repository_sha256,
+        copy_policy_sha256=REPOSITORY_SUITE_WORKSPACE_COPY_POLICY_SHA256,
+        source_inventory_sha256_before=selection.repository_sha256,
+        source_inventory_sha256_after=selection.repository_sha256,
+        workspace_inventory_sha256_after_copy=selection.repository_sha256,
+        workspace_inventory_sha256_after_execution=selection.repository_sha256,
+        source_root_device_before=11,
+        source_root_inode_before=12,
+        source_root_device_after=11,
+        source_root_inode_after=12,
+        workspace_root_device_before=21,
+        workspace_root_inode_before=22,
+        workspace_root_device_after=21,
+        workspace_root_inode_after=22,
+        workspace_created_exclusively=True,
+        workspace_direct_child=True,
+        audited_inventory_symlink_free=True,
+        source_descriptor_custody_validated=True,
+        workspace_descriptor_custody_validated=True,
+        copy_matches_source=True,
+        source_identity_stable=True,
+        workspace_identity_stable=True,
+        workspace_removed=False,
+    )
+
+    assert evidence.copy_evidence_sha256 == evidence.expected_copy_evidence_sha256()
+
+    with pytest.raises(ValidationError, match="audited inventory"):
+        RepositorySuiteWorkspaceCopyEvidence.sealed(
+            **evidence.model_dump(
+                mode="python",
+                exclude={"copy_evidence_sha256", "source_inventory_sha256_after"},
+            ),
+            source_inventory_sha256_after=HASH_A,
+        )
+    with pytest.raises(ValidationError, match="root identity"):
+        RepositorySuiteWorkspaceCopyEvidence.sealed(
+            **evidence.model_dump(
+                mode="python",
+                exclude={"copy_evidence_sha256", "workspace_root_inode_after"},
+            ),
+            workspace_root_inode_after=23,
+        )
+    with pytest.raises(ValidationError, match="copy policy"):
+        RepositorySuiteWorkspaceCopyEvidence.sealed(
+            **evidence.model_dump(
+                mode="python",
+                exclude={"copy_evidence_sha256", "copy_policy_sha256"},
+            ),
+            copy_policy_sha256=HASH_D,
+        )
+    with pytest.raises((ValidationError, ValueError), match="exact integers"):
+        RepositorySuiteWorkspaceCopyEvidence.sealed(
+            **evidence.model_dump(
+                mode="python",
+                exclude={"copy_evidence_sha256", "source_root_device_before"},
+            ),
+            source_root_device_before=True,
+        )
+
+
+def test_workspace_lifecycle_evidence_requires_actual_bounded_removal_and_nonretention() -> None:
+    freshness = _canonical_sha256(
+        {
+            "workspace_identity_sha256": HASH_F,
+            "created_with_exist_ok_false": True,
+            "device": 31,
+            "inode": 32,
+        }
+    )
+    lifecycle = RepositorySuiteWorkspaceLifecycleEvidence.sealed(
+        status=RepositorySuiteWorkspaceLifecycleStatus.VALIDATED,
+        attempt_binding_sha256=HASH_F,
+        selection_sha256=HASH_A,
+        repository_sha256=HASH_B,
+        workspace_copy_evidence_sha256=HASH_C,
+        scanner_execution_observation_sha256=HASH_D,
+        freshness_attestation_sha256=freshness,
+        disposal_policy_sha256=REPOSITORY_SUITE_WORKSPACE_DISPOSAL_POLICY_SHA256,
+        attempt_root_device=31,
+        attempt_root_inode=32,
+        attempt_root_created_exclusively=True,
+        attempt_root_direct_child=True,
+        removal_entry_limit=REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT,
+        removed_entry_count=9,
+        removal_depth_limit=REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT,
+        maximum_removed_depth=3,
+        removal_timeout_seconds=REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS,
+        removal_duration_seconds=0.25,
+        attempt_descriptor_closed=True,
+        workspace_path_absent=True,
+        attempt_path_absent=True,
+        private_path_retained=False,
+        rpc_endpoint_retained=False,
+    )
+
+    assert lifecycle.lifecycle_evidence_sha256 == (lifecycle.expected_lifecycle_evidence_sha256())
+    assert lifecycle.freshness_attestation_sha256 == (
+        lifecycle.expected_freshness_attestation_sha256()
+    )
+
+    with pytest.raises(ValidationError, match=r"removed_entry_count|entry limit"):
+        RepositorySuiteWorkspaceLifecycleEvidence.sealed(
+            **lifecycle.model_dump(
+                mode="python",
+                exclude={"lifecycle_evidence_sha256", "removed_entry_count"},
+            ),
+            removed_entry_count=REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT + 1,
+        )
+    with pytest.raises(ValidationError, match=r"removal_duration_seconds|timeout"):
+        RepositorySuiteWorkspaceLifecycleEvidence.sealed(
+            **lifecycle.model_dump(
+                mode="python",
+                exclude={"lifecycle_evidence_sha256", "removal_duration_seconds"},
+            ),
+            removal_duration_seconds=5.01,
+        )
+    with pytest.raises(ValidationError, match="freshness"):
+        RepositorySuiteWorkspaceLifecycleEvidence.sealed(
+            **lifecycle.model_dump(
+                mode="python",
+                exclude={"lifecycle_evidence_sha256", "freshness_attestation_sha256"},
+            ),
+            freshness_attestation_sha256=HASH_A,
+        )
+    with pytest.raises(ValidationError, match="disposal policy"):
+        RepositorySuiteWorkspaceLifecycleEvidence.sealed(
+            **lifecycle.model_dump(
+                mode="python",
+                exclude={"lifecycle_evidence_sha256", "disposal_policy_sha256"},
+            ),
+            disposal_policy_sha256=HASH_E,
+        )
+
+
+def test_workspace_lifecycle_uncredited_status_cannot_claim_complete_copy_join() -> None:
+    freshness = _canonical_sha256(
+        {
+            "workspace_identity_sha256": HASH_F,
+            "created_with_exist_ok_false": True,
+            "device": 31,
+            "inode": 32,
+        }
+    )
+
+    lifecycle = RepositorySuiteWorkspaceLifecycleEvidence.sealed(
+        status=RepositorySuiteWorkspaceLifecycleStatus.DISPOSED_UNCREDITED,
+        attempt_binding_sha256=HASH_F,
+        selection_sha256=HASH_A,
+        repository_sha256=HASH_B,
+        workspace_copy_evidence_sha256=None,
+        scanner_execution_observation_sha256=None,
+        freshness_attestation_sha256=freshness,
+        disposal_policy_sha256=REPOSITORY_SUITE_WORKSPACE_DISPOSAL_POLICY_SHA256,
+        attempt_root_device=31,
+        attempt_root_inode=32,
+        attempt_root_created_exclusively=True,
+        attempt_root_direct_child=True,
+        removal_entry_limit=REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT,
+        removed_entry_count=0,
+        removal_depth_limit=REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT,
+        maximum_removed_depth=0,
+        removal_timeout_seconds=REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS,
+        removal_duration_seconds=0.01,
+        attempt_descriptor_closed=True,
+        workspace_path_absent=True,
+        attempt_path_absent=True,
+        private_path_retained=False,
+        rpc_endpoint_retained=False,
+    )
+
+    assert lifecycle.status is RepositorySuiteWorkspaceLifecycleStatus.DISPOSED_UNCREDITED
+    with pytest.raises(ValidationError, match="validated lifecycle"):
+        RepositorySuiteWorkspaceLifecycleEvidence.sealed(
+            **lifecycle.model_dump(
+                mode="python",
+                exclude={
+                    "lifecycle_evidence_sha256",
+                    "status",
+                },
+            ),
+            status=RepositorySuiteWorkspaceLifecycleStatus.VALIDATED,
+        )
+
+
+def test_successful_scoped_scanner_run_cannot_rehash_away_workspace_copy_evidence() -> None:
+    descriptor = _scope_descriptors()[0]
+    selection = _scope_selection((descriptor,))
+    policy = _scope_policy(selection)
+    scope = _test_rpc_scope(selection, policy, descriptor, sequence_index=1)
+    run = _scanner_run_with_test_rpc_scopes(selection, policy, (scope,))
+    payload = run.model_dump(mode="json")
+    payload.pop("repository_suite_workspace_copy")
+    payload["execution_observation_sha256"] = None
+
+    with pytest.raises(ValidationError, match="workspace copy evidence"):
+        ScannerRun.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "binding_field",
+    [
+        "workspace_copy_evidence_sha256",
+        "scanner_execution_observation_sha256",
+        "selection_sha256",
+        "repository_sha256",
+    ],
+)
+def test_state_attempt_rejects_rehashed_cross_layer_workspace_lifecycle(
+    binding_field: str,
+) -> None:
+    matrix = _matrix()
+    target = matrix.attempts[0]
+    lifecycle_payload = target.workspace_lifecycle.model_dump(
+        mode="python",
+        exclude={"lifecycle_evidence_sha256", binding_field},
+    )
+    lifecycle_payload[binding_field] = HASH_A
+    tampered_lifecycle = RepositorySuiteWorkspaceLifecycleEvidence.sealed(**lifecycle_payload)
+
+    with pytest.raises(ValidationError, match="cross-layer joins"):
+        RepositorySuiteStateAttempt.sealed(
+            **target.model_dump(
+                mode="python",
+                exclude={
+                    "attempt_sha256",
+                    "scanner_run",
+                    "workspace_lifecycle",
+                },
+            ),
+            scanner_run=target.scanner_run,
+            workspace_lifecycle=tampered_lifecycle,
+        )
+
+
+def test_rehashed_uncredited_workspace_lifecycle_cannot_keep_consensus_credit() -> None:
+    matrix = _matrix()
+    target = matrix.attempts[0]
+    selection = target.scanner_run.repository_suite_selection
+    state = next(item for item in matrix.states if item.state_id == target.state_id)
+    assert selection is not None
+    uncredited = _state_attempt_with_lifecycle(
+        selection,
+        state,
+        attempt_index=target.attempt_index,
+        workspace_identity_sha256=target.workspace_identity_sha256,
+        run=target.scanner_run,
+        lifecycle_status=RepositorySuiteWorkspaceLifecycleStatus.DISPOSED_UNCREDITED,
+    )
+    attempts = tuple(
+        uncredited if item.attempt_sha256 == target.attempt_sha256 else item
+        for item in matrix.attempts
+    )
+    consensuses = tuple(
+        RepositorySuiteTestStateConsensus.sealed(
+            state_id=consensus.state_id,
+            state_sha256=consensus.state_sha256,
+            descriptor_sha256=consensus.descriptor_sha256,
+            status=consensus.status,
+            attempt_sha256s=tuple(
+                sorted(
+                    attempt.attempt_sha256
+                    for attempt in attempts
+                    if attempt.state_id == consensus.state_id
+                )
+            ),
+            observed_status=consensus.observed_status,
+            machine_result_sha256=consensus.machine_result_sha256,
+            inconclusive_reasons=consensus.inconclusive_reasons,
+        )
+        for consensus in matrix.state_consensuses
+    )
+
+    with pytest.raises(ValidationError, match="workspace_lifecycle_unproven"):
+        RepositorySuiteDifferentialMatrix.sealed(
+            **matrix.model_dump(
+                mode="python",
+                exclude={
+                    "matrix_sha256",
+                    "attempts",
+                    "states",
+                    "state_consensuses",
+                    "comparisons",
+                },
+            ),
+            states=matrix.states,
+            attempts=attempts,
+            state_consensuses=consensuses,
+            comparisons=matrix.comparisons,
+        )
+
+
+def test_workspace_lifecycle_rejects_nonfinite_or_inexact_persisted_bounds() -> None:
+    lifecycle = _matrix().attempts[0].workspace_lifecycle
+    payload = lifecycle.model_dump(mode="json")
+
+    for field, value in (
+        ("removal_duration_seconds", float("nan")),
+        ("removal_timeout_seconds", True),
+        ("removal_depth_limit", True),
+        ("maximum_removed_depth", 1.5),
+    ):
+        tampered = {**payload, field: value}
+        tampered["lifecycle_evidence_sha256"] = HASH_A
+        with pytest.raises(ValidationError, match=r"exact|finite"):
+            RepositorySuiteWorkspaceLifecycleEvidence.model_validate(tampered)
 
 
 def test_scoped_scanner_run_cannot_use_legacy_observation_digest() -> None:
@@ -2569,16 +3022,12 @@ def test_matrix_rejects_unscoped_residual_read_masking_duplicate_scope_credit() 
                 }
             )
             attempts.append(
-                RepositorySuiteStateAttempt.sealed(
-                    state_id=state.state_id,
-                    state_sha256=state.state_sha256,
+                _state_attempt_with_lifecycle(
+                    selection,
+                    state,
                     attempt_index=attempt_index,
-                    workspace_kind="fresh_disposable_copy",
                     workspace_identity_sha256=workspace_identity,
-                    workspace_freshness_attestation_sha256=(f"{identity_digit + 4:x}" * 64),
-                    workspace_disposal_policy_sha256=f"{identity_digit + 8:x}" * 64,
-                    fork_rpc_egress_sha256=egress.evidence_sha256,
-                    scanner_run=run,
+                    run=run,
                 )
             )
 
@@ -2654,12 +3103,15 @@ def test_rehashed_persisted_matrix_cannot_keep_conclusive_credit_after_scope_rem
             "execution_observation_sha256": provisional_run.expected_execution_observation_sha256(),
         }
     )
-    replacement_attempt = RepositorySuiteStateAttempt.sealed(
-        **target.model_dump(
-            mode="python",
-            exclude={"attempt_sha256", "scanner_run"},
-        ),
-        scanner_run=replacement_run,
+    selection = replacement_run.repository_suite_selection
+    state = next(item for item in matrix.states if item.state_id == target.state_id)
+    assert selection is not None
+    replacement_attempt = _state_attempt_with_lifecycle(
+        selection,
+        state,
+        attempt_index=target.attempt_index,
+        workspace_identity_sha256=target.workspace_identity_sha256,
+        run=replacement_run,
     )
     attempts = tuple(
         replacement_attempt if item.attempt_sha256 == target.attempt_sha256 else item

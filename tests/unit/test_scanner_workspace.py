@@ -103,19 +103,20 @@ def test_copy_rejects_symlink_replacement_after_inventory(
     source.write_text("contract Safe {}\n", encoding="utf-8")
     outside = tmp_path / "outside.sol"
     outside.write_text("contract Outside {}\n", encoding="utf-8")
-    original_copy = scanner_base._copy_scanner_workspace_inventory
+    original_copy = scanner_base._copy_scanner_workspace_inventory_with_descriptors
 
     def replace_then_copy(
         inventory: scanner_base._ScannerWorkspaceInventory,
-        workspace: Path,
+        source_root_fd: int,
+        workspace_root_fd: int,
     ) -> None:
         source.unlink()
         source.symlink_to(outside)
-        original_copy(inventory, workspace)
+        original_copy(inventory, source_root_fd, workspace_root_fd)
 
     monkeypatch.setattr(
         scanner_base,
-        "_copy_scanner_workspace_inventory",
+        "_copy_scanner_workspace_inventory_with_descriptors",
         replace_then_copy,
     )
 

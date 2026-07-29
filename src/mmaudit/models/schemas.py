@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import unicodedata
 from collections.abc import Sequence
@@ -295,6 +296,38 @@ def _canonical_model_sha256(value: Any) -> str:
     ).hexdigest()
 
 
+REPOSITORY_SUITE_WORKSPACE_COPY_POLICY_SHA256 = _canonical_model_sha256(
+    {
+        "domain": "mmaudit.repository-suite-workspace-copy-policy.v2",
+        "bounded_no_follow_inventory": True,
+        "direct_child_workspace": True,
+        "exclusive_creation": True,
+        "source_descriptor_custody": True,
+        "workspace_descriptor_custody": True,
+        "pre_post_root_identity_validation": True,
+        "pre_post_inventory_validation": True,
+    }
+)
+REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT = 250_000
+REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT = 128
+REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS = 5.0
+REPOSITORY_SUITE_WORKSPACE_DISPOSAL_POLICY_SHA256 = _canonical_model_sha256(
+    {
+        "domain": "mmaudit.repository-suite-workspace-disposal-policy.v2",
+        "descriptor_relative_no_follow_removal": True,
+        "entry_limit": REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT,
+        "depth_limit": REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT,
+        "monotonic_timeout_seconds": REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS,
+        "exact_root_identity_required": True,
+        "descriptor_close_required": True,
+        "workspace_absence_required": True,
+        "attempt_root_absence_required": True,
+        "private_path_retention_prohibited": True,
+        "rpc_endpoint_retention_prohibited": True,
+    }
+)
+
+
 class Severity(StrEnum):
     INFORMATIONAL = "informational"
     LOW = "low"
@@ -513,6 +546,13 @@ class RepositoryTestForkRpcScopeStatus(StrEnum):
     VIOLATION = "violation"
 
 
+class RepositorySuiteWorkspaceLifecycleStatus(StrEnum):
+    """Whether one removed attempt workspace has complete creditable evidence."""
+
+    VALIDATED = "validated"
+    DISPOSED_UNCREDITED = "disposed_uncredited"
+
+
 class RepositoryStateConsensusStatus(StrEnum):
     """Repeated-execution consensus for one test in one state."""
 
@@ -556,6 +596,7 @@ class RepositoryStateInconclusiveReason(StrEnum):
     UNISOLATED_EXECUTION = "unisolated_execution"
     EGRESS_UNENFORCED = "egress_unenforced"
     STATE_READ_UNPROVEN = "state_read_unproven"
+    WORKSPACE_LIFECYCLE_UNPROVEN = "workspace_lifecycle_unproven"
     ATTEMPT_DISAGREEMENT = "attempt_disagreement"
     IDENTITY_MISMATCH = "identity_mismatch"
     INVALID_MACHINE_OUTPUT = "invalid_machine_output"
@@ -4487,6 +4528,291 @@ class FoundryTestExecutionSummary(StrictModel):
         return self
 
 
+class RepositorySuiteWorkspaceCopyEvidence(StrictModel):
+    """Path-free proof that one exclusive audited-source copy stayed identity-stable."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    attempt_binding_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    selection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    repository_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    copy_policy_sha256: str = Field(
+        REPOSITORY_SUITE_WORKSPACE_COPY_POLICY_SHA256,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    source_inventory_sha256_before: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_inventory_sha256_after: str = Field(pattern=r"^[0-9a-f]{64}$")
+    workspace_inventory_sha256_after_copy: str = Field(pattern=r"^[0-9a-f]{64}$")
+    workspace_inventory_sha256_after_execution: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_root_device_before: int = Field(ge=0)
+    source_root_inode_before: int = Field(ge=1)
+    source_root_device_after: int = Field(ge=0)
+    source_root_inode_after: int = Field(ge=1)
+    workspace_root_device_before: int = Field(ge=0)
+    workspace_root_inode_before: int = Field(ge=1)
+    workspace_root_device_after: int = Field(ge=0)
+    workspace_root_inode_after: int = Field(ge=1)
+    workspace_created_exclusively: Literal[True] = True
+    workspace_direct_child: Literal[True] = True
+    audited_inventory_symlink_free: Literal[True] = True
+    source_descriptor_custody_validated: Literal[True] = True
+    workspace_descriptor_custody_validated: Literal[True] = True
+    copy_matches_source: Literal[True] = True
+    source_identity_stable: Literal[True] = True
+    workspace_identity_stable: Literal[True] = True
+    workspace_removed: Literal[False] = False
+    copy_evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> RepositorySuiteWorkspaceCopyEvidence:
+        """Validate and self-hash one scanner-owned source-copy observation."""
+
+        if "copy_evidence_sha256" in values:
+            raise ValueError("copy_evidence_sha256 is derived and cannot be supplied to sealed()")
+        identity_fields = (
+            "source_root_device_before",
+            "source_root_inode_before",
+            "source_root_device_after",
+            "source_root_inode_after",
+            "workspace_root_device_before",
+            "workspace_root_inode_before",
+            "workspace_root_device_after",
+            "workspace_root_inode_after",
+        )
+        if any(
+            isinstance(values.get(name), bool) or not isinstance(values.get(name), int)
+            for name in identity_fields
+        ):
+            raise ValueError("workspace copy root identity requires exact integers")
+        provisional = cls.model_construct(**values, copy_evidence_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"copy_evidence_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "copy_evidence_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator(
+        "source_root_device_before",
+        "source_root_inode_before",
+        "source_root_device_after",
+        "source_root_inode_after",
+        "workspace_root_device_before",
+        "workspace_root_inode_before",
+        "workspace_root_device_after",
+        "workspace_root_inode_after",
+        mode="before",
+    )
+    @classmethod
+    def root_identity_numbers_are_exact(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("workspace copy root identity requires exact integers")
+        return value
+
+    @model_validator(mode="after")
+    def inventory_identity_and_hash_are_consistent(
+        self,
+    ) -> RepositorySuiteWorkspaceCopyEvidence:
+        if self.attempt_binding_sha256 == "0" * 64:
+            raise ValueError("workspace copy requires a nonzero attempt binding")
+        if self.copy_policy_sha256 != REPOSITORY_SUITE_WORKSPACE_COPY_POLICY_SHA256:
+            raise ValueError("workspace copy policy hash differs from the exact v2 policy")
+        inventories = (
+            self.source_inventory_sha256_before,
+            self.source_inventory_sha256_after,
+            self.workspace_inventory_sha256_after_copy,
+            self.workspace_inventory_sha256_after_execution,
+        )
+        if any(value != self.repository_sha256 for value in inventories):
+            raise ValueError(
+                "workspace copy audited inventory must match the bound repository pre/post"
+            )
+        if (
+            self.source_root_device_before,
+            self.source_root_inode_before,
+        ) != (
+            self.source_root_device_after,
+            self.source_root_inode_after,
+        ) or (
+            self.workspace_root_device_before,
+            self.workspace_root_inode_before,
+        ) != (
+            self.workspace_root_device_after,
+            self.workspace_root_inode_after,
+        ):
+            raise ValueError("workspace copy pre/post root identity must remain stable")
+        if self.copy_evidence_sha256 != self.expected_copy_evidence_sha256():
+            raise ValueError("workspace copy evidence hash does not match its fields")
+        return self
+
+    def expected_copy_evidence_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"copy_evidence_sha256"})
+        return _canonical_model_sha256(payload)
+
+
+class RepositorySuiteWorkspaceLifecycleEvidence(StrictModel):
+    """Path-free, self-hashed disposal evidence for one matrix attempt root."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    status: RepositorySuiteWorkspaceLifecycleStatus
+    attempt_binding_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    selection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    repository_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    workspace_copy_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    scanner_execution_observation_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    freshness_attestation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    disposal_policy_sha256: str = Field(
+        REPOSITORY_SUITE_WORKSPACE_DISPOSAL_POLICY_SHA256,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    attempt_root_device: int = Field(ge=0)
+    attempt_root_inode: int = Field(ge=1)
+    attempt_root_created_exclusively: Literal[True] = True
+    attempt_root_direct_child: Literal[True] = True
+    removal_entry_limit: int = Field(ge=1, le=REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT)
+    removed_entry_count: int = Field(
+        ge=0,
+        le=REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT,
+    )
+    removal_depth_limit: int = Field(ge=1, le=REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT)
+    maximum_removed_depth: int = Field(ge=0, le=REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT)
+    removal_timeout_seconds: float = Field(
+        gt=0,
+        le=REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS,
+    )
+    removal_duration_seconds: float = Field(
+        ge=0,
+        le=REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS,
+    )
+    attempt_descriptor_closed: Literal[True] = True
+    workspace_path_absent: Literal[True] = True
+    attempt_path_absent: Literal[True] = True
+    private_path_retained: Literal[False] = False
+    rpc_endpoint_retained: Literal[False] = False
+    lifecycle_evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> RepositorySuiteWorkspaceLifecycleEvidence:
+        """Validate and self-hash one matrix-owned removal observation."""
+
+        if "lifecycle_evidence_sha256" in values:
+            raise ValueError(
+                "lifecycle_evidence_sha256 is derived and cannot be supplied to sealed()"
+            )
+        integer_fields = (
+            "attempt_root_device",
+            "attempt_root_inode",
+            "removal_entry_limit",
+            "removed_entry_count",
+            "removal_depth_limit",
+            "maximum_removed_depth",
+        )
+        if any(
+            isinstance(values.get(name), bool) or not isinstance(values.get(name), int)
+            for name in integer_fields
+        ):
+            raise ValueError("workspace lifecycle counters and identity require exact integers")
+        duration_fields = ("removal_timeout_seconds", "removal_duration_seconds")
+        durations = tuple(values.get(name) for name in duration_fields)
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            for value in durations
+        ):
+            raise ValueError("workspace lifecycle durations require exact finite numbers")
+        provisional = cls.model_construct(**values, lifecycle_evidence_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"lifecycle_evidence_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "lifecycle_evidence_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator(
+        "attempt_root_device",
+        "attempt_root_inode",
+        "removal_entry_limit",
+        "removed_entry_count",
+        "removal_depth_limit",
+        "maximum_removed_depth",
+        mode="before",
+    )
+    @classmethod
+    def lifecycle_integers_are_exact(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("workspace lifecycle counters and identity require exact integers")
+        return value
+
+    @field_validator(
+        "removal_timeout_seconds",
+        "removal_duration_seconds",
+        mode="before",
+    )
+    @classmethod
+    def lifecycle_durations_are_finite_numbers(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("workspace lifecycle durations require exact finite numbers")
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            raise ValueError("workspace lifecycle durations require exact finite numbers")
+        return numeric
+
+    @model_validator(mode="after")
+    def removal_bounds_status_and_hash_are_consistent(
+        self,
+    ) -> RepositorySuiteWorkspaceLifecycleEvidence:
+        if self.attempt_binding_sha256 == "0" * 64:
+            raise ValueError("workspace lifecycle requires a nonzero attempt binding")
+        if self.disposal_policy_sha256 != REPOSITORY_SUITE_WORKSPACE_DISPOSAL_POLICY_SHA256:
+            raise ValueError("workspace disposal policy hash differs from the exact v2 policy")
+        if self.removed_entry_count > self.removal_entry_limit:
+            raise ValueError("workspace removal exceeded its entry limit")
+        if self.maximum_removed_depth > self.removal_depth_limit:
+            raise ValueError("workspace removal exceeded its depth limit")
+        if self.removal_duration_seconds > self.removal_timeout_seconds:
+            raise ValueError("workspace removal exceeded its timeout")
+        if (
+            self.removal_entry_limit != REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT
+            or self.removal_depth_limit != REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT
+            or self.removal_timeout_seconds != REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS
+        ):
+            raise ValueError("workspace removal bounds differ from the exact v2 policy")
+        if self.status is RepositorySuiteWorkspaceLifecycleStatus.VALIDATED and (
+            self.workspace_copy_evidence_sha256 is None
+            or self.scanner_execution_observation_sha256 is None
+        ):
+            raise ValueError("validated lifecycle requires copy and scanner observation bindings")
+        if self.freshness_attestation_sha256 != (self.expected_freshness_attestation_sha256()):
+            raise ValueError("workspace lifecycle freshness attestation does not match")
+        if self.lifecycle_evidence_sha256 != self.expected_lifecycle_evidence_sha256():
+            raise ValueError("workspace lifecycle evidence hash does not match its fields")
+        return self
+
+    def expected_freshness_attestation_sha256(self) -> str:
+        """Recompute the historical freshness binding from inspectable root facts."""
+
+        return _canonical_model_sha256(
+            {
+                "workspace_identity_sha256": self.attempt_binding_sha256,
+                "created_with_exist_ok_false": True,
+                "device": self.attempt_root_device,
+                "inode": self.attempt_root_inode,
+            }
+        )
+
+    def expected_lifecycle_evidence_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"lifecycle_evidence_sha256"})
+        return _canonical_model_sha256(payload)
+
+
 class ScannerRun(StrictModel):
     scanner: str
     status: ScannerStatus
@@ -4514,6 +4840,10 @@ class ScannerRun(StrictModel):
     repository_suite_inventory: RepositorySuiteInventoryEvidence | None = None
     repository_suite_post_inventory: RepositorySuiteInventoryEvidence | None = None
     repository_suite_execution_policy: RepositorySuiteExecutionPolicy | None = None
+    repository_suite_workspace_copy: RepositorySuiteWorkspaceCopyEvidence | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     fork_rpc_egress: ForkRpcReadOnlyEgressEvidence | None = None
     repository_test_fork_rpc_scopes: list[RepositoryTestForkRpcScopeEvidence] = Field(
         default_factory=list,
@@ -4552,13 +4882,17 @@ class ScannerRun(StrictModel):
     def expected_legacy_execution_observation_sha256(self) -> str:
         """Recompute the pre-scope digest for an empty-scope historical run."""
 
-        if self.repository_test_fork_rpc_scopes:
-            raise ValueError("scoped scanner runs do not have a legacy observation digest")
+        if self.repository_test_fork_rpc_scopes or self.repository_suite_workspace_copy is not None:
+            raise ValueError(
+                "scoped scanner runs and workspace-attested runs do not have a legacy "
+                "observation digest"
+            )
         payload = self.model_dump(
             mode="json",
             exclude={
                 "execution_observation_sha256",
                 "repository_test_fork_rpc_scopes",
+                "repository_suite_workspace_copy",
             },
         )
         return hashlib.sha256(
@@ -4580,6 +4914,7 @@ class ScannerRun(StrictModel):
             return True
         return (
             not self.repository_test_fork_rpc_scopes
+            and self.repository_suite_workspace_copy is None
             and self.execution_observation_sha256
             == self.expected_legacy_execution_observation_sha256()
         )
@@ -4610,6 +4945,18 @@ class ScannerRun(StrictModel):
             and self.repository_suite_selection is None
         ):
             raise ValueError("repository execution policy requires its suite selection")
+        workspace_copy = self.repository_suite_workspace_copy
+        if workspace_copy is not None:
+            selection = self.repository_suite_selection
+            if self.scanner != "foundry_fork":
+                raise ValueError("workspace copy evidence requires the Foundry fork scanner")
+            if selection is None:
+                raise ValueError("workspace copy evidence requires its repository selection")
+            if (
+                workspace_copy.selection_sha256 != selection.selection_sha256
+                or workspace_copy.repository_sha256 != selection.repository_sha256
+            ):
+                raise ValueError("workspace copy evidence differs from its repository selection")
         if self.repository_test_fork_rpc_scopes:
             selection = self.repository_suite_selection
             execution_policy = self.repository_suite_execution_policy
@@ -4630,6 +4977,17 @@ class ScannerRun(StrictModel):
             if len(attempt_bindings) != 1 or "0" * 64 in attempt_bindings:
                 raise ValueError(
                     "per-test fork RPC scopes require one common nonzero attempt binding"
+                )
+            if (
+                workspace_copy is not None
+                and workspace_copy.attempt_binding_sha256 not in attempt_bindings
+            ):
+                raise ValueError(
+                    "workspace copy attempt binding differs from per-test fork RPC scopes"
+                )
+            if self.status is ScannerStatus.SUCCESS and workspace_copy is None:
+                raise ValueError(
+                    "successful scoped repository suite requires workspace copy evidence"
                 )
             if len({scope.bridge_policy_sha256 for scope in scopes}) != 1:
                 raise ValueError("per-test fork RPC scopes require one common bridge policy")
@@ -5136,6 +5494,7 @@ class RepositorySuiteStateAttempt(StrictModel):
     workspace_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     workspace_freshness_attestation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     workspace_disposal_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    workspace_lifecycle: RepositorySuiteWorkspaceLifecycleEvidence
     fork_rpc_egress_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     scanner_run: ScannerRun
     attempt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -5166,6 +5525,46 @@ class RepositorySuiteStateAttempt(StrictModel):
     def nested_egress_command_and_hash_are_consistent(
         self,
     ) -> RepositorySuiteStateAttempt:
+        lifecycle = self.workspace_lifecycle
+        if (
+            lifecycle.attempt_binding_sha256 != self.workspace_identity_sha256
+            or lifecycle.freshness_attestation_sha256 != self.workspace_freshness_attestation_sha256
+            or lifecycle.disposal_policy_sha256 != self.workspace_disposal_policy_sha256
+        ):
+            raise ValueError("state attempt workspace lifecycle identity or policy binding differs")
+        selection = self.scanner_run.repository_suite_selection
+        workspace_copy = self.scanner_run.repository_suite_workspace_copy
+        scanner_observation_sha256 = self.scanner_run.execution_observation_sha256
+        if lifecycle.status is RepositorySuiteWorkspaceLifecycleStatus.VALIDATED:
+            if (
+                self.scanner_run.status is not ScannerStatus.SUCCESS
+                or selection is None
+                or workspace_copy is None
+                or scanner_observation_sha256 is None
+                or lifecycle.selection_sha256 != selection.selection_sha256
+                or lifecycle.repository_sha256 != selection.repository_sha256
+                or lifecycle.workspace_copy_evidence_sha256 != workspace_copy.copy_evidence_sha256
+                or lifecycle.scanner_execution_observation_sha256 != scanner_observation_sha256
+                or workspace_copy.attempt_binding_sha256 != self.workspace_identity_sha256
+            ):
+                raise ValueError(
+                    "validated state attempt workspace lifecycle lacks full cross-layer joins"
+                )
+        else:
+            if lifecycle.workspace_copy_evidence_sha256 is not None and (
+                workspace_copy is None
+                or lifecycle.workspace_copy_evidence_sha256 != workspace_copy.copy_evidence_sha256
+            ):
+                raise ValueError(
+                    "uncredited workspace lifecycle copy binding differs from its scanner run"
+                )
+            if (
+                lifecycle.scanner_execution_observation_sha256 is not None
+                and lifecycle.scanner_execution_observation_sha256 != scanner_observation_sha256
+            ):
+                raise ValueError(
+                    "uncredited workspace lifecycle observation differs from its scanner run"
+                )
         egress = self.scanner_run.fork_rpc_egress
         if (egress is None) != (self.fork_rpc_egress_sha256 is None):
             raise ValueError("state attempt egress reference must be all-or-none")
@@ -5522,6 +5921,16 @@ class RepositorySuiteDifferentialMatrix(StrictModel):
             self.attempts
         ):
             raise ValueError("matrix attempts require distinct fresh workspace identities")
+        if any(
+            attempt.workspace_lifecycle.repository_sha256 != self.repository_sha256
+            or attempt.workspace_lifecycle.selection_sha256 != self.selection_sha256
+            for attempt in self.attempts
+        ):
+            raise ValueError("matrix attempt workspace lifecycle differs from repository selection")
+        if len(
+            {attempt.workspace_lifecycle.lifecycle_evidence_sha256 for attempt in self.attempts}
+        ) != len(self.attempts):
+            raise ValueError("matrix attempts require distinct workspace lifecycle evidence")
         states_by_id = {state.state_id: state for state in self.states}
         if any(
             attempt.state_sha256 != states_by_id[attempt.state_id].state_sha256
@@ -5589,6 +5998,11 @@ class RepositorySuiteDifferentialMatrix(StrictModel):
         observations: list[RepositoryTestExecution] = []
         for attempt in attempts:
             run = attempt.scanner_run
+            if (
+                attempt.workspace_lifecycle.status
+                is not RepositorySuiteWorkspaceLifecycleStatus.VALIDATED
+            ):
+                reasons.add(RepositoryStateInconclusiveReason.WORKSPACE_LIFECYCLE_UNPROVEN)
             egress = run.fork_rpc_egress
             if (
                 egress is None

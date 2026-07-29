@@ -31,6 +31,7 @@ from mmaudit.models.schemas import (
     ForkActor,
     ForkAssertion,
     ForkCallStep,
+    ForkRpcReadOnlyEgressEvidence,
     ForkTestType,
     FoundryInvariantHarnessSpec,
     FoundryTestExecutionSummary,
@@ -58,8 +59,11 @@ from mmaudit.models.schemas import (
     RepositorySuiteTestComparison,
     RepositorySuiteTestDescriptor,
     RepositorySuiteTestStateConsensus,
+    RepositorySuiteWorkspaceCopyEvidence,
+    RepositorySuiteWorkspaceLifecycleEvidence,
     RepositoryTestExecution,
     RepositoryTestExecutionStatus,
+    RepositoryTestForkRpcScopeEvidence,
     RepositoryTestKind,
     ReproductionAttemptEvidence,
     ReproductionResult,
@@ -481,11 +485,78 @@ def _rebind_differential_repository(
             if isinstance(prior_reference, str):
                 metadata["repository_test_execution_sha256"] = execution_hashes[prior_reference]
             findings.append(finding.model_copy(update={"metadata": metadata}))
+        prior_workspace_copy = prior_run.repository_suite_workspace_copy
+        assert prior_workspace_copy is not None
+        workspace_copy = RepositorySuiteWorkspaceCopyEvidence.sealed(
+            **{
+                **prior_workspace_copy.model_dump(
+                    mode="python",
+                    exclude={
+                        "copy_evidence_sha256",
+                        "selection_sha256",
+                        "repository_sha256",
+                        "source_inventory_sha256_before",
+                        "source_inventory_sha256_after",
+                        "workspace_inventory_sha256_after_copy",
+                        "workspace_inventory_sha256_after_execution",
+                    },
+                ),
+                "selection_sha256": selection.selection_sha256,
+                "repository_sha256": repository_sha256,
+                "source_inventory_sha256_before": repository_sha256,
+                "source_inventory_sha256_after": repository_sha256,
+                "workspace_inventory_sha256_after_copy": repository_sha256,
+                "workspace_inventory_sha256_after_execution": repository_sha256,
+            }
+        )
+        scopes: list[RepositoryTestForkRpcScopeEvidence] = []
+        for prior_scope in prior_run.repository_test_fork_rpc_scopes:
+            scope_values = {
+                **prior_scope.model_dump(
+                    mode="python",
+                    exclude={
+                        "evidence_sha256",
+                        "selection_sha256",
+                        "bridge_scope_snapshot_sha256",
+                    },
+                ),
+                "selection_sha256": selection.selection_sha256,
+                "allowed_method_counts": prior_scope.allowed_method_counts,
+            }
+            scope_values["bridge_scope_snapshot_sha256"] = (
+                RepositoryTestForkRpcScopeEvidence.calculate_bridge_scope_snapshot_sha256(
+                    scope_values
+                )
+            )
+            scopes.append(RepositoryTestForkRpcScopeEvidence.sealed(**scope_values))
+        prior_egress = prior_run.fork_rpc_egress
+        assert prior_egress is not None
+        egress_values = {
+            **prior_egress.model_dump(
+                mode="python",
+                exclude={
+                    "evidence_sha256",
+                    "bridge_snapshot_sha256",
+                    "selected_test_scope_snapshot_sha256s",
+                },
+            ),
+            "allowed_method_counts": prior_egress.allowed_method_counts,
+            "selected_test_scope_snapshot_sha256s": tuple(
+                scope.bridge_scope_snapshot_sha256 for scope in scopes
+            ),
+        }
+        egress_values["bridge_snapshot_sha256"] = (
+            ForkRpcReadOnlyEgressEvidence.calculate_bridge_snapshot_sha256(egress_values)
+        )
+        egress = ForkRpcReadOnlyEgressEvidence.sealed(**egress_values)
         run = prior_run.model_copy(
             update={
                 "repository_suite_selection": selection,
                 "repository_suite_execution_policy": policy,
+                "repository_suite_workspace_copy": workspace_copy,
                 "repository_test_executions": executions,
+                "repository_test_fork_rpc_scopes": scopes,
+                "fork_rpc_egress": egress,
                 "findings": findings,
                 "execution_observation_sha256": None,
             }
@@ -494,6 +565,24 @@ def _rebind_differential_repository(
             {
                 **run.model_dump(mode="json"),
                 "execution_observation_sha256": run.expected_execution_observation_sha256(),
+            }
+        )
+        lifecycle = RepositorySuiteWorkspaceLifecycleEvidence.sealed(
+            **{
+                **prior_attempt.workspace_lifecycle.model_dump(
+                    mode="python",
+                    exclude={
+                        "lifecycle_evidence_sha256",
+                        "selection_sha256",
+                        "repository_sha256",
+                        "workspace_copy_evidence_sha256",
+                        "scanner_execution_observation_sha256",
+                    },
+                ),
+                "selection_sha256": selection.selection_sha256,
+                "repository_sha256": repository_sha256,
+                "workspace_copy_evidence_sha256": workspace_copy.copy_evidence_sha256,
+                "scanner_execution_observation_sha256": run.execution_observation_sha256,
             }
         )
         attempts.append(
@@ -505,6 +594,7 @@ def _rebind_differential_repository(
                             "attempt_sha256",
                             "scanner_run",
                             "fork_rpc_egress_sha256",
+                            "workspace_lifecycle",
                         },
                     ),
                     "fork_rpc_egress_sha256": (
@@ -512,6 +602,7 @@ def _rebind_differential_repository(
                         if run.fork_rpc_egress is not None
                         else None
                     ),
+                    "workspace_lifecycle": lifecycle,
                     "scanner_run": run,
                 }
             )
