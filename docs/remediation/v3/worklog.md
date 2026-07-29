@@ -5,12 +5,12 @@ The objective source has SHA-256
 Do not record credentials, raw private prompts, or raw provider completions here.
 
 AUTORUN_STATUS: ACTIVE
-CURRENT_MILESTONE: Endpoint-aware token budgets and context manifests
-CURRENT_TICKET: V3-TOKENS-001
+CURRENT_MILESTONE: Honest minimum analysis floor and run status
+CURRENT_TICKET: V3-FLOOR-001
 LAST_COMPLETED_TICKET: V3-TOKENS-001
-NEXT_ACTION: Review and checkpoint the validated V3-TOKENS-001 diff, SSH-push it, and begin promoted V3-FLOOR-001.
-LAST_COMMAND: .venv/bin/pytest -q
-LAST_RESULT: PASS — 2367 passed and 10 explicit external-prerequisite tests skipped in 329.08s on the final post-closure tree.
+NEXT_ACTION: Reproduce the zero-scanner and zero-completed-model-role false-complete path, then add an evidence-derived fail-closed run-status gate and regressions.
+LAST_COMMAND: git commit -m "Add endpoint-aware token planning"
+LAST_RESULT: PASS — validated V3-TOKENS-001 implementation checkpoint 94b9f0791dee832273f016d81c06af3a56158d3e created.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 39fb4392f3dfcf06f2f92dd79bc5bc3563432b49
+LAST_CHECKPOINT_COMMIT: 94b9f0791dee832273f016d81c06af3a56158d3e
 
 ## 2026-07-29 — Operator pause during V3-TOKENS-001
 
@@ -182,6 +182,21 @@ LAST_CHECKPOINT_COMMIT: 39fb4392f3dfcf06f2f92dd79bc5bc3563432b49
   final tree then passed `.venv/bin/pytest -q` with `2367 passed, 10 skipped in
   329.08s`. Every skip is an explicit external-engine, isolation, loopback, or
   paid-provider prerequisite; none is counted as real execution.
+- **Validated checkpoint:** Commit
+  `94b9f0791dee832273f016d81c06af3a56158d3e` contains the complete
+  V3-TOKENS-001 implementation, schemas, operator documentation, and regression
+  evidence.
+
+## 2026-07-29 — V3-FLOOR-001
+
+- **Status:** `IN_PROGRESS`.
+- **Defensive objective:** Ensure zero real scanner execution plus zero completed
+  model roles can never produce a successful exit or completed no-findings
+  report, and derive the run status only from real completed analysis evidence.
+- **Initial action:** Reproduce the standard-profile false-complete path and map
+  the existing terminal exit, report-completion, scanner, and model-role
+  evidence before implementing the minimum floor. This local diagnostic work
+  requires no network, provider call, secret access, or paid spend.
 
 ## 2026-07-29 — V3-OUTPUT-001
 

@@ -332,7 +332,7 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Dependencies:** `V3-TOKENS-001` under the operator-authored revised
   sequencing; the original `V3-CONSENSUS-001` ordering is superseded for this
   minimum-floor defect.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
 
 ## V3-REPORT-001 — Client report and forensic evidence bundle
 

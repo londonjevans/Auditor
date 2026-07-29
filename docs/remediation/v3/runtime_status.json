@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-07-29T02:35:30Z",
-  "candidate_commit": "4f04a6fd79ff96466b48bc14ddc7557bb3a809b5",
+  "updated_at": "2026-07-29T08:09:38Z",
+  "candidate_commit": "94b9f0791dee832273f016d81c06af3a56158d3e",
   "autorun_status": "ACTIVE",
-  "current_milestone": "endpoint_aware_token_budgets",
-  "current_ticket": "V3-TOKENS-001",
-  "last_checkpoint_commit": "4f04a6fd79ff96466b48bc14ddc7557bb3a809b5",
+  "current_milestone": "honest_minimum_analysis_floor",
+  "current_ticket": "V3-FLOOR-001",
+  "last_checkpoint_commit": "94b9f0791dee832273f016d81c06af3a56158d3e",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,
