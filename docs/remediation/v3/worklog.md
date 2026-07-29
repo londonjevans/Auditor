@@ -4,7 +4,7 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: ACTIVE
+AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Differential and multi-state fork matrix
 CURRENT_TICKET: V3-FORKDIFF-001
 LAST_COMPLETED_TICKET: V3-FLOOR-001
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 74768911f6e98ac6587786ba718a658470cb85e4
+LAST_CHECKPOINT_COMMIT: ca9b65245d1e34388965797d2ce059cad5f7f6d9
 
 ## 2026-07-29 — V3-FORKDIFF-001
 
@@ -367,6 +367,14 @@ LAST_CHECKPOINT_COMMIT: 74768911f6e98ac6587786ba718a658470cb85e4
   and claimed workspace freshness are not being credited for those requirements.
   No provider request, public RPC, secret access, wallet, signing, transaction,
   budget reservation, or paid operation occurred.
+- **Operator pause checkpoint:** At `2026-07-29T19:50:29Z`, autorun stopped at
+  validated in-progress checkpoint
+  `ca9b65245d1e34388965797d2ce059cad5f7f6d9` (`Harden repository fork matrix
+  custody`). `V3-FORKDIFF-001` remains `IN_PROGRESS`; no remaining scope is
+  credited. All child reviews are complete, and no target process, provider
+  request, public RPC, secret access, wallet, signing, transaction, budget
+  reservation, or paid operation remains active. OpenRouter spend remains
+  `0.0033415625 USD`.
 
 ## 2026-07-29 — V3-FORKSUITE-001
 
