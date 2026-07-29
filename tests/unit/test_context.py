@@ -12,6 +12,7 @@ from mmaudit.models.schemas import (
 from mmaudit.orchestration.context import (
     ContextBuilder,
     context_category_byte_counts,
+    context_category_measurements,
     render_context,
 )
 from mmaudit.repository.discovery import discover_repository
@@ -65,6 +66,28 @@ def test_context_builder_package_is_independent_of_unrelated_peer_roles(
     assert render_context(few_roles) == render_context(many_roles)
 
 
+def test_context_builder_uses_source_token_ceiling_instead_of_global_role_share(
+    vulnerable_repo: Path,
+    config_factory,
+) -> None:
+    config = config_factory(
+        repository={"max_total_context_bytes": 2_000_000},
+        privacy={"fail_on_detected_secret": False},
+    )
+    discovery = discover_repository(vulnerable_repo, config.repository, IgnoreMatcher())
+    package = ContextBuilder(
+        discovery=discovery,
+        repository_map=build_repository_map(discovery),
+        repository_config=config.repository,
+        privacy=config.privacy,
+        scanner_findings=[],
+        maximum_source_tokens_per_request=50_000,
+    ).build("source_audit")
+
+    assert package.byte_budget == 150_000
+    assert package.bytes_used <= package.byte_budget
+
+
 def test_context_builder_accounts_for_trusted_surface_request_manifest(
     vulnerable_repo: Path,
     config_factory,
@@ -116,3 +139,11 @@ def test_context_builder_accounts_for_trusted_surface_request_manifest(
     assert categories["source"] > 0
     assert categories["metadata"] > 0
     assert categories["prior_audit"] == 0
+
+    measurements = context_category_measurements(package)
+    assert set(measurements) == set(categories)
+    assert {
+        category: measurement.utf8_bytes
+        for category, measurement in measurements.items()
+    } == categories
+    assert all(len(measurement.content_sha256) == 64 for measurement in measurements.values())

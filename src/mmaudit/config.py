@@ -180,7 +180,7 @@ class TokenBudgetConfig(ConfigModel):
     """Endpoint-aware request planning and aggregate model-resource ceilings."""
 
     usable_input_fraction: float = Field(default=0.70, ge=0.65, le=0.75)
-    reserved_output_tokens: int = Field(default=32_768, ge=256, le=65_536)
+    reserved_output_tokens: int | None = Field(default=None, ge=256, le=65_536)
     reserved_system_tokens: int = Field(default=8_192, ge=0, le=65_536)
     reserved_schema_tokens: int = Field(default=8_192, ge=0, le=65_536)
     reserved_protocol_tokens: int = Field(default=2_048, ge=0, le=65_536)
@@ -1009,6 +1009,26 @@ class AuditConfig(ConfigModel):
     models: ModelsConfig
     scanners: ScannersConfig = Field(default_factory=ScannersConfig)
     reporting: ReportingConfig = Field(default_factory=ReportingConfig)
+
+    @model_validator(mode="after")
+    def explicit_output_token_reserve_matches_request_limit(self) -> AuditConfig:
+        if (
+            self.token_budgets.reserved_output_tokens is not None
+            and self.token_budgets.reserved_output_tokens
+            != self.execution.max_output_tokens_per_request
+        ):
+            raise ValueError(
+                "explicit token output reserve must equal the execution request output limit"
+            )
+        return self
+
+    @property
+    def effective_reserved_output_tokens(self) -> int:
+        """Return the explicit reserve or the legacy execution-bound default."""
+
+        if self.token_budgets.reserved_output_tokens is None:
+            return self.execution.max_output_tokens_per_request
+        return self.token_budgets.reserved_output_tokens
 
     def effective(self) -> AuditConfig:
         """Apply non-downgradable profile requirements to a validated config."""

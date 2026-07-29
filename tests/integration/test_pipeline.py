@@ -67,6 +67,10 @@ from mmaudit.models.schemas import (
 from mmaudit.models.usage import UsageLedger
 from mmaudit.operator_secrets import load_operator_secrets
 from mmaudit.orchestration.budgets import BudgetManager
+from mmaudit.orchestration.context_manifest import (
+    context_manifest_report_binding,
+    load_context_manifest,
+)
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.manifest import (
     RunEvidenceManifest,
@@ -3302,6 +3306,15 @@ async def test_optional_unavailable_scanner_only_completes(
     assert result.exit_code is ExitCode.SUCCESS
     assert result.report.completed
     assert fake.chat_calls == 0
+    context_manifest = load_context_manifest(result.run_dir / "context-manifest.json")
+    assert context_manifest.run_id == result.report.run_id
+    assert context_manifest.requests == ()
+    assert result.report.metadata["context_manifest"] == context_manifest_report_binding(
+        context_manifest
+    ).model_dump(mode="json")
+    assert (tmp_path / "output" / "latest" / "context-manifest.json").read_bytes() == (
+        result.run_dir / "context-manifest.json"
+    ).read_bytes()
 
 
 @pytest.mark.asyncio

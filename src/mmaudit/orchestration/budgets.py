@@ -8,9 +8,11 @@ import json
 import math
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import ROUND_CEILING, Decimal, InvalidOperation, localcontext
-from typing import Final, cast
+from typing import Any, Final, Literal, Self, cast
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mmaudit.orchestration.cost_ledger import (
     AtomicCostLedger,
@@ -49,6 +51,147 @@ _USD_QUANTUM: Final = Decimal("1e-18")
 _MAX_PRICE_DECIMAL_PLACES: Final = 36
 _MAX_PRICE_INTEGER_DIGITS: Final = 12
 _MAX_METERED_UNITS: Final = 2**63 - 1
+
+
+class _FrozenBudgetEvidence(BaseModel):
+    """Strict immutable base for serialized budget evidence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+
+class TokenBudgetStateEvidence(_FrozenBudgetEvidence):
+    """One atomic snapshot of process-local global token accounting."""
+
+    spent_input_tokens: int = Field(ge=0, le=_MAX_METERED_UNITS)
+    reserved_input_tokens: int = Field(ge=0, le=_MAX_METERED_UNITS)
+    remaining_input_tokens: int | None = Field(default=None, ge=0, le=_MAX_METERED_UNITS)
+    spent_output_tokens: int = Field(ge=0, le=_MAX_METERED_UNITS)
+    reserved_output_tokens: int = Field(ge=0, le=_MAX_METERED_UNITS)
+    remaining_output_tokens: int | None = Field(default=None, ge=0, le=_MAX_METERED_UNITS)
+
+
+class AtomicTokenReservationEvidence(_FrozenBudgetEvidence):
+    """Self-hashed before/after proof for one lock-protected token reservation."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    request_id: str
+    exact_model_id: str
+    role: str
+    request_token_plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    planned_prompt_tokens: int = Field(ge=0, le=_MAX_METERED_UNITS)
+    planned_completion_tokens: int = Field(ge=0, le=_MAX_METERED_UNITS)
+    global_input_token_limit: int | None = Field(
+        default=None,
+        ge=0,
+        le=_MAX_METERED_UNITS,
+    )
+    global_output_token_limit: int | None = Field(
+        default=None,
+        ge=0,
+        le=_MAX_METERED_UNITS,
+    )
+    before: TokenBudgetStateEvidence
+    after: TokenBudgetStateEvidence
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        request_id: str,
+        exact_model_id: str,
+        role: str,
+        request_token_plan_sha256: str,
+        planned_prompt_tokens: int,
+        planned_completion_tokens: int,
+        global_input_token_limit: int | None,
+        global_output_token_limit: int | None,
+        spent_input_tokens_before: int,
+        reserved_input_tokens_before: int,
+        spent_output_tokens_before: int,
+        reserved_output_tokens_before: int,
+    ) -> Self:
+        """Build evidence from a state observed while the manager lock is held."""
+
+        before = _token_budget_state(
+            global_input_token_limit=global_input_token_limit,
+            global_output_token_limit=global_output_token_limit,
+            spent_input_tokens=spent_input_tokens_before,
+            reserved_input_tokens=reserved_input_tokens_before,
+            spent_output_tokens=spent_output_tokens_before,
+            reserved_output_tokens=reserved_output_tokens_before,
+        )
+        after = _token_budget_state(
+            global_input_token_limit=global_input_token_limit,
+            global_output_token_limit=global_output_token_limit,
+            spent_input_tokens=spent_input_tokens_before,
+            reserved_input_tokens=reserved_input_tokens_before + planned_prompt_tokens,
+            spent_output_tokens=spent_output_tokens_before,
+            reserved_output_tokens=reserved_output_tokens_before + planned_completion_tokens,
+        )
+        payload: dict[str, Any] = {
+            "schema_version": "1.0",
+            "request_id": request_id,
+            "exact_model_id": exact_model_id,
+            "role": role,
+            "request_token_plan_sha256": request_token_plan_sha256,
+            "planned_prompt_tokens": planned_prompt_tokens,
+            "planned_completion_tokens": planned_completion_tokens,
+            "global_input_token_limit": global_input_token_limit,
+            "global_output_token_limit": global_output_token_limit,
+            "before": before,
+            "after": after,
+        }
+        return cls(
+            **payload,
+            evidence_sha256=_canonical_evidence_sha256(payload),
+        )
+
+    @model_validator(mode="after")
+    def reservation_is_bound_conservative_and_self_hashed(
+        self,
+    ) -> AtomicTokenReservationEvidence:
+        if not isinstance(self.request_id, str) or not self.request_id:
+            raise ValueError("token reservation request ID is empty")
+        if len(self.request_id) > 256 or any(
+            character.isspace() or ord(character) < 32 for character in self.request_id
+        ):
+            raise ValueError("token reservation request ID is invalid")
+        if _MODEL_ID_PATTERN.fullmatch(self.exact_model_id) is None:
+            raise ValueError("token reservation requires an exact author/model ID")
+        if _ROLE_ID_PATTERN.fullmatch(self.role) is None:
+            raise ValueError("token reservation role is invalid")
+        _validate_token_state(
+            self.before,
+            global_input_token_limit=self.global_input_token_limit,
+            global_output_token_limit=self.global_output_token_limit,
+        )
+        _validate_token_state(
+            self.after,
+            global_input_token_limit=self.global_input_token_limit,
+            global_output_token_limit=self.global_output_token_limit,
+        )
+        if (
+            self.before.spent_input_tokens != self.after.spent_input_tokens
+            or self.before.spent_output_tokens != self.after.spent_output_tokens
+        ):
+            raise ValueError("token reservation may not change spent token counters")
+        if (
+            self.before.reserved_input_tokens + self.planned_prompt_tokens
+            != self.after.reserved_input_tokens
+        ):
+            raise ValueError("input token reservation does not conserve tokens")
+        if (
+            self.before.reserved_output_tokens + self.planned_completion_tokens
+            != self.after.reserved_output_tokens
+        ):
+            raise ValueError("output token reservation does not conserve tokens")
+        expected_hash = _canonical_evidence_sha256(
+            self.model_dump(mode="json", exclude={"evidence_sha256"})
+        )
+        if self.evidence_sha256 != expected_hash:
+            raise ValueError("token reservation evidence self-hash does not match")
+        return self
 
 
 @dataclass(frozen=True)
@@ -196,6 +339,35 @@ class Reservation:
     role: str | None = None
     planned_prompt_tokens: int | None = None
     planned_completion_tokens: int | None = None
+    request_token_plan_sha256: str | None = None
+    token_reservation_evidence: AtomicTokenReservationEvidence | None = None
+
+    def __post_init__(self) -> None:
+        evidence = self.token_reservation_evidence
+        if self.request_token_plan_sha256 is None:
+            if evidence is not None:
+                raise ValueError("legacy reservation cannot carry plan-bound token evidence")
+            return
+        if _SHA256_PATTERN.fullmatch(self.request_token_plan_sha256) is None:
+            raise ValueError("request token plan hash is invalid")
+        if (
+            self.exact_model_id is None
+            or self.role is None
+            or self.planned_prompt_tokens is None
+            or self.planned_completion_tokens is None
+        ):
+            raise ValueError("plan-bound reservation requires complete model and token fields")
+        if evidence is None:
+            raise ValueError("plan-bound reservation requires atomic token evidence")
+        if (
+            evidence.request_id != self.identifier
+            or evidence.exact_model_id != self.exact_model_id
+            or evidence.role != self.role
+            or evidence.request_token_plan_sha256 != self.request_token_plan_sha256
+            or evidence.planned_prompt_tokens != self.planned_prompt_tokens
+            or evidence.planned_completion_tokens != self.planned_completion_tokens
+        ):
+            raise ValueError("reservation fields differ from its atomic token evidence")
 
 
 @dataclass(frozen=True)
@@ -369,6 +541,7 @@ class BudgetManager:
         exact_model_id: str | None = None,
         planned_prompt_tokens: int | None = None,
         planned_completion_tokens: int | None = None,
+        request_token_plan_sha256: str | None = None,
     ) -> Reservation:
         """Reserve before send, requiring exact endpoint pricing in certification mode."""
 
@@ -378,11 +551,13 @@ class BudgetManager:
             resolved_model_id,
             resolved_prompt_tokens,
             resolved_completion_tokens,
+            resolved_plan_sha256,
         ) = self._validate_request_scope(
             role=role,
             exact_model_id=exact_model_id,
             planned_prompt_tokens=planned_prompt_tokens,
             planned_completion_tokens=planned_completion_tokens,
+            request_token_plan_sha256=request_token_plan_sha256,
             endpoint_cost_bound=endpoint_cost_bound,
         )
         async with self._lock:
@@ -405,6 +580,40 @@ class BudgetManager:
                 planned_prompt_tokens=resolved_prompt_tokens,
                 planned_completion_tokens=resolved_completion_tokens,
             )
+            token_evidence = (
+                AtomicTokenReservationEvidence.build(
+                    request_id=identifier,
+                    exact_model_id=resolved_model_id,
+                    role=role,
+                    request_token_plan_sha256=resolved_plan_sha256,
+                    planned_prompt_tokens=resolved_prompt_tokens,
+                    planned_completion_tokens=resolved_completion_tokens,
+                    global_input_token_limit=self.global_input_token_budget,
+                    global_output_token_limit=self.global_output_token_budget,
+                    spent_input_tokens_before=self._spent_input_tokens,
+                    reserved_input_tokens_before=self._reserved_input_tokens,
+                    spent_output_tokens_before=self._spent_output_tokens,
+                    reserved_output_tokens_before=self._reserved_output_tokens,
+                )
+                if (
+                    resolved_plan_sha256 is not None
+                    and resolved_model_id is not None
+                    and resolved_prompt_tokens is not None
+                    and resolved_completion_tokens is not None
+                )
+                else None
+            )
+            reservation_without_persistence = Reservation(
+                identifier=identifier,
+                estimated_cost_usd=estimated,
+                endpoint_cost_bound=endpoint_cost_bound,
+                exact_model_id=resolved_model_id,
+                role=role,
+                planned_prompt_tokens=resolved_prompt_tokens,
+                planned_completion_tokens=resolved_completion_tokens,
+                request_token_plan_sha256=resolved_plan_sha256,
+                token_reservation_evidence=token_evidence,
+            )
             try:
                 persistent = (
                     self.atomic_ledger.reserve(identifier, maximum_cost)
@@ -417,16 +626,7 @@ class BudgetManager:
                 ) from None
             self._reserved[identifier] = maximum_cost
             self._role_requests[role] = count + 1
-            reservation = Reservation(
-                identifier=identifier,
-                estimated_cost_usd=estimated,
-                persistent=persistent,
-                endpoint_cost_bound=endpoint_cost_bound,
-                exact_model_id=resolved_model_id,
-                role=role,
-                planned_prompt_tokens=resolved_prompt_tokens,
-                planned_completion_tokens=resolved_completion_tokens,
-            )
+            reservation = replace(reservation_without_persistence, persistent=persistent)
             self._issued[identifier] = reservation
             self._reserve_scoped(reservation, maximum_cost)
             return reservation
@@ -438,8 +638,9 @@ class BudgetManager:
         exact_model_id: str | None,
         planned_prompt_tokens: int | None,
         planned_completion_tokens: int | None,
+        request_token_plan_sha256: str | None,
         endpoint_cost_bound: EndpointRequestCostBound | None,
-    ) -> tuple[str | None, int | None, int | None]:
+    ) -> tuple[str | None, int | None, int | None, str | None]:
         _validate_scope_key(role, _ROLE_ID_PATTERN, scope="role")
         resolved_model_id = exact_model_id
         if resolved_model_id is not None:
@@ -466,6 +667,17 @@ class BudgetManager:
             raise BudgetReservationStateError(
                 "planned prompt and completion token ceilings must be supplied together"
             )
+        plan_sha256 = request_token_plan_sha256
+        if plan_sha256 is not None and (
+            not isinstance(plan_sha256, str) or _SHA256_PATTERN.fullmatch(plan_sha256) is None
+        ):
+            raise BudgetReservationStateError("request token plan hash is invalid")
+        if plan_sha256 is not None and (
+            resolved_model_id is None or prompt_tokens is None or completion_tokens is None
+        ):
+            raise BudgetReservationStateError(
+                "request token plan hash requires an exact model and complete token ceilings"
+            )
         if prompt_tokens is not None and resolved_model_id is None:
             raise BudgetReservationStateError("planned token ceilings require an exact model ID")
         if self.per_model_usd_caps and resolved_model_id is None:
@@ -491,7 +703,7 @@ class BudgetManager:
                 raise BudgetReservationStateError(
                     "planned completion tokens exceed the endpoint cost bound"
                 )
-        return resolved_model_id, prompt_tokens, completion_tokens
+        return resolved_model_id, prompt_tokens, completion_tokens, plan_sha256
 
     def _require_scoped_capacity(
         self,
@@ -550,6 +762,10 @@ class BudgetManager:
     ) -> None:
         cap = caps.get(key)
         if cap is None:
+            if caps:
+                raise BudgetExhaustedError(
+                    f"request has no configured {scope} USD budget for {key}"
+                )
             return
         available = cap - spent.get(key, Decimal(0)) - reserved.get(key, Decimal(0))
         if maximum_cost > available:
@@ -792,6 +1008,93 @@ class BudgetManager:
             )
         if reservation.role is not None:
             _decrement_decimal(self._reserved_role_usd, reservation.role, reserved_cost)
+
+
+def _token_budget_state(
+    *,
+    global_input_token_limit: int | None,
+    global_output_token_limit: int | None,
+    spent_input_tokens: int,
+    reserved_input_tokens: int,
+    spent_output_tokens: int,
+    reserved_output_tokens: int,
+) -> TokenBudgetStateEvidence:
+    remaining_input_tokens = _remaining_token_capacity(
+        global_input_token_limit,
+        spent=spent_input_tokens,
+        reserved=reserved_input_tokens,
+        field="input",
+    )
+    remaining_output_tokens = _remaining_token_capacity(
+        global_output_token_limit,
+        spent=spent_output_tokens,
+        reserved=reserved_output_tokens,
+        field="output",
+    )
+    return TokenBudgetStateEvidence(
+        spent_input_tokens=spent_input_tokens,
+        reserved_input_tokens=reserved_input_tokens,
+        remaining_input_tokens=remaining_input_tokens,
+        spent_output_tokens=spent_output_tokens,
+        reserved_output_tokens=reserved_output_tokens,
+        remaining_output_tokens=remaining_output_tokens,
+    )
+
+
+def _validate_token_state(
+    state: TokenBudgetStateEvidence,
+    *,
+    global_input_token_limit: int | None,
+    global_output_token_limit: int | None,
+) -> None:
+    expected_input = _remaining_token_capacity(
+        global_input_token_limit,
+        spent=state.spent_input_tokens,
+        reserved=state.reserved_input_tokens,
+        field="input",
+    )
+    if state.remaining_input_tokens != expected_input:
+        raise ValueError("input token remaining capacity is inconsistent")
+    expected_output = _remaining_token_capacity(
+        global_output_token_limit,
+        spent=state.spent_output_tokens,
+        reserved=state.reserved_output_tokens,
+        field="output",
+    )
+    if state.remaining_output_tokens != expected_output:
+        raise ValueError("output token remaining capacity is inconsistent")
+
+
+def _remaining_token_capacity(
+    limit: int | None,
+    *,
+    spent: int,
+    reserved: int,
+    field: str,
+) -> int | None:
+    if limit is None:
+        return None
+    remaining = limit - spent - reserved
+    if remaining < 0:
+        raise ValueError(f"{field} token state exceeds its global limit")
+    return remaining
+
+
+def _canonical_evidence_sha256(payload: Mapping[str, Any]) -> str:
+    material = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        default=_budget_evidence_json_default,
+    ).encode("utf-8")
+    return hashlib.sha256(material).hexdigest()
+
+
+def _budget_evidence_json_default(value: object) -> object:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    raise TypeError(f"unsupported budget evidence value: {type(value).__name__}")
 
 
 def _normalize_actual_cost(

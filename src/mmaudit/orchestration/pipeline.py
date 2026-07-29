@@ -171,6 +171,12 @@ from mmaudit.orchestration.context import (
     ContextBuilder,
     context_hash_index,
 )
+from mmaudit.orchestration.context_manifest import (
+    ContextManifest,
+    build_context_manifest,
+    context_manifest_report_binding,
+    write_context_manifest,
+)
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.manifest import (
     build_run_evidence_manifest,
@@ -1118,6 +1124,20 @@ class AuditPipeline:
                 max_requests_per_agent=self.config.execution.max_requests_per_agent,
                 atomic_ledger=None if scanner_only else self.cost_ledger,
                 require_endpoint_cost_bound=not scanner_only,
+                global_input_token_budget=(
+                    None if scanner_only else self.config.token_budgets.global_input_token_budget
+                ),
+                global_output_token_budget=(
+                    None if scanner_only else self.config.token_budgets.global_output_token_budget
+                ),
+                per_model_usd_caps={
+                    model: str(cap)
+                    for model, cap in self.config.token_budgets.per_model_cost_budget_usd.items()
+                },
+                per_role_usd_caps={
+                    role: str(cap)
+                    for role, cap in self.config.token_budgets.per_role_cost_budget_usd.items()
+                },
             )
         )
         model_surface_review_assignments = plan_model_surface_review_assignments(
@@ -1153,6 +1173,7 @@ class AuditPipeline:
                     qualification_routing=_openrouter_qualification_routing(
                         self.production_qualification
                     ),
+                    token_budgets=self.config.token_budgets,
                     effective_privacy_policy=self.effective_privacy_policy,
                     privacy_authorization=self.privacy_authorization,
                 )
@@ -1184,6 +1205,9 @@ class AuditPipeline:
                     formal_runs=formal_runs,
                     solidity_coverage=solidity_coverage,
                     planned_packages=6 + len(self.config.models.specialists),
+                    maximum_source_tokens_per_request=(
+                        self.config.token_budgets.maximum_source_tokens_per_request
+                    ),
                 )
                 context_withheld_files = len(repository_map.files) - len(
                     context_builder.repository_map.files
@@ -2290,6 +2314,10 @@ class AuditPipeline:
             )
             terminal_code = ExitCode.INCOMPLETE
         quality_status = _quality_status(terminal_code, failed_required_gates)
+        context_manifest = build_context_manifest(
+            run_id=run_id,
+            usage_records=usage.records,
+        )
 
         report = self._build_report(
             run_id=run_id,
@@ -2338,6 +2366,7 @@ class AuditPipeline:
             quality_status=quality_status,
             maximum_assurance=maximum_assurance,
             report_quality_review=report_quality_review,
+            context_manifest=context_manifest,
         )
         log_handler.flush()
         self._write_artifacts(
@@ -2363,6 +2392,7 @@ class AuditPipeline:
             reproduction_resolutions=reproduction_resolutions,
             falsifications=falsifications,
             run_options=run_options,
+            context_manifest=context_manifest,
         )
         self.logger.removeHandler(log_handler)
         log_handler.close()
@@ -2702,6 +2732,7 @@ class AuditPipeline:
         quality_status: AuditQualityStatus,
         maximum_assurance: MaximumAssuranceAssessment,
         report_quality_review: ReportQualityReview | None,
+        context_manifest: ContextManifest,
     ) -> AuditReport:
         fork_probing_enabled = self.config.smart_contracts.enabled and (
             self.config.smart_contracts.allow_fork_probing or allow_fork_probing
@@ -2795,6 +2826,9 @@ class AuditPipeline:
                 "threat_model_generated": threat_model is not None,
                 "threat_model_location_rejections": len(threat_location_rejections),
                 "context_files_withheld_by_secret_safeguards": context_withheld_files,
+                "context_manifest": context_manifest_report_binding(context_manifest).model_dump(
+                    mode="json"
+                ),
                 "raw_material_stored": (
                     self.config.privacy.store_raw_prompts or self.config.privacy.store_raw_responses
                 ),
@@ -2954,7 +2988,12 @@ class AuditPipeline:
         reproduction_resolutions: list[CandidateReproductionResolution],
         falsifications: FalsificationBatch,
         run_options: AuditRunOptions,
+        context_manifest: ContextManifest,
     ) -> None:
+        write_context_manifest(
+            run_dir / "context-manifest.json",
+            context_manifest,
+        )
         write_json(
             run_dir / "metadata.json",
             {
@@ -3149,6 +3188,7 @@ class AuditPipeline:
             "formal-results.json",
             "solidity-coverage.json",
             "model-review-coverage.json",
+            "context-manifest.json",
             "model-qualification-runtime.json",
             "scope-assessment.json",
             "prior-audit-comparison.json",

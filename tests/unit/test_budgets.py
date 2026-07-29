@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from dataclasses import replace
 from decimal import Decimal
 
 import pytest
+from pydantic import ValidationError
 
 from mmaudit.orchestration.budgets import (
+    AtomicTokenReservationEvidence,
     BudgetExhaustedError,
     BudgetManager,
     BudgetReservationStateError,
@@ -429,6 +433,31 @@ async def test_per_model_usd_cap_blocks_only_the_exhausted_model() -> None:
 
 
 @pytest.mark.asyncio
+async def test_configured_scoped_caps_reject_unlisted_models_and_roles() -> None:
+    model_scoped = _scoped_manager(model_caps={"alpha/atlas-secure": "1"})
+    with pytest.raises(BudgetExhaustedError, match="no configured model USD budget"):
+        await model_scoped.reserve(
+            "request-model",
+            "review",
+            "x",
+            exact_model_id="beta/beacon-secure",
+            planned_prompt_tokens=1,
+            planned_completion_tokens=1,
+        )
+
+    role_scoped = _scoped_manager(role_caps={"review": "1"})
+    with pytest.raises(BudgetExhaustedError, match="no configured role USD budget"):
+        await role_scoped.reserve(
+            "request-role",
+            "unlisted",
+            "x",
+            exact_model_id="alpha/atlas-secure",
+            planned_prompt_tokens=1,
+            planned_completion_tokens=1,
+        )
+
+
+@pytest.mark.asyncio
 async def test_per_role_usd_cap_blocks_only_the_exhausted_role() -> None:
     manager = _scoped_manager(
         role_caps={
@@ -731,3 +760,185 @@ async def test_scoped_reservation_requires_a_complete_exact_token_plan() -> None
 
     assert manager.reserved_usd == 0
     assert manager.reserved_input_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_plan_bound_reservation_carries_self_hashed_atomic_token_evidence() -> None:
+    manager = _scoped_manager(input_tokens=20, output_tokens=10)
+    canary_prompt = "PRIVATE_PROMPT_CANARY"
+    prior = await manager.reserve(
+        "request-prior",
+        "review",
+        "x",
+        exact_model_id="alpha/atlas-secure",
+        planned_prompt_tokens=2,
+        planned_completion_tokens=1,
+    )
+    await manager.reconcile(
+        prior,
+        Decimal("0.000001"),
+        actual_prompt_tokens=2,
+        actual_completion_tokens=1,
+    )
+
+    reservation = await manager.reserve(
+        "request-plan-a",
+        "review",
+        canary_prompt,
+        exact_model_id="alpha/atlas-secure",
+        planned_prompt_tokens=7,
+        planned_completion_tokens=3,
+        request_token_plan_sha256="a" * 64,
+    )
+
+    evidence = reservation.token_reservation_evidence
+    assert evidence is not None
+    assert evidence.request_id == reservation.identifier
+    assert evidence.exact_model_id == "alpha/atlas-secure"
+    assert evidence.role == "review"
+    assert evidence.request_token_plan_sha256 == "a" * 64
+    assert evidence.global_input_token_limit == 20
+    assert evidence.global_output_token_limit == 10
+    assert evidence.before.spent_input_tokens == 2
+    assert evidence.before.reserved_input_tokens == 0
+    assert evidence.before.remaining_input_tokens == 18
+    assert evidence.after.spent_input_tokens == 2
+    assert evidence.after.reserved_input_tokens == 7
+    assert evidence.after.remaining_input_tokens == 11
+    assert evidence.before.spent_output_tokens == 1
+    assert evidence.before.reserved_output_tokens == 0
+    assert evidence.before.remaining_output_tokens == 9
+    assert evidence.after.spent_output_tokens == 1
+    assert evidence.after.reserved_output_tokens == 3
+    assert evidence.after.remaining_output_tokens == 6
+    serialized = json.dumps(evidence.model_dump(mode="json"), sort_keys=True)
+    assert canary_prompt not in serialized
+    assert (
+        AtomicTokenReservationEvidence.model_validate(evidence.model_dump(mode="json")) == evidence
+    )
+
+
+@pytest.mark.asyncio
+async def test_plan_hash_requires_complete_exact_token_reservation_fields() -> None:
+    manager = _scoped_manager()
+
+    with pytest.raises(BudgetReservationStateError, match="exact model and complete"):
+        await manager.reserve(
+            "request-no-model",
+            "review",
+            "x",
+            planned_prompt_tokens=1,
+            planned_completion_tokens=1,
+            request_token_plan_sha256="a" * 64,
+        )
+    with pytest.raises(BudgetReservationStateError, match="exact model and complete"):
+        await manager.reserve(
+            "request-no-counts",
+            "review",
+            "x",
+            exact_model_id="alpha/atlas-secure",
+            request_token_plan_sha256="a" * 64,
+        )
+    with pytest.raises(BudgetReservationStateError, match="plan hash is invalid"):
+        await manager.reserve(
+            "request-invalid-hash",
+            "review",
+            "x",
+            exact_model_id="alpha/atlas-secure",
+            planned_prompt_tokens=1,
+            planned_completion_tokens=1,
+            request_token_plan_sha256="not-a-hash",
+        )
+
+    assert manager.reserved_usd == 0
+    assert manager.reserved_input_tokens == 0
+    assert manager.reserved_output_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_atomic_token_evidence_rejects_tampering_and_resealed_nonconservation() -> None:
+    manager = _scoped_manager(input_tokens=20, output_tokens=10)
+    reservation = await manager.reserve(
+        "request-plan-a",
+        "review",
+        "x",
+        exact_model_id="alpha/atlas-secure",
+        planned_prompt_tokens=7,
+        planned_completion_tokens=3,
+        request_token_plan_sha256="a" * 64,
+    )
+    evidence = reservation.token_reservation_evidence
+    assert evidence is not None
+    serialized = evidence.model_dump(mode="json")
+
+    changed_role = dict(serialized)
+    changed_role["role"] = "falsifier"
+    with pytest.raises(ValidationError, match="self-hash"):
+        AtomicTokenReservationEvidence.model_validate(changed_role)
+
+    changed_conservation = json.loads(json.dumps(serialized))
+    changed_conservation["after"]["reserved_input_tokens"] = 8
+    changed_conservation["after"]["remaining_input_tokens"] = 12
+    hash_payload = dict(changed_conservation)
+    hash_payload.pop("evidence_sha256")
+    changed_conservation["evidence_sha256"] = hashlib.sha256(
+        json.dumps(
+            hash_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    with pytest.raises(ValidationError, match="does not conserve"):
+        AtomicTokenReservationEvidence.model_validate(changed_conservation)
+
+    with pytest.raises(ValueError, match="differ from its atomic token evidence"):
+        replace(reservation, planned_prompt_tokens=8)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_plan_bound_reservations_have_distinct_atomic_snapshots() -> None:
+    manager = _scoped_manager(input_tokens=20, output_tokens=20)
+
+    results = await asyncio.gather(
+        manager.reserve(
+            "request-plan-a",
+            "review-a",
+            "x",
+            exact_model_id="alpha/atlas-secure",
+            planned_prompt_tokens=6,
+            planned_completion_tokens=4,
+            request_token_plan_sha256="a" * 64,
+        ),
+        manager.reserve(
+            "request-plan-b",
+            "review-b",
+            "x",
+            exact_model_id="alpha/atlas-secure",
+            planned_prompt_tokens=6,
+            planned_completion_tokens=4,
+            request_token_plan_sha256="b" * 64,
+        ),
+    )
+
+    evidence = [reservation.token_reservation_evidence for reservation in results]
+    assert all(item is not None for item in evidence)
+    ordered = sorted(
+        (item for item in evidence if item is not None),
+        key=lambda item: item.before.reserved_input_tokens,
+    )
+    assert [
+        (
+            item.before.reserved_input_tokens,
+            item.after.reserved_input_tokens,
+            item.before.reserved_output_tokens,
+            item.after.reserved_output_tokens,
+        )
+        for item in ordered
+    ] == [(0, 6, 0, 4), (6, 12, 4, 8)]
+    assert ordered[0].after == ordered[1].before
+    assert ordered[0].evidence_sha256 != ordered[1].evidence_sha256
+    assert manager.reserved_input_tokens == 12
+    assert manager.reserved_output_tokens == 8
+    assert manager.remaining_input_tokens == 8
+    assert manager.remaining_output_tokens == 12

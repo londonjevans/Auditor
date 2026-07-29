@@ -12,7 +12,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from mmaudit.models.identity import OpenRouterIdentityBindingResult
 from mmaudit.models.output_modes import supported_output_modes
@@ -24,6 +24,8 @@ from mmaudit.models.schemas import (
     StructuredOutputResponseFormat,
     UsageRecord,
 )
+from mmaudit.models.token_planning import RequestTokenPlan
+from mmaudit.orchestration.budgets import AtomicTokenReservationEvidence
 from mmaudit.privacy import EndpointPolicyClass, PrivacyProfile, PrivacySourceClassification
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -184,6 +186,7 @@ def _is_strict_usage_record(
         and routing.get("validation_status") == "valid"
         and _has_valid_privacy_routing(record)
         and _has_valid_structured_output_routing(record)
+        and _has_valid_token_plan_routing(record)
         and routing.get("repair_used") is False
         and routing.get("repair_request") is False
         and routing.get("request_started_at") == record.started_at.isoformat()
@@ -249,6 +252,133 @@ def _is_strict_usage_record(
 
 def _is_sha256(value: Any) -> bool:
     return isinstance(value, str) and _SHA256.fullmatch(value) is not None
+
+
+def request_token_plan_from_usage(record: UsageRecord) -> RequestTokenPlan | None:
+    """Return strict plan evidence, rejecting any present but incoherent projection."""
+
+    raw_plan = record.routing.get("request_token_plan")
+    raw_hash = record.routing.get("request_token_plan_sha256")
+    if raw_plan is None:
+        if raw_hash is not None:
+            raise ValueError("usage routing has a token-plan hash without its evidence")
+        return None
+    if not isinstance(raw_plan, dict) or not _is_sha256(raw_hash):
+        raise ValueError("usage routing token-plan evidence is malformed")
+    plan = _strict_json_evidence(RequestTokenPlan, raw_plan, label="request token plan")
+    if (
+        plan.model_dump(mode="json") != raw_plan
+        or raw_hash != plan.plan_sha256
+        or plan.request_id != record.request_id
+        or plan.role != record.role
+        or plan.route_intersection.exact_model_ids != (record.requested_model,)
+    ):
+        raise ValueError("usage routing token plan differs from its request")
+    configured_endpoints = {
+        endpoint.casefold() for endpoint in record.configured_provider_endpoints
+    }
+    planned_endpoints = {
+        endpoint.casefold() for endpoint in plan.route_intersection.provider_endpoints
+    }
+    local_mock_route = (
+        record.execution_evidence is ExecutionEvidenceKind.MOCK
+        and planned_endpoints == {"mmaudit-local-mock"}
+    )
+    if configured_endpoints and not local_mock_route and configured_endpoints != planned_endpoints:
+        raise ValueError("usage routing token plan differs from configured endpoints")
+    _atomic_token_reservation_from_usage(record, plan)
+    return plan
+
+
+def _atomic_token_reservation_from_usage(
+    record: UsageRecord,
+    plan: RequestTokenPlan,
+) -> AtomicTokenReservationEvidence:
+    raw_evidence = record.routing.get("atomic_token_reservation")
+    raw_hash = record.routing.get("atomic_token_reservation_sha256")
+    if not isinstance(raw_evidence, dict) or not _is_sha256(raw_hash):
+        raise ValueError("usage routing atomic token reservation is malformed")
+    evidence = _strict_json_evidence(
+        AtomicTokenReservationEvidence,
+        raw_evidence,
+        label="atomic token reservation",
+    )
+    request_id_matches = evidence.request_id == record.request_id or bool(
+        re.fullmatch(
+            re.escape(record.request_id) + r":attempt:[2-9][0-9]*",
+            evidence.request_id,
+        )
+    )
+    if (
+        evidence.model_dump(mode="json") != raw_evidence
+        or raw_hash != evidence.evidence_sha256
+        or not request_id_matches
+        or evidence.exact_model_id != record.requested_model
+        or evidence.role != record.role
+        or evidence.request_token_plan_sha256 != plan.plan_sha256
+        or evidence.planned_prompt_tokens != plan.prompt_byte_upper_bound_tokens
+        or evidence.planned_completion_tokens != plan.requested_completion_tokens
+    ):
+        raise ValueError("usage routing atomic reservation differs from its token plan")
+    if (
+        evidence.global_input_token_limit is not None
+        and evidence.global_input_token_limit != plan.global_budget.global_input_token_budget
+    ):
+        raise ValueError("atomic input token limit differs from its token plan")
+    if (
+        evidence.global_output_token_limit is not None
+        and evidence.global_output_token_limit != plan.global_budget.global_output_token_budget
+    ):
+        raise ValueError("atomic output token limit differs from its token plan")
+    return evidence
+
+
+def _strict_json_evidence[EvidenceT: BaseModel](
+    evidence_type: type[EvidenceT],
+    raw_evidence: dict[str, Any],
+    *,
+    label: str,
+) -> EvidenceT:
+    try:
+        serialized = json.dumps(
+            raw_evidence,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+        return evidence_type.model_validate_json(serialized, strict=True)
+    except (TypeError, ValueError, ValidationError):
+        raise ValueError(f"{label} is invalid") from None
+
+
+def _has_valid_token_plan_routing(record: UsageRecord) -> bool:
+    if "request_token_plan" not in record.routing:
+        return "request_token_plan_sha256" not in record.routing
+    try:
+        plan = request_token_plan_from_usage(record)
+    except ValueError:
+        return False
+    if plan is None:
+        return False
+    limits = plan.route_intersection
+    return (
+        record.prompt_tokens <= plan.prompt_byte_upper_bound_tokens
+        and record.prompt_tokens <= limits.max_prompt_tokens
+        and record.completion_tokens <= plan.requested_completion_tokens
+        and record.completion_tokens <= limits.max_completion_tokens
+        and record.prompt_tokens + record.completion_tokens <= limits.context_tokens
+        and record.reasoning_tokens <= record.completion_tokens
+        and (
+            not record.configured_provider_endpoints
+            or limits.provider_endpoints == ("mmaudit-local-mock",)
+            or (
+                isinstance(record.actual_provider_endpoint, str)
+                and record.actual_provider_endpoint.casefold()
+                in {endpoint.casefold() for endpoint in limits.provider_endpoints}
+            )
+        )
+    )
 
 
 def _has_valid_structured_output_routing(record: UsageRecord) -> bool:

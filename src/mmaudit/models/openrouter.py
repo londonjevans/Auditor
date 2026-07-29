@@ -23,7 +23,7 @@ from urllib.parse import quote
 import httpx
 from pydantic import BaseModel, ValidationError
 
-from mmaudit.config import ExecutionConfig, PrivacyConfig, model_family
+from mmaudit.config import ExecutionConfig, PrivacyConfig, TokenBudgetConfig, model_family
 from mmaudit.constants import OPENROUTER_DEFAULT_BASE_URL, VERSION
 from mmaudit.models.discovery import (
     _TRUSTED_OPENROUTER_DISCOVERY_ISSUER,
@@ -84,6 +84,7 @@ from mmaudit.models.output_modes import (
     supports_reasoning_request,
 )
 from mmaudit.models.schemas import (
+    ContextPackage,
     ExecutionEvidenceKind,
     ModelIdentityStrength,
     ModelRequestValidationStatus,
@@ -98,6 +99,16 @@ from mmaudit.models.structured_output import (
     StructuredOutputFailureCode,
     StructuredOutputRepairEvidence,
     decode_structured_output,
+)
+from mmaudit.models.token_planning import (
+    PROMPT_ALLOCATION_CATEGORIES,
+    EndpointRouteIntersection,
+    EndpointRouteTokenCapacity,
+    PromptAllocationCategory,
+    PromptTokenAllocation,
+    RequestTokenPlan,
+    TokenPlanningError,
+    build_request_token_plan,
 )
 from mmaudit.models.usage import (
     UsageLedger,
@@ -186,6 +197,8 @@ _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _PREQUALIFICATION_PROVIDER_ROLES = frozenset({"model_benchmark", "real_provider_smoke"})
 _BASE_ENDPOINT_REQUEST_PARAMETERS = frozenset({"max_tokens", "temperature"})
 _ROUTE_SENSITIVE_REQUEST_PARAMETERS = frozenset({"reasoning", "response_format"})
+_LOCAL_MOCK_PROVIDER_ENDPOINT = "mmaudit-local-mock"
+_MAX_TOKEN_EVIDENCE = 2**31 - 1
 
 
 @dataclass(frozen=True)
@@ -754,6 +767,30 @@ def strict_json_schema(response_model: type[BaseModel]) -> dict[str, Any]:
     return schema
 
 
+def _strict_output_protocol(
+    *,
+    schema: dict[str, Any],
+    schema_name: str,
+) -> str:
+    """Return the exact compact text protocol embedded for non-native output modes."""
+
+    return json.dumps(
+        {
+            "instruction": (
+                "Return exactly one complete JSON object matching this schema. "
+                "Do not add markdown, code fences, comments, or prose."
+            ),
+            "protocol": STRUCTURED_OUTPUT_PROTOCOL_VERSION,
+            "schema": schema,
+            "schema_name": schema_name,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+
+
 def _structured_output_request_plan(
     *,
     mode: StructuredOutputMode,
@@ -783,21 +820,7 @@ def _structured_output_request_plan(
         response_format = (
             {"type": "json_object"} if mode is StructuredOutputMode.JSON_OBJECT else None
         )
-        protocol = json.dumps(
-            {
-                "instruction": (
-                    "Return exactly one complete JSON object matching this schema. "
-                    "Do not add markdown, code fences, comments, or prose."
-                ),
-                "protocol": STRUCTURED_OUTPUT_PROTOCOL_VERSION,
-                "schema": schema,
-                "schema_name": schema_name,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-            allow_nan=False,
-        )
+        protocol = _strict_output_protocol(schema=schema, schema_name=schema_name)
         strict_protocol_sha256 = hashlib.sha256(protocol.encode("utf-8")).hexdigest()
         effective_system_prompt = (
             f"{system_prompt}\n\n"
@@ -873,6 +896,228 @@ def _structured_output_prompt_sha256_from_plan(
     )
 
 
+def _compact_json(value: Any) -> str:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+
+
+def _top_level_json_value_span(material: str, key: str) -> tuple[int, int]:
+    """Locate one exact top-level JSON value without interpreting repository text."""
+
+    decoder = json.JSONDecoder()
+    index = 0
+    length = len(material)
+
+    def skip_whitespace(position: int) -> int:
+        while position < length and material[position].isspace():
+            position += 1
+        return position
+
+    index = skip_whitespace(index)
+    if index >= length or material[index] != "{":
+        raise OpenRouterSchemaError("structured protocol is not a JSON object")
+    index += 1
+    observed: set[str] = set()
+    while True:
+        index = skip_whitespace(index)
+        if index < length and material[index] == "}":
+            break
+        try:
+            observed_key, key_end = decoder.raw_decode(material, index)
+        except ValueError:
+            raise OpenRouterSchemaError("structured protocol JSON keys are invalid") from None
+        if not isinstance(observed_key, str) or observed_key in observed:
+            raise OpenRouterSchemaError("structured protocol JSON keys are invalid")
+        observed.add(observed_key)
+        index = skip_whitespace(key_end)
+        if index >= length or material[index] != ":":
+            raise OpenRouterSchemaError("structured protocol JSON delimiter is invalid")
+        value_start = skip_whitespace(index + 1)
+        try:
+            _value, value_end = decoder.raw_decode(material, value_start)
+        except ValueError:
+            raise OpenRouterSchemaError("structured protocol JSON value is invalid") from None
+        if observed_key == key:
+            return value_start, value_end
+        index = skip_whitespace(value_end)
+        if index < length and material[index] == ",":
+            index += 1
+            continue
+        if index < length and material[index] == "}":
+            break
+        raise OpenRouterSchemaError("structured protocol JSON object is malformed")
+    raise OpenRouterSchemaError(f"structured protocol omits required {key} value")
+
+
+def _schema_and_protocol_material(
+    *,
+    plan: _StructuredOutputRequestPlan,
+    schema: dict[str, Any],
+    schema_name: str,
+    original_system_prompt: str,
+) -> tuple[str, str]:
+    """Partition exact provider-visible schema and protocol material."""
+
+    protocol_material = ""
+    if plan.mode is StructuredOutputMode.NATIVE_JSON_SCHEMA:
+        if plan.system_prompt != original_system_prompt or plan.response_format is None:
+            raise OpenRouterSchemaError("native schema request shape changed during planning")
+        response_material = _compact_json(plan.response_format)
+        schema_material = _compact_json(schema)
+        schema_start = response_material.find(schema_material)
+        if (
+            schema_start < 0
+            or response_material.find(
+                schema_material,
+                schema_start + len(schema_material),
+            )
+            >= 0
+        ):
+            raise OpenRouterSchemaError("native response schema partition is ambiguous")
+        protocol_material = (
+            response_material[:schema_start]
+            + response_material[schema_start + len(schema_material) :]
+        )
+    else:
+        protocol = _strict_output_protocol(schema=schema, schema_name=schema_name)
+        schema_start, schema_end = _top_level_json_value_span(protocol, "schema")
+        schema_material = protocol[schema_start:schema_end]
+        suffix = plan.system_prompt.removeprefix(original_system_prompt)
+        if original_system_prompt + suffix != plan.system_prompt:
+            raise OpenRouterSchemaError("structured protocol changed the original system prompt")
+        protocol_start = suffix.find(protocol)
+        if protocol_start < 0 or suffix.find(protocol, protocol_start + len(protocol)) >= 0:
+            raise OpenRouterSchemaError("structured protocol partition is ambiguous")
+        absolute_schema_start = protocol_start + schema_start
+        absolute_schema_end = protocol_start + schema_end
+        protocol_material = suffix[:absolute_schema_start] + suffix[absolute_schema_end:]
+        if plan.mode is StructuredOutputMode.JSON_OBJECT:
+            if plan.response_format is None:
+                raise OpenRouterSchemaError("JSON-object request omitted its response format")
+            protocol_material += _compact_json(plan.response_format)
+        elif plan.response_format is not None:
+            raise OpenRouterSchemaError("validated-text request unexpectedly has a response format")
+    if plan.reasoning_payload is not None:
+        protocol_material += _compact_json(plan.reasoning_payload)
+    return schema_material, protocol_material
+
+
+def _prompt_token_allocations(
+    *,
+    plan: _StructuredOutputRequestPlan,
+    original_system_prompt: str,
+    response_model: type[BaseModel],
+    schema_name: str,
+    context_package: ContextPackage | None,
+) -> tuple[PromptTokenAllocation, ...]:
+    """Measure the final request by disjoint semantic category without retaining text."""
+
+    # Local import avoids the context -> review-evidence -> OpenRouter import cycle.
+    from mmaudit.orchestration.context import (
+        context_category_measurements,
+        render_context,
+    )
+
+    schema = strict_json_schema(response_model)
+    schema_material, protocol_material = _schema_and_protocol_material(
+        plan=plan,
+        schema=schema,
+        schema_name=schema_name,
+        original_system_prompt=original_system_prompt,
+    )
+    context_measurements = (
+        context_category_measurements(context_package) if context_package is not None else {}
+    )
+    if context_package is None:
+        workflow_material = plan.user_prompt
+    else:
+        rendered_context = render_context(context_package)
+        context_start = plan.user_prompt.find(rendered_context)
+        if (
+            context_start < 0
+            or plan.user_prompt.find(
+                rendered_context,
+                context_start + len(rendered_context),
+            )
+            >= 0
+        ):
+            raise OpenRouterRequestLimitError(
+                "context package must occur exactly once in the provider-visible user prompt"
+            )
+        workflow_material = (
+            plan.user_prompt[:context_start]
+            + plan.user_prompt[context_start + len(rendered_context) :]
+        )
+
+    exact_material = {
+        PromptAllocationCategory.SYSTEM: original_system_prompt,
+        PromptAllocationCategory.SCHEMA: schema_material,
+        PromptAllocationCategory.PROTOCOL: protocol_material,
+        PromptAllocationCategory.WORKFLOW: workflow_material,
+    }
+    allocations: list[PromptTokenAllocation] = []
+    for category in PROMPT_ALLOCATION_CATEGORIES:
+        material = exact_material.get(category)
+        if material is not None:
+            allocations.append(PromptTokenAllocation.from_text(category, material))
+            continue
+        measurement = context_measurements.get(category.value)
+        if measurement is None:
+            allocations.append(PromptTokenAllocation.from_text(category, ""))
+            continue
+        allocations.append(
+            PromptTokenAllocation.from_measurement(
+                category,
+                content_sha256=measurement.content_sha256,
+                utf8_bytes=measurement.utf8_bytes,
+            )
+        )
+    return tuple(allocations)
+
+
+def _context_omission_sha256s(
+    context_package: ContextPackage | None,
+) -> tuple[str, ...]:
+    if context_package is None:
+        return ()
+    return tuple(
+        sorted(
+            {
+                hashlib.sha256(omission.encode("utf-8")).hexdigest()
+                for omission in context_package.omissions
+            }
+        )
+    )
+
+
+def _validate_provider_token_usage(
+    *,
+    request_token_plan: RequestTokenPlan,
+    prompt_tokens: int,
+    completion_tokens: int,
+    reasoning_tokens: int,
+) -> None:
+    """Reject provider usage that exceeds any frozen request or endpoint ceiling."""
+
+    limits = request_token_plan.route_intersection
+    if (
+        prompt_tokens > request_token_plan.prompt_byte_upper_bound_tokens
+        or prompt_tokens > limits.max_prompt_tokens
+        or completion_tokens > request_token_plan.requested_completion_tokens
+        or completion_tokens > limits.max_completion_tokens
+        or prompt_tokens + completion_tokens > limits.context_tokens
+        or reasoning_tokens > completion_tokens
+    ):
+        raise OpenRouterSchemaError(
+            "provider-reported token usage exceeds the endpoint-bound request plan"
+        )
+
+
 def _require_matching_request_parameter_profile(
     endpoint_policy: _RegisteredEndpointPolicy,
     plan: _StructuredOutputRequestPlan,
@@ -944,6 +1189,7 @@ class OpenRouterClient:
         random_seed: int = 0,
         provider_policy: OpenRouterProviderPolicy | None = None,
         reasoning: OpenRouterReasoning | None = None,
+        token_budgets: TokenBudgetConfig | None = None,
         qualification_routing: tuple[OpenRouterQualificationRoutingEvidence, ...] = (),
         effective_privacy_policy: EffectivePrivacyPolicyEvidence | None = None,
         privacy_authorization: TrustedPrivacyAuthorization | None = None,
@@ -966,6 +1212,34 @@ class OpenRouterClient:
             provider_policy if provider_policy is not None else OpenRouterProviderPolicy()
         )
         self.reasoning = reasoning
+        self.token_budgets = (
+            TokenBudgetConfig.model_validate(token_budgets.model_dump(mode="python"))
+            if token_budgets is not None
+            else None
+        )
+        if self.token_budgets is not None:
+            if (
+                self.token_budgets.reserved_output_tokens is not None
+                and self.token_budgets.reserved_output_tokens
+                != self.execution.max_output_tokens_per_request
+            ):
+                raise OpenRouterCostControlError(
+                    "token output reserve differs from the execution request limit"
+                )
+            if (
+                self.budget.global_input_token_budget
+                != self.token_budgets.global_input_token_budget
+            ):
+                raise OpenRouterCostControlError(
+                    "request and atomic global input token budgets differ"
+                )
+            if (
+                self.budget.global_output_token_budget
+                != self.token_budgets.global_output_token_budget
+            ):
+                raise OpenRouterCostControlError(
+                    "request and atomic global output token budgets differ"
+                )
         self.effective_privacy_policy = (
             _canonical_effective_privacy_policy(effective_privacy_policy)
             if effective_privacy_policy is not None
@@ -2322,7 +2596,7 @@ class OpenRouterClient:
                     provider_identities=provider_identities,
                     pricing=tuple(pricing.items()),
                     pricing_sha256=endpoint.pricing_sha256,
-                    snapshot_sha256=evidence.snapshot_sha256,
+                    snapshot_sha256=endpoint.endpoint_snapshot_sha256,
                     context_length=endpoint.context_length,
                     max_prompt_tokens=endpoint.max_prompt_tokens,
                     max_prompt_tokens_source=endpoint.max_prompt_tokens_source,
@@ -2350,6 +2624,184 @@ class OpenRouterClient:
             structured_output_mode=evidence.structured_output_mode,
             output_capability_sha256=evidence.output_capability_sha256,
         )
+
+    def _required_output_tokens(self) -> int:
+        configured = (
+            self.token_budgets.reserved_output_tokens if self.token_budgets is not None else None
+        )
+        return (
+            configured if configured is not None else self.execution.max_output_tokens_per_request
+        )
+
+    def _reserved_reasoning_tokens(self, required_output_tokens: int) -> int:
+        if self.reasoning is None or self.reasoning.effort == "none":
+            return 0
+        if self.reasoning.max_tokens is not None:
+            return self.reasoning.max_tokens
+        return required_output_tokens
+
+    def _route_token_intersection(
+        self,
+        *,
+        model: str,
+        provider_policy: OpenRouterProviderPolicy,
+        requested_completion_tokens: int,
+    ) -> EndpointRouteIntersection:
+        registered_policy = self._endpoint_pricing.get(model)
+        if registered_policy is None:
+            if self.execution_evidence is not ExecutionEvidenceKind.MOCK:
+                raise OpenRouterRequestLimitError(
+                    "endpoint token planning requires frozen route capacity evidence"
+                )
+            prompt_capacity = min(self.execution.max_request_bytes, _MAX_TOKEN_EVIDENCE - 1)
+            context_capacity = min(
+                _MAX_TOKEN_EVIDENCE,
+                prompt_capacity + requested_completion_tokens,
+            )
+            mock_snapshot_sha256 = _canonical_sha256(
+                {
+                    "execution_evidence": ExecutionEvidenceKind.MOCK.value,
+                    "exact_model_id": model,
+                    "max_request_bytes": self.execution.max_request_bytes,
+                    "requested_completion_tokens": requested_completion_tokens,
+                }
+            )
+            return EndpointRouteIntersection.build(
+                (
+                    EndpointRouteTokenCapacity.build(
+                        exact_model_id=model,
+                        provider_endpoint=_LOCAL_MOCK_PROVIDER_ENDPOINT,
+                        endpoint_snapshot_sha256=mock_snapshot_sha256,
+                        context_tokens=context_capacity,
+                        max_prompt_tokens=prompt_capacity,
+                        max_prompt_tokens_source="metadata",
+                        max_completion_tokens=requested_completion_tokens,
+                        max_completion_tokens_source="metadata",
+                    ),
+                )
+            )
+
+        configured_endpoints = provider_policy.configured_endpoints
+        if not configured_endpoints:
+            raise OpenRouterRequestLimitError(
+                "frozen endpoint token planning requires an explicit route policy"
+            )
+        routes: list[EndpointRouteTokenCapacity] = []
+        for configured_endpoint in configured_endpoints:
+            endpoint = registered_policy.endpoint(configured_endpoint)
+            if endpoint is None:
+                raise OpenRouterRequestLimitError(
+                    "request route is absent or ambiguous in frozen endpoint evidence"
+                )
+            routes.append(
+                EndpointRouteTokenCapacity.build(
+                    exact_model_id=model,
+                    provider_endpoint=endpoint.provider_endpoint,
+                    endpoint_snapshot_sha256=endpoint.snapshot_sha256,
+                    context_tokens=endpoint.context_length,
+                    max_prompt_tokens=endpoint.max_prompt_tokens,
+                    max_prompt_tokens_source=endpoint.max_prompt_tokens_source,
+                    max_completion_tokens=endpoint.max_completion_tokens,
+                    max_completion_tokens_source=endpoint.max_completion_tokens_source,
+                )
+            )
+        return EndpointRouteIntersection.build(routes)
+
+    def _request_token_plan(
+        self,
+        *,
+        request_id: str,
+        role: str,
+        model: str,
+        provider_policy: OpenRouterProviderPolicy,
+        structured_output_plan: _StructuredOutputRequestPlan,
+        original_system_prompt: str,
+        response_model: type[BaseModel],
+        schema_name: str,
+        context_package: ContextPackage | None = None,
+    ) -> RequestTokenPlan:
+        required_output_tokens = self._required_output_tokens()
+        reserved_reasoning_tokens = self._reserved_reasoning_tokens(required_output_tokens)
+        requested_completion_tokens = required_output_tokens + reserved_reasoning_tokens
+        global_input_budget = (
+            self.token_budgets.global_input_token_budget
+            if self.token_budgets is not None
+            else (
+                self.budget.global_input_token_budget
+                if self.budget.global_input_token_budget is not None
+                else _MAX_TOKEN_EVIDENCE
+            )
+        )
+        global_output_budget = (
+            self.token_budgets.global_output_token_budget
+            if self.token_budgets is not None
+            else (
+                self.budget.global_output_token_budget
+                if self.budget.global_output_token_budget is not None
+                else _MAX_TOKEN_EVIDENCE
+            )
+        )
+        try:
+            route_intersection = self._route_token_intersection(
+                model=model,
+                provider_policy=provider_policy,
+                requested_completion_tokens=requested_completion_tokens,
+            )
+            allocations = _prompt_token_allocations(
+                plan=structured_output_plan,
+                original_system_prompt=original_system_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                context_package=context_package,
+            )
+            return build_request_token_plan(
+                request_id=request_id,
+                role=role,
+                route_intersection=route_intersection,
+                allocations=allocations,
+                required_output_tokens=required_output_tokens,
+                reserved_reasoning_tokens=reserved_reasoning_tokens,
+                global_input_token_budget=global_input_budget,
+                global_output_token_budget=global_output_budget,
+                input_tokens_reserved_before=(
+                    self.budget.spent_input_tokens + self.budget.reserved_input_tokens
+                ),
+                output_tokens_reserved_before=(
+                    self.budget.spent_output_tokens + self.budget.reserved_output_tokens
+                ),
+                context_utilization=Decimal(
+                    str(
+                        self.token_budgets.usable_input_fraction
+                        if self.token_budgets is not None
+                        else 0.70
+                    )
+                ),
+                configured_reserved_system_tokens=(
+                    self.token_budgets.reserved_system_tokens
+                    if self.token_budgets is not None
+                    else 0
+                ),
+                configured_reserved_schema_tokens=(
+                    self.token_budgets.reserved_schema_tokens
+                    if self.token_budgets is not None
+                    else 0
+                ),
+                configured_reserved_protocol_tokens=(
+                    self.token_budgets.reserved_protocol_tokens
+                    if self.token_budgets is not None
+                    else 0
+                ),
+                maximum_source_tokens_per_request=(
+                    self.token_budgets.maximum_source_tokens_per_request
+                    if self.token_budgets is not None
+                    else 200_000
+                ),
+                context_omission_sha256s=_context_omission_sha256s(context_package),
+            )
+        except (TokenPlanningError, ValueError):
+            raise OpenRouterRequestLimitError(
+                "provider request cannot satisfy the endpoint-bound token plan"
+            ) from None
 
     async def _request_metadata(
         self,
@@ -2521,6 +2973,7 @@ class OpenRouterClient:
         request_metadata: Mapping[str, str] | None = None,
         provider_policy: OpenRouterProviderPolicy | None = None,
         structured_output_mode: StructuredOutputMode | None = None,
+        request_token_plan: RequestTokenPlan | None = None,
     ) -> dict[str, Any]:
         _require_exact_model_id(model)
         effective_provider_policy = provider_policy or self.provider_policy
@@ -2551,6 +3004,38 @@ class OpenRouterClient:
                 endpoint_policy,
                 request_plan,
             )
+        if request_token_plan is not None:
+            if (
+                request_token_plan.route_intersection.exact_model_ids != (model,)
+                or request_metadata is None
+                or request_metadata.get("mmaudit_request_id") != request_token_plan.request_id
+                or request_metadata.get("mmaudit_role") != request_token_plan.role
+                or request_metadata.get("mmaudit_token_plan_sha256")
+                != request_token_plan.plan_sha256
+            ):
+                raise OpenRouterRequestLimitError(
+                    "request metadata differs from its endpoint-bound token plan"
+                )
+            planned_endpoints = {
+                endpoint.casefold()
+                for endpoint in request_token_plan.route_intersection.provider_endpoints
+            }
+            configured_endpoints = {
+                endpoint.casefold() for endpoint in effective_provider_policy.configured_endpoints
+            }
+            if (
+                endpoint_policy is not None
+                and configured_endpoints
+                and planned_endpoints != configured_endpoints
+            ):
+                raise OpenRouterRequestLimitError(
+                    "provider routes differ from the endpoint-bound token plan"
+                )
+        maximum_tokens = (
+            request_token_plan.requested_completion_tokens
+            if request_token_plan is not None
+            else self.execution.max_output_tokens_per_request
+        )
         body: dict[str, Any] = {
             "model": model,
             "messages": [
@@ -2558,7 +3043,7 @@ class OpenRouterClient:
                 {"role": "user", "content": request_plan.user_prompt},
             ],
             "temperature": 0,
-            "max_tokens": self.execution.max_output_tokens_per_request,
+            "max_tokens": maximum_tokens,
             "stream": False,
             "provider": effective_provider_policy.as_request_payload(
                 require_zdr=self.privacy.require_zdr,
@@ -2590,6 +3075,7 @@ class OpenRouterClient:
         models: list[str],
         system_prompt: str,
         user_prompt: str,
+        context_package: ContextPackage | None = None,
         response_model: type[ResponseT],
         schema_name: str,
     ) -> ResponseT:
@@ -2600,6 +3086,7 @@ class OpenRouterClient:
             models=models,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
+            context_package=context_package,
             response_model=response_model,
             schema_name=schema_name,
         )
@@ -2618,6 +3105,7 @@ class OpenRouterClient:
         models: list[str],
         system_prompt: str,
         user_prompt: str,
+        context_package: ContextPackage | None = None,
         response_model: type[ResponseT],
         schema_name: str,
     ) -> StructuredCompletion[ResponseT]:
@@ -2714,6 +3202,7 @@ class OpenRouterClient:
                     model=model,
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
+                    context_package=context_package,
                     response_model=response_model,
                     schema_name=schema_name,
                     fallback_used=index > 0,
@@ -2765,6 +3254,7 @@ class OpenRouterClient:
         models: list[str],
         system_prompt: str,
         user_prompt: str,
+        context_package: ContextPackage | None = None,
         response_model: type[ResponseT],
         schema_name: str,
     ) -> StructuredCompletion[ResponseT]:
@@ -2792,6 +3282,7 @@ class OpenRouterClient:
             models=models,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
+            context_package=context_package,
             response_model=response_model,
             schema_name=schema_name,
         )
@@ -2927,6 +3418,7 @@ class OpenRouterClient:
         model: str,
         system_prompt: str,
         user_prompt: str,
+        context_package: ContextPackage | None = None,
         response_model: type[ResponseT],
         schema_name: str,
         fallback_used: bool,
@@ -2958,6 +3450,17 @@ class OpenRouterClient:
             schema_name=schema_name,
             reasoning=self.reasoning,
         )
+        request_token_plan = self._request_token_plan(
+            request_id=request_id,
+            role=role,
+            model=model,
+            provider_policy=request_provider_policy,
+            structured_output_plan=structured_output_plan,
+            original_system_prompt=system_prompt,
+            response_model=response_model,
+            schema_name=schema_name,
+            context_package=context_package,
+        )
         prompt_hash = _structured_output_prompt_sha256_from_plan(structured_output_plan)
         user_prompt_hash = hashlib.sha256(user_prompt.encode()).hexdigest()
         schema = strict_json_schema(response_model)
@@ -2973,6 +3476,7 @@ class OpenRouterClient:
             "mmaudit_required_provider_parameters_sha256": _canonical_sha256(
                 structured_output_plan.required_provider_parameters
             ),
+            "mmaudit_token_plan_sha256": request_token_plan.plan_sha256,
         }
         if structured_output_plan.strict_protocol_sha256 is not None:
             request_metadata["mmaudit_output_protocol_sha256"] = (
@@ -3002,6 +3506,7 @@ class OpenRouterClient:
             request_metadata=request_metadata,
             provider_policy=request_provider_policy,
             structured_output_mode=structured_output_mode,
+            request_token_plan=request_token_plan,
         )
         self._ensure_request_size(body)
         request_body_hash = _canonical_sha256(body)
@@ -3014,6 +3519,7 @@ class OpenRouterClient:
         endpoint_cost_bound = self._endpoint_request_cost_bound(
             model=model,
             request_material=request_material,
+            request_token_plan=request_token_plan,
         )
         if self.privacy.store_raw_prompts:
             self._store_debug(request_id, "prompt.json", body)
@@ -3021,8 +3527,11 @@ class OpenRouterClient:
         usage_recorded = False
         accounted_cost_usd = 0.0
         active_reservation: Reservation | None = None
+        last_reservation: Reservation | None = None
         active_network_attempted = False
         active_actual_cost: Decimal | None = None
+        active_actual_prompt_tokens: int | None = None
+        active_actual_completion_tokens: int | None = None
         started_at = datetime.now(UTC)
         started_clock = time.perf_counter()
         initial_usage: dict[str, Any] = {}
@@ -3044,6 +3553,8 @@ class OpenRouterClient:
                 accounted_cost_usd += await self.budget.reconcile(
                     reservation,
                     actual_cost,
+                    actual_prompt_tokens=active_actual_prompt_tokens,
+                    actual_completion_tokens=active_actual_completion_tokens,
                 )
             except Exception:
                 accounted_cost_usd += (
@@ -3065,13 +3576,20 @@ class OpenRouterClient:
             while True:
                 attempts += 1
                 active_reservation = await self.budget.reserve(
-                    f"{request_id}:attempt:{attempts}",
+                    (request_id if attempts == 1 else f"{request_id}:attempt:{attempts}"),
                     role,
                     request_material,
                     endpoint_cost_bound=endpoint_cost_bound,
+                    exact_model_id=model,
+                    planned_prompt_tokens=(request_token_plan.prompt_byte_upper_bound_tokens),
+                    planned_completion_tokens=(request_token_plan.requested_completion_tokens),
+                    request_token_plan_sha256=request_token_plan.plan_sha256,
                 )
+                last_reservation = active_reservation
                 active_network_attempted = False
                 active_actual_cost = None
+                active_actual_prompt_tokens = None
+                active_actual_completion_tokens = None
                 self.logger.info(
                     "Sending bounded structured model request",
                     extra={
@@ -3095,7 +3613,7 @@ class OpenRouterClient:
                         json_body=body,
                         max_bytes=max(
                             1_000_000,
-                            self.execution.max_output_tokens_per_request * 32,
+                            request_token_plan.requested_completion_tokens * 32,
                         ),
                     )
                 except (httpx.TimeoutException, httpx.NetworkError):
@@ -3161,6 +3679,10 @@ class OpenRouterClient:
             initial_cost = _optional_cost_decimal(initial_usage.get("cost"))
             assert initial_cost is not None
             active_actual_cost = initial_cost
+            active_actual_prompt_tokens = _nonnegative_int(initial_usage.get("prompt_tokens"))
+            active_actual_completion_tokens = _nonnegative_int(
+                initial_usage.get("completion_tokens")
+            )
             envelope = _validate_completion_envelope(
                 payload,
                 response.headers,
@@ -3170,6 +3692,16 @@ class OpenRouterClient:
                 model_identity=self._model_identities.get(model),
             )
             initial_usage = envelope.usage
+            active_actual_prompt_tokens = _nonnegative_int(initial_usage.get("prompt_tokens"))
+            active_actual_completion_tokens = _nonnegative_int(
+                initial_usage.get("completion_tokens")
+            )
+            _validate_provider_token_usage(
+                request_token_plan=request_token_plan,
+                prompt_tokens=active_actual_prompt_tokens,
+                completion_tokens=active_actual_completion_tokens,
+                reasoning_tokens=_reasoning_tokens(initial_usage),
+            )
             response_hash = hashlib.sha256(envelope.content.encode()).hexdigest()
             if self.privacy.store_raw_responses:
                 self._store_debug(request_id, "response.json", payload)
@@ -3210,6 +3742,8 @@ class OpenRouterClient:
                 qualification_binding=qualification_binding,
                 provider_policy=request_provider_policy,
                 host_model_fallback_used=fallback_used,
+                request_token_plan=request_token_plan,
+                token_reservation=last_reservation,
             )
             usage_record = UsageRecord(
                 request_id=request_id,
@@ -3282,7 +3816,7 @@ class OpenRouterClient:
                         await release_active()
                 except Exception as budget_error:
                     terminal_error = budget_error
-            if not usage_recorded:
+            if not usage_recorded and last_reservation is not None:
                 raw_content = (
                     _response_content_if_string(raw_payload) if raw_payload is not None else None
                 )
@@ -3358,6 +3892,8 @@ class OpenRouterClient:
                         provider_policy=request_provider_policy,
                         requested_model=model,
                         model_identity=self._model_identities.get(model),
+                        request_token_plan=request_token_plan,
+                        token_reservation=last_reservation,
                     ),
                     prompt_sha256=prompt_hash,
                     user_prompt_sha256=user_prompt_hash,
@@ -3435,26 +3971,29 @@ class OpenRouterClient:
         *,
         model: str,
         request_material: str,
+        request_token_plan: RequestTokenPlan,
     ) -> EndpointRequestCostBound | None:
         if not self.budget.require_endpoint_cost_bound:
             return None
         registered_policy = self._endpoint_pricing.get(model)
         if registered_policy is None:
             raise UnprovenCostBoundError("paid request lacks validated endpoint pricing")
+        if request_token_plan.route_intersection.exact_model_ids != (model,):
+            raise UnprovenCostBoundError("request token plan differs from the priced model")
         request_bytes = max(1, len(request_material.encode("utf-8")))
-        output_tokens = self.execution.max_output_tokens_per_request
-        reasoning_tokens = (
-            self.reasoning.max_tokens
-            if self.reasoning is not None and self.reasoning.max_tokens is not None
-            else output_tokens
+        prompt_pricing_units = max(
+            request_bytes,
+            request_token_plan.prompt_byte_upper_bound_tokens,
         )
+        output_tokens = request_token_plan.requested_completion_tokens
+        reasoning_tokens = request_token_plan.reserved_reasoning_tokens
         ceilings = {
             "completion": output_tokens,
             "image": 0,
-            "input_cache_read": request_bytes,
-            "input_cache_write": request_bytes,
-            "internal_reasoning": max(output_tokens, reasoning_tokens),
-            "prompt": request_bytes,
+            "input_cache_read": prompt_pricing_units,
+            "input_cache_write": prompt_pricing_units,
+            "internal_reasoning": reasoning_tokens,
+            "prompt": prompt_pricing_units,
             "request": 1,
             "web_search": 0,
         }
@@ -3466,13 +4005,20 @@ class OpenRouterClient:
             policy_prices[field] = format(normalized, "f")
         bounds: list[EndpointRequestCostBound] = []
         for registered in registered_policy.endpoints:
-            if request_bytes > registered.max_prompt_tokens:
+            if request_token_plan.estimated_prompt_tokens > registered.max_prompt_tokens:
                 raise UnprovenCostBoundError(
-                    "serialized request byte ceiling exceeds an endpoint prompt-token limit"
+                    "estimated prompt exceeds an endpoint prompt-token limit"
                 )
             if output_tokens > registered.max_completion_tokens:
                 raise UnprovenCostBoundError(
-                    "configured output ceiling exceeds an endpoint completion-token limit"
+                    "planned completion exceeds an endpoint completion-token limit"
+                )
+            if (
+                request_token_plan.estimated_prompt_tokens + output_tokens
+                > registered.context_length
+            ):
+                raise UnprovenCostBoundError(
+                    "planned prompt and completion exceed endpoint context"
                 )
             bounded_pricing = {**dict(registered.pricing), **policy_prices}
             bounds.append(
@@ -3488,6 +4034,32 @@ class OpenRouterClient:
             bounds,
             key=lambda bound: (bound.maximum_cost_usd, bound.provider_endpoint),
         )
+
+    @staticmethod
+    def _token_plan_routing_evidence(
+        *,
+        request_token_plan: RequestTokenPlan,
+        reservation: Reservation | None,
+    ) -> dict[str, Any]:
+        if (
+            reservation is None
+            or reservation.request_token_plan_sha256 != request_token_plan.plan_sha256
+            or reservation.planned_prompt_tokens
+            != request_token_plan.prompt_byte_upper_bound_tokens
+            or reservation.planned_completion_tokens
+            != request_token_plan.requested_completion_tokens
+            or reservation.token_reservation_evidence is None
+        ):
+            raise OpenRouterCostControlError(
+                "request usage lacks matching atomic token reservation evidence"
+            )
+        atomic_evidence = reservation.token_reservation_evidence
+        return {
+            "request_token_plan": request_token_plan.model_dump(mode="json"),
+            "request_token_plan_sha256": request_token_plan.plan_sha256,
+            "atomic_token_reservation": atomic_evidence.model_dump(mode="json"),
+            "atomic_token_reservation_sha256": atomic_evidence.evidence_sha256,
+        }
 
     def _privacy_routing_evidence(
         self,
@@ -3559,6 +4131,8 @@ class OpenRouterClient:
         qualification_binding: OpenRouterQualificationRoutingEvidence | None,
         provider_policy: OpenRouterProviderPolicy,
         host_model_fallback_used: bool,
+        request_token_plan: RequestTokenPlan,
+        token_reservation: Reservation | None,
         repair_request: bool = False,
     ) -> dict[str, Any]:
         usage = envelope.usage
@@ -3776,6 +4350,12 @@ class OpenRouterClient:
                 selected_provider_endpoint=envelope.selected_provider,
             )
         )
+        evidence.update(
+            self._token_plan_routing_evidence(
+                request_token_plan=request_token_plan,
+                reservation=token_reservation,
+            )
+        )
         if qualification_binding is not None:
             evidence.update(qualification_binding.routing_evidence())
         return evidence
@@ -3798,6 +4378,8 @@ class OpenRouterClient:
         provider_policy: OpenRouterProviderPolicy,
         requested_model: str,
         model_identity: _RegisteredModelIdentity | None,
+        request_token_plan: RequestTokenPlan,
+        token_reservation: Reservation | None,
     ) -> dict[str, Any]:
         router_metadata = payload.get("openrouter_metadata") if isinstance(payload, dict) else None
         finish_reason = _optional_finish_reason(payload)
@@ -3868,6 +4450,12 @@ class OpenRouterClient:
                     if len(provider_policy.configured_endpoints) == 1
                     else None
                 ),
+            )
+        )
+        evidence.update(
+            self._token_plan_routing_evidence(
+                request_token_plan=request_token_plan,
+                reservation=token_reservation,
             )
         )
         identity_diagnostic = _identity_failure_diagnostic(

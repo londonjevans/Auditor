@@ -26,6 +26,14 @@ from mmaudit.models.schemas import (
     MaximumAssuranceStatus,
     StrictModel,
 )
+from mmaudit.orchestration.context_manifest import (
+    ContextManifest,
+    ContextManifestReportBinding,
+    ContextRequestEvidence,
+    context_manifest_report_binding,
+    load_context_manifest,
+    validate_context_manifest_against_usage,
+)
 from mmaudit.reporting.json_report import write_json
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_name, is_sensitive_workspace_path
@@ -328,6 +336,8 @@ def build_run_evidence_manifest(
     solidity_coverage = _read_json_artifact(root, "solidity-coverage.json")
     model_coverage = _read_json_artifact(root, "model-review-coverage.json")
     scope_assessment = _read_json_artifact(root, "scope-assessment.json")
+    context_manifest = _validated_context_manifest(root, report)
+    _validate_context_manifest_configuration(context_manifest, effective_config)
     qualification_path = root / "model-qualification-runtime.json"
     if qualification_path.is_symlink() or qualification_path.is_junction():
         raise ValueError("run model qualification artifact may not be a link")
@@ -363,6 +373,7 @@ def build_run_evidence_manifest(
             solidity_coverage,
             model_coverage,
             scope_assessment,
+            context_manifest,
         ),
     )
     return seal_run_evidence_manifest(
@@ -471,6 +482,67 @@ def _validate_report_artifact_consistency(root: Path, report: AuditReport) -> No
     metadata = _read_json_artifact(root, "metadata.json")
     if metadata.get("privacy") != report.privacy:
         raise ValueError("metadata.json privacy differs from the final report")
+    embedded_metadata = metadata.get("metadata")
+    if not isinstance(embedded_metadata, dict):
+        raise ValueError("metadata.json lacks typed report metadata")
+    if embedded_metadata.get("context_manifest") != report.metadata.get("context_manifest"):
+        raise ValueError("metadata.json context manifest differs from the final report")
+
+
+def _validated_context_manifest(
+    root: Path,
+    report: AuditReport,
+) -> ContextManifest | None:
+    """Require typed context evidence whenever final usage or a report binding exists."""
+
+    path = root / "context-manifest.json"
+    report_binding_payload = report.metadata.get("context_manifest")
+    required = bool(report.usage) or report_binding_payload is not None
+    if not path.exists():
+        if required:
+            raise ValueError("final provider usage lacks context-manifest.json")
+        return None
+    if report_binding_payload is None:
+        raise ValueError("context-manifest.json lacks a final-report binding")
+    manifest = load_context_manifest(path)
+    if manifest.run_id != report.run_id:
+        raise ValueError("context manifest run ID differs from the final report")
+    validate_context_manifest_against_usage(
+        manifest,
+        run_id=report.run_id,
+        usage_records=report.usage,
+    )
+    try:
+        reported_binding = ContextManifestReportBinding.model_validate(report_binding_payload)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("final report context-manifest binding is invalid") from exc
+    expected_binding = context_manifest_report_binding(manifest)
+    if reported_binding != expected_binding:
+        raise ValueError("final report context-manifest binding differs from its artifact")
+    return manifest
+
+
+def _validate_context_manifest_configuration(
+    manifest: ContextManifest | None,
+    config: AuditConfig,
+) -> None:
+    """Bind every atomic request reservation to the effective global ceilings."""
+
+    if manifest is None:
+        return
+    expected_input = config.token_budgets.global_input_token_budget
+    expected_output = config.token_budgets.global_output_token_budget
+    for request in manifest.requests:
+        if not isinstance(request, ContextRequestEvidence):
+            continue
+        reservation = request.atomic_token_reservation
+        if (
+            reservation.global_input_token_limit != expected_input
+            or reservation.global_output_token_limit != expected_output
+        ):
+            raise ValueError(
+                "context manifest token reservation differs from effective configuration"
+            )
 
 
 def _run_configuration_binding(
@@ -623,6 +695,12 @@ def validate_manifest_artifacts(
     if "final-findings.json" in expected:
         report = AuditReport.model_validate(_read_json_artifact(root, "final-findings.json"))
         _validate_report_artifact_consistency(root, report)
+        context_manifest = _validated_context_manifest(root, report)
+        if manifest.run_configuration is not None:
+            _validate_context_manifest_configuration(
+                context_manifest,
+                manifest.run_configuration.reconstruct_effective_config(),
+            )
         expected_classification = (
             manifest.run_configuration.run_options.privacy_source_classification
             if manifest.run_configuration is not None
@@ -1159,8 +1237,9 @@ def _coverage_bindings(
     solidity_coverage: dict[str, Any],
     model_coverage: dict[str, Any],
     scope_assessment: dict[str, Any],
+    context_manifest: ContextManifest | None,
 ) -> list[ManifestHashBinding]:
-    return [
+    bindings = [
         _binding(
             "model-review/artifact",
             model_coverage,
@@ -1182,6 +1261,29 @@ def _coverage_bindings(
             {"artifact": "solidity-coverage.json"},
         ),
     ]
+    if context_manifest is None:
+        bindings.append(
+            _binding(
+                "context-manifest/absent",
+                {"present": False},
+                {"state": "legacy_without_model_usage"},
+            )
+        )
+    else:
+        bindings.append(
+            ManifestHashBinding(
+                identifier="context-manifest/artifact",
+                sha256=context_manifest.manifest_sha256,
+                details={
+                    "artifact": "context-manifest.json",
+                    "requests": str(context_manifest.totals.request_count),
+                    "provider_reported_requests": str(
+                        context_manifest.totals.provider_reported_request_count
+                    ),
+                },
+            )
+        )
+    return sorted(bindings, key=lambda item: item.identifier)
 
 
 def _binding(

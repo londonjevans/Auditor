@@ -82,14 +82,29 @@ class Utf8TokenEstimate(FrozenTokenEvidence):
         if not isinstance(text, str):
             raise TypeError("token estimation requires text")
         encoded = text.encode("utf-8")
-        byte_count = len(encoded)
-        if byte_count > _MAX_TOKENS:
+        return cls.from_measurement(
+            content_sha256=hashlib.sha256(encoded).hexdigest(),
+            utf8_bytes=len(encoded),
+        )
+
+    @classmethod
+    def from_measurement(cls, *, content_sha256: str, utf8_bytes: int) -> Self:
+        """Build from a locally measured hash/count pair without retaining content."""
+
+        if not isinstance(content_sha256, str) or _SHA256_RE.fullmatch(content_sha256) is None:
+            raise TokenPlanningError("token measurement content hash is invalid")
+        if (
+            isinstance(utf8_bytes, bool)
+            or not isinstance(utf8_bytes, int)
+            or not 0 <= utf8_bytes <= _MAX_TOKENS
+        ):
             raise TokenPlanningError("UTF-8 input exceeds the supported evidence range")
+        byte_count = utf8_bytes
         estimated_tokens = (byte_count + 2) // 3
         payload: dict[str, Any] = {
             "schema_version": "1.0",
             "estimator": UTF8_TOKEN_ESTIMATOR,
-            "content_sha256": hashlib.sha256(encoded).hexdigest(),
+            "content_sha256": content_sha256,
             "utf8_bytes": byte_count,
             "estimated_tokens": estimated_tokens,
             "byte_upper_bound_tokens": byte_count,
@@ -97,7 +112,7 @@ class Utf8TokenEstimate(FrozenTokenEvidence):
         return cls(
             schema_version="1.0",
             estimator=UTF8_TOKEN_ESTIMATOR,
-            content_sha256=payload["content_sha256"],
+            content_sha256=content_sha256,
             utf8_bytes=byte_count,
             estimated_tokens=estimated_tokens,
             byte_upper_bound_tokens=byte_count,
@@ -124,7 +139,36 @@ class PromptTokenAllocation(FrozenTokenEvidence):
 
     @classmethod
     def from_text(cls, category: PromptAllocationCategory, text: str) -> Self:
-        estimate = Utf8TokenEstimate.from_text(text)
+        return cls.from_estimate(category, Utf8TokenEstimate.from_text(text))
+
+    @classmethod
+    def from_measurement(
+        cls,
+        category: PromptAllocationCategory,
+        *,
+        content_sha256: str,
+        utf8_bytes: int,
+    ) -> Self:
+        """Build from a locally measured category projection."""
+
+        return cls.from_estimate(
+            category,
+            Utf8TokenEstimate.from_measurement(
+                content_sha256=content_sha256,
+                utf8_bytes=utf8_bytes,
+            ),
+        )
+
+    @classmethod
+    def from_estimate(
+        cls,
+        category: PromptAllocationCategory,
+        estimate: Utf8TokenEstimate,
+    ) -> Self:
+        """Bind one validated local estimate to its prompt category."""
+
+        if not isinstance(estimate, Utf8TokenEstimate):
+            raise TypeError("prompt allocation requires validated token evidence")
         payload: dict[str, Any] = {
             "schema_version": "1.0",
             "category": category,
@@ -239,6 +283,10 @@ class EndpointRouteIntersection(FrozenTokenEvidence):
         exact_model_ids = tuple(
             sorted({route.exact_model_id for route in ordered}, key=str.casefold)
         )
+        if len(exact_model_ids) != 1:
+            raise TokenPlanningError(
+                "one request route intersection must bind exactly one model ID"
+            )
         provider_endpoints = tuple(
             sorted({route.provider_endpoint for route in ordered}, key=str.casefold)
         )
@@ -275,6 +323,8 @@ class EndpointRouteIntersection(FrozenTokenEvidence):
         expected_models = tuple(
             sorted({route.exact_model_id for route in self.routes}, key=str.casefold)
         )
+        if len(expected_models) != 1:
+            raise ValueError("one request route intersection must bind exactly one model ID")
         expected_endpoints = tuple(
             sorted({route.provider_endpoint for route in self.routes}, key=str.casefold)
         )
@@ -298,9 +348,12 @@ class SourceTokenBudgetEvidence(FrozenTokenEvidence):
     schema_version: Literal["1.0"] = "1.0"
     usable_prompt_tokens: int = Field(ge=0, le=_MAX_TOKENS)
     non_source_prompt_tokens: int = Field(ge=0, le=_MAX_TOKENS)
+    reserved_non_source_prompt_tokens: int = Field(ge=0, le=_MAX_TOKENS)
+    configured_maximum_source_tokens_per_request: int = Field(gt=0, le=_MAX_TOKENS)
     maximum_source_tokens_per_request: int = Field(ge=0, le=_MAX_TOKENS)
     planned_source_tokens: int = Field(ge=0, le=_MAX_TOKENS)
     remaining_source_tokens: int = Field(ge=0, le=_MAX_TOKENS)
+    unallocated_prompt_tokens: int = Field(ge=0, le=_MAX_TOKENS)
     evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
 
     @classmethod
@@ -309,39 +362,74 @@ class SourceTokenBudgetEvidence(FrozenTokenEvidence):
         *,
         usable_prompt_tokens: int,
         non_source_prompt_tokens: int,
+        reserved_non_source_prompt_tokens: int,
+        configured_maximum_source_tokens_per_request: int,
         planned_source_tokens: int,
     ) -> Self:
-        maximum_source = usable_prompt_tokens - non_source_prompt_tokens
-        if maximum_source < 0:
-            raise TokenPlanningError("non-source allocations exceed usable prompt capacity")
+        if reserved_non_source_prompt_tokens < non_source_prompt_tokens:
+            raise TokenPlanningError(
+                "reserved non-source capacity is below actual non-source allocations"
+            )
+        available_source = usable_prompt_tokens - reserved_non_source_prompt_tokens
+        if available_source < 0:
+            raise TokenPlanningError("non-source reserves exceed usable prompt capacity")
+        if (
+            isinstance(configured_maximum_source_tokens_per_request, bool)
+            or configured_maximum_source_tokens_per_request <= 0
+        ):
+            raise TokenPlanningError("configured maximum source tokens must be positive")
+        maximum_source = min(
+            available_source,
+            configured_maximum_source_tokens_per_request,
+        )
         if planned_source_tokens > maximum_source:
             raise TokenPlanningError("source allocation exceeds its per-request maximum")
         remaining_source = maximum_source - planned_source_tokens
+        unallocated_prompt = available_source - maximum_source
         payload: dict[str, Any] = {
             "schema_version": "1.0",
             "usable_prompt_tokens": usable_prompt_tokens,
             "non_source_prompt_tokens": non_source_prompt_tokens,
+            "reserved_non_source_prompt_tokens": reserved_non_source_prompt_tokens,
+            "configured_maximum_source_tokens_per_request": (
+                configured_maximum_source_tokens_per_request
+            ),
             "maximum_source_tokens_per_request": maximum_source,
             "planned_source_tokens": planned_source_tokens,
             "remaining_source_tokens": remaining_source,
+            "unallocated_prompt_tokens": unallocated_prompt,
         }
         return cls(
             schema_version="1.0",
             usable_prompt_tokens=usable_prompt_tokens,
             non_source_prompt_tokens=non_source_prompt_tokens,
+            reserved_non_source_prompt_tokens=reserved_non_source_prompt_tokens,
+            configured_maximum_source_tokens_per_request=(
+                configured_maximum_source_tokens_per_request
+            ),
             maximum_source_tokens_per_request=maximum_source,
             planned_source_tokens=planned_source_tokens,
             remaining_source_tokens=remaining_source,
+            unallocated_prompt_tokens=unallocated_prompt,
             evidence_sha256=_canonical_sha256(payload),
         )
 
     @model_validator(mode="after")
     def source_budget_conserves_tokens(self) -> SourceTokenBudgetEvidence:
         if (
-            self.non_source_prompt_tokens + self.maximum_source_tokens_per_request
+            self.reserved_non_source_prompt_tokens
+            + self.maximum_source_tokens_per_request
+            + self.unallocated_prompt_tokens
             != self.usable_prompt_tokens
         ):
             raise ValueError("maximum source budget does not conserve usable prompt tokens")
+        if self.reserved_non_source_prompt_tokens < self.non_source_prompt_tokens:
+            raise ValueError("non-source reserve is below actual non-source allocations")
+        if (
+            self.maximum_source_tokens_per_request
+            > self.configured_maximum_source_tokens_per_request
+        ):
+            raise ValueError("effective source budget exceeds its configured maximum")
         if (
             self.planned_source_tokens + self.remaining_source_tokens
             != self.maximum_source_tokens_per_request
@@ -466,6 +554,7 @@ class RequestTokenPlan(FrozenTokenEvidence):
     reserved_system_tokens: int = Field(ge=0, le=_MAX_TOKENS)
     reserved_schema_tokens: int = Field(ge=0, le=_MAX_TOKENS)
     reserved_protocol_tokens: int = Field(ge=0, le=_MAX_TOKENS)
+    context_omission_sha256s: tuple[str, ...] = Field(default=(), max_length=4_096)
     source_budget: SourceTokenBudgetEvidence
     global_budget: GlobalTokenBudgetEvidence
     plan_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -509,35 +598,47 @@ class RequestTokenPlan(FrozenTokenEvidence):
         if self.estimated_prompt_tokens + self.requested_completion_tokens > limits.context_tokens:
             raise ValueError("planned prompt and completion exceed endpoint context")
         allocation_map = {allocation.category: allocation for allocation in self.allocations}
-        if (
-            self.reserved_system_tokens
-            != allocation_map[PromptAllocationCategory.SYSTEM].estimate.estimated_tokens
-        ):
-            raise ValueError("system token reserve differs from its allocation")
-        if (
-            self.reserved_schema_tokens
-            != allocation_map[PromptAllocationCategory.SCHEMA].estimate.estimated_tokens
-        ):
-            raise ValueError("schema token reserve differs from its allocation")
-        if (
-            self.reserved_protocol_tokens
-            != allocation_map[PromptAllocationCategory.PROTOCOL].estimate.estimated_tokens
-        ):
-            raise ValueError("protocol token reserve differs from its allocation")
+        system_tokens = allocation_map[PromptAllocationCategory.SYSTEM].estimate.estimated_tokens
+        schema_tokens = allocation_map[PromptAllocationCategory.SCHEMA].estimate.estimated_tokens
+        protocol_tokens = allocation_map[
+            PromptAllocationCategory.PROTOCOL
+        ].estimate.estimated_tokens
+        if self.reserved_system_tokens < system_tokens:
+            raise ValueError("system token reserve is below its allocation")
+        if self.reserved_schema_tokens < schema_tokens:
+            raise ValueError("schema token reserve is below its allocation")
+        if self.reserved_protocol_tokens < protocol_tokens:
+            raise ValueError("protocol token reserve is below its allocation")
         non_source_tokens = sum(
             allocation.estimate.estimated_tokens
             for allocation in self.allocations
             if allocation.category is not PromptAllocationCategory.SOURCE
         )
+        reserved_non_source_tokens = (
+            non_source_tokens
+            - system_tokens
+            - schema_tokens
+            - protocol_tokens
+            + self.reserved_system_tokens
+            + self.reserved_schema_tokens
+            + self.reserved_protocol_tokens
+        )
         source_tokens = allocation_map[PromptAllocationCategory.SOURCE].estimate.estimated_tokens
         if (
             self.source_budget.usable_prompt_tokens != self.usable_prompt_tokens
             or self.source_budget.non_source_prompt_tokens != non_source_tokens
+            or self.source_budget.reserved_non_source_prompt_tokens != reserved_non_source_tokens
             or self.source_budget.planned_source_tokens != source_tokens
         ):
             raise ValueError("source token budget differs from prompt allocations")
+        if self.context_omission_sha256s != tuple(sorted(self.context_omission_sha256s)):
+            raise ValueError("context omission hashes must be canonically sorted")
+        if len(self.context_omission_sha256s) != len(set(self.context_omission_sha256s)) or any(
+            _SHA256_RE.fullmatch(item) is None for item in self.context_omission_sha256s
+        ):
+            raise ValueError("context omission hashes must be unique SHA-256 values")
         if (
-            self.global_budget.request_input_tokens != self.estimated_prompt_tokens
+            self.global_budget.request_input_tokens != self.prompt_byte_upper_bound_tokens
             or self.global_budget.request_output_tokens != self.requested_completion_tokens
         ):
             raise ValueError("global token budget differs from the request plan")
@@ -558,6 +659,11 @@ def build_request_token_plan(
     input_tokens_reserved_before: int = 0,
     output_tokens_reserved_before: int = 0,
     context_utilization: Decimal = DEFAULT_CONTEXT_UTILIZATION,
+    configured_reserved_system_tokens: int = 0,
+    configured_reserved_schema_tokens: int = 0,
+    configured_reserved_protocol_tokens: int = 0,
+    maximum_source_tokens_per_request: int = 200_000,
+    context_omission_sha256s: Sequence[str] = (),
 ) -> RequestTokenPlan:
     """Build one fail-closed request plan without peer-role allocation coupling."""
 
@@ -605,9 +711,38 @@ def build_request_token_plan(
     allocation_map = {allocation.category: allocation for allocation in canonical_allocations}
     source_tokens = allocation_map[PromptAllocationCategory.SOURCE].estimate.estimated_tokens
     non_source_tokens = estimated_prompt_tokens - source_tokens
+    system_tokens = allocation_map[PromptAllocationCategory.SYSTEM].estimate.estimated_tokens
+    schema_tokens = allocation_map[PromptAllocationCategory.SCHEMA].estimate.estimated_tokens
+    protocol_tokens = allocation_map[PromptAllocationCategory.PROTOCOL].estimate.estimated_tokens
+    system_reserve = _effective_reserve(
+        configured_reserved_system_tokens,
+        system_tokens,
+        field="system",
+    )
+    schema_reserve = _effective_reserve(
+        configured_reserved_schema_tokens,
+        schema_tokens,
+        field="schema",
+    )
+    protocol_reserve = _effective_reserve(
+        configured_reserved_protocol_tokens,
+        protocol_tokens,
+        field="protocol",
+    )
+    reserved_non_source_tokens = (
+        non_source_tokens
+        - system_tokens
+        - schema_tokens
+        - protocol_tokens
+        + system_reserve
+        + schema_reserve
+        + protocol_reserve
+    )
     source_budget = SourceTokenBudgetEvidence.build(
         usable_prompt_tokens=usable_prompt_tokens,
         non_source_prompt_tokens=non_source_tokens,
+        reserved_non_source_prompt_tokens=reserved_non_source_tokens,
+        configured_maximum_source_tokens_per_request=maximum_source_tokens_per_request,
         planned_source_tokens=source_tokens,
     )
     global_budget = GlobalTokenBudgetEvidence.build(
@@ -615,12 +750,10 @@ def build_request_token_plan(
         global_output_token_budget=global_output_token_budget,
         input_tokens_reserved_before=input_tokens_reserved_before,
         output_tokens_reserved_before=output_tokens_reserved_before,
-        request_input_tokens=estimated_prompt_tokens,
+        request_input_tokens=byte_upper_bound,
         request_output_tokens=requested_completion_tokens,
     )
-    system_tokens = allocation_map[PromptAllocationCategory.SYSTEM].estimate.estimated_tokens
-    schema_tokens = allocation_map[PromptAllocationCategory.SCHEMA].estimate.estimated_tokens
-    protocol_tokens = allocation_map[PromptAllocationCategory.PROTOCOL].estimate.estimated_tokens
+    omission_hashes = _canonical_omission_hashes(context_omission_sha256s)
     payload: dict[str, Any] = {
         "schema_version": "1.0",
         "request_id": request_id,
@@ -636,9 +769,10 @@ def build_request_token_plan(
         "usable_prompt_tokens": usable_prompt_tokens,
         "estimated_prompt_tokens": estimated_prompt_tokens,
         "prompt_byte_upper_bound_tokens": byte_upper_bound,
-        "reserved_system_tokens": system_tokens,
-        "reserved_schema_tokens": schema_tokens,
-        "reserved_protocol_tokens": protocol_tokens,
+        "reserved_system_tokens": system_reserve,
+        "reserved_schema_tokens": schema_reserve,
+        "reserved_protocol_tokens": protocol_reserve,
+        "context_omission_sha256s": omission_hashes,
         "source_budget": source_budget,
         "global_budget": global_budget,
     }
@@ -657,9 +791,10 @@ def build_request_token_plan(
         usable_prompt_tokens=usable_prompt_tokens,
         estimated_prompt_tokens=estimated_prompt_tokens,
         prompt_byte_upper_bound_tokens=byte_upper_bound,
-        reserved_system_tokens=system_tokens,
-        reserved_schema_tokens=schema_tokens,
-        reserved_protocol_tokens=protocol_tokens,
+        reserved_system_tokens=system_reserve,
+        reserved_schema_tokens=schema_reserve,
+        reserved_protocol_tokens=protocol_reserve,
+        context_omission_sha256s=omission_hashes,
         source_budget=source_budget,
         global_budget=global_budget,
         plan_sha256=_canonical_sha256(payload),
@@ -682,6 +817,21 @@ def _canonical_allocations(
 
 def _utilized_tokens(capacity: int, utilization: Decimal) -> int:
     return int((Decimal(capacity) * utilization).to_integral_value(rounding=ROUND_FLOOR))
+
+
+def _effective_reserve(configured: int, actual: int, *, field: str) -> int:
+    if isinstance(configured, bool) or not isinstance(configured, int) or configured < 0:
+        raise TokenPlanningError(f"configured {field} token reserve is invalid")
+    return max(configured, actual)
+
+
+def _canonical_omission_hashes(values: Sequence[str]) -> tuple[str, ...]:
+    if any(not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None for value in values):
+        raise TokenPlanningError("context omission hashes must be SHA-256 values")
+    canonical = tuple(sorted(values))
+    if len(canonical) != len(set(canonical)):
+        raise TokenPlanningError("context omission hashes must be unique")
+    return canonical
 
 
 def _route_sort_key(route: EndpointRouteTokenCapacity) -> tuple[str, str, str]:

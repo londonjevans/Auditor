@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
-from dataclasses import replace
+from dataclasses import dataclass, replace
+import hashlib
 from typing import Any
 
 from mmaudit.config import PrivacyConfig, RepositoryConfig
@@ -38,6 +39,14 @@ from mmaudit.solidity.retrieval import (
 
 class ContextBudgetError(RuntimeError):
     """Raised when even metadata cannot fit an explicit context allocation."""
+
+
+@dataclass(frozen=True, slots=True)
+class ContextCategoryMeasurement:
+    """Hash/count projection for one provider-visible context category."""
+
+    content_sha256: str
+    utf8_bytes: int
 
 
 _ROLE_CATEGORY_WEIGHTS: dict[str, dict[str, int]] = {
@@ -275,6 +284,7 @@ class ContextBuilder:
         formal_runs: list[FormalToolRun] | None = None,
         solidity_coverage: SolidityCoverage | None = None,
         planned_packages: int = 6,
+        maximum_source_tokens_per_request: int = 200_000,
     ) -> None:
         self.discovery = discovery
         self.repository_map = repository_map
@@ -311,6 +321,12 @@ class ContextBuilder:
         self.formal_runs = formal_runs or []
         self.solidity_coverage = solidity_coverage
         self.planned_packages = max(1, planned_packages)
+        if (
+            isinstance(maximum_source_tokens_per_request, bool)
+            or maximum_source_tokens_per_request <= 0
+        ):
+            raise ContextBudgetError("maximum source token budget must be positive")
+        self.maximum_source_tokens_per_request = maximum_source_tokens_per_request
 
     def _redact_every_file(self, files: Iterable[DiscoveredFile]) -> tuple[DiscoveredFile, ...]:
         safe: list[DiscoveredFile] = []
@@ -419,7 +435,10 @@ class ContextBuilder:
     def remaining_bytes(self) -> int:
         """Return the per-package serialization ceiling kept for compatibility."""
 
-        return self.repository_config.max_total_context_bytes
+        return min(
+            self.repository_config.max_total_context_bytes,
+            self.maximum_source_tokens_per_request * 3,
+        )
 
     def build(
         self,
@@ -435,10 +454,15 @@ class ContextBuilder:
 
         if request_model_surface_reviews and requested_model_surfaces is not None:
             raise ContextBudgetError("model surface requests cannot be both derived and supplied")
-        default_share = self.repository_config.max_total_context_bytes
+        token_derived_byte_ceiling = self.maximum_source_tokens_per_request * 3
+        default_share = min(
+            self.repository_config.max_total_context_bytes,
+            token_derived_byte_ceiling,
+        )
         budget = min(
             requested_budget or default_share,
             self.repository_config.max_total_context_bytes,
+            token_derived_byte_ceiling,
         )
         if budget <= 0:
             raise ContextBudgetError("repository context package budget is invalid")
@@ -455,7 +479,10 @@ class ContextBuilder:
             for request in selected_model_surfaces
             for location in request.allowed_locations
         )
-        source_reserve = min(64_000, max(8_192, budget // 4))
+        source_reserve = min(
+            max(0, budget - 1),
+            max(8_192, (budget * 65) // 100),
+        )
         metadata_ceiling = max(1, budget - source_reserve)
         review_request_mode = bool(selected_model_surfaces) or request_model_surface_reviews
         if review_request_mode:
@@ -816,4 +843,101 @@ def context_category_byte_counts(package: ContextPackage) -> dict[str, int]:
         "scanner": scanner_bytes,
         "source": source_bytes,
         "workflow": 0,
+    }
+
+
+def context_category_measurements(
+    package: ContextPackage,
+) -> dict[str, ContextCategoryMeasurement]:
+    """Bind category byte counts to actual local semantic context projections."""
+
+    counts = context_category_byte_counts(package)
+    rendered_sha256 = hashlib.sha256(render_context(package).encode("utf-8")).hexdigest()
+    scanner_projection = json.dumps(
+        [finding.model_dump(mode="json") for finding in package.scanner_findings],
+        sort_keys=True,
+    )
+    framework_projection = json.dumps(
+        {
+            "projects": [project.model_dump(mode="json") for project in package.solidity_projects],
+            "compilations": [
+                result.model_dump(mode="json") for result in package.solidity_compilations
+            ],
+            "symbol_index": (
+                package.solidity_index.model_dump(mode="json")
+                if package.solidity_index
+                else None
+            ),
+            "coverage": (
+                package.solidity_coverage.model_dump(mode="json")
+                if package.solidity_coverage
+                else None
+            ),
+        },
+        sort_keys=True,
+    )
+    graph_projection = json.dumps(
+        package.solidity_graphs.model_dump(mode="json") if package.solidity_graphs else None,
+        sort_keys=True,
+    )
+    invariant_projection = json.dumps(
+        {
+            "invariants": (
+                package.solidity_invariants.model_dump(mode="json")
+                if package.solidity_invariants
+                else None
+            ),
+            "invariant_executions": [
+                result.model_dump(mode="json") for result in package.invariant_executions
+            ],
+            "economic_simulations": [
+                plan.model_dump(mode="json") for plan in package.economic_simulations
+            ],
+            "formal_runs": [run.model_dump(mode="json") for run in package.formal_runs],
+        },
+        sort_keys=True,
+    )
+    source_projection = json.dumps(
+        [
+            {
+                "path": excerpt.path,
+                "start_line": excerpt.start_line,
+                "end_line": excerpt.end_line,
+                "content_sha256": excerpt.content_hash,
+                "utf8_bytes": len(excerpt.content.encode("utf-8")),
+            }
+            for excerpt in package.excerpts
+        ],
+        sort_keys=True,
+    )
+    projections = {
+        "framework": framework_projection,
+        "graph": graph_projection,
+        "invariant": invariant_projection,
+        "prior_audit": "",
+        "scanner": scanner_projection,
+        "source": source_projection,
+        "workflow": "",
+    }
+    projection_hashes = {
+        category: hashlib.sha256(value.encode("utf-8")).hexdigest()
+        for category, value in projections.items()
+    }
+    metadata_projection = json.dumps(
+        {
+            "rendered_context_sha256": rendered_sha256,
+            "category_byte_counts": counts,
+            "semantic_projection_sha256s": projection_hashes,
+        },
+        sort_keys=True,
+    )
+    projection_hashes["metadata"] = hashlib.sha256(
+        metadata_projection.encode("utf-8")
+    ).hexdigest()
+    return {
+        category: ContextCategoryMeasurement(
+            content_sha256=projection_hashes[category],
+            utf8_bytes=utf8_bytes,
+        )
+        for category, utf8_bytes in counts.items()
     }

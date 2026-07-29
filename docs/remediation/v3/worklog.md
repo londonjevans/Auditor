@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Endpoint-aware token budgets and context manifests
 CURRENT_TICKET: V3-TOKENS-001
 LAST_COMPLETED_TICKET: V3-OUTPUT-001
-NEXT_ACTION: On operator resume, integrate the typed token plan with OpenRouter request construction and usage evidence, then add the fail-closed context manifest.
-LAST_COMMAND: .venv/bin/ruff check src/mmaudit/agents/base.py src/mmaudit/agents/invariant_review.py src/mmaudit/agents/judge.py src/mmaudit/agents/reproduction.py src/mmaudit/agents/specialists.py src/mmaudit/agents/verifier.py src/mmaudit/config.py src/mmaudit/models/openrouter.py src/mmaudit/models/token_planning.py src/mmaudit/orchestration/budgets.py src/mmaudit/orchestration/context.py tests/unit/test_budgets.py tests/unit/test_context.py tests/unit/test_openrouter_qualification_config.py tests/unit/test_token_planning.py
-LAST_RESULT: PASS; affected Ruff checks passed. The immediately preceding focused pytest command passed 48 tests in 0.54s.
+NEXT_ACTION: Resume V3-TOKENS-001 by correcting the local fake-provider budget configuration, then add successful-provider context-manifest assertions and the remaining OpenRouter token-plan regressions before broad validation.
+LAST_COMMAND: git status --short --branch; git diff --check; git diff --stat
+LAST_RESULT: PASS; filesystem-stable in-progress checkpoint with no command or worker in flight. Focused suites passed, while one fake-provider pipeline probe remains fail-closed pending test-harness budget wiring.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -245,6 +245,37 @@ LAST_CHECKPOINT_COMMIT: 2d991ce57229794b6b762b3c989284305cc41f67
   filesystem boundary. All delegated workers are complete, the partial
   implementation is preserved, and the next action is the explicit integration
   step above. No ticket-completion or production-readiness claim is made.
+- **Second resume checkpoint:** Automatic goal continuation resumed from clean,
+  synchronized commit `caaaf634a03790fad8ab4d53420c88dae339c077`.
+  The complete `1417`-line objective was reread and its SHA-256 reverified as
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
+  Repository instructions, legacy and active queues, worklogs, Git status, and
+  upstream state were rechecked. Work remains local and deterministic; no paid
+  provider call, network access, or operator-secret access is authorized for
+  this integration slice.
+- **Integrated local checkpoint:** The endpoint-aware plan now binds exact
+  endpoint-route capacity and snapshot provenance, conservative prompt-byte and
+  output reservations, configured system/schema/protocol/source limits,
+  OpenRouter request construction, planned-versus-actual token reconciliation,
+  and lock-atomic reservation evidence. The new hash-only context manifest
+  semantically joins plans, reservations, usage, omissions, report bindings,
+  and generated-schema validation without persisting raw prompts or source.
+- **Focused validation:** The OpenRouter and usage suite passed `228` tests; the
+  planner, budget, context, and qualification-config suite passed `58`; and the
+  context-manifest, run-manifest, schema, and scanner-only pipeline slice passed
+  `31`. Affected Ruff checks passed, focused mypy passed before final
+  compatibility adjustments, schema write/check passed, and `git diff --check`
+  passed.
+- **Known incomplete integration:** The successful fake-provider pipeline probe
+  remains fail-closed because its test helper constructs the budget manager and
+  client without the new configured global token limits. Runtime preflight
+  rejection recording and complete retry-attempt reservation inventory also
+  remain to be integrated; no evidence is fabricated and no maximum-assurance
+  credit is claimed.
+- **Pause checkpoint:** The operator requested a pause. Both delegated workers
+  stopped at a filesystem-stable boundary with no command or edit in flight.
+  `V3-TOKENS-001` remains `IN_PROGRESS`; no provider call, network access,
+  operator-secret access, new spend, or ticket-completion claim occurred.
 
 ## 2026-07-28 — V3-SMOKE-001
 

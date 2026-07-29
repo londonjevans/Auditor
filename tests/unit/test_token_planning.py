@@ -71,6 +71,11 @@ def _plan(
     context_utilization: Decimal = Decimal("0.75"),
     global_input_token_budget: int = 1_000_000,
     global_output_token_budget: int = 200_000,
+    configured_reserved_system_tokens: int = 0,
+    configured_reserved_schema_tokens: int = 0,
+    configured_reserved_protocol_tokens: int = 0,
+    maximum_source_tokens_per_request: int = 200_000,
+    context_omission_sha256s: tuple[str, ...] = (),
 ) -> RequestTokenPlan:
     return build_request_token_plan(
         request_id=request_id,
@@ -82,6 +87,11 @@ def _plan(
         global_input_token_budget=global_input_token_budget,
         global_output_token_budget=global_output_token_budget,
         context_utilization=context_utilization,
+        configured_reserved_system_tokens=configured_reserved_system_tokens,
+        configured_reserved_schema_tokens=configured_reserved_schema_tokens,
+        configured_reserved_protocol_tokens=configured_reserved_protocol_tokens,
+        maximum_source_tokens_per_request=maximum_source_tokens_per_request,
+        context_omission_sha256s=context_omission_sha256s,
     )
 
 
@@ -96,6 +106,13 @@ def test_utf8_estimator_records_estimate_upper_bound_and_no_raw_text() -> None:
     assert estimate.byte_upper_bound_tokens == expected_bytes
     assert raw_text not in estimate.model_dump_json()
     assert Utf8TokenEstimate.from_text("").estimated_tokens == 0
+    assert (
+        Utf8TokenEstimate.from_measurement(
+            content_sha256=estimate.content_sha256,
+            utf8_bytes=estimate.utf8_bytes,
+        )
+        == estimate
+    )
 
 
 def test_high_capacity_route_permits_near_200k_input_and_32k_output() -> None:
@@ -110,13 +127,14 @@ def test_high_capacity_route_permits_near_200k_input_and_32k_output() -> None:
     assert plan.source_budget.planned_source_tokens == 190_000
     assert plan.estimated_prompt_tokens == 191_000
     assert plan.prompt_byte_upper_bound_tokens == 573_000
+    assert plan.global_budget.request_input_tokens == 573_000
     assert plan.estimated_prompt_tokens + plan.requested_completion_tokens <= 300_000
 
 
 def test_mixed_routes_use_lowest_capacity_without_peer_role_division() -> None:
     high = _route()
     low = _route(
-        model="beta/compact-secure",
+        model="alpha/frontier-secure",
         endpoint="compact-provider",
         snapshot_character="b",
         context_tokens=32_768,
@@ -143,7 +161,7 @@ def test_mixed_routes_use_lowest_capacity_without_peer_role_division() -> None:
 
 def test_required_output_fails_instead_of_clamping_to_mixed_route() -> None:
     low = _route(
-        model="beta/compact-secure",
+        model="alpha/frontier-secure",
         endpoint="compact-provider",
         context_tokens=32_768,
         prompt_tokens=24_576,
@@ -188,6 +206,58 @@ def test_prompt_plus_completion_cannot_exceed_endpoint_context() -> None:
 def test_context_utilization_outside_65_to_75_percent_fails() -> None:
     with pytest.raises(TokenPlanningError, match=r"between 0\.65 and 0\.75"):
         _plan(context_utilization=Decimal("0.76"))
+
+
+def test_configured_non_source_reserves_and_source_cap_are_enforced() -> None:
+    plan = _plan(
+        allocations=_allocations(source_tokens=40_000),
+        configured_reserved_system_tokens=8_192,
+        configured_reserved_schema_tokens=8_192,
+        configured_reserved_protocol_tokens=2_048,
+        maximum_source_tokens_per_request=50_000,
+    )
+
+    assert plan.reserved_system_tokens == 8_192
+    assert plan.reserved_schema_tokens == 8_192
+    assert plan.reserved_protocol_tokens == 2_048
+    assert plan.source_budget.non_source_prompt_tokens == 1_000
+    assert plan.source_budget.reserved_non_source_prompt_tokens == 19_132
+    assert plan.source_budget.configured_maximum_source_tokens_per_request == 50_000
+    assert plan.source_budget.maximum_source_tokens_per_request == 50_000
+    assert plan.source_budget.remaining_source_tokens == 10_000
+    assert plan.source_budget.unallocated_prompt_tokens == 125_148
+
+    with pytest.raises(TokenPlanningError, match="per-request maximum"):
+        _plan(
+            allocations=_allocations(source_tokens=50_001),
+            configured_reserved_system_tokens=8_192,
+            configured_reserved_schema_tokens=8_192,
+            configured_reserved_protocol_tokens=2_048,
+            maximum_source_tokens_per_request=50_000,
+        )
+
+
+def test_route_intersection_rejects_multiple_exact_models() -> None:
+    with pytest.raises(TokenPlanningError, match="exactly one model ID"):
+        EndpointRouteIntersection.build(
+            (
+                _route(model="alpha/frontier-secure"),
+                _route(
+                    model="beta/frontier-secure",
+                    endpoint="second-provider",
+                    snapshot_character="b",
+                ),
+            )
+        )
+
+
+def test_context_omission_hashes_are_canonical_and_self_bound() -> None:
+    plan = _plan(context_omission_sha256s=("b" * 64, "a" * 64))
+
+    assert plan.context_omission_sha256s == ("a" * 64, "b" * 64)
+
+    with pytest.raises(TokenPlanningError, match="unique"):
+        _plan(context_omission_sha256s=("a" * 64, "a" * 64))
 
 
 def test_global_input_and_output_budgets_fail_closed() -> None:

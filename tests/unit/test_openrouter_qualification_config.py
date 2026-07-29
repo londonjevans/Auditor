@@ -33,6 +33,7 @@ def test_qualification_runtime_config_loads_without_secrets_or_claims() -> None:
     assert config.execution.cost_ledger_path is None
     assert config.execution.max_model_retries == 1
     assert config.execution.max_output_tokens_per_request == 4_096
+    assert config.effective_reserved_output_tokens == 4_096
     assert config.execution.max_requests_per_agent == 512
     assert 12 * 16 * (config.execution.max_model_retries + 1) <= (
         config.execution.max_requests_per_agent
@@ -87,7 +88,7 @@ def test_endpoint_token_budget_defaults_are_high_capacity_and_bounded() -> None:
 
     assert budgets.usable_input_fraction == 0.70
     assert budgets.maximum_source_tokens_per_request == 200_000
-    assert budgets.reserved_output_tokens == 32_768
+    assert budgets.reserved_output_tokens is None
     assert budgets.global_input_token_budget == 8_000_000
     assert budgets.global_output_token_budget == 2_000_000
 
@@ -99,6 +100,15 @@ def test_endpoint_token_budget_defaults_are_high_capacity_and_bounded() -> None:
         TokenBudgetConfig(per_model_cost_budget_usd={"not-exact": 1})
     with pytest.raises(ValidationError, match="safe role IDs"):
         TokenBudgetConfig(per_role_cost_budget_usd={"role with spaces": 1})
+
+
+def test_explicit_output_reserve_cannot_drift_from_request_limit() -> None:
+    config = load_config(QUALIFICATION_CONFIG, environ={})
+    payload = config.model_dump(mode="python")
+    payload["token_budgets"]["reserved_output_tokens"] = 32_768
+
+    with pytest.raises(ValidationError, match="output reserve"):
+        type(config).model_validate(payload)
 
 
 def test_reasoning_effort_and_token_budget_are_mutually_exclusive_at_config_load() -> None:

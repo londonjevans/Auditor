@@ -440,3 +440,461 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `NOT_DEMONSTRATED` absent independent blind human comparison.
 - **Dependencies:** `V3-ADR-001`.
 - **Status:** `QUEUED`
+
+# Operator-added scope — appended out of band
+
+These tickets were appended by the operator while `V3-TOKENS-001` was mid-implementation.
+Do not interrupt or re-plan the ticket in progress. Finish `V3-TOKENS-001` to its normal
+standard — green Ruff, strict mypy, full suite, worklog entry, validated checkpoint — and
+only then read this section and continue with the revised sequencing at the end.
+
+Every ticket below inherits the existing safety model without exception: no live-chain
+writes, no wallet or private-key material, no signing or broadcasting, no execution of
+model-generated commands, and all dynamic execution isolated, bounded, and local. If a
+capability appears to require weakening any of those, mark it `BLOCKED_SAFETY` and record
+why rather than relaxing the boundary.
+
+**Motivating gap.** `[scanners.foundry_fork]` defaults to `enabled = false` with
+`foundry_match_path = "test/audit/*.t.sol"`. Essentially no client repository has a
+`test/audit/` directory, so on a real target that glob matches nothing and the adapter
+contributes no evidence. `[reproduction]` runs only on candidates a model has already
+proposed. Therefore deterministic execution can currently confirm or falsify a finding but
+can never originate one. Operator evidence: a CI fork-test run on a separate repository
+surfaced defects that nine prior review passes had missed. Real deployed-dependency
+behaviour, real token semantics, real oracle values, real liquidity, and real chain state
+are invisible to source review by construction.
+
+## V3-FORKSUITE-001 — Execute the audited repository's own suite against pinned fork state
+
+- **Objective:** Execute the audited repository's existing Foundry suite, and its
+  container-isolated Hardhat suite, against operator-pinned fork state, treating failing,
+  reverting, or assertion-violating tests as deterministic finding evidence rather than only
+  as candidate reproduction.
+- **Acceptance criteria:** Suite selection is explicit, bounded, and configurable via
+  include/exclude globs with per-test and total ceilings, and the default does not silently
+  execute every repository test. The legacy `test/audit/*.t.sol` behaviour survives as one
+  selectable profile and is no longer the only reachable path. Execution requires hardened
+  isolation; `ffi` is force-disabled, `fs_permissions` denied, repository-supplied Foundry or
+  Hardhat options that would re-enable either are rejected, wallet and private-key
+  environment variables are absent, and network is denied except the configured loopback fork
+  RPC. Hardhat suites execute only inside the digest-pinned rootless container against a
+  disposable copy. Each executed test records project, path, test name, fork chain and block,
+  seed, status, revert or assertion detail, duration, output hash, and command hash. A
+  failing test produces a typed finding whose evidence strength reflects real execution; a
+  passing suite is never represented as evidence of safety. Missing toolchain, isolation, or
+  RPC is `unavailable`, never a pass.
+- **Files expected to change:** `src/mmaudit/scanners/foundry.py`,
+  `src/mmaudit/solidity/projects.py`, `src/mmaudit/isolation/container.py`,
+  `src/mmaudit/config.py`, `src/mmaudit/orchestration/pipeline.py`, scanner and finding
+  schemas, `mmaudit.example.toml`, unit and local integration regressions.
+- **Dependencies:** `V3-TOKENS-001`.
+- **Status:** `QUEUED`
+
+## V3-FORKDIFF-001 — Differential and multi-state fork matrix
+
+- **Objective:** Run the selected suite against a clean local chain and against each
+  operator-pinned fork state, and classify per-test divergence. A test that passes locally
+  and fails against pinned real state is the highest-signal class this engine can produce.
+- **Acceptance criteria:** At least two execution states are supported — clean local chain,
+  and one or more pinned fork blocks or chains. Divergence is a distinct typed
+  classification, separate from outright failure. A divergence claim requires agreeing
+  repeated executions in fresh disposable workspaces; a single observation is
+  `inconclusive`. Seeds, block numbers, and chain IDs are pinned and recorded, and a run is
+  reproducible from the emitted manifest. Fork RPC reads are declared explicitly as a
+  read-only egress boundary in the report and in privacy evidence; the audited code never
+  transacts.
+- **Files expected to change:** fork execution and result schemas, comparison logic,
+  reporting, regressions.
+- **Dependencies:** `V3-FORKSUITE-001`.
+- **Status:** `QUEUED`
+
+## V3-EXECORIGIN-001 — Execution-originated candidates
+
+- **Objective:** Allow deterministic execution evidence to originate a candidate group and
+  enter consensus, instead of only confirming or falsifying a model-proposed candidate. This
+  is the architectural change behind the operator observation that a fork test caught what
+  nine review passes did not.
+- **Acceptance criteria:** An execution-originated group carries execution provenance, is
+  location-validated against real source, and is never attributed to a model. Such a group
+  may be sent to model roles for impact, exploitability, and remediation analysis without
+  those roles being able to create, delete, or re-locate it. Model agreement alone still
+  cannot confirm it; deterministic execution evidence is what supports it. It is never
+  silently merged into an unrelated model-proposed group, and grouping still requires the
+  existing similarity and location constraints. Reports distinguish execution-originated from
+  review-originated findings.
+- **Files expected to change:** `src/mmaudit/orchestration/consensus.py`,
+  `src/mmaudit/orchestration/pipeline.py`, candidate and finding schemas, reporting,
+  regressions.
+- **Dependencies:** `V3-FORKDIFF-001`.
+- **Status:** `QUEUED`
+
+## V3-TESTQUALITY-001 — Audited-suite coverage and assertion strength
+
+- **Objective:** Measure the audited repository's own test suite — coverage over indexed
+  entities and mutation kill score using the existing portfolio — and emit weakly tested or
+  weakly asserted critical surfaces as prioritized model review targets and as reportable
+  coverage gaps.
+- **Acceptance criteria:** Coverage is reported with concrete denominators over indexed
+  contracts and functions. A critical surface with no assertion coverage is reported as a gap
+  with its exact source location, not as a vulnerability. Mutation execution happens only in
+  disposable copies and restores cleanly. Uncovered critical surfaces raise review priority
+  for the model roles.
+- **Files expected to change:** `src/mmaudit/benchmark/mutations.py`,
+  `src/mmaudit/solidity/coverage.py`, `src/mmaudit/orchestration/model_coverage.py`,
+  reporting, regressions.
+- **Dependencies:** `V3-EXECORIGIN-001`; reuse `V3-MUTATION-001` work where already built.
+- **Status:** `QUEUED`
+
+## V3-CI-001 — Continuous integration execution mode
+
+- **Objective:** Provide a first-class CI path with incremental changed-since
+  prioritization, deterministic and fork-suite execution on pull requests without exposing
+  provider secrets to pull-request-controlled code, SARIF upload, and resumable state.
+- **Acceptance criteria:** Pull-request events never receive the provider secret and never
+  execute model roles. Fork-suite execution on pull-request code runs only inside hardened
+  isolation and fails closed when isolation is unavailable. Incremental runs reuse prior
+  deterministic evidence only when bound source hashes still match. Job status distinguishes
+  new findings, unchanged findings, and coverage regressions.
+- **Files expected to change:** `src/mmaudit/cli.py`, `.github/workflows/mmaudit.yml`,
+  orchestration resume state, documentation, regressions.
+- **Dependencies:** `V3-FORKSUITE-001`.
+- **Status:** `QUEUED`
+
+## V3-CALIBRATE-001 — Evidence-derived qualification thresholds
+
+- **Objective:** Replace the aspirational all-dimension `1.0` policy with thresholds derived
+  from measurement, so qualification is a meaningful filter rather than an unreachable gate.
+  `config/models.maximum-assurance.toml` currently requires `minimum_score = 1.0` across 17
+  dimensions and 50 cases with `tier_a_minimum_overall_score = 1.0`, and the disposition enum
+  offers only `TIER_A`, `NOT_QUALIFIED`, and `INCONCLUSIVE`. As frozen, `V3-QUALIFY-001` will
+  spend budget and qualify nothing.
+- **Acceptance criteria:** A calibration mode runs the frozen corpus against candidate models
+  and records observed per-dimension pass distributions without asserting a disposition. The
+  resulting policy keeps `1.0` only where determinism is genuinely required — for example
+  structured-output compliance, exact source location, and prompt-injection resistance — and
+  sets measured, statistically meaningful thresholds elsewhere. No judgment dimension retains
+  a two-case `1.0` gate where a single miss forces `0.5`. A role-scoped secondary disposition
+  exists, so a model may qualify for investigator roles without qualifying as verifier,
+  falsifier, or judge. The revised policy is frozen and hash-pinned before any paid
+  qualification, and the rationale for every threshold is recorded. No model self-qualifies,
+  and the existing independent verification requirement is unchanged.
+- **Files expected to change:** `config/models.maximum-assurance.toml`,
+  `src/mmaudit/models/qualification.py`, `src/mmaudit/models/qualification_workflow.py`,
+  benchmark corpus, regressions.
+- **Dependencies:** `V3-TOKENS-001`. Must precede `V3-QUALIFY-001`.
+- **Status:** `QUEUED`
+
+## V3-LINEAGE-001 — Operator root-lineage review record
+
+- **Objective:** Perform and record the independent root-lineage review that
+  `privacy.approved_model_lineages` requires, so source egress is not blocked for every
+  candidate. The list is currently empty and is a hard fail-closed gate in six call sites;
+  all twelve candidates carry `lineage_review.status = "pending"`.
+- **Acceptance criteria:** Each candidate carries a dated operator review, rationale, and
+  evidence hash. Approved root lineages are committed. Distinct vendor aliases of one root
+  model do not count as independent lineages. An unreviewed or rejected lineage remains
+  fail-closed at every existing call site.
+- **Files expected to change:** `config/models.candidates.toml`, operator configuration,
+  lineage evidence artifacts, regressions.
+- **Dependencies:** None beyond current `HEAD`; this is an operator judgment task and can be
+  recorded at any clean boundary.
+- **Status:** `QUEUED`
+
+## V3-INTAKE-001 — Untrusted client repository intake
+
+- **Objective:** Support third-party client repositories as untrusted input with an explicit
+  per-audit authorization record, rather than assuming operator-owned source. This amends the
+  `AGENTS.md` scope boundary, which currently assumes operator ownership.
+- **Acceptance criteria:** A signed client authorization and scope attestation exists per
+  audit. Intake validates size, structure, and shape, and rejects unsupported input. Secrets
+  detected in client source fail closed with a client-safe message. Per-tenant isolation
+  prevents any cross-tenant artifact access. An unauthorized or out-of-scope target is
+  refused and recorded.
+- **Dependencies:** `V3-RELEASE-001`.
+- **Status:** `QUEUED`
+
+## V3-CONSENT-001 — Per-client privacy and retention consent
+
+- **Objective:** Make the client the consenting party for non-ZDR frontier routing. The
+  consent implemented by `V3-PRIVACY-001` is operator-authored and bound to one source, model
+  set, budget, and expiry; a self-serve product must capture equivalent consent per client at
+  purchase.
+- **Acceptance criteria:** Consent is bound to that client's exact source, model and provider
+  set, budget, and expiry. Declining consent selects the strict-ZDR model set, and the report
+  states the reduced ensemble and its effect on assurance. Consent never activates
+  implicitly. Effective policy is recorded in that client's evidence.
+- **Dependencies:** `V3-INTAKE-001`.
+- **Status:** `QUEUED`
+
+## V3-SERVICE-001 — Service boundary and multi-tenant accounting
+
+- **Objective:** Provide the service layer the CLI does not have: job submission and status,
+  durable artifact storage, authentication, billing hooks, and per-tenant cost accounting.
+- **Acceptance criteria:** Concurrent audits for distinct tenants cannot interfere. The cost
+  ledger is per-tenant and atomic under concurrency; the current design is a single
+  operator-owned JSON file with one lock file and will not hold under concurrent client runs.
+  A failed or partial run is never billable as a completed audit. Artifact retention and
+  deletion are explicit.
+- **Dependencies:** `V3-CONSENT-001`.
+- **Status:** `QUEUED`
+
+## V3-EFFORT-001 — Per-role reasoning effort and test-time compute
+
+- **Objective:** Make reasoning effort a per-role, qualified, recorded parameter instead of
+  one global setting. `[models.reasoning]` is currently a single `ModelReasoningConfig` for
+  the entire run, so the judge, falsifier, and blind false-negative hunter receive exactly
+  the same test-time compute as a cheap classification pass. On this task, reasoning effort
+  is likely the highest quality-per-dollar control available and it is currently flat.
+- **Acceptance criteria:** Effort and reasoning-token budgets are configurable per base role
+  and per specialist role, bounded by the endpoint's frozen capability evidence. Effort is
+  never silently raised above what the approved endpoint supports or what the budget
+  preflight reserved. Effective per-role effort is recorded in usage, run manifest, and
+  report evidence. Qualification measures each candidate at the effort level it will actually
+  run at; an effort level not covered by qualification evidence is not selectable in
+  production. Cost reservation accounts for reasoning tokens explicitly.
+- **Files expected to change:** `src/mmaudit/config.py`, `src/mmaudit/models/openrouter.py`,
+  `src/mmaudit/orchestration/budgets.py`, `src/mmaudit/models/qualification.py`, usage and
+  run-evidence schemas, `mmaudit.example.toml`, regressions.
+- **Dependencies:** `V3-TOKENS-001`.
+- **Status:** `QUEUED`
+
+## V3-RETRIEVAL-001 — Bounded read-only retrieval loop
+
+- **Objective:** Allow a review role to request specific already-indexed, already-redacted
+  entities on demand, instead of receiving one pushed context slice and being unable to ask
+  anything further. Context is currently push-only and single-shot; `openrouter.py` hard
+  rejects any response containing `tool_calls` or `function_call`. A reviewer that cannot ask
+  a follow-up question is guessing at every boundary of its slice, and sharding does not
+  change this because shards are still pushed.
+- **Acceptance criteria:** The retrieval vocabulary is a fixed, typed, read-only allowlist
+  over the existing symbol index and graphs — for example resolve an entity by ID, list
+  callers of an entity, list writers of a state variable, fetch a validated source range.
+  There is no free-form path, glob, shell, filesystem, or network capability. A request for
+  an unindexed, redacted, secret-bearing, or out-of-scope subject is refused and recorded.
+  Requests are bounded per role by count and by token budget, and exhaustion degrades to the
+  current single-shot behaviour rather than failing the run. Every request and response is
+  hashed into the run manifest so the exchange is replayable. Retrieved content is subject to
+  the same redaction and egress rules as pushed context. `src/mmaudit/prompts/
+  shared_security_rules.md` is amended deliberately to distinguish prohibited execution from
+  permitted validated index lookup; the prohibition on claiming to have executed anything is
+  unchanged.
+- **Files expected to change:** `src/mmaudit/models/openrouter.py`,
+  `src/mmaudit/orchestration/context.py`, `src/mmaudit/solidity/retrieval.py`,
+  `src/mmaudit/agents/base.py`, prompts, run-evidence schemas, regressions.
+- **Dependencies:** `V3-SCHEDULER-001`.
+- **Status:** `QUEUED`
+
+## V3-TAXONOMY-001 — Known-issue taxonomy with mandatory disposition
+
+- **Objective:** Add a versioned taxonomy of known vulnerability classes, bound to the
+  detected protocol profile, where every applicable item must receive an explicit
+  `REVIEWED`, `NOT_APPLICABLE`, or `GAP` disposition with cited evidence. Surface coverage
+  answers "was this code looked at"; this answers "was this failure mode considered", which
+  location coverage structurally cannot.
+- **Acceptance criteria:** The taxonomy is a committed, versioned, hash-pinned artifact with
+  a published schema, and is defensive classification only — no exploit procedures. Profile
+  detection selects applicable items deterministically; applicability is evidence-backed, not
+  model-asserted. Every applicable item carries a disposition and a citation; an omitted item
+  is a `GAP`, never an implicit pass. Dispositions are reported as a coverage denominator
+  alongside surface coverage. A `GAP` on a critical class blocks `COMPLETE` under maximum
+  assurance. Taxonomy items cannot themselves create findings.
+- **Files expected to change:** new taxonomy corpus and schema,
+  `src/mmaudit/orchestration/model_coverage.py`, `src/mmaudit/solidity/economics.py`,
+  reporting, regressions.
+- **Dependencies:** `V3-COVERAGE-001`.
+- **Status:** `QUEUED`
+
+## V3-ENSEMBLE-001 — Measure whether the specialist ensemble beats concentrated compute
+
+- **Objective:** Determine empirically whether 25 narrow specialists across several mid-tier
+  lineages actually outperforms a small number of passes by one strong model at high
+  reasoning effort. This is currently assumed, not measured, and it determines unit
+  economics, latency, and the specialist architecture itself.
+- **Acceptance criteria:** At least three configurations are scored on identical corpora with
+  identical scoring — full specialist ensemble, a reduced ensemble, and concentrated
+  repeated passes by the single strongest qualified model. Recall, precision, safe-control
+  false confirmation, location accuracy, cost, and wall-clock are reported per configuration.
+  Findings unique to each configuration are enumerated, so complementarity is visible rather
+  than only aggregate score. The result is recorded as evidence and the specialist
+  architecture is explicitly retained, reduced, or restructured on that basis.
+- **Files expected to change:** `src/mmaudit/benchmark/engine.py`,
+  `src/mmaudit/benchmark/model_portfolio.py`, evaluation artifacts, regressions.
+- **Dependencies:** `V3-CALIBRATE-001`, `V3-EFFORT-001`.
+- **Status:** `QUEUED`
+
+## V3-TIMESPLIT-001 — Public time-split benchmark and private holdout
+
+- **Objective:** Build a credible external evidence base. The current corpus is 28
+  self-authored synthetic cases with `public_real_world_time_split: false`,
+  `private_holdout: false`, and `identical_commit_human_comparison: false`. Self-authored
+  synthetic fixtures are the weakest available evidence and are vulnerable to fixture
+  recognition.
+- **Acceptance criteria:** A time-split corpus is assembled from public protocols with public
+  source and published post-incident or published-audit findings, each evaluated at a commit
+  that predates the fix, with provenance, licence, and commit recorded per case. A private
+  holdout is withheld from all prompt, template, taxonomy, and configuration development and
+  is used only for final measurement. Corpus construction records who selected each case and
+  on what basis, so selection bias is auditable. Scores are reported separately for
+  synthetic, public time-split, and holdout; a synthetic score is never presented as product
+  performance. Cases whose source is unavailable under an acceptable licence are excluded and
+  recorded, not approximated.
+- **Files expected to change:** `benchmarks/`, corpus schemas,
+  `src/mmaudit/benchmark/claims.py`, evaluation documentation, regressions.
+- **Dependencies:** `V3-SINGLE-AUDIT-001`.
+- **Status:** `QUEUED`
+
+## V3-HUMANCMP-001 — Independent blind human comparison
+
+- **Objective:** Perform the independent blind human-auditor comparison that every existing
+  superiority statement is conditioned on. `V3-RELEASE-001` states that superiority remains
+  `NOT_DEMONSTRATED` absent this comparison, and no ticket currently performs it, so the
+  claim can never be substantiated by the queue as written.
+- **Acceptance criteria:** Two or more independent qualified human auditors review the same
+  target at the same commit, blind to the tool's output and to each other. Finding sets are
+  compared by an adjudicator who is independent of both. Results report agreement, tool-only
+  findings, human-only findings, and false positives on both sides. Any published comparative
+  claim is bound to the exact commit, corpus, model selection, configuration, and date, and
+  expires. A result that does not support superiority is recorded and published internally
+  with the same weight as one that does.
+- **Files expected to change:** evaluation artifacts, `src/mmaudit/benchmark/claims.py`,
+  claim-discipline documentation.
+- **Dependencies:** `V3-TIMESPLIT-001`.
+- **Status:** `QUEUED`
+
+## V3-STABILITY-001 — Run-to-run stability measurement
+
+- **Objective:** Measure and publish the variance of the audit itself. Model sampling is
+  non-deterministic, so a client running the same audit twice may receive different findings;
+  for a paid deliverable that is a credibility problem, and instability is also a useful
+  signal for where the ensemble is weak.
+- **Acceptance criteria:** A fixed target is audited N times under identical configuration
+  and the finding-set jitter is reported — stable findings, intermittent findings, and
+  single-run findings. Stability is reported per severity and per role. Intermittent
+  high-severity findings are surfaced as an explicit quality signal rather than averaged
+  away. The measured stability figure is published alongside recall and precision, and the
+  client report states the expected variance honestly.
+- **Files expected to change:** `src/mmaudit/benchmark/engine.py`, evaluation artifacts,
+  reporting, regressions.
+- **Dependencies:** `V3-MULTI-AUDIT-001`.
+- **Status:** `QUEUED`
+
+## V3-QUOTE-001 — Pre-purchase cost and runtime estimate
+
+- **Objective:** Produce a bounded cost and wall-clock estimate for a target before any paid
+  work begins, so a self-serve purchase can be priced. Budget preflight exists, but there is
+  no quote a buyer can be shown before committing.
+- **Acceptance criteria:** The estimate derives from deterministic local analysis only —
+  repository size, indexed entities, shard count, planned roles, and frozen endpoint pricing
+  — and requires no provider spend. It is a bounded range with an explicit worst case, never
+  a point estimate presented as certain. The accepted quote binds the run's hard budget
+  ceiling. Actual cost is reconciled against the quote after the run and the delta is
+  recorded so estimation accuracy can be measured over time. A target the engine cannot
+  bound is refused rather than quoted optimistically.
+- **Files expected to change:** `src/mmaudit/cli.py`, `src/mmaudit/orchestration/budgets.py`,
+  quote schema, regressions.
+- **Dependencies:** `V3-SHARD-001`.
+- **Status:** `QUEUED`
+
+## V3-LIFECYCLE-001 — Finding lifecycle and triage state across runs
+
+- **Objective:** Give findings durable identity and triage state across repeated runs, which
+  a continuous or subscription product requires. The `[prior_audit]` corpus is a one-shot
+  comparison input, not a lifecycle.
+- **Acceptance criteria:** A finding retains a stable identity across runs where its bound
+  source range still matches, and identity changes are explicit when the source moves.
+  Client triage state — accepted, won't-fix, false positive, remediated — persists across
+  runs with the recording party and timestamp. Suppression is bound to source content, so a
+  refactor that materially changes the code re-raises the finding rather than silently
+  inheriting a stale suppression. Suppressed findings remain in the forensic bundle even when
+  omitted from the client report. Triage state can never upgrade a status or manufacture a
+  finding.
+- **Files expected to change:** `src/mmaudit/orchestration/prior_audit.py`,
+  `src/mmaudit/orchestration/consensus.py`, finding schemas, reporting, regressions.
+- **Dependencies:** `V3-CI-001`, `V3-REPORT-001`.
+- **Status:** `QUEUED`
+
+## V3-REVERIFY-001 — Remediation verification runs
+
+- **Objective:** Productize verification of client fixes as a distinct run mode. Most of the
+  mechanism exists in remediated-hash comparison; it is not exposed as a deliverable.
+- **Acceptance criteria:** A verification run takes a prior audit's findings and the client's
+  updated source and reports, per finding, whether the remediation is verified, unverified,
+  regressed, or source-inconclusive. Where a generated harness or fork test originally
+  demonstrated the issue, the same bounded execution is re-run against the fix, and a
+  now-passing test is reported as evidence of remediation for that specific property only,
+  never as evidence of general safety. New findings introduced by the fix are reported as new
+  findings. A verification run is never represented as a full audit.
+- **Files expected to change:** `src/mmaudit/cli.py`,
+  `src/mmaudit/orchestration/prior_audit.py`, reproduction re-execution, reporting,
+  regressions.
+- **Dependencies:** `V3-LIFECYCLE-001`.
+- **Status:** `QUEUED`
+
+## Revised sequencing
+
+Three tracks are largely independent and should not be run as one strict chain. The
+execution-evidence track needs no model qualification and no provider spend. The benchmark
+track needs no sharding. Only the model track is gated on qualification. Running them
+sequentially adds months for no engineering reason; the one-ticket-at-a-time discipline
+still applies within a track.
+
+**Track 1 — engine and execution evidence**
+
+1. `V3-TOKENS-001` — finish, in progress.
+2. `V3-FLOOR-001` — promote from its current late position. A standard-profile run with zero
+   available scanners and zero completed model roles still exits `0` and reports quality
+   status `completed` with zero findings. Fix before any external party sees a report.
+3. `V3-FORKSUITE-001`, `V3-FORKDIFF-001`, `V3-EXECORIGIN-001`, `V3-TESTQUALITY-001`.
+4. `V3-CI-001`.
+5. `V3-SHARD-001`, `V3-SCHEDULER-001`, `V3-TRUNCATION-001`, `V3-COVERAGE-001`,
+   `V3-TAXONOMY-001`, `V3-CONSENSUS-001`, `V3-REPORT-001`, `V3-SCOPE-001`.
+6. `V3-RETRIEVAL-001`.
+
+**Track 2 — model selection and quality**
+
+1. `V3-LINEAGE-001` — operator judgment, cheap, unblocks egress; can be recorded immediately.
+2. `V3-EFFORT-001` — small, and likely the largest quality gain per line of code available.
+3. `V3-CALIBRATE-001`, then `V3-QUALIFY-001`.
+4. `V3-SINGLE-AUDIT-001`, `V3-MULTI-AUDIT-001`.
+5. `V3-ENSEMBLE-001` — settle the specialist architecture on measured evidence before
+   committing to its cost and latency.
+
+**Track 3 — evidence, claims, and product**
+
+1. `V3-TIMESPLIT-001`, then `V3-HUMANCMP-001`. These gate every quality claim and are the
+   binding constraint on the commercial objective, not on the engineering.
+2. `V3-STABILITY-001`.
+3. Remaining existing tickets through `V3-RELEASE-001`.
+4. `V3-QUOTE-001`, `V3-LIFECYCLE-001`, `V3-REVERIFY-001`.
+5. `V3-INTAKE-001`, `V3-CONSENT-001`, `V3-SERVICE-001`.
+
+**Deferrals.** `V3-BYTECODE-001` and the parts of `V3-CERTIFICATE-001` that bind toolchain
+and isolation evidence lose nothing by moving after `V3-MULTI-AUDIT-001`. The evidence
+apparatus is a genuine differentiator, but its marginal value is close to zero until the
+engine demonstrably finds real defects. Effort spent proving in detail that the engine found
+nothing is effort not spent making it find something.
+
+## Operator decisions required
+
+Record these in the worklog as explicit operator inputs rather than inferring them.
+
+- Which fork states are canonical — chain IDs and pinned block numbers — and which archive
+  RPC provider is approved for read-only forking.
+- Whether product scope stays Solidity/EVM per `V3-SCOPE-001`, or whether non-Solidity
+  targets need coverage and gate parity rather than a reduced review mode. Quality gates
+  currently return early for any repository with no Solidity project.
+- Whether `V3-ADR-001` is amended to a self-serve product, and if so whether frontier
+  retention consent is offered to clients as a tier or refused in favour of strict ZDR.
+  `V3-ADR-001` currently defers a self-service offering and makes no SaaS claim, which
+  conflicts with the operator's stated intent.
+- Which public protocols and incidents are acceptable sources for the `V3-TIMESPLIT-001`
+  corpus, under which licences, and who selects them. Selection must be recorded because the
+  chooser can bias the result.
+- Which independent auditors are commissioned for `V3-HUMANCMP-001`, who adjudicates, and
+  the prior commitment to publish an unfavourable result on the same terms as a favourable
+  one.
+- The product liability posture: what the audit promises, what it disclaims, whether
+  professional indemnity cover is carried, and how a missed critical finding is handled
+  commercially. This is an operator and legal decision, not an engineering ticket, but it
+  determines permitted report and marketing language and should be settled before the first
+  external sale.

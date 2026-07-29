@@ -1,0 +1,1486 @@
+{
+  "$defs": {
+    "ActualTokenUsageEvidence": {
+      "additionalProperties": false,
+      "description": "Typed actual token totals, with no raw provider response.",
+      "properties": {
+        "completion_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completion Tokens"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "openrouter_generation_id_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Openrouter Generation Id Sha256"
+        },
+        "prompt_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt Tokens"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/ActualTokenUsageSource"
+        },
+        "total_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total Tokens"
+        }
+      },
+      "required": [
+        "source",
+        "evidence_sha256"
+      ],
+      "title": "ActualTokenUsageEvidence",
+      "type": "object"
+    },
+    "ActualTokenUsageSource": {
+      "description": "Provenance class for actual token totals retained by the provider adapter.",
+      "enum": [
+        "PROVIDER_RESPONSE",
+        "MOCK_RESPONSE",
+        "UNAVAILABLE"
+      ],
+      "title": "ActualTokenUsageSource",
+      "type": "string"
+    },
+    "AtomicTokenReservationEvidence": {
+      "additionalProperties": false,
+      "description": "Self-hashed before/after proof for one lock-protected token reservation.",
+      "properties": {
+        "after": {
+          "$ref": "#/$defs/TokenBudgetStateEvidence"
+        },
+        "before": {
+          "$ref": "#/$defs/TokenBudgetStateEvidence"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "global_input_token_limit": {
+          "anyOf": [
+            {
+              "maximum": 9223372036854775807,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Global Input Token Limit"
+        },
+        "global_output_token_limit": {
+          "anyOf": [
+            {
+              "maximum": 9223372036854775807,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Global Output Token Limit"
+        },
+        "planned_completion_tokens": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Planned Completion Tokens",
+          "type": "integer"
+        },
+        "planned_prompt_tokens": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Planned Prompt Tokens",
+          "type": "integer"
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "request_token_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Token Plan Sha256",
+          "type": "string"
+        },
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "exact_model_id",
+        "role",
+        "request_token_plan_sha256",
+        "planned_prompt_tokens",
+        "planned_completion_tokens",
+        "before",
+        "after",
+        "evidence_sha256"
+      ],
+      "title": "AtomicTokenReservationEvidence",
+      "type": "object"
+    },
+    "ContextCategoryTotals": {
+      "additionalProperties": false,
+      "description": "Aggregate one prompt category across all request plans.",
+      "properties": {
+        "byte_upper_bound_tokens": {
+          "minimum": 0,
+          "title": "Byte Upper Bound Tokens",
+          "type": "integer"
+        },
+        "category": {
+          "$ref": "#/$defs/PromptAllocationCategory"
+        },
+        "estimated_tokens": {
+          "minimum": 0,
+          "title": "Estimated Tokens",
+          "type": "integer"
+        },
+        "request_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Request Count",
+          "type": "integer"
+        },
+        "utf8_bytes": {
+          "minimum": 0,
+          "title": "Utf8 Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "category",
+        "request_count",
+        "utf8_bytes",
+        "estimated_tokens",
+        "byte_upper_bound_tokens"
+      ],
+      "title": "ContextCategoryTotals",
+      "type": "object"
+    },
+    "ContextManifestTotals": {
+      "additionalProperties": false,
+      "description": "Conserved aggregate counts for a complete context manifest.",
+      "properties": {
+        "categories": {
+          "items": {
+            "$ref": "#/$defs/ContextCategoryTotals"
+          },
+          "maxItems": 11,
+          "minItems": 11,
+          "title": "Categories",
+          "type": "array"
+        },
+        "completed_request_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Completed Request Count",
+          "type": "integer"
+        },
+        "failed_request_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Failed Request Count",
+          "type": "integer"
+        },
+        "mock_reported_completion_tokens": {
+          "minimum": 0,
+          "title": "Mock Reported Completion Tokens",
+          "type": "integer"
+        },
+        "mock_reported_prompt_tokens": {
+          "minimum": 0,
+          "title": "Mock Reported Prompt Tokens",
+          "type": "integer"
+        },
+        "mock_reported_request_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Mock Reported Request Count",
+          "type": "integer"
+        },
+        "not_sent_request_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Not Sent Request Count",
+          "type": "integer"
+        },
+        "omission_record_count": {
+          "minimum": 0,
+          "title": "Omission Record Count",
+          "type": "integer"
+        },
+        "omitted_item_count": {
+          "minimum": 0,
+          "title": "Omitted Item Count",
+          "type": "integer"
+        },
+        "planned_prompt_tokens": {
+          "minimum": 0,
+          "title": "Planned Prompt Tokens",
+          "type": "integer"
+        },
+        "planned_request_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Planned Request Count",
+          "type": "integer"
+        },
+        "planned_source_tokens": {
+          "minimum": 0,
+          "title": "Planned Source Tokens",
+          "type": "integer"
+        },
+        "preflight_rejected_request_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Preflight Rejected Request Count",
+          "type": "integer"
+        },
+        "provider_reported_completion_tokens": {
+          "minimum": 0,
+          "title": "Provider Reported Completion Tokens",
+          "type": "integer"
+        },
+        "provider_reported_prompt_tokens": {
+          "minimum": 0,
+          "title": "Provider Reported Prompt Tokens",
+          "type": "integer"
+        },
+        "provider_reported_request_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Provider Reported Request Count",
+          "type": "integer"
+        },
+        "request_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Request Count",
+          "type": "integer"
+        },
+        "requested_completion_tokens": {
+          "minimum": 0,
+          "title": "Requested Completion Tokens",
+          "type": "integer"
+        },
+        "reserved_output_tokens": {
+          "minimum": 0,
+          "title": "Reserved Output Tokens",
+          "type": "integer"
+        },
+        "reserved_reasoning_tokens": {
+          "minimum": 0,
+          "title": "Reserved Reasoning Tokens",
+          "type": "integer"
+        },
+        "totals_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Totals Sha256",
+          "type": "string"
+        },
+        "truncated_request_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Truncated Request Count",
+          "type": "integer"
+        },
+        "unavailable_actual_usage_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Unavailable Actual Usage Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "request_count",
+        "planned_request_count",
+        "completed_request_count",
+        "truncated_request_count",
+        "failed_request_count",
+        "preflight_rejected_request_count",
+        "not_sent_request_count",
+        "planned_prompt_tokens",
+        "planned_source_tokens",
+        "reserved_output_tokens",
+        "reserved_reasoning_tokens",
+        "requested_completion_tokens",
+        "provider_reported_request_count",
+        "provider_reported_prompt_tokens",
+        "provider_reported_completion_tokens",
+        "mock_reported_request_count",
+        "mock_reported_prompt_tokens",
+        "mock_reported_completion_tokens",
+        "unavailable_actual_usage_count",
+        "omission_record_count",
+        "omitted_item_count",
+        "categories",
+        "totals_sha256"
+      ],
+      "title": "ContextManifestTotals",
+      "type": "object"
+    },
+    "ContextOmissionCategory": {
+      "description": "Typed omission scope without retaining source names or text.",
+      "enum": [
+        "context_package",
+        "framework",
+        "graph",
+        "invariant",
+        "metadata",
+        "prior_audit",
+        "protocol",
+        "scanner",
+        "schema",
+        "source",
+        "system",
+        "workflow"
+      ],
+      "title": "ContextOmissionCategory",
+      "type": "string"
+    },
+    "ContextOmissionEvidence": {
+      "additionalProperties": false,
+      "description": "Hash-only inventory for one typed omission class.",
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/ContextOmissionCategory"
+        },
+        "estimated_tokens": {
+          "default": null,
+          "title": "Estimated Tokens",
+          "type": "null"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "omitted_item_count": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Omitted Item Count",
+          "type": "integer"
+        },
+        "omitted_item_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100000,
+          "title": "Omitted Item Sha256S",
+          "type": "array"
+        },
+        "provenance": {
+          "$ref": "#/$defs/ContextOmissionProvenance"
+        },
+        "reason": {
+          "$ref": "#/$defs/ContextOmissionReason"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "token_estimation_state": {
+          "const": "NOT_ESTIMATED",
+          "default": "NOT_ESTIMATED",
+          "title": "Token Estimation State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "category",
+        "reason",
+        "provenance",
+        "omitted_item_sha256s",
+        "omitted_item_count",
+        "evidence_sha256"
+      ],
+      "title": "ContextOmissionEvidence",
+      "type": "object"
+    },
+    "ContextOmissionProvenance": {
+      "description": "Origin of one omission inventory.",
+      "enum": [
+        "BLIND_DISCOVERY_POLICY",
+        "HASHED_CONTEXT_PACKAGE"
+      ],
+      "title": "ContextOmissionProvenance",
+      "type": "string"
+    },
+    "ContextOmissionReason": {
+      "description": "Host-defined non-operational reason for withholding context.",
+      "enum": [
+        "BLIND_DISCOVERY_WITHHELD",
+        "CONTEXT_BUDGET_EXCLUDED"
+      ],
+      "title": "ContextOmissionReason",
+      "type": "string"
+    },
+    "ContextPreflightReason": {
+      "description": "Typed host-side reason a request did not reach provider transport.",
+      "enum": [
+        "ENDPOINT_CAPACITY",
+        "GLOBAL_TOKEN_BUDGET",
+        "COST_BUDGET",
+        "ROUTE_UNAVAILABLE",
+        "CONTEXT_PLAN_INVALID",
+        "ORCHESTRATOR_NOT_SCHEDULED"
+      ],
+      "title": "ContextPreflightReason",
+      "type": "string"
+    },
+    "ContextPreflightRequestEvidence": {
+      "additionalProperties": false,
+      "description": "Hash-only proof that one planned request did not enter transport.",
+      "properties": {
+        "decision_evidence_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Decision Evidence Sha256S",
+          "type": "array"
+        },
+        "decision_source": {
+          "$ref": "#/$defs/ContextPreflightSource"
+        },
+        "estimated_prompt_tokens": {
+          "minimum": 0,
+          "title": "Estimated Prompt Tokens",
+          "type": "integer"
+        },
+        "evidence_kind": {
+          "const": "preflight",
+          "default": "preflight",
+          "title": "Evidence Kind",
+          "type": "string"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/ContextPreflightReason"
+        },
+        "request_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "request_plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequestTokenPlan"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "request_plan_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Plan Sha256"
+        },
+        "request_state": {
+          "enum": [
+            "PRE_FLIGHT_REJECTED",
+            "NOT_SENT"
+          ],
+          "title": "Request State",
+          "type": "string"
+        },
+        "requested_completion_tokens": {
+          "exclusiveMinimum": 0,
+          "title": "Requested Completion Tokens",
+          "type": "integer"
+        },
+        "requested_model": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+          "title": "Requested Model",
+          "type": "string"
+        },
+        "role": {
+          "pattern": "^[a-z][a-z0-9_:.-]{0,127}$",
+          "title": "Role",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_id",
+        "role",
+        "requested_model",
+        "request_state",
+        "decision_source",
+        "reason",
+        "decision_evidence_sha256s",
+        "estimated_prompt_tokens",
+        "requested_completion_tokens",
+        "evidence_sha256"
+      ],
+      "title": "ContextPreflightRequestEvidence",
+      "type": "object"
+    },
+    "ContextPreflightSource": {
+      "description": "Trusted component that made a preflight decision.",
+      "enum": [
+        "TOKEN_PLANNER",
+        "BUDGET_MANAGER",
+        "ORCHESTRATOR"
+      ],
+      "title": "ContextPreflightSource",
+      "type": "string"
+    },
+    "ContextRequestEvidence": {
+      "additionalProperties": false,
+      "description": "Semantic join between one usage record and its exact request token plan.",
+      "properties": {
+        "actual_usage": {
+          "$ref": "#/$defs/ActualTokenUsageEvidence"
+        },
+        "atomic_token_reservation": {
+          "$ref": "#/$defs/AtomicTokenReservationEvidence"
+        },
+        "atomic_token_reservation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Atomic Token Reservation Sha256",
+          "type": "string"
+        },
+        "evidence_kind": {
+          "const": "provider_usage",
+          "default": "provider_usage",
+          "title": "Evidence Kind",
+          "type": "string"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "execution_evidence": {
+          "$ref": "#/$defs/ExecutionEvidenceKind"
+        },
+        "omissions": {
+          "items": {
+            "$ref": "#/$defs/ContextOmissionEvidence"
+          },
+          "maxItems": 2,
+          "minItems": 1,
+          "title": "Omissions",
+          "type": "array"
+        },
+        "prompt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prompt Sha256",
+          "type": "string"
+        },
+        "provider_attempts": {
+          "minimum": 1,
+          "title": "Provider Attempts",
+          "type": "integer"
+        },
+        "request_body_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Body Sha256"
+        },
+        "request_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "request_plan": {
+          "$ref": "#/$defs/RequestTokenPlan"
+        },
+        "request_plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Request Plan Sha256",
+          "type": "string"
+        },
+        "request_state": {
+          "enum": [
+            "COMPLETED",
+            "TRUNCATED",
+            "SENT_FAILED"
+          ],
+          "title": "Request State",
+          "type": "string"
+        },
+        "requested_model": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+          "title": "Requested Model",
+          "type": "string"
+        },
+        "response_schema_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Response Schema Sha256"
+        },
+        "role": {
+          "pattern": "^[a-z][a-z0-9_:.-]{0,127}$",
+          "title": "Role",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "usage_record_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Usage Record Sha256",
+          "type": "string"
+        },
+        "user_prompt_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "User Prompt Sha256"
+        }
+      },
+      "required": [
+        "request_id",
+        "role",
+        "requested_model",
+        "execution_evidence",
+        "request_state",
+        "provider_attempts",
+        "usage_record_sha256",
+        "prompt_sha256",
+        "request_plan",
+        "request_plan_sha256",
+        "atomic_token_reservation",
+        "atomic_token_reservation_sha256",
+        "omissions",
+        "actual_usage",
+        "evidence_sha256"
+      ],
+      "title": "ContextRequestEvidence",
+      "type": "object"
+    },
+    "EndpointRouteIntersection": {
+      "additionalProperties": false,
+      "description": "Conservative capacity intersection across every possible request route.",
+      "properties": {
+        "context_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Context Tokens",
+          "type": "integer"
+        },
+        "exact_model_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Exact Model Ids",
+          "type": "array"
+        },
+        "intersection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Intersection Sha256",
+          "type": "string"
+        },
+        "max_completion_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Max Completion Tokens",
+          "type": "integer"
+        },
+        "max_prompt_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Max Prompt Tokens",
+          "type": "integer"
+        },
+        "provider_endpoints": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Provider Endpoints",
+          "type": "array"
+        },
+        "routes": {
+          "items": {
+            "$ref": "#/$defs/EndpointRouteTokenCapacity"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "title": "Routes",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "routes",
+        "exact_model_ids",
+        "provider_endpoints",
+        "context_tokens",
+        "max_prompt_tokens",
+        "max_completion_tokens",
+        "intersection_sha256"
+      ],
+      "title": "EndpointRouteIntersection",
+      "type": "object"
+    },
+    "EndpointRouteTokenCapacity": {
+      "additionalProperties": false,
+      "description": "Frozen token capacities for one exact model and provider endpoint route.",
+      "properties": {
+        "context_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Context Tokens",
+          "type": "integer"
+        },
+        "endpoint_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Snapshot Sha256",
+          "type": "string"
+        },
+        "exact_model_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "max_completion_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Max Completion Tokens",
+          "type": "integer"
+        },
+        "max_completion_tokens_source": {
+          "enum": [
+            "metadata",
+            "context_limit"
+          ],
+          "title": "Max Completion Tokens Source",
+          "type": "string"
+        },
+        "max_prompt_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Max Prompt Tokens",
+          "type": "integer"
+        },
+        "max_prompt_tokens_source": {
+          "enum": [
+            "metadata",
+            "context_limit"
+          ],
+          "title": "Max Prompt Tokens Source",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "route_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Route Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "provider_endpoint",
+        "endpoint_snapshot_sha256",
+        "context_tokens",
+        "max_prompt_tokens",
+        "max_prompt_tokens_source",
+        "max_completion_tokens",
+        "max_completion_tokens_source",
+        "route_sha256"
+      ],
+      "title": "EndpointRouteTokenCapacity",
+      "type": "object"
+    },
+    "ExecutionEvidenceKind": {
+      "description": "Whether a runtime record came from a real process or a test double.",
+      "enum": [
+        "real",
+        "mock",
+        "unverified"
+      ],
+      "title": "ExecutionEvidenceKind",
+      "type": "string"
+    },
+    "GlobalTokenBudgetEvidence": {
+      "additionalProperties": false,
+      "description": "Immutable input/output reservation proof against global token limits.",
+      "properties": {
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "global_input_token_budget": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Global Input Token Budget",
+          "type": "integer"
+        },
+        "global_output_token_budget": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Global Output Token Budget",
+          "type": "integer"
+        },
+        "input_tokens_remaining_after": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Input Tokens Remaining After",
+          "type": "integer"
+        },
+        "input_tokens_reserved_after": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Input Tokens Reserved After",
+          "type": "integer"
+        },
+        "input_tokens_reserved_before": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Input Tokens Reserved Before",
+          "type": "integer"
+        },
+        "output_tokens_remaining_after": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Output Tokens Remaining After",
+          "type": "integer"
+        },
+        "output_tokens_reserved_after": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Output Tokens Reserved After",
+          "type": "integer"
+        },
+        "output_tokens_reserved_before": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Output Tokens Reserved Before",
+          "type": "integer"
+        },
+        "request_input_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Request Input Tokens",
+          "type": "integer"
+        },
+        "request_output_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Request Output Tokens",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "global_input_token_budget",
+        "global_output_token_budget",
+        "input_tokens_reserved_before",
+        "output_tokens_reserved_before",
+        "request_input_tokens",
+        "request_output_tokens",
+        "input_tokens_reserved_after",
+        "output_tokens_reserved_after",
+        "input_tokens_remaining_after",
+        "output_tokens_remaining_after",
+        "evidence_sha256"
+      ],
+      "title": "GlobalTokenBudgetEvidence",
+      "type": "object"
+    },
+    "PromptAllocationCategory": {
+      "description": "Complete prompt allocation inventory retained by every request plan.",
+      "enum": [
+        "framework",
+        "graph",
+        "invariant",
+        "metadata",
+        "prior_audit",
+        "protocol",
+        "scanner",
+        "schema",
+        "source",
+        "system",
+        "workflow"
+      ],
+      "title": "PromptAllocationCategory",
+      "type": "string"
+    },
+    "PromptTokenAllocation": {
+      "additionalProperties": false,
+      "description": "One explicit prompt category without raw text.",
+      "properties": {
+        "allocation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Allocation Sha256",
+          "type": "string"
+        },
+        "category": {
+          "$ref": "#/$defs/PromptAllocationCategory"
+        },
+        "estimate": {
+          "$ref": "#/$defs/Utf8TokenEstimate"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "category",
+        "estimate",
+        "allocation_sha256"
+      ],
+      "title": "PromptTokenAllocation",
+      "type": "object"
+    },
+    "RequestTokenPlan": {
+      "additionalProperties": false,
+      "description": "Self-hashed endpoint-bound input, reasoning, and output request plan.",
+      "properties": {
+        "allocations": {
+          "items": {
+            "$ref": "#/$defs/PromptTokenAllocation"
+          },
+          "maxItems": 11,
+          "minItems": 11,
+          "title": "Allocations",
+          "type": "array"
+        },
+        "context_omission_sha256s": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4096,
+          "title": "Context Omission Sha256S",
+          "type": "array"
+        },
+        "context_utilization": {
+          "anyOf": [
+            {
+              "maximum": 0.75,
+              "minimum": 0.65,
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Context Utilization"
+        },
+        "estimated_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Estimated Prompt Tokens",
+          "type": "integer"
+        },
+        "global_budget": {
+          "$ref": "#/$defs/GlobalTokenBudgetEvidence"
+        },
+        "hard_prompt_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Hard Prompt Tokens",
+          "type": "integer"
+        },
+        "plan_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Plan Sha256",
+          "type": "string"
+        },
+        "prompt_byte_upper_bound_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Prompt Byte Upper Bound Tokens",
+          "type": "integer"
+        },
+        "request_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "requested_completion_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Requested Completion Tokens",
+          "type": "integer"
+        },
+        "required_output_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Required Output Tokens",
+          "type": "integer"
+        },
+        "reserved_output_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Reserved Output Tokens",
+          "type": "integer"
+        },
+        "reserved_protocol_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Reserved Protocol Tokens",
+          "type": "integer"
+        },
+        "reserved_reasoning_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Reserved Reasoning Tokens",
+          "type": "integer"
+        },
+        "reserved_schema_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Reserved Schema Tokens",
+          "type": "integer"
+        },
+        "reserved_system_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Reserved System Tokens",
+          "type": "integer"
+        },
+        "role": {
+          "pattern": "^[a-z][a-z0-9_:.-]{0,127}$",
+          "title": "Role",
+          "type": "string"
+        },
+        "route_intersection": {
+          "$ref": "#/$defs/EndpointRouteIntersection"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_budget": {
+          "$ref": "#/$defs/SourceTokenBudgetEvidence"
+        },
+        "usable_prompt_tokens": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Usable Prompt Tokens",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "request_id",
+        "role",
+        "route_intersection",
+        "context_utilization",
+        "allocations",
+        "required_output_tokens",
+        "reserved_output_tokens",
+        "reserved_reasoning_tokens",
+        "requested_completion_tokens",
+        "hard_prompt_tokens",
+        "usable_prompt_tokens",
+        "estimated_prompt_tokens",
+        "prompt_byte_upper_bound_tokens",
+        "reserved_system_tokens",
+        "reserved_schema_tokens",
+        "reserved_protocol_tokens",
+        "source_budget",
+        "global_budget",
+        "plan_sha256"
+      ],
+      "title": "RequestTokenPlan",
+      "type": "object"
+    },
+    "SourceTokenBudgetEvidence": {
+      "additionalProperties": false,
+      "description": "Conservation proof for the maximum source allocation in one request.",
+      "properties": {
+        "configured_maximum_source_tokens_per_request": {
+          "exclusiveMinimum": 0,
+          "maximum": 2147483647,
+          "title": "Configured Maximum Source Tokens Per Request",
+          "type": "integer"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "maximum_source_tokens_per_request": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Maximum Source Tokens Per Request",
+          "type": "integer"
+        },
+        "non_source_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Non Source Prompt Tokens",
+          "type": "integer"
+        },
+        "planned_source_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Planned Source Tokens",
+          "type": "integer"
+        },
+        "remaining_source_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Remaining Source Tokens",
+          "type": "integer"
+        },
+        "reserved_non_source_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Reserved Non Source Prompt Tokens",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "unallocated_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Unallocated Prompt Tokens",
+          "type": "integer"
+        },
+        "usable_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Usable Prompt Tokens",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "usable_prompt_tokens",
+        "non_source_prompt_tokens",
+        "reserved_non_source_prompt_tokens",
+        "configured_maximum_source_tokens_per_request",
+        "maximum_source_tokens_per_request",
+        "planned_source_tokens",
+        "remaining_source_tokens",
+        "unallocated_prompt_tokens",
+        "evidence_sha256"
+      ],
+      "title": "SourceTokenBudgetEvidence",
+      "type": "object"
+    },
+    "TokenBudgetStateEvidence": {
+      "additionalProperties": false,
+      "description": "One atomic snapshot of process-local global token accounting.",
+      "properties": {
+        "remaining_input_tokens": {
+          "anyOf": [
+            {
+              "maximum": 9223372036854775807,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remaining Input Tokens"
+        },
+        "remaining_output_tokens": {
+          "anyOf": [
+            {
+              "maximum": 9223372036854775807,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remaining Output Tokens"
+        },
+        "reserved_input_tokens": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Reserved Input Tokens",
+          "type": "integer"
+        },
+        "reserved_output_tokens": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Reserved Output Tokens",
+          "type": "integer"
+        },
+        "spent_input_tokens": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Spent Input Tokens",
+          "type": "integer"
+        },
+        "spent_output_tokens": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Spent Output Tokens",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "spent_input_tokens",
+        "reserved_input_tokens",
+        "spent_output_tokens",
+        "reserved_output_tokens"
+      ],
+      "title": "TokenBudgetStateEvidence",
+      "type": "object"
+    },
+    "Utf8TokenEstimate": {
+      "additionalProperties": false,
+      "description": "Deterministic local estimate with a separate conservative byte upper bound.",
+      "properties": {
+        "byte_upper_bound_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Byte Upper Bound Tokens",
+          "type": "integer"
+        },
+        "content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "estimated_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Estimated Tokens",
+          "type": "integer"
+        },
+        "estimator": {
+          "const": "MMAUDIT_UTF8_BYTES_DIV3_V1",
+          "default": "MMAUDIT_UTF8_BYTES_DIV3_V1",
+          "title": "Estimator",
+          "type": "string"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "utf8_bytes": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Utf8 Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "content_sha256",
+        "utf8_bytes",
+        "estimated_tokens",
+        "byte_upper_bound_tokens",
+        "evidence_sha256"
+      ],
+      "title": "Utf8TokenEstimate",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/context_manifest.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Self-hashed deterministic context evidence for one complete run.",
+  "properties": {
+    "generated_by": {
+      "const": "mmaudit",
+      "default": "mmaudit",
+      "title": "Generated By",
+      "type": "string"
+    },
+    "manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Manifest Sha256",
+      "type": "string"
+    },
+    "requests": {
+      "items": {
+        "discriminator": {
+          "mapping": {
+            "preflight": "#/$defs/ContextPreflightRequestEvidence",
+            "provider_usage": "#/$defs/ContextRequestEvidence"
+          },
+          "propertyName": "evidence_kind"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/$defs/ContextRequestEvidence"
+          },
+          {
+            "$ref": "#/$defs/ContextPreflightRequestEvidence"
+          }
+        ]
+      },
+      "maxItems": 100000,
+      "title": "Requests",
+      "type": "array"
+    },
+    "run_id": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "totals": {
+      "$ref": "#/$defs/ContextManifestTotals"
+    }
+  },
+  "required": [
+    "run_id",
+    "requests",
+    "totals",
+    "manifest_sha256"
+  ],
+  "title": "ContextManifest",
+  "type": "object"
+}
