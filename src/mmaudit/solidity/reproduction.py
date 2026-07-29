@@ -122,8 +122,36 @@ class MacOSSandboxBackend:
         private_dir: Path,
         network_rule: str,
     ) -> list[str]:
-        profile_path = private_dir / "sandbox.sb"
+        resolved_private = private_dir.resolve(strict=True)
+        resolved_workspace = workspace.resolve(strict=True)
+        resolved_workspace.relative_to(resolved_private)
+        profile_path = resolved_private / "sandbox.sb"
         forge_path = Path(command[0]).resolve()
+        private_command_files: set[Path] = set()
+        for argument in command[1:]:
+            candidate = Path(argument)
+            if not candidate.is_absolute():
+                continue
+            try:
+                resolved_candidate = candidate.resolve(strict=True)
+                resolved_candidate.relative_to(resolved_private)
+            except (OSError, ValueError):
+                continue
+            if resolved_candidate.is_file():
+                private_command_files.add(resolved_candidate)
+        metadata_paths = sorted(
+            {
+                *resolved_private.parents,
+                *forge_path.parents,
+                *(parent for path in private_command_files for parent in path.parents),
+            },
+            key=str,
+        )
+        metadata_rules = " ".join(
+            f'(literal "{_sandbox_quote(str(path))}")'
+            for path in metadata_paths
+            if path != Path("/")
+        )
         # Compiler frontends legitimately spawn pinned compiler/linker processes.
         # Process execution is therefore allowed inside the boundary; file reads,
         # writes, and network remain deny-by-default, and command construction
@@ -136,11 +164,25 @@ class MacOSSandboxBackend:
                 "(allow process-fork)",
                 "(allow process-exec)",
                 "(allow sysctl-read)",
+                # Foundry's macOS HTTP client constructs the system proxy matcher
+                # before connecting to the pinned loopback RPC. Permit only the
+                # read-only SystemConfiguration broker lookup it requires. The
+                # separate network rule still restricts outbound connections to
+                # the exact operator-pinned loopback port.
+                '(allow mach-lookup (global-name "com.apple.SystemConfiguration.configd"))',
                 '(allow file-read* (subpath "/System") (subpath "/usr") '
-                '(subpath "/Library") (subpath "/dev"))',
-                f'(allow file-read* (subpath "{_sandbox_quote(str(workspace))}") '
-                f'(literal "{_sandbox_quote(str(forge_path))}"))',
-                f'(allow file-write* (subpath "{_sandbox_quote(str(private_dir))}"))',
+                '(subpath "/Library") (subpath "/dev") '
+                '(subpath "/private/var/select"))',
+                f"(allow file-read-metadata {metadata_rules})",
+                f'(allow file-read* (subpath "{_sandbox_quote(str(resolved_workspace))}") '
+                f'(subpath "{_sandbox_quote(str(resolved_private))}") '
+                f'(literal "{_sandbox_quote(str(forge_path))}") '
+                + " ".join(
+                    f'(literal "{_sandbox_quote(str(path))}")'
+                    for path in sorted(private_command_files, key=str)
+                )
+                + ")",
+                f'(allow file-write* (subpath "{_sandbox_quote(str(resolved_private))}"))',
                 network_rule,
             )
         )

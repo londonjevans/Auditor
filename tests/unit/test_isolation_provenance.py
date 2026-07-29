@@ -79,6 +79,7 @@ def test_preflight_records_each_boundary_observation_without_secret_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed_environments: list[dict[str, str]] = []
+    observed_ports: list[int] = []
 
     def execute(
         _backend: object,
@@ -86,8 +87,11 @@ def test_preflight_records_each_boundary_observation_without_secret_environment(
         **kwargs: object,
     ) -> int:
         environment = kwargs["environment"]
+        rpc_port = kwargs["rpc_port"]
         assert isinstance(environment, dict)
+        assert isinstance(rpc_port, int)
         observed_environments.append(environment)
+        observed_ports.append(rpc_port)
         rendered = " ".join(command)
         if "workspace-ok" in rendered:
             Path(command[-1]).write_text("workspace-ok", encoding="utf-8")
@@ -107,6 +111,8 @@ def test_preflight_records_each_boundary_observation_without_secret_environment(
 
     assert probes == _passing_probes()
     assert observed_environments
+    assert observed_ports
+    assert all(0 < port <= 65_535 for port in observed_ports)
     assert all("OPENROUTER_API_KEY" not in item for item in observed_environments)
     assert all("MMAUDIT_SECRETS_ENV_FILE" not in item for item in observed_environments)
 

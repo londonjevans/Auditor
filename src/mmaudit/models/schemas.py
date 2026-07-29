@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from collections.abc import Sequence
 from datetime import datetime
 from enum import StrEnum
@@ -447,6 +448,19 @@ class ScannerStatus(StrEnum):
     SKIPPED = "skipped"
 
 
+class RepositoryTestExecutionStatus(StrEnum):
+    """Terminal observation for one selected repository-owned test."""
+
+    PASSED = "passed"
+    FAILED = "failed"
+    REVERTED = "reverted"
+    ASSERTION_FAILED = "assertion_failed"
+    SKIPPED = "skipped"
+    TIMED_OUT = "timed_out"
+    UNAVAILABLE = "unavailable"
+    INVALID_OUTPUT = "invalid_output"
+
+
 class ExecutionEvidenceKind(StrEnum):
     """Whether a runtime record came from a real process or a test double."""
 
@@ -475,6 +489,21 @@ class SolidityProjectType(StrEnum):
     HARDHAT = "hardhat"
     MIXED = "mixed"
     PLAIN = "plain"
+
+
+class RepositorySuiteFramework(StrEnum):
+    """Supported repository-owned suite framework."""
+
+    FOUNDRY = "foundry"
+    HARDHAT = "hardhat"
+
+
+class RepositoryTestKind(StrEnum):
+    """Machine-classified Foundry test campaign kind."""
+
+    UNIT = "unit"
+    FUZZ = "fuzz"
+    INVARIANT = "invariant"
 
 
 class CompilationStatus(StrEnum):
@@ -2507,6 +2536,457 @@ class ScannerFinding(StrictModel):
     fingerprint: str
 
 
+def _repository_suite_path_is_safe(value: str, *, allow_root: bool) -> bool:
+    normalized = value.replace("\\", "/")
+    parts = normalized.split("/")
+    sensitive_parts = {".git", ".ssh", ".aws", ".azure", "credentials", "mnemonics"}
+    if allow_root and value == ".":
+        return True
+    return not (
+        not value
+        or value != value.strip()
+        or normalized != value
+        or len(value) > 1_000
+        or value.startswith(("/", "-"))
+        or re.match(r"^[A-Za-z]:/", value)
+        or any(part in {"", ".", ".."} for part in parts)
+        or any(character in "*?[]{}" for character in value)
+        or unicodedata.normalize("NFC", value) != value
+        or any(unicodedata.category(character).startswith("C") for character in value)
+        or any(
+            part.casefold() in sensitive_parts or part.casefold().startswith(".env")
+            for part in parts
+        )
+    )
+
+
+def _repository_suite_text_is_safe(value: str) -> bool:
+    return (
+        bool(value)
+        and value == value.strip()
+        and unicodedata.normalize("NFC", value) == value
+        and not any(unicodedata.category(character).startswith("C") for character in value)
+    )
+
+
+class RepositorySuiteTestDescriptor(StrictModel):
+    """Canonical source-bound identity for one selected repository-owned test."""
+
+    framework: RepositorySuiteFramework
+    project_root: str = Field(min_length=1, max_length=1_000)
+    path: str = Field(min_length=1, max_length=1_000)
+    suite_name: str = Field(min_length=1, max_length=1_000)
+    test_name: str = Field(min_length=1, max_length=1_000)
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    descriptor_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> RepositorySuiteTestDescriptor:
+        """Validate and self-hash a newly discovered descriptor."""
+
+        if "descriptor_sha256" in values:
+            raise ValueError("descriptor_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, descriptor_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"descriptor_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "descriptor_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator("project_root")
+    @classmethod
+    def project_root_is_safe(cls, value: str) -> str:
+        if not _repository_suite_path_is_safe(value, allow_root=True):
+            raise ValueError("repository suite project root must be repository-relative")
+        return value
+
+    @field_validator("path")
+    @classmethod
+    def path_is_safe(cls, value: str) -> str:
+        if not _repository_suite_path_is_safe(value, allow_root=False):
+            raise ValueError("repository suite test path must be repository-relative")
+        return value
+
+    @field_validator("suite_name", "test_name")
+    @classmethod
+    def names_are_bounded_printable_text(cls, value: str) -> str:
+        if not _repository_suite_text_is_safe(value):
+            raise ValueError("repository suite and test names must be bounded printable text")
+        return value
+
+    @model_validator(mode="after")
+    def source_range_and_hash_are_consistent(self) -> RepositorySuiteTestDescriptor:
+        if self.end_line < self.start_line:
+            raise ValueError("repository suite descriptor end line precedes its start line")
+        if self.path != self.project_relative_path:
+            raise ValueError("repository suite test path must reside under its project root")
+        if self.descriptor_sha256 != self.expected_descriptor_sha256():
+            raise ValueError("repository suite descriptor hash does not match its fields")
+        return self
+
+    @property
+    def project_relative_path(self) -> str:
+        if self.project_root == ".":
+            return self.path
+        prefix = f"{self.project_root}/"
+        if not self.path.startswith(prefix):
+            return ""
+        return self.path
+
+    @property
+    def canonical_key(self) -> tuple[str, str, str, str, str]:
+        return (
+            self.framework.value,
+            self.project_root,
+            self.path,
+            self.suite_name,
+            self.test_name,
+        )
+
+    @property
+    def collision_key(self) -> tuple[str, str, str, str, str]:
+        return (
+            self.framework.value.casefold(),
+            self.project_root.casefold(),
+            self.path.casefold(),
+            self.suite_name.casefold(),
+            self.test_name.casefold(),
+        )
+
+    def expected_descriptor_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"descriptor_sha256"})
+        return _canonical_model_sha256(payload)
+
+
+class RepositorySuiteSelection(StrictModel):
+    """Hash-bound result of bounded repository-suite selection."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    profile: Literal["legacy_audit", "explicit"]
+    repository_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    configuration_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    candidate_file_count: int = Field(ge=0)
+    candidate_test_count: int = Field(ge=0)
+    selected_file_count: int = Field(ge=0)
+    selected_test_count: int = Field(ge=0)
+    omitted_file_count: int = Field(ge=0)
+    omitted_test_count: int = Field(ge=0)
+    limit_reached: bool
+    tests: tuple[RepositorySuiteTestDescriptor, ...] = Field(max_length=10_000)
+    safety_claim: Literal[False] = False
+    selection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> RepositorySuiteSelection:
+        """Validate and self-hash a completed bounded selection."""
+
+        if "selection_sha256" in values:
+            raise ValueError("selection_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, selection_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"selection_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "selection_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @model_validator(mode="after")
+    def counts_order_and_hash_are_consistent(self) -> RepositorySuiteSelection:
+        keys = tuple(test.canonical_key for test in self.tests)
+        collision_keys = tuple(test.collision_key for test in self.tests)
+        descriptor_hashes = tuple(test.descriptor_sha256 for test in self.tests)
+        if keys != tuple(sorted(set(keys))):
+            raise ValueError("repository suite descriptors must be unique and canonically sorted")
+        if len(descriptor_hashes) != len(set(descriptor_hashes)):
+            raise ValueError("repository suite descriptor hashes must be unique")
+        if len(collision_keys) != len(set(collision_keys)):
+            raise ValueError("repository suite descriptors have a case-insensitive collision")
+        selected_files = {
+            (test.framework.value, test.project_root, test.path) for test in self.tests
+        }
+        if self.selected_file_count != len(selected_files) or self.selected_test_count != len(
+            self.tests
+        ):
+            raise ValueError("repository suite selected counts do not match its descriptors")
+        if (
+            self.candidate_file_count != self.selected_file_count + self.omitted_file_count
+            or self.candidate_test_count != self.selected_test_count + self.omitted_test_count
+        ):
+            raise ValueError("repository suite candidate and omission counts are inconsistent")
+        if self.limit_reached:
+            raise ValueError("repository suite selection must fail instead of truncating at limits")
+        if self.selection_sha256 != self.expected_selection_sha256():
+            raise ValueError("repository suite selection hash does not match its fields")
+        return self
+
+    def expected_selection_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"selection_sha256"})
+        return _canonical_model_sha256(payload)
+
+
+class RepositorySuiteExecutionPolicy(StrictModel):
+    """Typed, self-hashed policy that independently binds repository-suite execution."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    framework: Literal[RepositorySuiteFramework.FOUNDRY] = RepositorySuiteFramework.FOUNDRY
+    selection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    selection_configuration_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    chain_id: int = Field(ge=1)
+    block_number: int = Field(ge=0)
+    block_hash: str = Field(pattern=r"^0x[0-9a-f]{64}$")
+    tool_name: Literal["forge"] = "forge"
+    tool_version: str = Field(min_length=1, max_length=1_000)
+    tool_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    compiler_version: str = Field(min_length=1, max_length=1_000)
+    compiler_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    isolation_backend: str = Field(min_length=1, max_length=200)
+    isolation_attestation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    fuzz_seed: str = Field(pattern=r"^0x[0-9a-f]{64}$")
+    fuzz_runs: int = Field(ge=1, le=1_000_000)
+    invariant_runs: int = Field(ge=1, le=100_000)
+    per_test_timeout_seconds: float = Field(gt=0, le=1_800)
+    total_timeout_seconds: float = Field(gt=0, le=7_200)
+    max_output_bytes_per_test: int = Field(ge=1_024, le=10_000_000)
+    max_total_output_bytes: int = Field(ge=1_024, le=100_000_000)
+    ffi_enabled: Literal[False] = False
+    fs_permissions: Literal["[]"] = "[]"
+    foundry_profile: Literal["default"] = "default"
+    offline: Literal[True] = True
+    storage_caching: Literal[False] = False
+    threads: Literal[1] = 1
+    policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> RepositorySuiteExecutionPolicy:
+        """Validate and self-hash a canonical execution policy."""
+
+        if "policy_sha256" in values:
+            raise ValueError("policy_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, policy_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"policy_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "policy_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @model_validator(mode="after")
+    def limits_and_hash_are_consistent(self) -> RepositorySuiteExecutionPolicy:
+        if self.total_timeout_seconds < self.per_test_timeout_seconds:
+            raise ValueError("repository execution total timeout is below its per-test timeout")
+        if self.max_total_output_bytes < self.max_output_bytes_per_test:
+            raise ValueError(
+                "repository execution total output is below its per-test output ceiling"
+            )
+        if self.policy_sha256 != self.expected_policy_sha256():
+            raise ValueError("repository suite execution policy hash does not match its fields")
+        return self
+
+    def expected_policy_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"policy_sha256"})
+        return _canonical_model_sha256(payload)
+
+
+class RepositoryTestExecution(StrictModel):
+    """Terminal, hash-bound execution evidence for one selected repository test."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    selection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    descriptor_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    framework: RepositorySuiteFramework
+    project_root: str = Field(min_length=1, max_length=1_000)
+    path: str = Field(min_length=1, max_length=1_000)
+    suite_name: str = Field(min_length=1, max_length=1_000)
+    test_name: str = Field(min_length=1, max_length=1_000)
+    chain_id: int | None = Field(default=None, ge=1)
+    block_number: int | None = Field(default=None, ge=0)
+    block_hash: str | None = Field(default=None, pattern=r"^0x[0-9a-f]{64}$")
+    fuzz_seed: str = Field(pattern=r"^0x[0-9a-f]{64}$")
+    test_kind: RepositoryTestKind | None = None
+    fuzz_cases: int = Field(default=0, ge=0, le=2**63 - 1)
+    invariant_runs: int = Field(default=0, ge=0, le=2**63 - 1)
+    invariant_calls: int = Field(default=0, ge=0, le=2**63 - 1)
+    status: RepositoryTestExecutionStatus
+    terminal_detail: str | None = Field(default=None, max_length=8_000)
+    duration_seconds: float = Field(ge=0, le=7_200)
+    command_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    output_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    output_bytes: int = Field(default=0, ge=0, le=10_000_000)
+    machine_result_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    process_exit_code: int | None = None
+    machine_output_validated: bool = False
+    execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.UNVERIFIED
+    repository_code_execution: RepositoryCodeExecutionState = (
+        RepositoryCodeExecutionState.NOT_APPLICABLE
+    )
+    isolation_backend: str | None = Field(default=None, min_length=1, max_length=200)
+    isolation_attestation_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    compiler_version: str | None = Field(default=None, min_length=1, max_length=1_000)
+    compiler_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    execution_policy_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    safety_claim: Literal[False] = False
+    execution_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> RepositoryTestExecution:
+        """Validate and self-hash one terminal execution observation."""
+
+        if "execution_sha256" in values:
+            raise ValueError("execution_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, execution_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"execution_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "execution_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator("project_root")
+    @classmethod
+    def project_root_is_safe(cls, value: str) -> str:
+        if not _repository_suite_path_is_safe(value, allow_root=True):
+            raise ValueError("repository test execution project root must be repository-relative")
+        return value
+
+    @field_validator("path")
+    @classmethod
+    def path_is_safe(cls, value: str) -> str:
+        if not _repository_suite_path_is_safe(value, allow_root=False):
+            raise ValueError("repository test execution path must be repository-relative")
+        return value
+
+    @field_validator("suite_name", "test_name")
+    @classmethod
+    def names_are_bounded_printable_text(cls, value: str) -> str:
+        if not _repository_suite_text_is_safe(value):
+            raise ValueError("repository execution names must be bounded printable text")
+        return value
+
+    @field_validator("terminal_detail")
+    @classmethod
+    def terminal_detail_is_printable(cls, value: str | None) -> str | None:
+        if value is not None and (not _repository_suite_text_is_safe(value)):
+            raise ValueError("repository execution detail must be bounded printable text")
+        return value
+
+    @model_validator(mode="after")
+    def terminal_evidence_and_hash_are_consistent(self) -> RepositoryTestExecution:
+        if self.project_root != "." and not self.path.startswith(f"{self.project_root}/"):
+            raise ValueError("repository test execution path must reside under its project root")
+        attempted = {
+            RepositoryTestExecutionStatus.PASSED,
+            RepositoryTestExecutionStatus.FAILED,
+            RepositoryTestExecutionStatus.REVERTED,
+            RepositoryTestExecutionStatus.ASSERTION_FAILED,
+            RepositoryTestExecutionStatus.TIMED_OUT,
+            RepositoryTestExecutionStatus.INVALID_OUTPUT,
+        }
+        machine_validated = {
+            RepositoryTestExecutionStatus.PASSED,
+            RepositoryTestExecutionStatus.FAILED,
+            RepositoryTestExecutionStatus.REVERTED,
+            RepositoryTestExecutionStatus.ASSERTION_FAILED,
+        }
+        detail_required = set(RepositoryTestExecutionStatus) - {
+            RepositoryTestExecutionStatus.PASSED
+        }
+        if self.status in attempted:
+            if self.chain_id is None or self.block_number is None or self.block_hash is None:
+                raise ValueError("attempted repository test requires pinned fork chain and block")
+            if self.command_sha256 is None or self.output_sha256 is None:
+                raise ValueError("attempted repository test requires command and output hashes")
+            if self.repository_code_execution is not RepositoryCodeExecutionState.ISOLATED:
+                raise ValueError("attempted repository test requires isolated repository code")
+            if self.isolation_backend is None or self.isolation_attestation_sha256 is None:
+                raise ValueError("attempted repository test requires isolation evidence")
+            if (
+                self.compiler_version is None
+                or self.compiler_sha256 is None
+                or self.execution_policy_sha256 is None
+            ):
+                raise ValueError(
+                    "attempted repository test requires compiler and execution-policy evidence"
+                )
+        if self.status in machine_validated and not self.machine_output_validated:
+            raise ValueError("classified repository test outcome requires validated machine output")
+        if self.status not in machine_validated and self.machine_output_validated:
+            raise ValueError("non-classified repository test cannot claim validated machine output")
+        if self.status in machine_validated and self.machine_result_sha256 is None:
+            raise ValueError(
+                "classified repository test outcome requires a normalized machine-result hash"
+            )
+        if self.status not in machine_validated and self.machine_result_sha256 is not None:
+            raise ValueError(
+                "unclassified repository test cannot claim a normalized machine-result hash"
+            )
+        if self.status in detail_required and self.terminal_detail is None:
+            raise ValueError("non-passing repository test requires terminal detail")
+        if self.status is RepositoryTestExecutionStatus.PASSED:
+            if self.terminal_detail is not None or self.process_exit_code != 0:
+                raise ValueError("passing repository test requires exit zero and no failure detail")
+        elif self.status in {
+            RepositoryTestExecutionStatus.FAILED,
+            RepositoryTestExecutionStatus.REVERTED,
+            RepositoryTestExecutionStatus.ASSERTION_FAILED,
+        } and self.process_exit_code in {None, 0}:
+            raise ValueError("failed repository test requires a nonzero process exit code")
+        if self.status in machine_validated and self.test_kind is None:
+            raise ValueError("classified repository test requires a typed campaign kind")
+        if self.status not in machine_validated and self.test_kind is not None:
+            raise ValueError("unclassified repository test cannot claim a campaign kind")
+        if self.test_kind is RepositoryTestKind.UNIT and (
+            self.fuzz_cases or self.invariant_runs or self.invariant_calls
+        ):
+            raise ValueError("unit repository test cannot claim fuzz or invariant campaigns")
+        if self.test_kind is RepositoryTestKind.FUZZ and (
+            self.fuzz_cases < 1 or self.invariant_runs or self.invariant_calls
+        ):
+            raise ValueError("fuzz repository test requires only a nonzero fuzz campaign")
+        if self.test_kind is RepositoryTestKind.INVARIANT and (
+            self.fuzz_cases or self.invariant_runs < 1 or self.invariant_calls < 1
+        ):
+            raise ValueError("invariant repository test requires nonzero invariant runs and calls")
+        if self.test_kind is None and (
+            self.fuzz_cases or self.invariant_runs or self.invariant_calls
+        ):
+            raise ValueError("unclassified repository test cannot claim campaign counts")
+        if self.output_sha256 is None and self.output_bytes:
+            raise ValueError("repository test output bytes require an output hash")
+        if self.execution_sha256 != self.expected_execution_sha256():
+            raise ValueError("repository test execution hash does not match its fields")
+        return self
+
+    @property
+    def canonical_key(self) -> tuple[str, str, str, str, str]:
+        return (
+            self.framework.value,
+            self.project_root,
+            self.path,
+            self.suite_name,
+            self.test_name,
+        )
+
+    def expected_execution_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"execution_sha256"})
+        return _canonical_model_sha256(payload)
+
+
 class FoundryTestExecutionSummary(StrictModel):
     """Observed unit, fuzz/property, and invariant coverage from one Forge suite."""
 
@@ -2552,6 +3032,12 @@ class ScannerRun(StrictModel):
     )
     machine_output_validated: bool = False
     foundry_summary: FoundryTestExecutionSummary | None = None
+    repository_suite_selection: RepositorySuiteSelection | None = None
+    repository_suite_execution_policy: RepositorySuiteExecutionPolicy | None = None
+    repository_test_executions: list[RepositoryTestExecution] = Field(
+        default_factory=list,
+        max_length=10_000,
+    )
     execution_observation_sha256: str | None = Field(
         default=None,
         pattern=r"^[0-9a-f]{64}$",
@@ -2591,6 +3077,251 @@ class ScannerRun(StrictModel):
             raise ValueError("blocked repository code cannot have a successful scanner result")
         if self.raw_output_sha256 is None and self.raw_output_bytes:
             raise ValueError("scanner output bytes require a SHA-256 binding")
+        if self.repository_test_executions and self.repository_suite_selection is None:
+            raise ValueError("repository test executions require their selection evidence")
+        if (
+            self.repository_suite_execution_policy is not None
+            and self.repository_suite_selection is None
+        ):
+            raise ValueError("repository execution policy requires its suite selection")
+        if self.repository_suite_selection is not None:
+            selection = self.repository_suite_selection
+            if not selection.tests and self.status is ScannerStatus.SUCCESS:
+                raise ValueError("an empty repository suite selection cannot be successful")
+            executions = self.repository_test_executions
+            execution_policy = self.repository_suite_execution_policy
+            expected_framework = {
+                "foundry_fork": RepositorySuiteFramework.FOUNDRY,
+                "hardhat_fork": RepositorySuiteFramework.HARDHAT,
+            }.get(self.scanner)
+            if expected_framework is None:
+                raise ValueError(
+                    "repository suite evidence requires the Foundry or Hardhat fork scanner"
+                )
+            if any(test.framework is not expected_framework for test in selection.tests):
+                raise ValueError("repository suite descriptor framework differs from its scanner")
+            execution_keys = tuple(execution.canonical_key for execution in executions)
+            execution_hashes = tuple(execution.execution_sha256 for execution in executions)
+            if execution_keys != tuple(sorted(set(execution_keys))):
+                raise ValueError("repository test executions must be unique and canonically sorted")
+            if len(execution_hashes) != len(set(execution_hashes)):
+                raise ValueError("repository test execution hashes must be unique")
+            selected_by_hash = {
+                descriptor.descriptor_sha256: descriptor for descriptor in selection.tests
+            }
+            if set(selected_by_hash) != {execution.descriptor_sha256 for execution in executions}:
+                raise ValueError(
+                    "repository test executions must exactly cover the selected descriptors"
+                )
+            for execution in executions:
+                descriptor = selected_by_hash[execution.descriptor_sha256]
+                if execution.selection_sha256 != selection.selection_sha256:
+                    raise ValueError("repository test execution does not bind its suite selection")
+                if execution.canonical_key != descriptor.canonical_key:
+                    raise ValueError(
+                        "repository test execution identity differs from its descriptor"
+                    )
+                if execution.execution_evidence is not self.execution_evidence:
+                    raise ValueError(
+                        "repository test execution evidence differs from its scanner run"
+                    )
+                if execution.repository_code_execution is not self.repository_code_execution:
+                    raise ValueError("repository test isolation state differs from its scanner run")
+                if execution.isolation_backend != self.isolation_backend:
+                    raise ValueError(
+                        "repository test isolation backend differs from its scanner run"
+                    )
+                if execution.isolation_attestation_sha256 != self.isolation_attestation_sha256:
+                    raise ValueError(
+                        "repository test isolation attestation differs from its scanner run"
+                    )
+                if execution.status in {
+                    RepositoryTestExecutionStatus.PASSED,
+                    RepositoryTestExecutionStatus.FAILED,
+                    RepositoryTestExecutionStatus.REVERTED,
+                    RepositoryTestExecutionStatus.ASSERTION_FAILED,
+                }:
+                    if execution_policy is None:
+                        raise ValueError(
+                            "classified repository suite requires its typed execution policy"
+                        )
+                    if execution.execution_policy_sha256 != execution_policy.policy_sha256:
+                        raise ValueError(
+                            "repository test execution policy differs from its typed policy"
+                        )
+                    if (
+                        execution.chain_id != execution_policy.chain_id
+                        or execution.block_number != execution_policy.block_number
+                        or execution.block_hash != execution_policy.block_hash
+                        or execution.fuzz_seed != execution_policy.fuzz_seed
+                        or execution.compiler_version != execution_policy.compiler_version
+                        or execution.compiler_sha256 != execution_policy.compiler_sha256
+                    ):
+                        raise ValueError(
+                            "repository test evidence differs from its typed execution policy"
+                        )
+
+            if execution_policy is not None:
+                if expected_framework is not RepositorySuiteFramework.FOUNDRY:
+                    raise ValueError("only Foundry repository suites support this execution policy")
+                if execution_policy.selection_sha256 != selection.selection_sha256:
+                    raise ValueError("repository execution policy differs from its selection")
+                if (
+                    execution_policy.selection_configuration_sha256
+                    != selection.configuration_sha256
+                ):
+                    raise ValueError(
+                        "repository execution policy configuration differs from its selection"
+                    )
+                if execution_policy.tool_version != self.version:
+                    raise ValueError("repository execution policy tool version differs")
+                if execution_policy.tool_sha256 != self.executable_sha256:
+                    raise ValueError("repository execution policy tool hash differs")
+                if execution_policy.isolation_backend != self.isolation_backend:
+                    raise ValueError("repository execution policy isolation backend differs")
+                if (
+                    execution_policy.isolation_attestation_sha256
+                    != self.isolation_attestation_sha256
+                ):
+                    raise ValueError("repository execution policy isolation attestation differs")
+
+            failure_statuses = {
+                RepositoryTestExecutionStatus.FAILED,
+                RepositoryTestExecutionStatus.REVERTED,
+                RepositoryTestExecutionStatus.ASSERTION_FAILED,
+            }
+            classified_statuses = {
+                RepositoryTestExecutionStatus.PASSED,
+                *failure_statuses,
+            }
+            if self.status is ScannerStatus.SUCCESS and any(
+                execution.status not in classified_statuses for execution in executions
+            ):
+                raise ValueError(
+                    "successful repository suite requires every selected test to have a "
+                    "classified machine result"
+                )
+            fork_states = {
+                (
+                    execution.chain_id,
+                    execution.block_number,
+                    execution.block_hash,
+                    execution.fuzz_seed,
+                )
+                for execution in executions
+                if execution.status in classified_statuses
+            }
+            if len(fork_states) > 1:
+                raise ValueError(
+                    "repository suite executions do not share one pinned fork state and seed"
+                )
+            execution_policies = {
+                (
+                    execution.compiler_version,
+                    execution.compiler_sha256,
+                    execution.execution_policy_sha256,
+                )
+                for execution in executions
+                if execution.status in classified_statuses
+            }
+            if len(execution_policies) > 1:
+                raise ValueError(
+                    "repository suite executions do not share one compiler and execution policy"
+                )
+            failing_hashes = {
+                execution.execution_sha256
+                for execution in executions
+                if execution.status in failure_statuses
+            }
+            executions_by_hash = {execution.execution_sha256: execution for execution in executions}
+            finding_hashes: list[str] = []
+            for finding in self.findings:
+                reference = finding.metadata.get("repository_test_execution_sha256")
+                if reference is None:
+                    raise ValueError("repository suite finding lacks its test execution reference")
+                if finding.scanner != self.scanner:
+                    raise ValueError(
+                        "repository suite finding scanner differs from its scanner run"
+                    )
+                if not isinstance(reference, str) or not re.fullmatch(r"[0-9a-f]{64}", reference):
+                    raise ValueError("repository test finding has an invalid execution reference")
+                if reference not in failing_hashes:
+                    raise ValueError(
+                        "repository test finding does not reference a failing execution"
+                    )
+                execution = executions_by_hash[reference]
+                descriptor = selected_by_hash[execution.descriptor_sha256]
+                if not any(
+                    location.path == descriptor.path
+                    and location.start_line >= descriptor.start_line
+                    and location.end_line <= descriptor.end_line
+                    for location in finding.locations
+                ):
+                    raise ValueError(
+                        "repository suite finding location differs from its test descriptor"
+                    )
+                finding_hashes.append(reference)
+            if set(finding_hashes) != failing_hashes:
+                raise ValueError(
+                    "every failing repository test must have hash-bound finding evidence"
+                )
+
+            if (
+                expected_framework is RepositorySuiteFramework.FOUNDRY
+                and self.status is ScannerStatus.SUCCESS
+                and self.foundry_summary is None
+            ):
+                raise ValueError("successful Foundry repository suite requires its summary")
+            if (
+                expected_framework is RepositorySuiteFramework.HARDHAT
+                and self.foundry_summary is not None
+            ):
+                raise ValueError("Hardhat repository suite cannot carry a Foundry summary")
+            if self.foundry_summary is not None:
+                foundry_executions = [
+                    execution
+                    for execution in executions
+                    if execution.framework is RepositorySuiteFramework.FOUNDRY
+                ]
+                passed = sum(
+                    execution.status is RepositoryTestExecutionStatus.PASSED
+                    for execution in foundry_executions
+                )
+                failed = sum(
+                    execution.status in failure_statuses for execution in foundry_executions
+                )
+                skipped = sum(
+                    execution.status is RepositoryTestExecutionStatus.SKIPPED
+                    for execution in foundry_executions
+                )
+                unit_tests = sum(
+                    execution.test_kind is RepositoryTestKind.UNIT
+                    for execution in foundry_executions
+                )
+                fuzz_tests = sum(
+                    execution.test_kind is RepositoryTestKind.FUZZ
+                    for execution in foundry_executions
+                )
+                invariant_tests = sum(
+                    execution.test_kind is RepositoryTestKind.INVARIANT
+                    for execution in foundry_executions
+                )
+                if (
+                    self.foundry_summary.passed_tests != passed
+                    or self.foundry_summary.failed_tests != failed
+                    or self.foundry_summary.skipped_tests != skipped
+                    or passed + failed + skipped != len(foundry_executions)
+                    or self.foundry_summary.unit_tests != unit_tests
+                    or self.foundry_summary.fuzz_tests != fuzz_tests
+                    or self.foundry_summary.invariant_tests != invariant_tests
+                    or self.foundry_summary.fuzz_cases
+                    != sum(execution.fuzz_cases for execution in foundry_executions)
+                    or self.foundry_summary.invariant_runs
+                    != sum(execution.invariant_runs for execution in foundry_executions)
+                    or self.foundry_summary.invariant_calls
+                    != sum(execution.invariant_calls for execution in foundry_executions)
+                ):
+                    raise ValueError("Foundry summary does not match repository test executions")
         if (
             self.execution_observation_sha256 is not None
             and self.execution_observation_sha256 != self.expected_execution_observation_sha256()

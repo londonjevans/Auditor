@@ -520,7 +520,7 @@ are invisible to source review by construction.
   `src/mmaudit/config.py`, `src/mmaudit/orchestration/pipeline.py`, scanner and finding
   schemas, `mmaudit.example.toml`, unit and local integration regressions.
 - **Dependencies:** `V3-TOKENS-001`.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
 
 ## V3-FORKDIFF-001 — Differential and multi-state fork matrix
 

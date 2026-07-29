@@ -15,7 +15,12 @@ from mmaudit.benchmark.certificate import (
     CertificateVerificationStatus,
     FileBackedBenchmarkVerificationEvidence,
 )
-from mmaudit.config import model_lineage_index, validate_model_independence
+from mmaudit.config import (
+    AuditConfig,
+    SmartContractsConfig,
+    model_lineage_index,
+    validate_model_independence,
+)
 from mmaudit.constants import (
     ALL_SPECIALIST_ROLES,
     SPECIALIST_INVESTIGATOR_ROLES,
@@ -67,7 +72,15 @@ from mmaudit.models.schemas import (
     ModelSurfaceReviewRecord,
     ModelSurfaceReviewRequest,
     ModelSurfaceReviewStatus,
+    RepositoryCodeExecutionState,
     RepositoryMap,
+    RepositorySuiteExecutionPolicy,
+    RepositorySuiteFramework,
+    RepositorySuiteSelection,
+    RepositorySuiteTestDescriptor,
+    RepositoryTestExecution,
+    RepositoryTestExecutionStatus,
+    RepositoryTestKind,
     ReproductionIntegrityAssessment,
     ReproductionIntegrityCheck,
     ReproductionIntegrityCheckKind,
@@ -78,11 +91,13 @@ from mmaudit.models.schemas import (
     ReproductionSettlementEvidence,
     ReproductionSettlementStatus,
     ReproductionState,
+    ScannerFinding,
     ScannerRun,
     ScannerStatus,
     ScopeComponent,
     ScopeComponentEvidence,
     ScopeEvidenceStatus,
+    Severity,
     SolidityCompilationResult,
     SolidityCoverage,
     SolidityEntity,
@@ -227,6 +242,10 @@ def _maximum_config(config_factory, *, allow_downgrade: bool = False, families: 
         smart_contracts={
             "solc_version": "0.8.30",
             "solc_sha256": "6" * 64,
+        },
+        reproduction={
+            "expected_chain_id": 31_337,
+            "pinned_block_number": 42,
         },
         scanners={
             "slither": {
@@ -703,7 +722,132 @@ def _real_offline_replay(
     return OfflineReplay.model_validate(payload)
 
 
-def _real_foundry_scanner(now: datetime) -> ScannerRun:
+def _real_foundry_scanner(
+    now: datetime,
+    config: AuditConfig | None = None,
+) -> ScannerRun:
+    smart_contracts = config.smart_contracts if config is not None else SmartContractsConfig()
+    chain_id = (
+        config.reproduction.expected_chain_id
+        if config is not None and config.reproduction.expected_chain_id is not None
+        else 31_337
+    )
+    block_number = (
+        config.reproduction.pinned_block_number
+        if config is not None and config.reproduction.pinned_block_number is not None
+        else 42
+    )
+    descriptors = tuple(
+        sorted(
+            (
+                RepositorySuiteTestDescriptor.sealed(
+                    framework=RepositorySuiteFramework.FOUNDRY,
+                    project_root=".",
+                    path="test/audit/Portfolio.t.sol",
+                    suite_name="PortfolioTest",
+                    test_name=test_name,
+                    source_sha256="8" * 64,
+                    start_line=line,
+                    end_line=line,
+                )
+                for line, test_name in enumerate(
+                    ("testUnit", "testFuzz_Portfolio", "invariant_Portfolio"),
+                    start=1,
+                )
+            ),
+            key=lambda item: item.canonical_key,
+        )
+    )
+    selection = RepositorySuiteSelection.sealed(
+        profile="legacy_audit",
+        repository_sha256="9" * 64,
+        configuration_sha256=smart_contracts.repository_suite.stable_hash(),
+        candidate_file_count=1,
+        candidate_test_count=3,
+        selected_file_count=1,
+        selected_test_count=3,
+        omitted_file_count=0,
+        omitted_test_count=0,
+        limit_reached=False,
+        tests=descriptors,
+        safety_claim=False,
+    )
+    scanner_timeout = config.execution.scanner_timeout_seconds if config is not None else 2
+    total_timeout = min(
+        scanner_timeout,
+        smart_contracts.max_fork_probe_seconds,
+        smart_contracts.repository_suite.total_timeout_seconds,
+    )
+    execution_policy = RepositorySuiteExecutionPolicy.sealed(
+        selection_sha256=selection.selection_sha256,
+        selection_configuration_sha256=selection.configuration_sha256,
+        chain_id=chain_id,
+        block_number=block_number,
+        block_hash="0x" + ("a" * 64),
+        tool_version="forge 1.3.2",
+        tool_sha256="5" * 64,
+        compiler_version="solc 0.8.30",
+        compiler_sha256=smart_contracts.solc_sha256 or ("6" * 64),
+        isolation_backend="sandbox-exec",
+        isolation_attestation_sha256="7" * 64,
+        fuzz_seed=smart_contracts.repository_suite.fuzz_seed,
+        fuzz_runs=smart_contracts.foundry_fuzz_runs,
+        invariant_runs=smart_contracts.foundry_invariant_runs,
+        per_test_timeout_seconds=min(
+            total_timeout,
+            smart_contracts.repository_suite.per_test_timeout_seconds,
+        ),
+        total_timeout_seconds=total_timeout,
+        max_output_bytes_per_test=(smart_contracts.repository_suite.max_output_bytes_per_test),
+        max_total_output_bytes=smart_contracts.repository_suite.max_total_output_bytes,
+    )
+    executions = [
+        RepositoryTestExecution.sealed(
+            selection_sha256=selection.selection_sha256,
+            descriptor_sha256=descriptor.descriptor_sha256,
+            framework=descriptor.framework,
+            project_root=descriptor.project_root,
+            path=descriptor.path,
+            suite_name=descriptor.suite_name,
+            test_name=descriptor.test_name,
+            chain_id=chain_id,
+            block_number=block_number,
+            block_hash="0x" + ("a" * 64),
+            fuzz_seed=smart_contracts.repository_suite.fuzz_seed,
+            test_kind=(
+                RepositoryTestKind.FUZZ
+                if descriptor.test_name.startswith("testFuzz")
+                else (
+                    RepositoryTestKind.INVARIANT
+                    if descriptor.test_name.startswith("invariant")
+                    else RepositoryTestKind.UNIT
+                )
+            ),
+            fuzz_cases=256 if descriptor.test_name.startswith("testFuzz") else 0,
+            invariant_runs=256 if descriptor.test_name.startswith("invariant") else 0,
+            invariant_calls=8192 if descriptor.test_name.startswith("invariant") else 0,
+            status=RepositoryTestExecutionStatus.PASSED,
+            terminal_detail=None,
+            duration_seconds=0.1,
+            command_sha256=hashlib.sha256(f"command:{descriptor.test_name}".encode()).hexdigest(),
+            output_sha256=hashlib.sha256(f"output:{descriptor.test_name}".encode()).hexdigest(),
+            output_bytes=100,
+            machine_result_sha256=hashlib.sha256(
+                f"machine-result:{descriptor.test_name}".encode()
+            ).hexdigest(),
+            process_exit_code=0,
+            machine_output_validated=True,
+            execution_evidence=ExecutionEvidenceKind.REAL,
+            repository_code_execution=RepositoryCodeExecutionState.ISOLATED,
+            isolation_backend="sandbox-exec",
+            isolation_attestation_sha256="7" * 64,
+            compiler_version="solc 0.8.30",
+            compiler_sha256=smart_contracts.solc_sha256 or ("6" * 64),
+            execution_policy_sha256=execution_policy.policy_sha256,
+            safety_claim=False,
+        )
+        for descriptor in descriptors
+    ]
     run = ScannerRun(
         scanner="foundry_fork",
         status=ScannerStatus.SUCCESS,
@@ -732,6 +876,10 @@ def _real_foundry_scanner(now: datetime) -> ScannerRun:
             invariant_runs=256,
             invariant_calls=8_192,
         ),
+        repository_suite_selection=selection,
+        repository_suite_execution_policy=execution_policy,
+        repository_test_executions=executions,
+        repository_code_execution=RepositoryCodeExecutionState.ISOLATED,
     )
     return ScannerRun.model_validate(
         {
@@ -768,7 +916,7 @@ def _real_slither_scanner(now: datetime) -> ScannerRun:
     )
 
 
-def _complete_runtime(config=None) -> AssuranceRuntime:
+def _complete_runtime(config: AuditConfig | None = None) -> AssuranceRuntime:
     now = datetime.now(UTC).replace(microsecond=0)
     model_usage = _real_model_usage(now)
     model_review_coverage, model_surface_review_artifacts = _complete_model_coverage(model_usage)
@@ -829,7 +977,7 @@ def _complete_runtime(config=None) -> AssuranceRuntime:
             ast_sources=["src/Vault.sol"],
         ),
         graphs=SolidityGraphSet(edges=[], analyzed_graphs=list(FULL_SEMANTIC_GRAPHS)),
-        scanners=[_real_slither_scanner(now), _real_foundry_scanner(now)],
+        scanners=[_real_slither_scanner(now), _real_foundry_scanner(now, config)],
         invariants=InvariantSuite(
             invariants=[invariant],
             templates_available_count=1,
@@ -1642,12 +1790,53 @@ def test_foundry_negative_regression_is_conclusive_engine_execution(config_facto
     runtime = _complete_runtime(config)
     foundry = next(run for run in runtime.scanners if run.scanner == "foundry_fork")
     assert foundry.foundry_summary is not None
+    assert foundry.repository_suite_selection is not None
+    prior_execution = foundry.repository_test_executions[0]
+    execution_payload = prior_execution.model_dump(
+        mode="python",
+        exclude={"execution_sha256"},
+    )
+    execution_payload.update(
+        {
+            "status": RepositoryTestExecutionStatus.ASSERTION_FAILED,
+            "terminal_detail": "Synthetic assertion failed",
+            "process_exit_code": 1,
+        }
+    )
+    failed_execution = RepositoryTestExecution.sealed(**execution_payload)
+    executions = [failed_execution, *foundry.repository_test_executions[1:]]
+    descriptor = next(
+        item
+        for item in foundry.repository_suite_selection.tests
+        if item.descriptor_sha256 == failed_execution.descriptor_sha256
+    )
+    finding = ScannerFinding(
+        scanner="foundry_fork",
+        rule_id="repository-fork-test-failure",
+        title="Synthetic pinned-fork test failure",
+        severity=Severity.HIGH,
+        message="Synthetic assertion failed",
+        locations=[
+            Location(
+                path=descriptor.path,
+                start_line=descriptor.start_line,
+                end_line=descriptor.end_line,
+            )
+        ],
+        metadata={
+            "repository_test_execution_sha256": failed_execution.execution_sha256,
+        },
+        fingerprint="f" * 64,
+    )
     updated = foundry.model_copy(
         update={
             "process_exit_code": 1,
+            "findings": [finding],
+            "repository_test_executions": executions,
             "foundry_summary": foundry.foundry_summary.model_copy(
                 update={"passed_tests": 2, "failed_tests": 1}
             ),
+            "execution_observation_sha256": None,
         }
     )
     updated = ScannerRun.model_validate(

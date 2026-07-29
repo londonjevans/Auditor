@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -133,8 +134,9 @@ class StaticScannerRunner:
         *,
         skip_codeql: bool = False,
         allow_fork_probing: bool = False,
+        projects: Sequence[SolidityProjectMetadata] = (),
     ) -> list[ScannerRun]:
-        del root, private_dir, skip_codeql, allow_fork_probing
+        del root, private_dir, skip_codeql, allow_fork_probing, projects
         now = datetime.now(UTC)
         findings = []
         if self.status is ScannerStatus.SUCCESS:

@@ -8,6 +8,7 @@ import math
 import os
 import re
 import tomllib
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -303,6 +304,179 @@ class DependencyPreparationConfig(ConfigModel):
         return self
 
 
+_LEGACY_REPOSITORY_SUITE_FOUNDRY_PATHS = ("test/audit/*.t.sol",)
+_LEGACY_REPOSITORY_SUITE_FOUNDRY_TESTS = ("*",)
+_REPOSITORY_SUITE_FUZZ_SEED = "0x" + ("0" * 63) + "1"
+
+
+def _safe_repository_suite_path_glob(value: str) -> bool:
+    """Return whether a suite path glob is canonical and repository-relative."""
+
+    normalized = value.replace("\\", "/")
+    parts = normalized.split("/")
+    sensitive_parts = {".git", ".ssh", ".aws", ".azure", "credentials", "mnemonics"}
+    return not (
+        not value
+        or value != value.strip()
+        or normalized != value
+        or len(value) > 512
+        or value.startswith(("/", "-"))
+        or re.match(r"^[A-Za-z]:/", value)
+        or any(part in {"", ".", ".."} for part in parts)
+        or unicodedata.normalize("NFC", value) != value
+        or any(unicodedata.category(character).startswith("C") for character in value)
+        or any(
+            part.casefold() in sensitive_parts or part.casefold().startswith(".env")
+            for part in parts
+        )
+    )
+
+
+def _safe_repository_suite_test_glob(value: str) -> bool:
+    """Return whether a suite test-name glob is bounded printable glob data."""
+
+    return not (
+        not value
+        or value != value.strip()
+        or len(value) > 512
+        or value.startswith("-")
+        or "\\" in value
+        or unicodedata.normalize("NFC", value) != value
+        or any(unicodedata.category(character).startswith("C") for character in value)
+    )
+
+
+class RepositoryForkSuiteConfig(ConfigModel):
+    """Explicit bounded selection and execution limits for repository-owned tests."""
+
+    profile: Literal["legacy_audit", "explicit"] = "legacy_audit"
+    foundry_include_paths: tuple[str, ...] = _LEGACY_REPOSITORY_SUITE_FOUNDRY_PATHS
+    foundry_exclude_paths: tuple[str, ...] = ()
+    foundry_include_tests: tuple[str, ...] = _LEGACY_REPOSITORY_SUITE_FOUNDRY_TESTS
+    foundry_exclude_tests: tuple[str, ...] = ()
+    hardhat_include_paths: tuple[str, ...] = ()
+    hardhat_exclude_paths: tuple[str, ...] = ()
+    hardhat_include_tests: tuple[str, ...] = ()
+    hardhat_exclude_tests: tuple[str, ...] = ()
+    max_selected_files: int = Field(default=100, ge=1, le=1_000)
+    max_tests_per_file: int = Field(default=100, ge=1, le=1_000)
+    max_total_tests: int = Field(default=1_000, ge=1, le=10_000)
+    per_test_timeout_seconds: float = Field(default=120, gt=0, le=1_800)
+    total_timeout_seconds: float = Field(default=900, gt=0, le=7_200)
+    max_output_bytes_per_test: int = Field(default=1_000_000, ge=1_024, le=10_000_000)
+    max_total_output_bytes: int = Field(default=10_000_000, ge=1_024, le=100_000_000)
+    fuzz_seed: str = Field(default=_REPOSITORY_SUITE_FUZZ_SEED, pattern=r"^0x[0-9a-f]{64}$")
+
+    @field_validator(
+        "foundry_include_paths",
+        "foundry_exclude_paths",
+        "hardhat_include_paths",
+        "hardhat_exclude_paths",
+    )
+    @classmethod
+    def path_globs_are_safe_unique_and_canonical(
+        cls,
+        value: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if (
+            len(value) > 1_000
+            or value != tuple(sorted(set(value)))
+            or any(not _safe_repository_suite_path_glob(pattern) for pattern in value)
+        ):
+            raise ValueError(
+                "repository suite path globs must be safe, unique, and canonically sorted"
+            )
+        return value
+
+    @field_validator(
+        "foundry_include_tests",
+        "foundry_exclude_tests",
+        "hardhat_include_tests",
+        "hardhat_exclude_tests",
+    )
+    @classmethod
+    def test_globs_are_safe_unique_and_canonical(
+        cls,
+        value: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if (
+            len(value) > 1_000
+            or value != tuple(sorted(set(value)))
+            or any(not _safe_repository_suite_test_glob(pattern) for pattern in value)
+        ):
+            raise ValueError(
+                "repository suite test globs must be safe, unique, and canonically sorted"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def selection_and_limits_are_fail_closed(self) -> RepositoryForkSuiteConfig:
+        if self.total_timeout_seconds < self.per_test_timeout_seconds:
+            raise ValueError("repository suite total timeout cannot be below its per-test timeout")
+        if self.max_total_output_bytes < self.max_output_bytes_per_test:
+            raise ValueError(
+                "repository suite total output ceiling cannot be below its per-test ceiling"
+            )
+
+        foundry_enabled = bool(self.foundry_include_paths or self.foundry_include_tests)
+        hardhat_enabled = bool(self.hardhat_include_paths or self.hardhat_include_tests)
+        if bool(self.foundry_include_paths) is not bool(self.foundry_include_tests):
+            raise ValueError(
+                "Foundry suite selection requires both include-path and include-test globs"
+            )
+        if bool(self.hardhat_include_paths) is not bool(self.hardhat_include_tests):
+            raise ValueError(
+                "Hardhat suite selection requires both include-path and include-test globs"
+            )
+        if (self.foundry_exclude_paths or self.foundry_exclude_tests) and not foundry_enabled:
+            raise ValueError("Foundry exclusions require an enabled Foundry selection")
+        if (self.hardhat_exclude_paths or self.hardhat_exclude_tests) and not hardhat_enabled:
+            raise ValueError("Hardhat exclusions require an enabled Hardhat selection")
+
+        if self.profile == "legacy_audit":
+            if (
+                self.foundry_include_paths != _LEGACY_REPOSITORY_SUITE_FOUNDRY_PATHS
+                or self.foundry_exclude_paths
+                or self.foundry_include_tests != _LEGACY_REPOSITORY_SUITE_FOUNDRY_TESTS
+                or self.foundry_exclude_tests
+                or hardhat_enabled
+                or self.hardhat_exclude_paths
+                or self.hardhat_exclude_tests
+            ):
+                raise ValueError(
+                    "legacy_audit repository suite profile cannot broaden its fixed selection"
+                )
+        else:
+            required_explicit_fields = {
+                "foundry_include_paths",
+                "foundry_include_tests",
+                "hardhat_include_paths",
+                "hardhat_include_tests",
+            }
+            if not required_explicit_fields.issubset(self.model_fields_set):
+                raise ValueError(
+                    "explicit repository suite profile requires explicit Foundry and Hardhat "
+                    "include selections; use empty arrays to disable a framework"
+                )
+            if not foundry_enabled and not hardhat_enabled:
+                raise ValueError("explicit repository suite profile selects no tests")
+
+        if set(self.foundry_include_paths).intersection(self.foundry_exclude_paths):
+            raise ValueError("Foundry suite path include and exclude globs overlap")
+        if set(self.foundry_include_tests).intersection(self.foundry_exclude_tests):
+            raise ValueError("Foundry suite test include and exclude globs overlap")
+        if set(self.hardhat_include_paths).intersection(self.hardhat_exclude_paths):
+            raise ValueError("Hardhat suite path include and exclude globs overlap")
+        if set(self.hardhat_include_tests).intersection(self.hardhat_exclude_tests):
+            raise ValueError("Hardhat suite test include and exclude globs overlap")
+        return self
+
+    def stable_hash(self) -> str:
+        payload = self.model_dump(mode="json")
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+
 class SmartContractsConfig(ConfigModel):
     """Fork-only EVM probing controls.
 
@@ -318,6 +492,10 @@ class SmartContractsConfig(ConfigModel):
     project_root: str | None = None
     compilation_timeout_seconds: float = Field(default=600, gt=0, le=3_600)
     keep_artifacts: bool = False
+    solc_executable_env: str = Field(
+        default="MMAUDIT_SOLC_EXECUTABLE",
+        pattern=r"^[A-Z][A-Z0-9_]{0,63}$",
+    )
     fork_only: Literal[True] = True
     allow_fork_probing: bool = False
     fork_rpc_url_env: str = "MMAUDIT_FORK_RPC_URL"
@@ -328,12 +506,47 @@ class SmartContractsConfig(ConfigModel):
     foundry_invariant_runs: int = Field(default=64, ge=1, le=100_000)
     max_fork_probe_seconds: float = Field(default=900, gt=0, le=3_600)
     fail_on_fork_test_failure: bool = False
+    repository_suite: RepositoryForkSuiteConfig = Field(default_factory=RepositoryForkSuiteConfig)
 
     @model_validator(mode="after")
-    def solc_trust_pin_is_complete(self) -> SmartContractsConfig:
+    def trust_pins_and_suite_authority_are_consistent(self) -> SmartContractsConfig:
         if (self.solc_version is None) != (self.solc_sha256 is None):
             raise ValueError("solc_version and solc_sha256 must be configured together")
+        legacy_custom = (
+            self.foundry_match_path != "test/audit/*.t.sol" or self.foundry_match_test is not None
+        )
+        if not legacy_custom:
+            return self
+        if (
+            self.foundry_match_test is not None
+            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.foundry_match_test) is None
+        ):
+            raise ValueError(
+                "legacy Foundry regex selectors cannot be migrated safely; configure "
+                "smart_contracts.repository_suite with explicit test globs"
+            )
+        migrated = RepositoryForkSuiteConfig(
+            profile="explicit",
+            foundry_include_paths=(self.foundry_match_path,),
+            foundry_include_tests=(self.foundry_match_test or "*",),
+            hardhat_include_paths=(),
+            hardhat_include_tests=(),
+        )
+        if "repository_suite" in self.model_fields_set:
+            if self.repository_suite != migrated:
+                raise ValueError(
+                    "legacy Foundry selectors conflict with smart_contracts.repository_suite"
+                )
+        else:
+            object.__setattr__(self, "repository_suite", migrated)
         return self
+
+    @field_validator("solc_executable_env")
+    @classmethod
+    def compiler_path_cannot_use_a_control_plane_secret_name(cls, value: str) -> str:
+        if value in RESERVED_OPERATOR_CONTROL_PLANE_NAMES:
+            raise ValueError("Solidity compiler path cannot use a control-plane secret variable")
+        return value
 
     @field_validator("project_root")
     @classmethod
@@ -985,6 +1198,7 @@ class ScannersConfig(ConfigModel):
     codeql: CodeQLConfig = Field(default_factory=CodeQLConfig)
     slither: ScannerConfig = Field(default_factory=lambda: ScannerConfig(enabled=False))
     foundry_fork: ScannerConfig = Field(default_factory=lambda: ScannerConfig(enabled=False))
+    hardhat_fork: ScannerConfig = Field(default_factory=lambda: ScannerConfig(enabled=False))
 
 
 class ReportingConfig(ConfigModel):

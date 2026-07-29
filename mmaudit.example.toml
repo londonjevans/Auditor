@@ -79,6 +79,10 @@ framework = "auto"
 # project_root = "packages/contracts"
 compilation_timeout_seconds = 600
 keep_artifacts = false
+# Maximum-assurance execution also requires exact solc_version/solc_sha256 pins.
+# solc_version = "0.8.30"
+# solc_sha256 = "<sha256>"
+solc_executable_env = "MMAUDIT_SOLC_EXECUTABLE"
 fork_only = true
 allow_fork_probing = false
 fork_rpc_url_env = "MMAUDIT_FORK_RPC_URL"
@@ -89,6 +93,27 @@ foundry_fuzz_runs = 256
 foundry_invariant_runs = 64
 max_fork_probe_seconds = 900
 fail_on_fork_test_failure = false
+
+[smart_contracts.repository_suite]
+# The default preserves the historic, narrowly scoped test/audit/*.t.sol behavior.
+# Use "explicit" only with all four include arrays authored; [] disables that framework.
+profile = "legacy_audit"
+foundry_include_paths = ["test/audit/*.t.sol"]
+foundry_exclude_paths = []
+foundry_include_tests = ["*"]
+foundry_exclude_tests = []
+hardhat_include_paths = []
+hardhat_exclude_paths = []
+hardhat_include_tests = []
+hardhat_exclude_tests = []
+max_selected_files = 100
+max_tests_per_file = 100
+max_total_tests = 1000
+per_test_timeout_seconds = 120
+total_timeout_seconds = 900
+max_output_bytes_per_test = 1000000
+max_total_output_bytes = 10000000
+fuzz_seed = "0x0000000000000000000000000000000000000000000000000000000000000001"
 
 [dependency_preparation]
 # Dependency preparation is explicit and consumes only an operator-pinned local
@@ -484,6 +509,10 @@ enabled = false
 required = false
 # Legacy path for pre-existing test/audit/*.t.sol suites. Candidate-specific generated fork
 # reproduction is controlled by [reproduction] and is the default Solidity evidence gate.
+
+[scanners.hardhat_fork]
+enabled = false
+required = false
 
 [reporting]
 markdown = true

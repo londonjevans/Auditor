@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from mmaudit.config import SmartContractsConfig
+from mmaudit.config import ReproductionConfig, SmartContractsConfig
 from mmaudit.models.openrouter import safe_headers
 from mmaudit.models.schemas import (
     AttackerCapability,
@@ -39,6 +39,7 @@ from mmaudit.models.schemas import (
     RepositoryMap,
     ReproductionResult,
     ReproductionState,
+    ScannerFinding,
     ScannerRun,
     ScannerStatus,
     Severity,
@@ -47,13 +48,20 @@ from mmaudit.models.schemas import (
     TransactionOrderingCapability,
     VerificationTest,
 )
+from mmaudit.orchestration.pipeline import _annotate_scanner_locations
 from mmaudit.orchestration.run_status import minimum_analysis_floor_quality_gate
 from mmaudit.reporting.json_report import stable_json
 from mmaudit.reporting.markdown import render_markdown
 from mmaudit.reporting.sarif import generate_sarif
 from mmaudit.scanners.base import ScannerAdapter, sanitized_scanner_environment
 from mmaudit.scanners.codeql import CodeQLScanner
-from mmaudit.scanners.foundry import FoundryForkScanner, _foundry_execution_summary
+from mmaudit.scanners.fork_rpc import PinnedForkObservation
+from mmaudit.scanners.foundry import (
+    FoundryForkScanner,
+    _foundry_execution_summary,
+    _foundry_machine_result_precondition,
+    _reject_unsafe_foundry_configuration,
+)
 from mmaudit.scanners.gitleaks import GitleaksScanner
 from mmaudit.scanners.osv import OsvScanner
 from mmaudit.scanners.semgrep import SemgrepScanner
@@ -93,6 +101,10 @@ class _PassthroughIsolation:
     ) -> list[str]:
         del workspace, private_dir, rpc_port
         return command
+
+
+class _NoLocalForkIsolation(_PassthroughIsolation):
+    supports_local_fork_rpc = False
 
 
 class _SelfAssertedRealIsolation(_PassthroughIsolation):
@@ -357,7 +369,194 @@ def test_foundry_execution_summary_rejects_ambiguous_or_unknown_metadata() -> No
         _foundry_execution_summary(unsupported_kind)
 
 
-def test_foundry_scanner_uses_json_and_binds_observed_execution(
+def test_foundry_repository_suite_rejects_nonempty_fs_permissions(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    (root / "foundry.toml").write_text(
+        "\n".join(
+            (
+                "[profile.default]",
+                'fs_permissions = [{ access = "read-write", path = "./" }]',
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="fs_permissions"):
+        _reject_unsafe_foundry_configuration(root)
+
+
+def test_foundry_repository_suite_rejects_repository_selected_compiler_path(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    (root / "foundry.toml").write_text(
+        '[profile.default]\nsolc = "./toolchain/solc"\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="executable compiler path"):
+        _reject_unsafe_foundry_configuration(root)
+
+
+def test_foundry_repository_suite_rejects_backend_without_local_rpc_before_tool_lookup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "repository"
+    test_dir = root / "test" / "audit"
+    test_dir.mkdir(parents=True)
+    (root / "foundry.toml").write_text("[profile.default]\n", encoding="utf-8")
+    (test_dir / "Portfolio.t.sol").write_text(
+        "contract PortfolioTest { function testUnit() public {} }\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "mmaudit.scanners.foundry.shutil.which",
+        lambda _executable: pytest.fail("tool lookup must follow isolation capability preflight"),
+    )
+
+    result = FoundryForkScanner(SmartContractsConfig(allow_fork_probing=True)).run(
+        root,
+        tmp_path / "private-no-local-rpc",
+        5,
+        backend=_NoLocalForkIsolation(),
+    )
+
+    assert result.status is ScannerStatus.UNAVAILABLE
+    assert "loopback" in (result.error or "")
+
+
+def test_foundry_repository_suite_missing_rpc_is_unavailable_before_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "repository"
+    test_dir = root / "test" / "audit"
+    test_dir.mkdir(parents=True)
+    (root / "foundry.toml").write_text("[profile.default]\n", encoding="utf-8")
+    (test_dir / "Portfolio.t.sol").write_text(
+        "contract PortfolioTest { function testUnit() public {} }\n",
+        encoding="utf-8",
+    )
+    fake_forge = tmp_path / "forge"
+    fake_forge.write_text("#!/bin/sh\nexit 97\n", encoding="utf-8")
+    fake_forge.chmod(0o755)
+    monkeypatch.setattr(
+        "mmaudit.scanners.foundry.shutil.which",
+        lambda executable: str(fake_forge) if executable == "forge" else None,
+    )
+    monkeypatch.delenv("MMAUDIT_FORK_RPC_URL", raising=False)
+    monkeypatch.setattr(
+        "mmaudit.scanners.foundry.isolation_execution_evidence",
+        lambda _backend: ExecutionEvidenceKind.REAL,
+    )
+    monkeypatch.setattr(
+        "mmaudit.scanners.foundry.isolation_attestation_sha256",
+        lambda _backend: "a" * 64,
+    )
+
+    result = FoundryForkScanner(
+        SmartContractsConfig(allow_fork_probing=True),
+        reproduction=ReproductionConfig(
+            expected_chain_id=31_337,
+            pinned_block_number=42,
+        ),
+    ).run(
+        root,
+        tmp_path / "private-missing-rpc",
+        5,
+        backend=_PassthroughIsolation(),
+    )
+
+    assert result.status is ScannerStatus.UNAVAILABLE
+    assert "MMAUDIT_FORK_RPC_URL" in (result.error or "")
+
+
+@pytest.mark.parametrize(
+    ("return_code", "stdout", "expected"),
+    [
+        (-6, "", "terminated before emitting"),
+        (134, '{"suite":{}}', "terminated before emitting"),
+        (0, "", "no machine JSON"),
+        (1, " \n\t", "no machine JSON"),
+        (0, '{"suite":{}}', None),
+        (1, '{"suite":{}}', None),
+    ],
+)
+def test_foundry_machine_result_precondition_rejects_crash_and_empty_output(
+    return_code: int,
+    stdout: str,
+    expected: str | None,
+) -> None:
+    result = _foundry_machine_result_precondition(
+        return_code=return_code,
+        stdout=stdout,
+    )
+
+    if expected is None:
+        assert result is None
+    else:
+        assert expected in (result or "")
+
+
+def test_scanner_location_annotation_reseals_execution_observation(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repository"
+    root.mkdir()
+    (root / "Vault.t.sol").write_text(
+        "contract VaultTest { function testInvariant() public {} }\n",
+        encoding="utf-8",
+    )
+    now = datetime.now(UTC)
+    unsealed = ScannerRun(
+        scanner="foundry_fork",
+        status=ScannerStatus.SUCCESS,
+        execution_evidence=ExecutionEvidenceKind.REAL,
+        version="forge 1.3.2",
+        executable_sha256="1" * 64,
+        command=["forge", "test"],
+        started_at=now,
+        finished_at=now,
+        duration_seconds=0,
+        findings=[
+            ScannerFinding(
+                scanner="foundry_fork",
+                rule_id="repository-test-failure",
+                title="Synthetic repository test failure",
+                severity=Severity.MEDIUM,
+                message="Synthetic local assertion failed.",
+                locations=[Location(path="Vault.t.sol", start_line=1, end_line=1)],
+                fingerprint="2" * 64,
+            )
+        ],
+        raw_output_path="private/scanners/foundry.json",
+        raw_output_sha256="3" * 64,
+        raw_output_bytes=1,
+        process_exit_code=1,
+        isolation_backend="sandbox-exec",
+        isolation_attestation_sha256="4" * 64,
+        machine_output_validated=True,
+    )
+    run = unsealed.model_copy(
+        update={"execution_observation_sha256": (unsealed.expected_execution_observation_sha256())}
+    )
+
+    annotated = _annotate_scanner_locations(root, run)
+
+    assert annotated.findings[0].metadata["location_validation"][0]["valid"] is True
+    assert (
+        annotated.execution_observation_sha256 == annotated.expected_execution_observation_sha256()
+    )
+    assert ScannerRun.model_validate_json(annotated.model_dump_json()) == annotated
+
+
+def test_foundry_scanner_mocked_attested_execution_binds_one_selected_test(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -376,15 +575,7 @@ def test_foundry_scanner_uses_json_and_binds_observed_execution(
                     "testUnit()": {
                         "status": "Success",
                         "kind": {"Unit": {"gas": 123}},
-                    },
-                    "testFuzz_Portfolio(uint256)": {
-                        "status": "Success",
-                        "kind": {"Fuzz": {"runs": 8}},
-                    },
-                    "invariant_Portfolio()": {
-                        "status": "Success",
-                        "kind": {"Invariant": {"runs": 4, "calls": 64}},
-                    },
+                    }
                 }
             }
         },
@@ -409,17 +600,53 @@ def test_foundry_scanner_uses_json_and_binds_observed_execution(
         encoding="utf-8",
     )
     fake_forge.chmod(0o755)
+    fake_solc = tmp_path / "solc-0.8.30"
+    fake_solc.write_text(
+        "\n".join(
+            (
+                f"#!{sys.executable}",
+                'print("solc, Version: 0.8.30")',
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    fake_solc.chmod(0o755)
+    fake_solc_sha256 = hashlib.sha256(fake_solc.read_bytes()).hexdigest()
     monkeypatch.setattr(
         "mmaudit.scanners.foundry.shutil.which",
         lambda executable: str(fake_forge) if executable == "forge" else None,
     )
     monkeypatch.setenv("MMAUDIT_FORK_RPC_URL", "http://127.0.0.1:8545")
+    monkeypatch.setenv("MMAUDIT_SOLC_EXECUTABLE", str(fake_solc))
+    monkeypatch.setattr(
+        "mmaudit.scanners.foundry.isolation_execution_evidence",
+        lambda _backend: ExecutionEvidenceKind.REAL,
+    )
+    monkeypatch.setattr(
+        "mmaudit.scanners.foundry.isolation_attestation_sha256",
+        lambda _backend: "a" * 64,
+    )
+    monkeypatch.setattr(
+        "mmaudit.scanners.foundry.observe_pinned_fork_rpc",
+        lambda *_args, **_kwargs: PinnedForkObservation(
+            chain_id=31_337,
+            block_number=42,
+            block_hash="0x" + "b" * 64,
+        ),
+    )
     scanner = FoundryForkScanner(
         SmartContractsConfig(
             allow_fork_probing=True,
+            solc_version="0.8.30",
+            solc_sha256=fake_solc_sha256,
             foundry_fuzz_runs=8,
             foundry_invariant_runs=4,
-        )
+        ),
+        reproduction=ReproductionConfig(
+            expected_chain_id=31_337,
+            pinned_block_number=42,
+        ),
     )
 
     run = scanner.run(
@@ -430,13 +657,26 @@ def test_foundry_scanner_uses_json_and_binds_observed_execution(
     )
 
     assert run.status is ScannerStatus.SUCCESS
-    assert run.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
+    assert run.execution_evidence is ExecutionEvidenceKind.REAL
     assert run.isolation_backend == "sandbox-exec"
     assert run.foundry_summary is not None
     assert run.foundry_summary.unit_tests == 1
-    assert run.foundry_summary.fuzz_tests == 1
-    assert run.foundry_summary.invariant_tests == 1
-    assert "--json" in run.command
+    assert run.foundry_summary.fuzz_tests == 0
+    assert run.foundry_summary.invariant_tests == 0
+    assert run.repository_suite_selection is not None
+    assert run.repository_suite_selection.selected_test_count == 1
+    assert len(run.repository_test_executions) == 1
+    execution = run.repository_test_executions[0]
+    assert execution.status.value == "passed"
+    assert execution.chain_id == 31_337
+    assert execution.block_number == 42
+    assert execution.block_hash == "0x" + ("b" * 64)
+    assert execution.test_kind is not None
+    assert execution.compiler_sha256 == fake_solc_sha256
+    assert execution.execution_policy_sha256 is not None
+    assert execution.safety_claim is False
+    assert not run.findings
+    assert "forge" in run.command
     assert "--color" not in run.command
     assert "--invariant-runs" not in run.command
     assert run.execution_observation_sha256 == run.expected_execution_observation_sha256()

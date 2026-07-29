@@ -5,12 +5,12 @@ The objective source has SHA-256
 Do not record credentials, raw private prompts, or raw provider completions here.
 
 AUTORUN_STATUS: PAUSED_BY_OPERATOR
-CURRENT_MILESTONE: Paused at clean ticket boundary
-CURRENT_TICKET: NONE
+CURRENT_MILESTONE: Paused during pinned fork repository suite execution
+CURRENT_TICKET: V3-FORKSUITE-001
 LAST_COMPLETED_TICKET: V3-FLOOR-001
-NEXT_ACTION: On operator resume, begin V3-FORKSUITE-001 under the revised engine-and-execution-evidence track.
-LAST_COMMAND: .venv/bin/pytest -q
-LAST_RESULT: PASS — 2397 passed and 10 explicit external-prerequisite tests skipped in 364.66s; no paid-provider path ran.
+NEXT_ACTION: On operator resume, run affected Ruff and strict mypy, rerun the affected pytest matrix, run the complete repository validation suite, review the final diff and artifact/secret scan, then checkpoint V3-FORKSUITE-001 with its Hardhat and inherited-test limitations explicit.
+LAST_COMMAND: .venv/bin/mypy
+LAST_RESULT: PASS — canonical strict mypy reported no issues in 143 source files in 10.79s. A prior noncanonical explicit-file invocation also included configured test modules and surfaced 70 existing test-only diagnostics; it is recorded as diagnostic output, not represented as a passing command.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,123 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: c9ff0a8f49ad65728c031505ceab372d4e779ec7
+LAST_CHECKPOINT_COMMIT: 14908b3dcd38cdb1c91428306d160d80d67eb325
+
+## 2026-07-29 — V3-FORKSUITE-001
+
+- **Status:** `IN_PROGRESS`.
+- **Defensive objective:** Execute an explicitly selected, bounded subset of an
+  audited repository's existing Foundry suite against operator-pinned local fork
+  state, with typed deterministic finding evidence and fail-closed hardened
+  isolation. Preserve the legacy audit-test profile and prepare the digest-pinned
+  rootless Hardhat boundary without treating unavailable prerequisites as passes.
+- **Starting state:** Clean synchronized `main` at
+  `14908b3dcd38cdb1c91428306d160d80d67eb325`; the complete objective was reread
+  and reverified at SHA-256
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
+  No provider call, network access, operator-secret access, live RPC, signing, or
+  paid spend is part of this implementation slice.
+- **Next safe action:** Inspect existing trusted tool resolution, Foundry fork
+  execution, container isolation, project discovery, normalized scanner evidence,
+  and pipeline finding origination; then add an expected-red bounded-selection
+  regression before implementation.
+- **Expected-red defect proof:** Three focused regressions failed against the
+  checkpoint tree. Recursive nonempty Foundry `fs_permissions` was accepted; a
+  backend declaring no local-fork RPC capability reached Forge resolution; and
+  a missing configured loopback RPC was reported as engine failure rather than
+  `UNAVAILABLE`. These failures occurred before any target process, RPC,
+  provider request, secret access, or spend.
+- **Independent design review:** Read-only Foundry, isolation/Hardhat, and
+  evidence reviews confirmed the missing bounded selection manifest,
+  project-aware per-test execution, chain/block/seed binding, per-test evidence,
+  cleanup, and configuration controls. They also found that location annotation
+  mutates a sealed scanner run without resealing it. The current rootless
+  container deliberately denies all networking and is not REAL-attested, so a
+  Hardhat fork suite must remain explicitly unavailable until a separately
+  proven single-loopback-endpoint boundary exists; broad container networking
+  will not be introduced.
+- **Implemented before operator pause:** Foundry preflight now rejects a backend
+  without explicit local-fork RPC capability, classifies a missing configured
+  RPC as `UNAVAILABLE`, recursively rejects nonempty `fs_permissions`, fixes the
+  profile and filesystem-permission environment, and avoids target execution in
+  each refusal case. Scanner location annotation now reseals and revalidates the
+  modified execution observation.
+- **Focused validation:** The three Foundry fail-closed regressions passed
+  together (`3 passed in 0.23s`), and the scanner-observation resealing
+  regression passed (`1 passed in 0.40s`).
+- **Pause checkpoint:** At the operator's request, delegated workers stopped at
+  clean boundaries without filesystem edits. The bounded selector, typed
+  per-test schemas, full project-aware execution path, Hardhat refusal adapter,
+  and ticket-wide validation remain incomplete. Temporary Forge output created
+  while inspecting trusted list output was removed; only intentional source,
+  test, queue, and worklog changes remain.
+- **Resume checkpoint:** Persistent-goal continuation resumed the same bounded
+  ticket from the preserved worktree. The authoritative objective was reread
+  and its SHA-256 reverified before further implementation.
+- **Second operator pause:** Autorun stopped at the next safe boundary after the
+  typed repository-suite configuration, evidence schemas, deterministic selector,
+  loopback fork binding, per-test Foundry execution path, maximum-assurance
+  portfolio gate, and explicit Hardhat prerequisite adapter were implemented.
+  Focused schema, selector, RPC, Hardhat, scanner, and root assurance regressions
+  have passed; ticket-wide and full-suite validation have not yet run. The
+  uncommitted implementation and tests are intentionally preserved for review
+  and completion on resume. No target process, provider request, secret access,
+  budget reservation, or external network operation remains active.
+- **Second resume checkpoint:** Persistent-goal continuation reactivated the
+  same bounded ticket from the preserved worktree. The complete 1417-line
+  objective and repository instructions were reread, the objective hash matched,
+  the current diff passed its whitespace check, and no paid or external operation
+  was initiated.
+- **Third operator pause:** Work stopped at a clean diagnostic boundary. All
+  delegated reviews are complete and no child process or delegated task remains
+  active. The hardened local Foundry integration now reaches the selected
+  synthetic test and emits output, but strict per-test JSON normalization rejects
+  the observed Forge payload. The next action is bounded inspection and parser
+  correction, followed by the affected validation matrix. The intentional
+  uncommitted implementation is preserved; no provider request, public RPC,
+  secret access, budget reservation, or external network operation remains active.
+- **Third resume checkpoint:** Persistent-goal continuation resumed the same
+  bounded ticket. The complete objective was reread and hash-verified, the
+  intentional worktree passed `git diff --check`, and work resumed from the
+  strict Forge JSON normalization failure without paid or external operations.
+- **Implemented execution evidence:** Added a typed, self-hashed repository-suite
+  execution policy; exact Foundry/solc/isolation/fork/config binding; stable
+  normalized machine-result hashes; raw-output forensic hashes; honest
+  pre-filter candidate denominators; fail-closed inherited-test detection; and
+  replay comparison that ignores volatile timing/private paths while detecting
+  toolchain, block, policy, and normalized-evidence drift.
+- **Real local execution evidence:** The synthetic integration executed pinned
+  unit, fuzz, invariant, and failing-control tests twice in fresh private
+  workspaces against loopback Anvil chain `31337` at block `0`. It required an
+  explicit external native solc path, produced typed failure evidence, validated
+  JSON round-trips and private manifests, and matched the semantic replay
+  projection. The exact command recorded above passed once in `6.32s`.
+- **Focused regression evidence:** The latest combined schema, replay,
+  assurance, and scanner matrix passed `273` tests in `28.72s`; repository-suite
+  selection and inherited-test refusal passed `17` tests in `0.32s`. An earlier
+  broad affected matrix passed `452` tests in `132.93s`, but it predates the
+  final policy and denominator changes and is not represented as final
+  ticket-wide validation.
+- **Remaining ticket limitations:** Real Hardhat execution is
+  `BLOCKED_TECHNICAL`: neither Podman nor Docker is installed/configured, no
+  approved digest-pinned image is present, and the existing rootless backend
+  intentionally denies networking and lacks a REAL identity attestation.
+  Inherited Foundry tests fail closed rather than run because a trusted isolated
+  runtime inventory reconciled to declarations is not yet implemented. These
+  limitations cannot satisfy the complete ticket acceptance criteria.
+- **Pause-time static validation:** `.venv/bin/ruff format --check <25 affected
+  Python files>` reported all 25 already formatted; `.venv/bin/ruff check <same
+  files>` passed; canonical `.venv/bin/mypy` passed all 143 configured source
+  files; and `git diff --check` passed. The noncanonical
+  `.venv/bin/mypy <14 affected production paths>` invocation still included
+  configured test modules and returned 70 existing test-only diagnostics, so it
+  is not used as the authoritative type gate.
+- **Fourth operator pause:** Work stopped at a clean resumable boundary. All
+  delegated tasks and child processes are complete. The queue ticket remains
+  `IN_PROGRESS`; the final affected pytest matrix and full repository suite have
+  not run after the latest changes. This is a partial-ticket checkpoint, not
+  ticket completion. No provider request, public RPC, operator secret access,
+  budget reservation, container, or external network operation is active.
 
 ## 2026-07-29 — V3-FLOOR-001 implementation and focused validation
 

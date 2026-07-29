@@ -62,6 +62,27 @@ digest-pinned approved rootless isolation backend execute with real evidence.
 Unavailable integrations must retain exact non-secret operator installation or
 configuration instructions when their tickets begin.
 
+### Hardhat pinned-fork execution
+
+`V3-FORKSUITE-001` cannot credit real Hardhat execution on the current host. A
+future operator-authorized integration requires:
+
+- an installed approved rootless Podman or Docker backend;
+- an approved digest-pinned image containing the pinned Node.js, Hardhat, test
+  runner, and machine-result reporter toolchain;
+- REAL process and image-identity attestation bound to the emitted run;
+- network-none container execution with a narrowly scoped Unix-socket,
+  read-only JSON-RPC bridge to the exact operator-configured loopback fork
+  endpoint;
+- read-only audited source, disposable output and home directories, no host
+  credentials or container socket, and bounded CPU, memory, process, output, and
+  runtime limits.
+
+Neither `podman` nor `docker` resolves on the current trusted host PATH and no
+approved image digest is configured. The adapter therefore remains fail-closed
+as `UNAVAILABLE`; broad container networking or host-loopback access is not an
+acceptable substitute.
+
 ## External evaluation
 
 A private holdout and independently adjudicated professional comparison are not

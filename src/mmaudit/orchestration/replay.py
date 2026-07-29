@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import tempfile
+from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal, Protocol
@@ -200,6 +201,7 @@ class ScannerReplayRunner(Protocol):
         *,
         skip_codeql: bool = False,
         allow_fork_probing: bool = False,
+        projects: Sequence[SolidityProjectMetadata] = (),
     ) -> list[ScannerRun]: ...
 
 
@@ -370,6 +372,7 @@ class OfflineReplayOrchestrator:
                 await self._replay_scanners(
                     repository=repository,
                     private_dir=private / "scanners",
+                    projects=artifacts.projects.projects,
                     expected=artifacts.scanners.runs,
                 )
             )
@@ -465,16 +468,24 @@ class OfflineReplayOrchestrator:
         *,
         repository: Path,
         private_dir: Path,
+        projects: list[SolidityProjectMetadata],
         expected: list[ScannerRun],
     ) -> list[OfflineReplayComponent]:
         assert self.scanner_runner is not None
         expected_by_name = {item.scanner: item for item in expected}
         try:
+            fork_acknowledged = any(
+                item.scanner in {"foundry_fork", "hardhat_fork"}
+                and item.repository_suite_selection is not None
+                and bool(item.repository_test_executions)
+                for item in expected
+            )
             observed = await self.scanner_runner.run_all(
                 repository,
                 private_dir,
                 skip_codeql=False,
-                allow_fork_probing=False,
+                allow_fork_probing=fork_acknowledged,
+                projects=projects,
             )
         except (OSError, RuntimeError, ValueError) as exc:
             return [
@@ -870,23 +881,57 @@ def _safe_work_directory(path: Path) -> Path:
 
 
 def _scanner_projection(run: ScannerRun) -> dict[str, object]:
-    findings = sorted(
-        (finding.model_dump(mode="json") for finding in run.findings),
-        key=lambda item: str(item["fingerprint"]),
-    )
+    repository_executions: list[dict[str, object]] = []
+    stable_execution_refs: dict[str, str] = {}
+    for execution in run.repository_test_executions:
+        payload = execution.model_dump(
+            mode="json",
+            exclude={
+                "duration_seconds",
+                "execution_sha256",
+                "output_bytes",
+                "output_sha256",
+            },
+        )
+        repository_executions.append(payload)
+        stable_execution_refs[execution.execution_sha256] = canonical_sha256(payload)
+    findings: list[dict[str, object]] = []
+    for finding in run.findings:
+        payload = finding.model_dump(mode="json")
+        metadata = payload.get("metadata")
+        if isinstance(metadata, dict):
+            reference = metadata.get("repository_test_execution_sha256")
+            if isinstance(reference, str) and reference in stable_execution_refs:
+                payload["metadata"] = {
+                    **metadata,
+                    "repository_test_execution_sha256": stable_execution_refs[reference],
+                }
+        findings.append(payload)
+    findings.sort(key=lambda item: str(item["fingerprint"]))
+    repository_suite = run.repository_suite_selection is not None
     return {
         "scanner": run.scanner,
         "status": run.status.value,
         "execution_evidence": run.execution_evidence.value,
         "version": run.version,
         "executable_sha256": run.executable_sha256,
-        "raw_output_sha256": run.raw_output_sha256,
-        "raw_output_bytes": run.raw_output_bytes,
+        "raw_output_sha256": None if repository_suite else run.raw_output_sha256,
+        "raw_output_bytes": 0 if repository_suite else run.raw_output_bytes,
         "process_exit_code": run.process_exit_code,
-        "execution_observation_sha256": run.execution_observation_sha256,
         "foundry_summary": (
             run.foundry_summary.model_dump(mode="json") if run.foundry_summary is not None else None
         ),
+        "repository_suite_selection": (
+            run.repository_suite_selection.model_dump(mode="json")
+            if run.repository_suite_selection is not None
+            else None
+        ),
+        "repository_suite_execution_policy": (
+            run.repository_suite_execution_policy.model_dump(mode="json")
+            if run.repository_suite_execution_policy is not None
+            else None
+        ),
+        "repository_test_executions": repository_executions,
         "findings": findings,
         "isolation_backend": run.isolation_backend,
         "isolation_attestation_sha256": run.isolation_attestation_sha256,

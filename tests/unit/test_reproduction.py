@@ -304,10 +304,9 @@ def test_setup_calls_are_explicit_and_translated_before_the_attack_phase() -> No
 def test_macos_policy_allows_compiler_children_but_not_host_or_remote_access(
     tmp_path: Path,
 ) -> None:
-    workspace = tmp_path / "workspace"
     private = tmp_path / "private"
-    workspace.mkdir()
-    private.mkdir()
+    workspace = private / "workspace"
+    workspace.mkdir(parents=True)
     backend = MacOSSandboxBackend(executable="/usr/bin/sandbox-exec")
     command = backend.wrap(
         ["/usr/local/bin/forge", "test"],
@@ -318,6 +317,7 @@ def test_macos_policy_allows_compiler_children_but_not_host_or_remote_access(
     policy = (private / "sandbox.sb").read_text(encoding="utf-8")
     assert command[:2] == ["/usr/bin/sandbox-exec", "-f"]
     assert "(allow process-exec)" in policy
+    assert '(allow mach-lookup (global-name "com.apple.SystemConfiguration.configd"))' in policy
     assert "localhost:8545" in policy
     assert "(allow network-outbound)" not in policy
     assert str(Path.home()) not in policy

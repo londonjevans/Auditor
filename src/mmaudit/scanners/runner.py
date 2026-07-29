@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -12,11 +13,13 @@ from mmaudit.models.schemas import (
     RepositoryCodeExecutionState,
     ScannerRun,
     ScannerStatus,
+    SolidityProjectMetadata,
 )
 from mmaudit.scanners.base import ScannerAdapter, ScannerIsolationBackend
 from mmaudit.scanners.codeql import CodeQLScanner
 from mmaudit.scanners.foundry import FoundryForkScanner
 from mmaudit.scanners.gitleaks import GitleaksScanner
+from mmaudit.scanners.hardhat import HardhatForkScanner
 from mmaudit.scanners.osv import OsvScanner
 from mmaudit.scanners.semgrep import SemgrepScanner
 from mmaudit.scanners.slither import SlitherScanner
@@ -44,7 +47,14 @@ class ScannerRunner:
                 config.scanners.codeql.query_suite,
             ),
             "slither": SlitherScanner(),
-            "foundry_fork": FoundryForkScanner(config.smart_contracts),
+            "foundry_fork": FoundryForkScanner(
+                config.smart_contracts,
+                reproduction=config.reproduction,
+            ),
+            "hardhat_fork": HardhatForkScanner(
+                config.smart_contracts,
+                config.scanners.hardhat_fork,
+            ),
         }
 
     def scanner_config(self, name: str) -> ScannerConfig:
@@ -60,6 +70,7 @@ class ScannerRunner:
         *,
         skip_codeql: bool = False,
         allow_fork_probing: bool = False,
+        projects: Sequence[SolidityProjectMetadata] = (),
     ) -> list[ScannerRun]:
         tasks: list[asyncio.Task[ScannerRun]] = []
         results: list[ScannerRun] = []
@@ -104,6 +115,11 @@ class ScannerRunner:
                 )
                 continue
             if isinstance(adapter, FoundryForkScanner):
+                adapter = adapter.with_runtime_context(
+                    allow_fork_probing=allow_fork_probing,
+                    projects=projects,
+                )
+            elif isinstance(adapter, HardhatForkScanner):
                 adapter = adapter.with_runtime_allowance(allow_fork_probing)
             tasks.append(
                 asyncio.create_task(

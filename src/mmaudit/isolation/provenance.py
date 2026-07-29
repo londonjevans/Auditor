@@ -319,7 +319,7 @@ def _run_builtin_preflight(backend: _BuiltInBackend) -> _IsolationProbeResults |
                     [str(true_executable)],
                     workspace=workspace,
                     private_dir=private_dir,
-                    rpc_port=0,
+                    rpc_port=_POLICY_PROBE_PORT,
                     environment=environment,
                 )
                 == 0
@@ -336,7 +336,7 @@ def _run_builtin_preflight(backend: _BuiltInBackend) -> _IsolationProbeResults |
                     ],
                     workspace=workspace,
                     private_dir=private_dir,
-                    rpc_port=0,
+                    rpc_port=_POLICY_PROBE_PORT,
                     environment=environment,
                 )
                 == 0
@@ -354,7 +354,7 @@ def _run_builtin_preflight(backend: _BuiltInBackend) -> _IsolationProbeResults |
                 ],
                 workspace=workspace,
                 private_dir=private_dir,
-                rpc_port=0,
+                rpc_port=_POLICY_PROBE_PORT,
                 environment=environment,
             ) not in (None, 0)
             outside_write_denied = (
@@ -369,7 +369,7 @@ def _run_builtin_preflight(backend: _BuiltInBackend) -> _IsolationProbeResults |
                     ],
                     workspace=workspace,
                     private_dir=private_dir,
-                    rpc_port=0,
+                    rpc_port=_POLICY_PROBE_PORT,
                     environment=environment,
                 )
                 not in (None, 0)
@@ -384,7 +384,7 @@ def _run_builtin_preflight(backend: _BuiltInBackend) -> _IsolationProbeResults |
                     [str(shell_executable), "-c", secret_expression],
                     workspace=workspace,
                     private_dir=private_dir,
-                    rpc_port=0,
+                    rpc_port=_POLICY_PROBE_PORT,
                     environment=environment,
                 )
                 == 0

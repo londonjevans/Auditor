@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import time
 from abc import ABC, abstractmethod
@@ -523,6 +524,54 @@ def copy_scanner_workspace(root: Path, workspace: Path, private_dir: Path) -> No
     shutil.copytree(repository_root, workspace, symlinks=False, ignore=ignore)
 
 
+def scanner_workspace_sha256(root: Path, private_dir: Path | None = None) -> str:
+    """Hash the exact bounded, non-secret tree copied into scanner workspaces."""
+
+    repository_root = root.resolve(strict=True)
+    private_root = (
+        private_dir.resolve(strict=False)
+        if private_dir is not None
+        else (repository_root / ".mmaudit").resolve(strict=False)
+    )
+
+    def excluded(path: Path) -> bool:
+        return _workspace_path_excluded(path, repository_root, private_root)
+
+    validate_copyable_workspace(
+        repository_root,
+        excluded=excluded,
+        max_files=_MAX_WORKSPACE_FILES,
+        max_total_bytes=_MAX_WORKSPACE_BYTES,
+    )
+    bindings: list[dict[str, str | int]] = []
+    total_bytes = 0
+    for candidate in sorted(repository_root.rglob("*"), key=lambda item: item.as_posix()):
+        if excluded(candidate) or candidate.is_dir():
+            continue
+        metadata = candidate.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise ValueError("scanner workspace hash requires unique regular files")
+        total_bytes += metadata.st_size
+        if len(bindings) + 1 > _MAX_WORKSPACE_FILES or total_bytes > _MAX_WORKSPACE_BYTES:
+            raise ValueError("scanner workspace hash bounds were exceeded")
+        bindings.append(
+            {
+                "path": candidate.relative_to(repository_root).as_posix(),
+                "sha256": _file_sha256(candidate),
+                "size": metadata.st_size,
+            }
+        )
+    return hashlib.sha256(
+        json.dumps(
+            bindings,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def _workspace_path_excluded(path: Path, root: Path, private_dir: Path) -> bool:
     try:
         relative = path.relative_to(root)
@@ -588,7 +637,7 @@ def isolated_executable_version(
     if result is None:
         return None
     output = (result.stdout or result.stderr).strip().splitlines()
-    return output[0][:200] if output else None
+    return "\n".join(output)[:1_000] if output else None
 
 
 def _scanner_cleanup_error(backend: object, private_dir: Path) -> str | None:

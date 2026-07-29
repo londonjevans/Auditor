@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-07-29T09:39:19Z",
-  "candidate_commit": "c9ff0a8f49ad65728c031505ceab372d4e779ec7",
+  "updated_at": "2026-07-29T11:56:12Z",
+  "candidate_commit": "14908b3dcd38cdb1c91428306d160d80d67eb325",
   "autorun_status": "PAUSED_BY_OPERATOR",
-  "current_milestone": "paused_at_clean_ticket_boundary",
-  "current_ticket": null,
-  "last_checkpoint_commit": "c9ff0a8f49ad65728c031505ceab372d4e779ec7",
+  "current_milestone": "paused_during_pinned_fork_repository_suite_execution",
+  "current_ticket": "V3-FORKSUITE-001",
+  "last_checkpoint_commit": "14908b3dcd38cdb1c91428306d160d80d67eb325",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,

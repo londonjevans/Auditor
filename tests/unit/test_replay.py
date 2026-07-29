@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import socket
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -24,11 +25,13 @@ from mmaudit.models.schemas import (
     AttackerCapabilityPolicy,
     AuditProfile,
     AuditReport,
+    ExecutionEvidenceKind,
     ForkActor,
     ForkAssertion,
     ForkCallStep,
     ForkTestType,
     FoundryInvariantHarnessSpec,
+    FoundryTestExecutionSummary,
     GeneratedFoundryTestSpec,
     InvariantCategory,
     InvariantExecutionAttemptEvidence,
@@ -39,8 +42,16 @@ from mmaudit.models.schemas import (
     InvariantRelation,
     InvariantSpec,
     InvariantSuite,
+    RepositoryCodeExecutionState,
     RepositoryFile,
     RepositoryMap,
+    RepositorySuiteExecutionPolicy,
+    RepositorySuiteFramework,
+    RepositorySuiteSelection,
+    RepositorySuiteTestDescriptor,
+    RepositoryTestExecution,
+    RepositoryTestExecutionStatus,
+    RepositoryTestKind,
     ReproductionAttemptEvidence,
     ReproductionResult,
     ReproductionState,
@@ -88,11 +99,32 @@ class _LocalScannerRunner:
         *,
         skip_codeql: bool = False,
         allow_fork_probing: bool = False,
+        projects: Sequence[SolidityProjectMetadata] = (),
     ) -> list[ScannerRun]:
-        del root, private_dir
+        del root, private_dir, projects
         assert not skip_codeql
         assert not allow_fork_probing
         self.calls += 1
+        return self.runs
+
+
+class _ForkAwareScannerRunner:
+    def __init__(self, runs: list[ScannerRun]) -> None:
+        self.runs = runs
+        self.allow_fork_probing: list[bool] = []
+
+    async def run_all(
+        self,
+        root: Path,
+        private_dir: Path,
+        *,
+        skip_codeql: bool = False,
+        allow_fork_probing: bool = False,
+        projects: Sequence[SolidityProjectMetadata] = (),
+    ) -> list[ScannerRun]:
+        del root, private_dir, projects
+        assert not skip_codeql
+        self.allow_fork_probing.append(allow_fork_probing)
         return self.runs
 
 
@@ -148,6 +180,129 @@ def _scanner_run() -> ScannerRun:
         duration_seconds=0,
         findings=[],
         isolation_backend="synthetic-no-network",
+    )
+
+
+def _repository_suite_scanner_run(
+    *,
+    private_command_root: str = "/private/replay-one",
+    scanner_duration_seconds: float = 0.25,
+    execution_duration_seconds: float = 0.25,
+    block_hash: str = "0x" + ("4" * 64),
+    compiler_sha256: str = "5" * 64,
+    policy_fuzz_runs: int = 256,
+    execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.MOCK,
+) -> ScannerRun:
+    descriptor = RepositorySuiteTestDescriptor.sealed(
+        framework=RepositorySuiteFramework.FOUNDRY,
+        project_root=".",
+        path="test/audit/ReplaySuite.t.sol",
+        suite_name="ReplaySuiteTest",
+        test_name="testPinnedState",
+        source_sha256="1" * 64,
+        start_line=10,
+        end_line=12,
+    )
+    selection = RepositorySuiteSelection.sealed(
+        profile="legacy_audit",
+        repository_sha256="2" * 64,
+        configuration_sha256="3" * 64,
+        candidate_file_count=1,
+        candidate_test_count=1,
+        selected_file_count=1,
+        selected_test_count=1,
+        omitted_file_count=0,
+        omitted_test_count=0,
+        limit_reached=False,
+        tests=(descriptor,),
+    )
+    policy = RepositorySuiteExecutionPolicy.sealed(
+        selection_sha256=selection.selection_sha256,
+        selection_configuration_sha256=selection.configuration_sha256,
+        chain_id=31_337,
+        block_number=42,
+        block_hash=block_hash,
+        tool_version="forge 1.3.2",
+        tool_sha256="a" * 64,
+        compiler_version="solc 0.8.30",
+        compiler_sha256=compiler_sha256,
+        isolation_backend="synthetic-isolation",
+        isolation_attestation_sha256="9" * 64,
+        fuzz_seed="0x" + ("0" * 63) + "1",
+        fuzz_runs=policy_fuzz_runs,
+        invariant_runs=64,
+        per_test_timeout_seconds=120,
+        total_timeout_seconds=900,
+        max_output_bytes_per_test=1_000_000,
+        max_total_output_bytes=10_000_000,
+    )
+    execution = RepositoryTestExecution.sealed(
+        selection_sha256=selection.selection_sha256,
+        descriptor_sha256=descriptor.descriptor_sha256,
+        framework=descriptor.framework,
+        project_root=descriptor.project_root,
+        path=descriptor.path,
+        suite_name=descriptor.suite_name,
+        test_name=descriptor.test_name,
+        chain_id=31_337,
+        block_number=42,
+        block_hash=block_hash,
+        fuzz_seed="0x" + ("0" * 63) + "1",
+        test_kind=RepositoryTestKind.UNIT,
+        status=RepositoryTestExecutionStatus.PASSED,
+        duration_seconds=execution_duration_seconds,
+        command_sha256="7" * 64,
+        output_sha256="8" * 64,
+        output_bytes=128,
+        machine_result_sha256="c" * 64,
+        process_exit_code=0,
+        machine_output_validated=True,
+        execution_evidence=execution_evidence,
+        repository_code_execution=RepositoryCodeExecutionState.ISOLATED,
+        isolation_backend="synthetic-isolation",
+        isolation_attestation_sha256="9" * 64,
+        compiler_version="solc 0.8.30",
+        compiler_sha256=compiler_sha256,
+        execution_policy_sha256=policy.policy_sha256,
+    )
+    return ScannerRun(
+        scanner="foundry_fork",
+        status=ScannerStatus.SUCCESS,
+        execution_evidence=execution_evidence,
+        version="forge 1.3.2",
+        executable_sha256="a" * 64,
+        command=[
+            f"{private_command_root}/forge",
+            "test",
+            "--cache-path",
+            f"{private_command_root}/cache",
+        ],
+        started_at=_NOW,
+        finished_at=_NOW,
+        duration_seconds=scanner_duration_seconds,
+        findings=[],
+        raw_output_path=f"{private_command_root}/scanner-output.json",
+        raw_output_sha256=hashlib.sha256(private_command_root.encode()).hexdigest(),
+        raw_output_bytes=256,
+        process_exit_code=0,
+        isolation_backend="synthetic-isolation",
+        isolation_attestation_sha256="9" * 64,
+        machine_output_validated=True,
+        foundry_summary=FoundryTestExecutionSummary(
+            unit_tests=1,
+            fuzz_tests=0,
+            invariant_tests=0,
+            passed_tests=1,
+            failed_tests=0,
+            skipped_tests=0,
+            fuzz_cases=0,
+            invariant_runs=0,
+            invariant_calls=0,
+        ),
+        repository_suite_selection=selection,
+        repository_suite_execution_policy=policy,
+        repository_test_executions=[execution],
+        repository_code_execution=RepositoryCodeExecutionState.ISOLATED,
     )
 
 
@@ -487,6 +642,92 @@ def _orchestrator(
         invariant,
         reproduction,
     )
+
+
+@pytest.mark.asyncio
+async def test_sealed_repository_suite_replay_acknowledges_fork_probing(
+    tmp_path: Path,
+) -> None:
+    baseline = _repository_suite_scanner_run()
+    scanner = _ForkAwareScannerRunner([baseline])
+    orchestrator = OfflineReplayOrchestrator(scanner_runner=scanner)
+
+    components = await orchestrator._replay_scanners(
+        repository=tmp_path,
+        private_dir=tmp_path / "private",
+        projects=[],
+        expected=[baseline],
+    )
+
+    assert scanner.allow_fork_probing == [True]
+    assert len(components) == 1
+    assert components[0].identifier == "foundry_fork"
+    assert components[0].status is ReplayComponentStatus.MATCHED
+
+
+@pytest.mark.asyncio
+async def test_repository_suite_replay_ignores_volatility_but_retains_identities(
+    tmp_path: Path,
+) -> None:
+    baseline = _repository_suite_scanner_run(
+        private_command_root="/private/original",
+        scanner_duration_seconds=0.25,
+        execution_duration_seconds=0.1,
+    )
+    volatile_replay = _repository_suite_scanner_run(
+        private_command_root="/private/replay",
+        scanner_duration_seconds=4.5,
+        execution_duration_seconds=3.25,
+    )
+    assert baseline.command != volatile_replay.command
+    assert baseline.raw_output_path != volatile_replay.raw_output_path
+    assert baseline.raw_output_sha256 != volatile_replay.raw_output_sha256
+    assert (
+        baseline.repository_test_executions[0].execution_sha256
+        != volatile_replay.repository_test_executions[0].execution_sha256
+    )
+    assert (
+        baseline.repository_test_executions[0].command_sha256
+        == volatile_replay.repository_test_executions[0].command_sha256
+    )
+
+    scanner = _ForkAwareScannerRunner([volatile_replay])
+    orchestrator = OfflineReplayOrchestrator(scanner_runner=scanner)
+    components = await orchestrator._replay_scanners(
+        repository=tmp_path,
+        private_dir=tmp_path / "private",
+        projects=[],
+        expected=[baseline],
+    )
+
+    assert scanner.allow_fork_probing == [True]
+    assert components[0].status is ReplayComponentStatus.MATCHED
+    assert components[0].expected_sha256 == components[0].observed_sha256
+
+    identity_changes = {
+        "toolchain": _repository_suite_scanner_run(compiler_sha256="b" * 64),
+        "block": _repository_suite_scanner_run(block_hash="0x" + ("c" * 64)),
+        "policy": _repository_suite_scanner_run(policy_fuzz_runs=257),
+        "evidence": _repository_suite_scanner_run(execution_evidence=ExecutionEvidenceKind.REAL),
+    }
+    statuses: dict[str, ReplayComponentStatus] = {}
+    for identity, replay_run in identity_changes.items():
+        scanner = _ForkAwareScannerRunner([replay_run])
+        orchestrator = OfflineReplayOrchestrator(scanner_runner=scanner)
+        identity_components = await orchestrator._replay_scanners(
+            repository=tmp_path,
+            private_dir=tmp_path / f"private-{identity}",
+            projects=[],
+            expected=[baseline],
+        )
+        statuses[identity] = identity_components[0].status
+
+    assert statuses == {
+        "toolchain": ReplayComponentStatus.DRIFTED,
+        "block": ReplayComponentStatus.DRIFTED,
+        "policy": ReplayComponentStatus.DRIFTED,
+        "evidence": ReplayComponentStatus.DRIFTED,
+    }
 
 
 def _rewrite_manifest_as_legacy(manifest_path: Path) -> None:

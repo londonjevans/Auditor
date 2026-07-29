@@ -46,6 +46,8 @@ from mmaudit.models.schemas import (
     ModelReviewCoverage,
     ModelSurfaceReviewArtifact,
     ModelSurfaceReviewStatus,
+    RepositoryCodeExecutionState,
+    RepositoryTestExecutionStatus,
     ReproductionIntegrityStatus,
     ReproductionResolutionKind,
     ReproductionResult,
@@ -516,7 +518,7 @@ class MaximumAssuranceContract:
             foundry_records[0]
             if (
                 len(foundry_records) == 1
-                and _is_real_foundry_portfolio(foundry_records[0])
+                and is_qualifying_real_foundry_portfolio(foundry_records[0], self.config)
                 and _scanner_matches_trust_pin(
                     foundry_records[0],
                     version=self.config.scanners.foundry_fork.version,
@@ -1722,9 +1724,59 @@ def _formal_run_matches_config_pin(run: FormalToolRun, config: AuditConfig) -> b
     )
 
 
-def _is_real_foundry_portfolio(run: ScannerRun) -> bool:
+def is_qualifying_real_foundry_portfolio(
+    run: ScannerRun,
+    config: AuditConfig,
+) -> bool:
     summary = run.foundry_summary
-    if run.scanner != "foundry_fork" or not _is_real_scanner_run(run) or summary is None:
+    selection = run.repository_suite_selection
+    execution_policy = run.repository_suite_execution_policy
+    executions = run.repository_test_executions
+    expected_total_timeout = min(
+        config.execution.scanner_timeout_seconds,
+        config.smart_contracts.max_fork_probe_seconds,
+        config.smart_contracts.repository_suite.total_timeout_seconds,
+    )
+    expected_per_test_timeout = min(
+        expected_total_timeout,
+        config.smart_contracts.repository_suite.per_test_timeout_seconds,
+    )
+    classified_statuses = {
+        RepositoryTestExecutionStatus.PASSED,
+        RepositoryTestExecutionStatus.FAILED,
+        RepositoryTestExecutionStatus.REVERTED,
+        RepositoryTestExecutionStatus.ASSERTION_FAILED,
+    }
+    if (
+        run.scanner != "foundry_fork"
+        or not _is_real_scanner_run(run)
+        or summary is None
+        or selection is None
+        or execution_policy is None
+        or not executions
+        or selection.configuration_sha256 != config.smart_contracts.repository_suite.stable_hash()
+        or selection.selection_sha256 != selection.expected_selection_sha256()
+        or config.reproduction.expected_chain_id is None
+        or config.reproduction.pinned_block_number is None
+        or execution_policy.policy_sha256 != execution_policy.expected_policy_sha256()
+        or execution_policy.selection_sha256 != selection.selection_sha256
+        or execution_policy.selection_configuration_sha256 != selection.configuration_sha256
+        or execution_policy.chain_id != config.reproduction.expected_chain_id
+        or execution_policy.block_number != config.reproduction.pinned_block_number
+        or execution_policy.tool_version != run.version
+        or execution_policy.tool_sha256 != run.executable_sha256
+        or execution_policy.isolation_backend != run.isolation_backend
+        or execution_policy.isolation_attestation_sha256 != run.isolation_attestation_sha256
+        or execution_policy.fuzz_seed != config.smart_contracts.repository_suite.fuzz_seed
+        or execution_policy.fuzz_runs != config.smart_contracts.foundry_fuzz_runs
+        or execution_policy.invariant_runs != config.smart_contracts.foundry_invariant_runs
+        or execution_policy.per_test_timeout_seconds != expected_per_test_timeout
+        or execution_policy.total_timeout_seconds != expected_total_timeout
+        or execution_policy.max_output_bytes_per_test
+        != config.smart_contracts.repository_suite.max_output_bytes_per_test
+        or execution_policy.max_total_output_bytes
+        != config.smart_contracts.repository_suite.max_total_output_bytes
+    ):
         return False
     observed_tests = summary.unit_tests + summary.fuzz_tests + summary.invariant_tests
     return (
@@ -1739,6 +1791,32 @@ def _is_real_foundry_portfolio(run: ScannerRun) -> bool:
         and summary.fuzz_cases > 0
         and summary.invariant_runs > 0
         and summary.invariant_calls > 0
+        and len(executions) == selection.selected_test_count
+        and all(
+            execution.status in classified_statuses
+            and execution.execution_evidence is ExecutionEvidenceKind.REAL
+            and execution.repository_code_execution is RepositoryCodeExecutionState.ISOLATED
+            and execution.machine_output_validated
+            and execution.chain_id == config.reproduction.expected_chain_id
+            and execution.block_number == config.reproduction.pinned_block_number
+            and execution.block_hash is not None
+            and re.fullmatch(r"0x[0-9a-f]{64}", execution.block_hash) is not None
+            and execution.fuzz_seed == config.smart_contracts.repository_suite.fuzz_seed
+            and execution.compiler_sha256 == config.smart_contracts.solc_sha256
+            and config.smart_contracts.solc_version is not None
+            and execution.compiler_version is not None
+            and re.search(
+                rf"(?<![0-9.]){re.escape(config.smart_contracts.solc_version)}(?![0-9.])",
+                execution.compiler_version,
+            )
+            is not None
+            and execution.execution_sha256 == execution.expected_execution_sha256()
+            and _is_sha256(execution.command_sha256)
+            and _is_sha256(execution.output_sha256)
+            and _is_sha256(execution.machine_result_sha256)
+            and execution.execution_policy_sha256 == execution_policy.policy_sha256
+            for execution in executions
+        )
     )
 
 

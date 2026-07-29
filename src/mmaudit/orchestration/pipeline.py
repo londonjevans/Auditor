@@ -166,6 +166,7 @@ from mmaudit.orchestration.assurance import (
     MaximumAssuranceContract,
     ProviderSessionProvenance,
     _issue_provider_session_provenance,
+    is_qualifying_real_foundry_portfolio,
 )
 from mmaudit.orchestration.budgets import BudgetExhaustedError, BudgetManager
 from mmaudit.orchestration.consensus import (
@@ -1024,6 +1025,7 @@ class AuditPipeline:
                 run_dir / "private" / "scanner-output",
                 skip_codeql=skip_codeql,
                 allow_fork_probing=allow_fork_probing,
+                projects=solidity_projects,
             )
         )
         scanner_runs = [_annotate_scanner_locations(discovery.root, run) for run in scanner_runs]
@@ -3763,7 +3765,18 @@ def _annotate_scanner_locations(root: Path, run: ScannerRun) -> ScannerRun:
                 }
             )
         )
-    return run.model_copy(update={"findings": findings})
+    updated = run.model_copy(
+        update={
+            "findings": findings,
+            "execution_observation_sha256": None,
+        }
+    )
+    return ScannerRun.model_validate(
+        {
+            **updated.model_dump(mode="json"),
+            "execution_observation_sha256": updated.expected_execution_observation_sha256(),
+        }
+    )
 
 
 def _scanner_findings_for_context(
@@ -4417,7 +4430,7 @@ def _evaluate_quality_gates(
     }
     reproduction_integrity_passed = eligible_candidate_ids <= integrity_verified_ids
     fork_executed = bool(attempted_candidates) or (
-        baseline is not None and baseline.status is ScannerStatus.SUCCESS
+        baseline is not None and is_qualifying_real_foundry_portfolio(baseline, config)
     )
     required_roles = {
         "threat_model",
