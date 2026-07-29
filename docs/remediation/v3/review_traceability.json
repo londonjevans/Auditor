@@ -174,10 +174,14 @@
       "id": "O",
       "title": "Fail loudly when analysis did not run",
       "tickets": ["V3-FLOOR-001"],
-      "status": "QUEUED",
+      "status": "COMPLETE",
       "current_evidence_class": "LOCAL_IMPLEMENTATION",
-      "evidence": ["Assurance gates fail closed in several paths, but zero-scanner/zero-model no-findings output can still appear completed."],
-      "remaining_proof": "Evidence-derived run states, non-zero minimum floor, non-zero exit, and no-analysis report wording."
+      "evidence": [
+        "Audit report schema 1.2 binds COMPLETE, DEGRADED, INCOMPLETE, or FAILED to serialized source, compilation, REAL scanner, REAL model-role, coverage, surface-feasibility, quality-gate, and maximum-assurance evidence.",
+        "The zero-scanner/zero-model integration and CLI regressions return non-zero and render prominent incomplete no-findings wording; infeasible required surface assignments reject before provider transport.",
+        "Ruff, strict mypy over 140 source files, release-schema synchronization, diff integrity, and the complete local suite passed with 2397 tests and 10 explicit external-prerequisite skips at implementation checkpoint c9ff0a8f49ad65728c031505ceab372d4e779ec7."
+      ],
+      "remaining_proof": null
     },
     {
       "id": "P",

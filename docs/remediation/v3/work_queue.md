@@ -332,7 +332,24 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Dependencies:** `V3-TOKENS-001` under the operator-authored revised
   sequencing; the original `V3-CONSENSUS-001` ordering is superseded for this
   minimum-floor defect.
-- **Status:** `IN_PROGRESS`
+- **Status:** `COMPLETE`
+- **Evidence:** Typed report schema `1.2` cross-binds the evidence-derived run
+  state to source ingestion, AST-backed compilation, qualifying REAL static
+  analysis, structurally creditable REAL model roles, non-empty coverage
+  denominators, surface feasibility, required quality gates, and the
+  maximum-assurance assessment. Zero qualifying scanners plus zero completed
+  model roles now returns a non-zero exit and prominent incomplete no-findings
+  wording. Infeasible required scope or model-surface assignments stop before
+  provider transport unless a lower profile is explicitly authorized and
+  feasible. The final local gate passed Ruff, strict mypy over `140` source
+  files, release-schema synchronization, diff integrity, and `2397` tests with
+  `10` explicit external-prerequisite skips.
+- **Remaining limitation:** The deterministic decision logic and negative
+  regressions use synthetic typed evidence and fake transports; they do not
+  claim a new provider call, real scanner execution, hardened isolation, or a
+  completed real audit.
+- **Next action:** On operator resume, begin `V3-FORKSUITE-001` under the revised
+  engine-and-execution-evidence track.
 
 ## V3-REPORT-001 — Client report and forensic evidence bundle
 
