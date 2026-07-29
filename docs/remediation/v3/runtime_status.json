@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-07-29T16:50:17Z",
+  "updated_at": "2026-07-29T17:05:12Z",
   "candidate_commit": "aa7ea0f1eb5053c95d7d44c2d97ec1c776c3d7e1",
-  "autorun_status": "ACTIVE",
+  "autorun_status": "PAUSED_BY_OPERATOR",
   "current_milestone": "differential_multi_state_fork_matrix",
   "current_ticket": "V3-FORKDIFF-001",
   "last_checkpoint_commit": "aa7ea0f1eb5053c95d7d44c2d97ec1c776c3d7e1",

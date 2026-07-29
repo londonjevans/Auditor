@@ -346,6 +346,32 @@ def _safe_repository_suite_test_glob(value: str) -> bool:
     )
 
 
+class RepositoryForkMatrixStateConfig(ConfigModel):
+    """Operator-authored identity for one local repository-suite execution state."""
+
+    state_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
+    kind: Literal["clean_local", "pinned_fork"]
+    rpc_url_env: str = Field(pattern=r"^[A-Z_][A-Z0-9_]{0,127}$")
+    expected_chain_id: int = Field(ge=1)
+    pinned_block_number: int = Field(ge=0)
+    state_source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("rpc_url_env")
+    @classmethod
+    def rpc_environment_name_is_not_a_control_plane_secret(cls, value: str) -> str:
+        if value in RESERVED_OPERATOR_CONTROL_PLANE_NAMES:
+            raise ValueError("fork matrix RPC cannot select an operator control-plane variable")
+        return value
+
+    @model_validator(mode="after")
+    def clean_state_is_the_genesis_snapshot(self) -> RepositoryForkMatrixStateConfig:
+        if self.kind == "clean_local" and self.pinned_block_number != 0:
+            raise ValueError("clean-local fork matrix state must pin block zero")
+        if self.state_source_sha256 == "0" * 64:
+            raise ValueError("fork matrix state requires an operator-authored source identity")
+        return self
+
+
 class RepositoryForkSuiteConfig(ConfigModel):
     """Explicit bounded selection and execution limits for repository-owned tests."""
 
@@ -366,6 +392,11 @@ class RepositoryForkSuiteConfig(ConfigModel):
     max_output_bytes_per_test: int = Field(default=1_000_000, ge=1_024, le=10_000_000)
     max_total_output_bytes: int = Field(default=10_000_000, ge=1_024, le=100_000_000)
     fuzz_seed: str = Field(default=_REPOSITORY_SUITE_FUZZ_SEED, pattern=r"^0x[0-9a-f]{64}$")
+    fork_matrix_states: tuple[RepositoryForkMatrixStateConfig, ...] = Field(
+        default=(),
+        max_length=8,
+    )
+    fork_matrix_repetitions: int = Field(default=2, ge=1, le=10)
 
     @field_validator(
         "foundry_include_paths",
@@ -417,6 +448,25 @@ class RepositoryForkSuiteConfig(ConfigModel):
             raise ValueError(
                 "repository suite total output ceiling cannot be below its per-test ceiling"
             )
+        state_ids = [state.state_id for state in self.fork_matrix_states]
+        if state_ids != sorted(set(state_ids)):
+            raise ValueError("fork matrix states must have unique canonically sorted IDs")
+        if self.fork_matrix_states:
+            clean_states = [
+                state for state in self.fork_matrix_states if state.kind == "clean_local"
+            ]
+            pinned_states = [
+                state for state in self.fork_matrix_states if state.kind == "pinned_fork"
+            ]
+            if len(clean_states) != 1 or not pinned_states:
+                raise ValueError(
+                    "fork matrix requires exactly one clean-local state and at least "
+                    "one pinned-fork state"
+                )
+            if self.fork_matrix_repetitions < 2:
+                raise ValueError("fork matrix requires at least two fresh repetitions")
+        elif self.fork_matrix_repetitions != 2:
+            raise ValueError("fork matrix repetitions cannot be customized without states")
 
         foundry_enabled = bool(self.foundry_include_paths or self.foundry_include_tests)
         hardhat_enabled = bool(self.hardhat_include_paths or self.hardhat_include_tests)

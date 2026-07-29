@@ -141,6 +141,55 @@ def test_smart_contract_config_round_trip_preserves_explicit_repository_suite() 
     assert restored.repository_suite.profile == "explicit"
 
 
+def test_repository_suite_fork_matrix_requires_clean_and_pinned_states() -> None:
+    suite = _explicit_config(
+        fork_matrix_repetitions=2,
+        fork_matrix_states=(
+            {
+                "state_id": "clean-local",
+                "kind": "clean_local",
+                "rpc_url_env": "MMAUDIT_CLEAN_LOCAL_RPC_URL",
+                "expected_chain_id": 31_337,
+                "pinned_block_number": 0,
+                "state_source_sha256": "a" * 64,
+            },
+            {
+                "state_id": "pinned-state",
+                "kind": "pinned_fork",
+                "rpc_url_env": "MMAUDIT_PINNED_FORK_RPC_URL",
+                "expected_chain_id": 1,
+                "pinned_block_number": 20_000_000,
+                "state_source_sha256": "b" * 64,
+            },
+        ),
+    )
+
+    assert suite.fork_matrix_repetitions == 2
+    assert [state.state_id for state in suite.fork_matrix_states] == [
+        "clean-local",
+        "pinned-state",
+    ]
+
+    with pytest.raises(ValidationError, match="one clean-local state"):
+        _explicit_config(
+            fork_matrix_states=(
+                {
+                    "state_id": "pinned-only",
+                    "kind": "pinned_fork",
+                    "rpc_url_env": "MMAUDIT_PINNED_FORK_RPC_URL",
+                    "expected_chain_id": 1,
+                    "pinned_block_number": 20_000_000,
+                    "state_source_sha256": "b" * 64,
+                },
+            ),
+        )
+    with pytest.raises(ValidationError, match="at least two fresh repetitions"):
+        _explicit_config(
+            fork_matrix_repetitions=1,
+            fork_matrix_states=suite.fork_matrix_states,
+        )
+
+
 def test_safe_legacy_foundry_selectors_migrate_to_one_explicit_authority() -> None:
     migrated = SmartContractsConfig(
         foundry_match_path="contracts/test/*.t.sol",

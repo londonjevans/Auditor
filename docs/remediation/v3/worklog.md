@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: ACTIVE
+AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Differential and multi-state fork matrix
 CURRENT_TICKET: V3-FORKDIFF-001
 LAST_COMPLETED_TICKET: V3-FLOOR-001
-NEXT_ACTION: Inspect the pinned-state execution schemas, manifests, privacy evidence, reporting, replay, and existing comparison abstractions; then add expected-red multi-state/repeatability regressions before implementation.
-LAST_COMMAND: git commit -m "Harden pinned repository suite execution"
-LAST_RESULT: PASS — cohesive V3-FORKSUITE-001 Foundry implementation and honest partial/blocked disposition committed as aa7ea0f1eb5053c95d7d44c2d97ec1c776c3d7e1.
+NEXT_ACTION: Resume V3-FORKDIFF-001 by implementing and expected-red testing a trusted bounded read-only loopback JSON-RPC bridge; preserve the qualifying single-state Foundry run while building a separate typed repeated-state matrix artifact.
+LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_repository_suite_config.py
+LAST_RESULT: PASS — 27 focused configuration tests passed in 0.02s; affected Ruff check and format check also passed.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -36,6 +36,29 @@ LAST_CHECKPOINT_COMMIT: aa7ea0f1eb5053c95d7d44c2d97ec1c776c3d7e1
   privacy, report, and replay abstractions; define the typed state/comparison
   evidence and add expected-red tests before implementation. No live target,
   public RPC, provider call, secret, wallet, signing, or paid path is involved.
+- **Expected-red configuration proof:** The focused configuration suite initially
+  rejected `fork_matrix_states` and `fork_matrix_repetitions` as unrecognized
+  fields. The implementation now accepts only a canonically ordered matrix with
+  exactly one clean-local state, at least one pinned-fork state, at least two
+  repetitions, nonzero operator-authored state identities, non-secret RPC
+  environment names, and a genesis-pinned clean state.
+- **Focused validation:** `.venv/bin/pytest -q
+  tests/unit/test_repository_suite_config.py` passed `27` tests in `0.02s`;
+  `.venv/bin/ruff check src/mmaudit/config.py
+  tests/unit/test_repository_suite_config.py` passed; and
+  `.venv/bin/ruff format --check src/mmaudit/config.py
+  tests/unit/test_repository_suite_config.py` reported both files formatted.
+- **Independent design review:** Three read-only reviews completed without file
+  changes. They agree that the existing qualifying single-state
+  `foundry_fork` run must remain intact, repeated matrix evidence must be a
+  separate typed artifact, and a trusted bounded method-allowlisting loopback
+  bridge is required before any read-only RPC or no-transaction claim can be
+  credited.
+- **Operator pause:** Work stopped at this cohesive configuration boundary.
+  `V3-FORKDIFF-001` remains `IN_PROGRESS`; no divergence execution, read-only
+  bridge, report integration, or real differential integration is being
+  credited yet. No child task, target process, provider request, secret access,
+  public RPC, budget reservation, or paid operation remains active.
 
 ## 2026-07-29 — V3-FORKSUITE-001
 
