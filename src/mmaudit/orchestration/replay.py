@@ -6,7 +6,7 @@ import asyncio
 import tempfile
 from collections.abc import Sequence
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -21,6 +21,7 @@ from mmaudit.models.schemas import (
     InvariantExecutionResult,
     InvariantExecutionStatus,
     InvariantSuite,
+    RepositorySuiteInventoryEvidence,
     ReproductionResult,
     ReproductionState,
     ScannerRun,
@@ -41,6 +42,7 @@ from mmaudit.orchestration.verification import (
 from mmaudit.reporting.json_report import stable_json
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_name
+from mmaudit.scanners.base import scanner_workspace_sha256
 from mmaudit.scanners.runner import ScannerRunner
 from mmaudit.solidity.invariant_execution import FoundryInvariantRunner
 from mmaudit.solidity.reproduction import ForkReproductionRunner
@@ -202,6 +204,8 @@ class ScannerReplayRunner(Protocol):
         skip_codeql: bool = False,
         allow_fork_probing: bool = False,
         projects: Sequence[SolidityProjectMetadata] = (),
+        expected_repository_sha256: str | None = None,
+        repository_exclusion_root: Path | None = None,
     ) -> list[ScannerRun]: ...
 
 
@@ -226,6 +230,38 @@ class ReproductionReplayRunner(Protocol):
         specification: GeneratedFoundryTestSpec,
         private_dir: Path,
     ) -> ReproductionResult: ...
+
+
+def _repository_suite_replay_identity(
+    repository: Path,
+    expected: Sequence[ScannerRun],
+) -> tuple[str | None, Path | None]:
+    """Reconstruct and verify one unambiguous frozen repository-suite identity."""
+
+    identities = {
+        (
+            selection.repository_sha256,
+            selection.repository_exclusion_path,
+        )
+        for run in expected
+        if (selection := run.repository_suite_selection) is not None
+    }
+    if not identities:
+        return None, None
+    if len(identities) != 1:
+        raise ValueError("repository suite replay identities conflict")
+
+    expected_sha256, relative_exclusion = identities.pop()
+    if normalize_relative_path(relative_exclusion) != relative_exclusion:
+        raise ValueError("repository suite replay exclusion is not normalized")
+    exclusion_root = repository.joinpath(*PurePosixPath(relative_exclusion).parts)
+    try:
+        exclusion_root.absolute().relative_to(repository.absolute())
+    except ValueError as exc:
+        raise ValueError("repository suite replay exclusion leaves the repository") from exc
+    if scanner_workspace_sha256(repository, exclusion_root) != expected_sha256:
+        raise ValueError("repository suite replay source differs from its frozen identity")
+    return expected_sha256, exclusion_root
 
 
 class _ScannerArtifact(StrictModel):
@@ -474,6 +510,10 @@ class OfflineReplayOrchestrator:
         assert self.scanner_runner is not None
         expected_by_name = {item.scanner: item for item in expected}
         try:
+            (
+                expected_repository_sha256,
+                repository_exclusion_root,
+            ) = _repository_suite_replay_identity(repository, expected)
             fork_acknowledged = any(
                 item.scanner in {"foundry_fork", "hardhat_fork"}
                 and item.repository_suite_selection is not None
@@ -486,7 +526,16 @@ class OfflineReplayOrchestrator:
                 skip_codeql=False,
                 allow_fork_probing=fork_acknowledged,
                 projects=projects,
+                expected_repository_sha256=expected_repository_sha256,
+                repository_exclusion_root=repository_exclusion_root,
             )
+            if (
+                expected_repository_sha256 is not None
+                and repository_exclusion_root is not None
+                and scanner_workspace_sha256(repository, repository_exclusion_root)
+                != expected_repository_sha256
+            ):
+                raise ValueError("repository execution source changed during scanner replay")
         except (OSError, RuntimeError, ValueError) as exc:
             return [
                 _blocked_component(
@@ -883,6 +932,18 @@ def _safe_work_directory(path: Path) -> Path:
 def _scanner_projection(run: ScannerRun) -> dict[str, object]:
     repository_executions: list[dict[str, object]] = []
     stable_execution_refs: dict[str, str] = {}
+    stable_pre_inventory_ref = (
+        canonical_sha256(_repository_suite_inventory_projection(run.repository_suite_inventory))
+        if run.repository_suite_inventory is not None
+        else None
+    )
+    stable_post_inventory_ref = (
+        canonical_sha256(
+            _repository_suite_inventory_projection(run.repository_suite_post_inventory)
+        )
+        if run.repository_suite_post_inventory is not None
+        else None
+    )
     for execution in run.repository_test_executions:
         payload = execution.model_dump(
             mode="json",
@@ -893,6 +954,9 @@ def _scanner_projection(run: ScannerRun) -> dict[str, object]:
                 "output_sha256",
             },
         )
+        if execution.inventory_sha256 is not None:
+            payload["inventory_sha256"] = stable_pre_inventory_ref
+            payload["post_inventory_sha256"] = stable_post_inventory_ref
         repository_executions.append(payload)
         stable_execution_refs[execution.execution_sha256] = canonical_sha256(payload)
     findings: list[dict[str, object]] = []
@@ -926,6 +990,16 @@ def _scanner_projection(run: ScannerRun) -> dict[str, object]:
             if run.repository_suite_selection is not None
             else None
         ),
+        "repository_suite_inventory": (
+            _repository_suite_inventory_projection(run.repository_suite_inventory)
+            if run.repository_suite_inventory is not None
+            else None
+        ),
+        "repository_suite_post_inventory": (
+            _repository_suite_inventory_projection(run.repository_suite_post_inventory)
+            if run.repository_suite_post_inventory is not None
+            else None
+        ),
         "repository_suite_execution_policy": (
             run.repository_suite_execution_policy.model_dump(mode="json")
             if run.repository_suite_execution_policy is not None
@@ -936,6 +1010,55 @@ def _scanner_projection(run: ScannerRun) -> dict[str, object]:
         "isolation_backend": run.isolation_backend,
         "isolation_attestation_sha256": run.isolation_attestation_sha256,
         "repository_code_execution": run.repository_code_execution.value,
+    }
+
+
+def _repository_suite_inventory_projection(
+    inventory: RepositorySuiteInventoryEvidence,
+) -> dict[str, object]:
+    """Project compiler inventory onto path-independent replay semantics."""
+
+    projects: list[dict[str, object]] = []
+    for project in inventory.projects:
+        projects.append(
+            {
+                "project_root": project.project_root,
+                "command_sha256": project.command_sha256,
+                "process_exit_code": project.process_exit_code,
+                "machine_output_validated": project.machine_output_validated,
+                "stdout_sha256": project.stdout_sha256,
+                "stdout_bytes": project.stdout_bytes,
+                "stderr_sha256": project.stderr_sha256,
+                "stderr_bytes": project.stderr_bytes,
+                "normalized_build_info_sha256s": sorted(
+                    artifact.normalized_sha256 for artifact in project.build_info_artifacts
+                ),
+                "normalized_build_info_bundle_sha256": (
+                    project.normalized_build_info_bundle_sha256
+                ),
+                "parser_inventory_sha256": project.parser_inventory_sha256,
+                "records": [record.model_dump(mode="json") for record in project.records],
+                "normalized_inventory_sha256": project.normalized_inventory_sha256,
+            }
+        )
+    return {
+        "schema_version": inventory.schema_version,
+        "phase": inventory.phase.value,
+        "framework": inventory.framework.value,
+        "repository_sha256": inventory.repository_sha256,
+        "configuration_sha256": inventory.configuration_sha256,
+        "tool_version": inventory.tool_version,
+        "tool_sha256": inventory.tool_sha256,
+        "compiler_version": inventory.compiler_version,
+        "compiler_sha256": inventory.compiler_sha256,
+        "isolation_backend": inventory.isolation_backend,
+        "isolation_attestation_sha256": inventory.isolation_attestation_sha256,
+        "execution_evidence": inventory.execution_evidence.value,
+        "repository_code_execution": inventory.repository_code_execution.value,
+        "projects": projects,
+        "normalized_inventory_sha256": inventory.normalized_inventory_sha256,
+        "inventory_record_count": inventory.inventory_record_count,
+        "safety_claim": inventory.safety_claim,
     }
 
 

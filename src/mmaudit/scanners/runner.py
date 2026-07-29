@@ -71,6 +71,8 @@ class ScannerRunner:
         skip_codeql: bool = False,
         allow_fork_probing: bool = False,
         projects: Sequence[SolidityProjectMetadata] = (),
+        expected_repository_sha256: str | None = None,
+        repository_exclusion_root: Path | None = None,
     ) -> list[ScannerRun]:
         tasks: list[asyncio.Task[ScannerRun]] = []
         results: list[ScannerRun] = []
@@ -118,6 +120,8 @@ class ScannerRunner:
                 adapter = adapter.with_runtime_context(
                     allow_fork_probing=allow_fork_probing,
                     projects=projects,
+                    expected_repository_sha256=expected_repository_sha256,
+                    repository_exclusion_root=repository_exclusion_root,
                 )
             elif isinstance(adapter, HardhatForkScanner):
                 adapter = adapter.with_runtime_allowance(allow_fork_probing)

@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 
 import pytest
 
 from mmaudit.config import RepositoryForkSuiteConfig, SmartContractsConfig
-from mmaudit.models.schemas import SolidityProjectMetadata, SolidityProjectType
+from mmaudit.models.schemas import (
+    RepositorySuiteInventoryKind,
+    RepositorySuiteInventoryRecord,
+    SolidityProjectMetadata,
+    SolidityProjectType,
+)
 from mmaudit.scanners.repository_suite import (
     RepositorySuiteSelectionError,
     select_foundry_repository_suite,
+    select_foundry_repository_suite_from_inventory,
 )
 
 
@@ -59,6 +66,120 @@ def _explicit_config(
 def _contract(suite: str, *functions: str) -> str:
     body = "\n\n".join(f"    {function}" for function in functions)
     return f"pragma solidity ^0.8.20;\n\ncontract {suite} {{\n{body}\n}}\n"
+
+
+def _compiler_inventory(
+    *,
+    project_root: str = "packages/core",
+    tests: tuple[tuple[str, str, str, str], ...] = (
+        (
+            "test/audit/Concrete.t.sol",
+            "ConcreteSuite",
+            "testInherited",
+            "test/base/SharedBase.t.sol",
+        ),
+    ),
+) -> tuple[RepositorySuiteInventoryRecord, ...]:
+    source_paths = sorted(
+        {
+            path
+            for execution_path, _suite, _test, declaration_path in tests
+            for path in (execution_path, declaration_path)
+        }
+    )
+    source_hashes = {
+        path: hashlib.sha256(f"source:{path}".encode()).hexdigest() for path in source_paths
+    }
+    return tuple(
+        RepositorySuiteInventoryRecord.sealed(
+            project_root=project_root,
+            execution_path=(
+                execution_path if project_root == "." else f"{project_root}/{execution_path}"
+            ),
+            execution_suite_name=suite,
+            test_name=test_name,
+            execution_signature=test_name,
+            execution_source_sha256=source_hashes[execution_path],
+            execution_start_line=3,
+            execution_end_line=20,
+            execution_contract_ast_id=100 + index,
+            declaration_path=(
+                declaration_path if project_root == "." else f"{project_root}/{declaration_path}"
+            ),
+            declaration_suite_name="SharedBase",
+            declaration_signature=f"{test_name}()",
+            declaration_source_sha256=source_hashes[declaration_path],
+            declaration_start_line=7,
+            declaration_end_line=9,
+            declaration_contract_ast_id=200 + index,
+            declaration_function_ast_id=300 + index,
+            build_info_sha256="b" * 64,
+        )
+        for index, (execution_path, suite, test_name, declaration_path) in enumerate(tests)
+    )
+
+
+def test_compiler_inventory_selects_inherited_test_and_binds_declaration() -> None:
+    inventory = _compiler_inventory()
+    config = SmartContractsConfig()
+
+    selection = select_foundry_repository_suite_from_inventory(
+        inventory,
+        config,
+        repository_sha256="d" * 64,
+        repository_exclusion_path=".mmaudit",
+        inventory_sha256="e" * 64,
+    )
+
+    assert selection.inventory_kind is RepositorySuiteInventoryKind.ISOLATED_FOUNDRY_BUILD_INFO
+    assert selection.inventory_sha256 == "e" * 64
+    assert selection.candidate_file_count == 1
+    assert selection.candidate_test_count == 1
+    descriptor = selection.tests[0]
+    assert descriptor.path == "packages/core/test/audit/Concrete.t.sol"
+    assert descriptor.suite_name == "ConcreteSuite"
+    assert descriptor.declaration_path == "packages/core/test/base/SharedBase.t.sol"
+    assert descriptor.declaration_suite_name == "SharedBase"
+    assert descriptor.declaration_signature == "testInherited()"
+    assert descriptor.inventory_record_sha256 == inventory[0].record_sha256
+    assert descriptor.finding_path == descriptor.declaration_path
+    assert descriptor.finding_start_line == 7
+    assert descriptor.finding_end_line == 9
+
+
+def test_compiler_inventory_preserves_full_denominators_and_bounded_filters() -> None:
+    inventory = _compiler_inventory(
+        tests=(
+            (
+                "test/audit/Concrete.t.sol",
+                "ConcreteSuite",
+                "testIncluded",
+                "test/base/SharedBase.t.sol",
+            ),
+            (
+                "test/unit/Other.t.sol",
+                "OtherSuite",
+                "testOmitted",
+                "test/unit/Other.t.sol",
+            ),
+        )
+    )
+
+    selection = select_foundry_repository_suite_from_inventory(
+        inventory,
+        SmartContractsConfig(),
+        repository_sha256="d" * 64,
+        repository_exclusion_path=".mmaudit",
+        inventory_sha256="e" * 64,
+    )
+
+    assert [descriptor.test_name for descriptor in selection.tests] == ["testIncluded"]
+    assert selection.candidate_file_count == 2
+    assert selection.candidate_test_count == 2
+    assert selection.selected_file_count == 1
+    assert selection.selected_test_count == 1
+    assert selection.omitted_file_count == 1
+    assert selection.omitted_test_count == 1
 
 
 def test_legacy_profile_selects_only_project_relative_audit_tests(tmp_path: Path) -> None:
@@ -201,6 +322,34 @@ def test_selection_hash_binds_non_test_source_changes(tmp_path: Path) -> None:
     assert before.tests[0].descriptor_sha256 == after.tests[0].descriptor_sha256
     assert before.repository_sha256 != after.repository_sha256
     assert before.selection_sha256 != after.selection_sha256
+
+
+def test_selection_excludes_custom_output_nested_under_test_directory(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path,
+        "test/Selected.t.sol",
+        _contract("SelectedTest", "function testSelected() public {}"),
+    )
+    output = tmp_path / "test" / "custom-audit-output"
+    _write(
+        tmp_path,
+        "test/custom-audit-output/Rogue.t.sol",
+        _contract("RogueTest", "function testRogue() public {}"),
+    )
+
+    selection = select_foundry_repository_suite(
+        tmp_path,
+        [_project()],
+        _explicit_config(include_paths=("test/**/*.t.sol",)),
+        private_dir=output,
+    )
+
+    assert selection.candidate_file_count == 1
+    assert selection.candidate_test_count == 1
+    assert selection.repository_exclusion_path == "test/custom-audit-output"
+    assert [test.path for test in selection.tests] == ["test/Selected.t.sol"]
 
 
 def test_exact_bare_name_is_rejected_when_multiple_tests_match(tmp_path: Path) -> None:

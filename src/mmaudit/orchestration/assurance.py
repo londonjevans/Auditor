@@ -47,7 +47,10 @@ from mmaudit.models.schemas import (
     ModelSurfaceReviewArtifact,
     ModelSurfaceReviewStatus,
     RepositoryCodeExecutionState,
+    RepositorySuiteInventoryKind,
+    RepositorySuiteInventoryPhase,
     RepositoryTestExecutionStatus,
+    RepositoryTestKind,
     ReproductionIntegrityStatus,
     ReproductionResolutionKind,
     ReproductionResult,
@@ -187,6 +190,7 @@ def _issue_provider_session_provenance(
 class AssuranceRuntime:
     """Only deterministic execution facts used to evaluate the contract."""
 
+    repository_execution_sha256: str | None = None
     projects: list[SolidityProjectMetadata] = field(default_factory=list)
     compilations: list[SolidityCompilationResult] = field(default_factory=list)
     index: SoliditySymbolIndex | None = None
@@ -518,7 +522,11 @@ class MaximumAssuranceContract:
             foundry_records[0]
             if (
                 len(foundry_records) == 1
-                and is_qualifying_real_foundry_portfolio(foundry_records[0], self.config)
+                and is_qualifying_real_foundry_portfolio(
+                    foundry_records[0],
+                    self.config,
+                    expected_repository_sha256=runtime.repository_execution_sha256,
+                )
                 and _scanner_matches_trust_pin(
                     foundry_records[0],
                     version=self.config.scanners.foundry_fork.version,
@@ -1727,9 +1735,17 @@ def _formal_run_matches_config_pin(run: FormalToolRun, config: AuditConfig) -> b
 def is_qualifying_real_foundry_portfolio(
     run: ScannerRun,
     config: AuditConfig,
+    *,
+    expected_repository_sha256: str | None,
 ) -> bool:
+    try:
+        run = ScannerRun.model_validate(run.model_dump(mode="json"))
+    except (TypeError, ValueError):
+        return False
     summary = run.foundry_summary
     selection = run.repository_suite_selection
+    inventory = run.repository_suite_inventory
+    post_inventory = run.repository_suite_post_inventory
     execution_policy = run.repository_suite_execution_policy
     executions = run.repository_test_executions
     expected_total_timeout = min(
@@ -1752,10 +1768,70 @@ def is_qualifying_real_foundry_portfolio(
         or not _is_real_scanner_run(run)
         or summary is None
         or selection is None
+        or inventory is None
+        or post_inventory is None
         or execution_policy is None
         or not executions
+        or not _is_sha256(expected_repository_sha256)
+        or selection.inventory_kind is not RepositorySuiteInventoryKind.ISOLATED_FOUNDRY_BUILD_INFO
+        or selection.profile != config.smart_contracts.repository_suite.profile
+        or selection.repository_sha256 != expected_repository_sha256
+        or selection.inventory_sha256 != inventory.normalized_inventory_sha256
+        or inventory.phase is not RepositorySuiteInventoryPhase.PRE_EXECUTION
+        or post_inventory.phase is not RepositorySuiteInventoryPhase.POST_EXECUTION
+        or inventory.execution_evidence is not ExecutionEvidenceKind.REAL
+        or post_inventory.execution_evidence is not ExecutionEvidenceKind.REAL
+        or inventory.inventory_sha256 != inventory.expected_inventory_sha256()
+        or post_inventory.inventory_sha256 != post_inventory.expected_inventory_sha256()
+        or inventory.repository_sha256 != selection.repository_sha256
+        or post_inventory.repository_sha256 != selection.repository_sha256
+        or inventory.configuration_sha256 != selection.configuration_sha256
+        or post_inventory.configuration_sha256 != selection.configuration_sha256
+        or inventory.tool_version != run.version
+        or post_inventory.tool_version != run.version
+        or inventory.tool_sha256 != run.executable_sha256
+        or post_inventory.tool_sha256 != run.executable_sha256
+        or inventory.compiler_version != execution_policy.compiler_version
+        or post_inventory.compiler_version != execution_policy.compiler_version
+        or inventory.compiler_sha256 != execution_policy.compiler_sha256
+        or post_inventory.compiler_sha256 != execution_policy.compiler_sha256
+        or inventory.isolation_backend != run.isolation_backend
+        or post_inventory.isolation_backend != run.isolation_backend
+        or inventory.isolation_attestation_sha256 != run.isolation_attestation_sha256
+        or post_inventory.isolation_attestation_sha256 != run.isolation_attestation_sha256
+        or inventory.execution_evidence is not run.execution_evidence
+        or post_inventory.execution_evidence is not run.execution_evidence
+        or inventory.repository_code_execution is not run.repository_code_execution
+        or post_inventory.repository_code_execution is not run.repository_code_execution
+        or inventory.normalized_inventory_sha256 != post_inventory.normalized_inventory_sha256
+        or inventory.inventory_record_count != post_inventory.inventory_record_count
+        or tuple(
+            (
+                project.project_root,
+                project.build_info_bundle_sha256,
+                project.normalized_build_info_bundle_sha256,
+                project.parser_inventory_sha256,
+                project.normalized_inventory_sha256,
+            )
+            for project in inventory.projects
+        )
+        != tuple(
+            (
+                project.project_root,
+                project.build_info_bundle_sha256,
+                project.normalized_build_info_bundle_sha256,
+                project.parser_inventory_sha256,
+                project.normalized_inventory_sha256,
+            )
+            for project in post_inventory.projects
+        )
         or selection.configuration_sha256 != config.smart_contracts.repository_suite.stable_hash()
         or selection.selection_sha256 != selection.expected_selection_sha256()
+        or not _scanner_matches_trust_pin(
+            run,
+            version=config.scanners.foundry_fork.version,
+            sha256=config.scanners.foundry_fork.sha256,
+        )
         or config.reproduction.expected_chain_id is None
         or config.reproduction.pinned_block_number is None
         or execution_policy.policy_sha256 != execution_policy.expected_policy_sha256()
@@ -1765,6 +1841,14 @@ def is_qualifying_real_foundry_portfolio(
         or execution_policy.block_number != config.reproduction.pinned_block_number
         or execution_policy.tool_version != run.version
         or execution_policy.tool_sha256 != run.executable_sha256
+        or config.smart_contracts.solc_version is None
+        or config.smart_contracts.solc_sha256 is None
+        or execution_policy.compiler_sha256 != config.smart_contracts.solc_sha256
+        or re.search(
+            rf"(?<![0-9.]){re.escape(config.smart_contracts.solc_version)}(?![0-9.])",
+            execution_policy.compiler_version,
+        )
+        is None
         or execution_policy.isolation_backend != run.isolation_backend
         or execution_policy.isolation_attestation_sha256 != run.isolation_attestation_sha256
         or execution_policy.fuzz_seed != config.smart_contracts.repository_suite.fuzz_seed
@@ -1772,10 +1856,34 @@ def is_qualifying_real_foundry_portfolio(
         or execution_policy.invariant_runs != config.smart_contracts.foundry_invariant_runs
         or execution_policy.per_test_timeout_seconds != expected_per_test_timeout
         or execution_policy.total_timeout_seconds != expected_total_timeout
+        or run.duration_seconds > execution_policy.total_timeout_seconds
         or execution_policy.max_output_bytes_per_test
         != config.smart_contracts.repository_suite.max_output_bytes_per_test
         or execution_policy.max_total_output_bytes
         != config.smart_contracts.repository_suite.max_total_output_bytes
+    ):
+        return False
+    inventory_records = {
+        record.record_sha256: record for project in inventory.projects for record in project.records
+    }
+    post_inventory_records = {
+        record.record_sha256: record
+        for project in post_inventory.projects
+        for record in project.records
+    }
+    selected_by_hash = {descriptor.descriptor_sha256: descriptor for descriptor in selection.tests}
+    executions_by_descriptor = {execution.descriptor_sha256: execution for execution in executions}
+    if (
+        len(inventory_records) != inventory.inventory_record_count
+        or inventory_records != post_inventory_records
+        or len(selected_by_hash) != selection.selected_test_count
+        or set(executions_by_descriptor) != set(selected_by_hash)
+        or len(executions_by_descriptor) != len(executions)
+        or any(
+            descriptor.inventory_sha256 != inventory.normalized_inventory_sha256
+            or descriptor.inventory_record_sha256 not in inventory_records
+            for descriptor in selection.tests
+        )
     ):
         return False
     observed_tests = summary.unit_tests + summary.fuzz_tests + summary.invariant_tests
@@ -1788,8 +1896,8 @@ def is_qualifying_real_foundry_portfolio(
         and summary.invariant_tests > 0
         and summary.passed_tests + summary.failed_tests == observed_tests
         and summary.skipped_tests == 0
-        and summary.fuzz_cases > 0
-        and summary.invariant_runs > 0
+        and summary.fuzz_cases >= execution_policy.fuzz_runs
+        and summary.invariant_runs >= execution_policy.invariant_runs
         and summary.invariant_calls > 0
         and len(executions) == selection.selected_test_count
         and all(
@@ -1797,6 +1905,7 @@ def is_qualifying_real_foundry_portfolio(
             and execution.execution_evidence is ExecutionEvidenceKind.REAL
             and execution.repository_code_execution is RepositoryCodeExecutionState.ISOLATED
             and execution.machine_output_validated
+            and execution.duration_seconds <= execution_policy.per_test_timeout_seconds
             and execution.chain_id == config.reproduction.expected_chain_id
             and execution.block_number == config.reproduction.pinned_block_number
             and execution.block_hash is not None
@@ -1815,6 +1924,21 @@ def is_qualifying_real_foundry_portfolio(
             and _is_sha256(execution.output_sha256)
             and _is_sha256(execution.machine_result_sha256)
             and execution.execution_policy_sha256 == execution_policy.policy_sha256
+            and execution.selection_sha256 == selection.selection_sha256
+            and execution.inventory_sha256 == inventory.inventory_sha256
+            and execution.post_inventory_sha256 == post_inventory.inventory_sha256
+            and execution.inventory_record_sha256
+            == selected_by_hash[execution.descriptor_sha256].inventory_record_sha256
+            and execution.canonical_key
+            == selected_by_hash[execution.descriptor_sha256].canonical_key
+            and (
+                execution.test_kind is not RepositoryTestKind.FUZZ
+                or execution.fuzz_cases >= execution_policy.fuzz_runs
+            )
+            and (
+                execution.test_kind is not RepositoryTestKind.INVARIANT
+                or execution.invariant_runs >= execution_policy.invariant_runs
+            )
             for execution in executions
         )
     )

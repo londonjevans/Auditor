@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
+import builtins
 import hashlib
 import json
 import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
 import tomllib
 from collections.abc import Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -33,6 +37,8 @@ from mmaudit.models.schemas import (
     FoundryTestExecutionSummary,
     RepositoryCodeExecutionState,
     RepositorySuiteExecutionPolicy,
+    RepositorySuiteInventoryEvidence,
+    RepositorySuiteInventoryPhase,
     RepositorySuiteSelection,
     RepositorySuiteTestDescriptor,
     RepositoryTestExecution,
@@ -54,6 +60,7 @@ from mmaudit.scanners.base import (
     make_finding,
     sanitized_scanner_environment,
     scanner_trust_pin_error,
+    scanner_workspace_exclusion_path,
     scanner_workspace_sha256,
 )
 from mmaudit.scanners.fork_rpc import (
@@ -63,10 +70,47 @@ from mmaudit.scanners.fork_rpc import (
     local_fork_rpc_port,
     observe_pinned_fork_rpc,
 )
+from mmaudit.scanners.foundry_inventory_runner import (
+    FoundryInventoryInvalidError,
+    FoundryInventoryOverflowError,
+    FoundryInventoryRunLimits,
+    FoundryInventoryTimeoutError,
+    FoundryInventoryUnavailableError,
+    run_foundry_test_inventory,
+)
 from mmaudit.scanners.repository_suite import (
     RepositorySuiteSelectionError,
     select_foundry_repository_suite,
+    select_foundry_repository_suite_from_inventory,
 )
+
+_MAX_PRIVATE_ARTIFACT_ENTRIES_PER_TEST = 20_000
+_MAX_PRIVATE_ARTIFACT_ENTRIES_TOTAL = 100_000
+_MAX_PRIVATE_ARTIFACT_BYTES = 100_000_000
+_MAX_PRIVATE_ARTIFACT_DIRECTORY_DEPTH = 128
+_FOUNDRY_PATH_GLOB_MAGIC = frozenset("*?[]{}!")
+_FOUNDRY_HOST_ENVIRONMENT_ALLOWLIST = frozenset(
+    {
+        "CI",
+        "CONTAINER_HOST",
+        "DOCKER_HOST",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "NO_COLOR",
+        "PATH",
+        "TMPDIR",
+        "XDG_CACHE_HOME",
+        "XDG_RUNTIME_DIR",
+    }
+)
+
+
+class _PrivateArtifactTraversalPurpose(StrEnum):
+    """Separate live ceiling monitoring from stable post-exit evidence capture."""
+
+    STRICT_SNAPSHOT = "strict_snapshot"
+    LIVE_LIMIT_MONITOR = "live_limit_monitor"
 
 
 @dataclass(frozen=True)
@@ -82,6 +126,77 @@ class _FoundryTestObservation:
     machine_output_validated: bool
     machine_result_sha256: str | None = None
     summary: FoundryTestExecutionSummary | None = None
+
+
+@dataclass(frozen=True)
+class _CapturedPrivateArtifact:
+    """Bytes retained from the same descriptor snapshot used by the artifact hash."""
+
+    relative_path: str
+    sha256: str
+    content: bytes
+
+
+@dataclass(frozen=True)
+class _PrivateArtifactUsage:
+    """Bounded identity and resource usage for one private execution tree."""
+
+    entries: int
+    bytes: int
+    artifact_sha256: str
+    captured_files: tuple[_CapturedPrivateArtifact, ...] = ()
+
+    def captured(self, relative_path: str) -> builtins.bytes:
+        matches = [
+            artifact.content
+            for artifact in self.captured_files
+            if artifact.relative_path == relative_path
+        ]
+        if len(matches) != 1:
+            raise FoundryInventoryInvalidError(
+                "Foundry private artifact snapshot is missing its bound file"
+            )
+        return matches[0]
+
+
+@dataclass
+class _SuiteArtifactBudget:
+    """Charge every generated execution artifact against one suite-wide budget."""
+
+    max_bytes_per_test: int
+    max_total_bytes: int
+    max_entries_per_test: int = _MAX_PRIVATE_ARTIFACT_ENTRIES_PER_TEST
+    max_total_entries: int = _MAX_PRIVATE_ARTIFACT_ENTRIES_TOTAL
+    bytes: int = 0
+    entries: int = 0
+
+    @property
+    def remaining_bytes(self) -> int:
+        return self.max_total_bytes - self.bytes
+
+    def charge(
+        self,
+        usage: _PrivateArtifactUsage,
+        *,
+        label: str,
+        per_test: bool,
+    ) -> None:
+        if per_test and (
+            usage.bytes > self.max_bytes_per_test or usage.entries > self.max_entries_per_test
+        ):
+            raise FoundryInventoryOverflowError(f"{label} exceeded the per-test artifact ceiling")
+        next_bytes = self.bytes + usage.bytes
+        next_entries = self.entries + usage.entries
+        if next_bytes > self.max_total_bytes or next_entries > self.max_total_entries:
+            raise FoundryInventoryOverflowError(
+                f"{label} exceeded the suite total artifact ceiling"
+            )
+        self.bytes = next_bytes
+        self.entries = next_entries
+
+
+class _FoundrySuiteDeadlineExpired(RuntimeError):
+    """The single repository-suite wall-clock deadline has expired."""
 
 
 class _PinnedCompilerUnavailableError(RuntimeError):
@@ -104,23 +219,31 @@ class FoundryForkScanner(ScannerAdapter):
         reproduction: ReproductionConfig | None = None,
         projects: Sequence[SolidityProjectMetadata] = (),
         allow_fork_probing: bool = False,
+        expected_repository_sha256: str | None = None,
+        repository_exclusion_root: Path | None = None,
     ) -> None:
         self.config = config
         self.reproduction = reproduction or ReproductionConfig()
         self.projects = tuple(projects)
         self.allow_fork_probing = allow_fork_probing
+        self.expected_repository_sha256 = expected_repository_sha256
+        self.repository_exclusion_root = repository_exclusion_root
 
     def with_runtime_context(
         self,
         *,
         allow_fork_probing: bool,
         projects: Sequence[SolidityProjectMetadata],
+        expected_repository_sha256: str | None = None,
+        repository_exclusion_root: Path | None = None,
     ) -> FoundryForkScanner:
         return FoundryForkScanner(
             self.config,
             reproduction=self.reproduction,
             projects=projects,
             allow_fork_probing=allow_fork_probing,
+            expected_repository_sha256=expected_repository_sha256,
+            repository_exclusion_root=repository_exclusion_root,
         )
 
     def build_command(self, root: Path, private_dir: Path) -> list[str]:
@@ -222,7 +345,12 @@ class FoundryForkScanner(ScannerAdapter):
         compiler_version: str | None = None
         compiler_sha256: str | None = None
         execution_policy: RepositorySuiteExecutionPolicy | None = None
+        inventory: RepositorySuiteInventoryEvidence | None = None
+        post_inventory: RepositorySuiteInventoryEvidence | None = None
         compiler_path: Path | None = None
+        repository_sha256: str | None = None
+        repository_exclusion_root = self.repository_exclusion_root or private_dir
+        repository_exclusion_path: str
         total_timeout = min(
             timeout_seconds,
             self.config.max_fork_probe_seconds,
@@ -232,6 +360,11 @@ class FoundryForkScanner(ScannerAdapter):
             total_timeout,
             self.config.repository_suite.per_test_timeout_seconds,
         )
+        deadline = monotonic_start + total_timeout
+        artifact_budget = _SuiteArtifactBudget(
+            max_bytes_per_test=self.config.repository_suite.max_output_bytes_per_test,
+            max_total_bytes=self.config.repository_suite.max_total_output_bytes,
+        )
 
         def finish(status: ScannerStatus, error: str | None) -> ScannerRun:
             return _finalize_foundry_repository_suite(
@@ -240,6 +373,8 @@ class FoundryForkScanner(ScannerAdapter):
                 backend=backend,
                 start=start,
                 monotonic_start=monotonic_start,
+                deadline=deadline,
+                total_timeout_seconds=total_timeout,
                 status=status,
                 error=error,
                 selection=selection,
@@ -250,6 +385,8 @@ class FoundryForkScanner(ScannerAdapter):
                 compiler_version=compiler_version,
                 compiler_sha256=compiler_sha256,
                 execution_policy=execution_policy,
+                inventory=inventory,
+                post_inventory=post_inventory,
                 fuzz_seed=self.config.repository_suite.fuzz_seed,
             )
 
@@ -265,7 +402,37 @@ class FoundryForkScanner(ScannerAdapter):
             or not self.config.repository_suite.foundry_include_tests
         ):
             return finish(ScannerStatus.SKIPPED, "Foundry repository-suite selection is disabled")
-        projects = self.projects or _default_foundry_projects(root)
+        if self.repository_exclusion_root is not None and self.expected_repository_sha256 is None:
+            return finish(
+                ScannerStatus.FAILED,
+                "pipeline-frozen repository execution identity is unavailable",
+            )
+        try:
+            repository_exclusion_path = scanner_workspace_exclusion_path(
+                root,
+                repository_exclusion_root,
+            )
+            repository_sha256 = scanner_workspace_sha256(
+                root,
+                repository_exclusion_root,
+            )
+        except (OSError, ValueError):
+            return finish(
+                ScannerStatus.FAILED,
+                "repository suite could not bind the complete scanner workspace",
+            )
+        if (
+            self.expected_repository_sha256 is not None
+            and repository_sha256 != self.expected_repository_sha256
+        ):
+            return finish(
+                ScannerStatus.FAILED,
+                "repository execution source differs from the pipeline-frozen identity",
+            )
+        projects = self.projects or _default_foundry_projects(
+            root,
+            excluded_root=repository_exclusion_root,
+        )
         if not projects:
             return finish(ScannerStatus.SKIPPED, "no Foundry smart-contract project detected")
         try:
@@ -273,28 +440,37 @@ class FoundryForkScanner(ScannerAdapter):
                 root,
                 projects,
                 self.config,
-                private_dir=private_dir,
+                private_dir=repository_exclusion_root,
             )
         except RepositorySuiteSelectionError as exc:
-            status = (
-                ScannerStatus.SKIPPED
-                if (
-                    self.config.repository_suite.profile == "legacy_audit"
-                    and "matched zero tests" in str(exc)
+            if str(exc) == ("Foundry test inheritance requires isolated inventory reconciliation"):
+                pass
+            else:
+                status = (
+                    ScannerStatus.SKIPPED
+                    if (
+                        self.config.repository_suite.profile == "legacy_audit"
+                        and "matched zero tests" in str(exc)
+                    )
+                    else ScannerStatus.FAILED
                 )
-                else ScannerStatus.FAILED
-            )
-            return finish(status, str(exc))
+                return finish(status, str(exc))
+        else:
+            if selection.repository_sha256 != repository_sha256:
+                return finish(
+                    ScannerStatus.FAILED,
+                    "repository execution source changed during suite selection",
+                )
 
         if backend is None:
             return finish(
                 ScannerStatus.UNAVAILABLE,
                 "hardened fork-test isolation is unavailable; tests were not executed",
             )
-        if not bool(getattr(backend, "supports_local_fork_rpc", True)):
+        if getattr(backend, "supports_local_fork_rpc", None) is not True:
             return finish(
                 ScannerStatus.UNAVAILABLE,
-                f"{backend.name} cannot reach the configured loopback fork RPC; "
+                f"{backend.name} lacks an explicit configured loopback fork RPC capability; "
                 "tests were not executed",
             )
         if (
@@ -326,7 +502,10 @@ class FoundryForkScanner(ScannerAdapter):
             return finish(ScannerStatus.FAILED, str(exc))
 
         try:
-            _reject_unsafe_foundry_configuration(root)
+            _reject_unsafe_foundry_configuration(
+                root,
+                excluded_root=repository_exclusion_root,
+            )
         except (OSError, ValueError, tomllib.TOMLDecodeError) as exc:
             return finish(
                 ScannerStatus.FAILED,
@@ -370,11 +549,24 @@ class FoundryForkScanner(ScannerAdapter):
             )
 
         try:
+            fork_timeout = _remaining_deadline_seconds(
+                deadline,
+                maximum=min(
+                    5.0,
+                    self.config.repository_suite.per_test_timeout_seconds,
+                ),
+            )
             fork = observe_pinned_fork_rpc(
                 rpc_url,
                 expected_chain_id=self.reproduction.expected_chain_id,
                 pinned_block_number=self.reproduction.pinned_block_number,
-                timeout_seconds=min(5.0, self.config.repository_suite.per_test_timeout_seconds),
+                timeout_seconds=fork_timeout,
+            )
+            _remaining_deadline_seconds(deadline)
+        except _FoundrySuiteDeadlineExpired:
+            return finish(
+                ScannerStatus.TIMED_OUT,
+                f"repository fork suite exceeded {total_timeout:.0f}s total timeout",
             )
         except ForkRpcUnavailableError as exc:
             return finish(ScannerStatus.UNAVAILABLE, str(exc))
@@ -385,8 +577,10 @@ class FoundryForkScanner(ScannerAdapter):
         environment = sanitized_scanner_environment(private_dir)
         copied_compiler = private_dir / "toolchain" / "solc"
         try:
-            copy_scanner_workspace(root, workspace, private_dir)
-            if scanner_workspace_sha256(workspace) != selection.repository_sha256:
+            copy_scanner_workspace(root, workspace, repository_exclusion_root)
+            if repository_sha256 is None:
+                raise ValueError("repository suite workspace identity is absent")
+            if scanner_workspace_sha256(workspace) != repository_sha256:
                 raise ValueError("disposable scanner workspace differs from the selected source")
             version = isolated_executable_version(
                 executable_path,
@@ -394,7 +588,12 @@ class FoundryForkScanner(ScannerAdapter):
                 backend,
                 workspace,
                 private_dir,
+                timeout_seconds=_remaining_deadline_seconds(
+                    deadline,
+                    maximum=15.0,
+                ),
             )
+            _remaining_deadline_seconds(deadline)
             trust_error = scanner_trust_pin_error(
                 version=version,
                 executable_sha256=executable_sha256,
@@ -408,20 +607,31 @@ class FoundryForkScanner(ScannerAdapter):
                     ScannerStatus.UNAVAILABLE,
                     "forge version could not be attested before repository execution",
                 )
+            version = " ".join(version.split())
+            if not version or len(version) > 1_000:
+                return finish(
+                    ScannerStatus.FAILED,
+                    "forge version attestation is not bounded printable text",
+                )
             assert compiler_path is not None
-            compiler_version = isolated_executable_version(
+            observed_compiler_version = isolated_executable_version(
                 compiler_path,
                 environment,
                 backend,
                 workspace,
                 private_dir,
+                timeout_seconds=_remaining_deadline_seconds(
+                    deadline,
+                    maximum=15.0,
+                ),
             )
+            _remaining_deadline_seconds(deadline)
             if (
-                compiler_version is None
+                observed_compiler_version is None
                 or self.config.solc_version is None
                 or re.search(
                     rf"(?<![0-9.]){re.escape(self.config.solc_version)}(?![0-9.])",
-                    compiler_version,
+                    observed_compiler_version,
                 )
                 is None
             ):
@@ -429,11 +639,70 @@ class FoundryForkScanner(ScannerAdapter):
                     ScannerStatus.FAILED,
                     "Solidity compiler version does not match the configured trust pin",
                 )
+            compiler_version = self.config.solc_version
             copied_compiler.parent.mkdir(mode=0o700)
             shutil.copyfile(compiler_path, copied_compiler)
             copied_compiler.chmod(0o500)
             if _file_sha256(copied_compiler) != compiler_sha256:
                 raise ValueError("copied Solidity compiler differs from its trust pin")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise FoundryInventoryTimeoutError(
+                    "repository suite deadline expired before compiler inventory"
+                )
+            assert repository_sha256 is not None
+            assert version is not None
+            assert compiler_version is not None
+            pre_inventory_result = run_foundry_test_inventory(
+                workspace=workspace,
+                private_dir=private_dir,
+                projects=projects,
+                phase=RepositorySuiteInventoryPhase.PRE_EXECUTION,
+                forge_executable=executable_path,
+                copied_solc=copied_compiler,
+                repository_sha256=repository_sha256,
+                configuration_sha256=self.config.repository_suite.stable_hash(),
+                tool_version=version,
+                tool_sha256=executable_sha256,
+                compiler_version=compiler_version,
+                compiler_sha256=compiler_sha256,
+                backend=backend,
+                timeout_seconds=min(remaining, per_test_timeout),
+                limits=_foundry_inventory_limits(
+                    self.config,
+                    remaining_total_bytes=artifact_budget.remaining_bytes,
+                ),
+            )
+            inventory = pre_inventory_result.evidence
+            pre_inventory_usage = _foundry_inventory_artifact_usage(
+                backend=backend,
+                private_dir=private_dir,
+                phase=RepositorySuiteInventoryPhase.PRE_EXECUTION,
+                deadline=deadline,
+            )
+            _validate_inventory_artifact_accounting(
+                pre_inventory_result.accounted_output_bytes,
+                pre_inventory_result.generated_artifact_bytes,
+                pre_inventory_usage,
+            )
+            artifact_budget.charge(
+                pre_inventory_usage,
+                label="pre-execution Foundry inventory",
+                per_test=False,
+            )
+            _remaining_deadline_seconds(deadline)
+            inventory_records = tuple(
+                record
+                for project_inventory in inventory.projects
+                for record in project_inventory.records
+            )
+            selection = select_foundry_repository_suite_from_inventory(
+                inventory_records,
+                self.config,
+                repository_sha256=repository_sha256,
+                repository_exclusion_path=repository_exclusion_path,
+                inventory_sha256=inventory.normalized_inventory_sha256,
+            )
             execution_policy = _foundry_execution_policy(
                 selection=selection,
                 fork=fork,
@@ -451,14 +720,40 @@ class FoundryForkScanner(ScannerAdapter):
                 max_output_bytes_per_test=(self.config.repository_suite.max_output_bytes_per_test),
                 max_total_output_bytes=self.config.repository_suite.max_total_output_bytes,
             )
+        except _FoundrySuiteDeadlineExpired:
+            return finish(
+                ScannerStatus.TIMED_OUT,
+                f"repository fork suite exceeded {total_timeout:.0f}s total timeout",
+            )
+        except FoundryInventoryUnavailableError as exc:
+            return finish(ScannerStatus.UNAVAILABLE, str(exc))
+        except FoundryInventoryTimeoutError as exc:
+            return finish(ScannerStatus.TIMED_OUT, str(exc))
+        except (FoundryInventoryInvalidError, FoundryInventoryOverflowError) as exc:
+            return finish(ScannerStatus.FAILED, str(exc))
+        except RepositorySuiteSelectionError as exc:
+            status = (
+                ScannerStatus.SKIPPED
+                if (
+                    self.config.repository_suite.profile == "legacy_audit"
+                    and "matched zero tests" in str(exc)
+                )
+                else ScannerStatus.FAILED
+            )
+            return finish(status, str(exc))
         except (OSError, RuntimeError, subprocess.TimeoutExpired, ValueError) as exc:
             return finish(
                 ScannerStatus.FAILED,
                 f"fork-suite workspace preflight failed: {type(exc).__name__}",
             )
 
-        deadline = time.monotonic() + total_timeout
-        total_output_bytes = 0
+        assert selection is not None
+        assert inventory is not None
+        assert repository_sha256 is not None
+        assert executable_sha256 is not None
+        assert version is not None
+        assert compiler_version is not None
+        assert compiler_sha256 is not None
         terminal_status = ScannerStatus.SUCCESS
         terminal_error: str | None = None
         for index, descriptor in enumerate(selection.tests):
@@ -469,27 +764,46 @@ class FoundryForkScanner(ScannerAdapter):
                     f"repository fork suite exceeded {total_timeout:.0f}s total timeout"
                 )
                 break
-            observation, private_output_bytes = _execute_foundry_test(
-                descriptor=descriptor,
-                selection=selection,
-                workspace=workspace,
-                private_dir=private_dir,
-                output_index=index,
-                executable_path=executable_path,
-                compiler_path=copied_compiler,
-                compiler_sha256=compiler_sha256,
-                rpc_url=rpc_url,
-                rpc_port=rpc_port,
-                fork=fork,
-                fuzz_seed=self.config.repository_suite.fuzz_seed,
-                fuzz_runs=self.config.foundry_fuzz_runs,
-                invariant_runs=self.config.foundry_invariant_runs,
-                timeout_seconds=min(remaining, per_test_timeout),
-                max_output_bytes=self.config.repository_suite.max_output_bytes_per_test,
-                backend=backend,
-                base_environment=environment,
-            )
+            try:
+                observation, private_artifacts = _execute_foundry_test(
+                    descriptor=descriptor,
+                    selection=selection,
+                    workspace=workspace,
+                    private_dir=private_dir,
+                    output_index=index,
+                    executable_path=executable_path,
+                    compiler_path=copied_compiler,
+                    compiler_sha256=compiler_sha256,
+                    rpc_url=rpc_url,
+                    rpc_port=rpc_port,
+                    fork=fork,
+                    fuzz_seed=self.config.repository_suite.fuzz_seed,
+                    fuzz_runs=self.config.foundry_fuzz_runs,
+                    invariant_runs=self.config.foundry_invariant_runs,
+                    deadline=min(deadline, time.monotonic() + per_test_timeout),
+                    max_output_bytes=self.config.repository_suite.max_output_bytes_per_test,
+                    backend=backend,
+                    base_environment=environment,
+                )
+            except FoundryInventoryUnavailableError as exc:
+                terminal_status = ScannerStatus.UNAVAILABLE
+                terminal_error = str(exc)
+                break
+            except (FoundryInventoryInvalidError, FoundryInventoryOverflowError) as exc:
+                terminal_status = ScannerStatus.FAILED
+                terminal_error = str(exc)
+                break
             observations.append(observation)
+            try:
+                artifact_budget.charge(
+                    private_artifacts,
+                    label=f"Foundry repository test {descriptor.test_name}",
+                    per_test=True,
+                )
+            except FoundryInventoryOverflowError as exc:
+                terminal_status = ScannerStatus.FAILED
+                terminal_error = str(exc)
+                break
             try:
                 compiler_unchanged = _file_sha256(copied_compiler) == compiler_sha256
             except OSError:
@@ -497,11 +811,6 @@ class FoundryForkScanner(ScannerAdapter):
             if not compiler_unchanged:
                 terminal_status = ScannerStatus.FAILED
                 terminal_error = "pinned Solidity compiler changed during repository execution"
-                break
-            total_output_bytes += private_output_bytes
-            if total_output_bytes > self.config.repository_suite.max_total_output_bytes:
-                terminal_status = ScannerStatus.FAILED
-                terminal_error = "repository fork-suite output exceeded the total byte ceiling"
                 break
             if observation.status is RepositoryTestExecutionStatus.TIMED_OUT:
                 terminal_status = ScannerStatus.TIMED_OUT
@@ -519,48 +828,146 @@ class FoundryForkScanner(ScannerAdapter):
         if len(observations) != len(selection.tests) and terminal_status is ScannerStatus.SUCCESS:
             terminal_status = ScannerStatus.FAILED
             terminal_error = "repository fork suite did not execute every selected test"
-        if not _selection_sources_unchanged(root, selection):
-            terminal_status = ScannerStatus.FAILED
-            terminal_error = "repository fork-suite source changed after selection"
-        else:
+
+        remaining = deadline - time.monotonic()
+        if terminal_status is not ScannerStatus.TIMED_OUT and remaining > 0:
             try:
-                final_selection = select_foundry_repository_suite(
-                    root,
-                    projects,
-                    self.config,
+                post_inventory_result = run_foundry_test_inventory(
+                    workspace=workspace,
                     private_dir=private_dir,
+                    projects=projects,
+                    phase=RepositorySuiteInventoryPhase.POST_EXECUTION,
+                    forge_executable=executable_path,
+                    copied_solc=copied_compiler,
+                    repository_sha256=repository_sha256,
+                    configuration_sha256=self.config.repository_suite.stable_hash(),
+                    tool_version=version,
+                    tool_sha256=executable_sha256,
+                    compiler_version=compiler_version,
+                    compiler_sha256=compiler_sha256,
+                    backend=backend,
+                    timeout_seconds=min(remaining, per_test_timeout),
+                    limits=_foundry_inventory_limits(
+                        self.config,
+                        remaining_total_bytes=artifact_budget.remaining_bytes,
+                    ),
                 )
-            except RepositorySuiteSelectionError:
-                terminal_status = ScannerStatus.FAILED
-                terminal_error = "repository fork-suite selection changed during execution"
-            else:
+                post_inventory = post_inventory_result.evidence
+                post_inventory_usage = _foundry_inventory_artifact_usage(
+                    backend=backend,
+                    private_dir=private_dir,
+                    phase=RepositorySuiteInventoryPhase.POST_EXECUTION,
+                    deadline=deadline,
+                )
+                _validate_inventory_artifact_accounting(
+                    post_inventory_result.accounted_output_bytes,
+                    post_inventory_result.generated_artifact_bytes,
+                    post_inventory_usage,
+                )
+                artifact_budget.charge(
+                    post_inventory_usage,
+                    label="post-execution Foundry inventory",
+                    per_test=False,
+                )
+                _remaining_deadline_seconds(deadline)
+                post_records = tuple(
+                    record
+                    for project_inventory in post_inventory.projects
+                    for record in project_inventory.records
+                )
+                final_selection = select_foundry_repository_suite_from_inventory(
+                    post_records,
+                    self.config,
+                    repository_sha256=repository_sha256,
+                    repository_exclusion_path=repository_exclusion_path,
+                    inventory_sha256=post_inventory.normalized_inventory_sha256,
+                )
                 if final_selection.selection_sha256 != selection.selection_sha256:
                     terminal_status = ScannerStatus.FAILED
-                    terminal_error = "repository fork-suite selection changed during execution"
-        try:
-            final_fork = observe_pinned_fork_rpc(
-                rpc_url,
-                expected_chain_id=self.reproduction.expected_chain_id,
-                pinned_block_number=self.reproduction.pinned_block_number,
-                timeout_seconds=min(5.0, self.config.repository_suite.per_test_timeout_seconds),
-            )
-        except ForkRpcUnavailableError:
-            terminal_status = ScannerStatus.UNAVAILABLE
-            terminal_error = "configured loopback fork RPC became unavailable after execution"
-        except ForkRpcBindingError:
-            terminal_status = ScannerStatus.FAILED
-            terminal_error = "configured loopback fork identity changed after execution"
-        else:
-            if final_fork != fork:
+                    terminal_error = "repository fork-suite inventory changed during execution"
+                if not _foundry_inventory_semantics_match(inventory, post_inventory):
+                    terminal_status = ScannerStatus.FAILED
+                    terminal_error = (
+                        "repository fork-suite compiler evidence changed during execution"
+                    )
+            except _FoundrySuiteDeadlineExpired:
+                terminal_status = ScannerStatus.TIMED_OUT
+                terminal_error = (
+                    f"repository fork suite exceeded {total_timeout:.0f}s total timeout"
+                )
+            except FoundryInventoryUnavailableError as exc:
+                terminal_status = ScannerStatus.UNAVAILABLE
+                terminal_error = str(exc)
+            except FoundryInventoryTimeoutError as exc:
+                terminal_status = ScannerStatus.TIMED_OUT
+                terminal_error = str(exc)
+            except (
+                FoundryInventoryInvalidError,
+                FoundryInventoryOverflowError,
+                RepositorySuiteSelectionError,
+            ) as exc:
                 terminal_status = ScannerStatus.FAILED
-                terminal_error = "configured loopback fork state changed during execution"
-        try:
-            workspace_unchanged = scanner_workspace_sha256(workspace) == selection.repository_sha256
-        except (OSError, ValueError):
-            workspace_unchanged = False
-        if not workspace_unchanged:
-            terminal_status = ScannerStatus.FAILED
-            terminal_error = "disposable scanner workspace changed during repository execution"
+                terminal_error = str(exc)
+        elif post_inventory is None:
+            terminal_status = ScannerStatus.TIMED_OUT
+            terminal_error = "repository suite deadline expired before post-execution inventory"
+
+        if terminal_status is not ScannerStatus.TIMED_OUT:
+            try:
+                if not _selection_sources_unchanged(root, selection, deadline=deadline):
+                    terminal_status = ScannerStatus.FAILED
+                    terminal_error = "repository fork-suite source changed after selection"
+                final_fork = observe_pinned_fork_rpc(
+                    rpc_url,
+                    expected_chain_id=self.reproduction.expected_chain_id,
+                    pinned_block_number=self.reproduction.pinned_block_number,
+                    timeout_seconds=_remaining_deadline_seconds(
+                        deadline,
+                        maximum=min(
+                            5.0,
+                            self.config.repository_suite.per_test_timeout_seconds,
+                        ),
+                    ),
+                )
+                _remaining_deadline_seconds(deadline)
+                if final_fork != fork:
+                    terminal_status = ScannerStatus.FAILED
+                    terminal_error = "configured loopback fork state changed during execution"
+                workspace_unchanged = (
+                    scanner_workspace_sha256(workspace) == selection.repository_sha256
+                )
+                _remaining_deadline_seconds(deadline)
+                if not workspace_unchanged:
+                    terminal_status = ScannerStatus.FAILED
+                    terminal_error = (
+                        "disposable scanner workspace changed during repository execution"
+                    )
+                repository_unchanged = (
+                    scanner_workspace_sha256(root, repository_exclusion_root)
+                    == selection.repository_sha256
+                )
+                _remaining_deadline_seconds(deadline)
+                if not repository_unchanged:
+                    terminal_status = ScannerStatus.FAILED
+                    terminal_error = (
+                        "repository execution source changed during repository execution"
+                    )
+            except _FoundrySuiteDeadlineExpired:
+                terminal_status = ScannerStatus.TIMED_OUT
+                terminal_error = (
+                    f"repository fork suite exceeded {total_timeout:.0f}s total timeout"
+                )
+            except ForkRpcUnavailableError:
+                terminal_status = ScannerStatus.UNAVAILABLE
+                terminal_error = "configured loopback fork RPC became unavailable after execution"
+            except ForkRpcBindingError:
+                terminal_status = ScannerStatus.FAILED
+                terminal_error = "configured loopback fork identity changed after execution"
+            except (OSError, ValueError):
+                terminal_status = ScannerStatus.FAILED
+                terminal_error = (
+                    "repository or disposable scanner workspace could not be revalidated"
+                )
         return finish(terminal_status, terminal_error)
 
     def _fork_rpc_url(self) -> str:
@@ -659,13 +1066,155 @@ def _foundry_execution_policy(
     )
 
 
-def _default_foundry_projects(root: Path) -> tuple[SolidityProjectMetadata, ...]:
-    if not _looks_like_foundry_project(root):
+def _foundry_inventory_semantics_match(
+    pre_inventory: RepositorySuiteInventoryEvidence,
+    post_inventory: RepositorySuiteInventoryEvidence,
+) -> bool:
+    stable_fields = (
+        "framework",
+        "repository_sha256",
+        "configuration_sha256",
+        "tool_version",
+        "tool_sha256",
+        "compiler_version",
+        "compiler_sha256",
+        "isolation_backend",
+        "isolation_attestation_sha256",
+        "execution_evidence",
+        "repository_code_execution",
+        "normalized_inventory_sha256",
+        "inventory_record_count",
+        "safety_claim",
+    )
+    if any(
+        getattr(pre_inventory, field) != getattr(post_inventory, field) for field in stable_fields
+    ):
+        return False
+    pre_projects = tuple(
+        (
+            project.project_root,
+            project.build_info_bundle_sha256,
+            project.normalized_build_info_bundle_sha256,
+            project.parser_inventory_sha256,
+            project.normalized_inventory_sha256,
+            tuple(record.record_sha256 for record in project.records),
+        )
+        for project in pre_inventory.projects
+    )
+    post_projects = tuple(
+        (
+            project.project_root,
+            project.build_info_bundle_sha256,
+            project.normalized_build_info_bundle_sha256,
+            project.parser_inventory_sha256,
+            project.normalized_inventory_sha256,
+            tuple(record.record_sha256 for record in project.records),
+        )
+        for project in post_inventory.projects
+    )
+    return pre_projects == post_projects
+
+
+def _foundry_inventory_limits(
+    config: SmartContractsConfig,
+    *,
+    remaining_total_bytes: int,
+) -> FoundryInventoryRunLimits:
+    if remaining_total_bytes < 1_024:
+        raise FoundryInventoryOverflowError(
+            "repository suite has insufficient output budget for compiler inventory"
+        )
+    stream_ceiling = min(
+        config.repository_suite.max_output_bytes_per_test,
+        remaining_total_bytes,
+    )
+    return FoundryInventoryRunLimits(
+        max_stdout_bytes_per_project=stream_ceiling,
+        max_stderr_bytes_per_project=stream_ceiling,
+        max_total_stream_bytes=remaining_total_bytes,
+        max_generated_file_bytes=remaining_total_bytes,
+        max_generated_bytes_per_project=remaining_total_bytes,
+        max_total_generated_bytes=remaining_total_bytes,
+        max_combined_output_bytes=remaining_total_bytes,
+    )
+
+
+def _remaining_deadline_seconds(
+    deadline: float,
+    *,
+    maximum: float | None = None,
+) -> float:
+    """Return only time remaining on the suite deadline, never a fresh allowance."""
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise _FoundrySuiteDeadlineExpired
+    return min(remaining, maximum) if maximum is not None else remaining
+
+
+def _foundry_private_generated_root(
+    backend: ScannerIsolationBackend,
+    private_dir: Path,
+) -> Path:
+    provider = getattr(backend, "writable_path", None)
+    try:
+        candidate = Path(provider(private_dir) if callable(provider) else private_dir)
+        resolved_private = private_dir.resolve(strict=True)
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(resolved_private)
+    except (OSError, TypeError, ValueError) as exc:
+        raise FoundryInventoryInvalidError(
+            "Foundry isolation returned an invalid private artifact root"
+        ) from exc
+    if resolved.is_symlink() or resolved.is_junction() or not resolved.is_dir():
+        raise FoundryInventoryInvalidError(
+            "Foundry private artifact root is not a regular directory"
+        )
+    return resolved
+
+
+def _foundry_inventory_artifact_usage(
+    *,
+    backend: ScannerIsolationBackend,
+    private_dir: Path,
+    phase: RepositorySuiteInventoryPhase,
+    deadline: float,
+) -> _PrivateArtifactUsage:
+    generated_root = _foundry_private_generated_root(backend, private_dir)
+    phase_root = generated_root / "repository-suite" / "inventory" / phase.value
+    return _private_artifact_usage(
+        phase_root,
+        deadline=deadline,
+        trusted_root=generated_root,
+    )
+
+
+def _validate_inventory_artifact_accounting(
+    stream_bytes: int,
+    generated_bytes: int,
+    observed: _PrivateArtifactUsage,
+) -> None:
+    if observed.bytes != stream_bytes + generated_bytes:
+        raise FoundryInventoryInvalidError(
+            "Foundry inventory artifact accounting differs from private outputs"
+        )
+
+
+def _default_foundry_projects(
+    root: Path,
+    *,
+    excluded_root: Path | None = None,
+) -> tuple[SolidityProjectMetadata, ...]:
+    if not _looks_like_foundry_project(root, excluded_root=excluded_root):
         return ()
     test_directories = [
         name
         for name in ("test", "tests")
-        if (root / name).is_dir() and not (root / name).is_symlink()
+        if (
+            (root / name).is_dir()
+            and not (root / name).is_symlink()
+            and not _path_is_within_excluded_root(root / name, excluded_root)
+        )
     ]
     if not test_directories:
         return ()
@@ -699,6 +1248,13 @@ def _display_foundry_test_command(
     compiler_sha256: str,
 ) -> list[str]:
     project_relative_path = _project_relative_test_path(descriptor)
+    if any(character in _FOUNDRY_PATH_GLOB_MAGIC for character in project_relative_path):
+        raise ValueError("selected Foundry test path is not an exact literal path")
+    test_pattern = (
+        f"^{re.escape(descriptor.declaration_signature)}$"
+        if descriptor.declaration_signature is not None
+        else rf"^{re.escape(descriptor.test_name)}\([^)]*\)$"
+    )
     return [
         "forge",
         "test",
@@ -711,7 +1267,7 @@ def _display_foundry_test_command(
         "--match-contract",
         f"^{re.escape(descriptor.suite_name)}$",
         "--match-test",
-        descriptor.test_name,
+        test_pattern,
         "--fuzz-runs",
         str(fuzz_runs),
         "--fuzz-seed",
@@ -761,16 +1317,673 @@ def _canonical_command_sha256(command: list[str]) -> str:
     ).hexdigest()
 
 
-def _process_output_sha256(stdout_path: Path, stderr_path: Path) -> str:
-    """Bind both bounded process streams without exposing their contents."""
+def _private_artifact_open_flags(*, directory: bool = False) -> int:
+    """Return fail-closed flags for descriptor-bound private artifact reads."""
 
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if not isinstance(no_follow, int) or no_follow == 0:
+        raise FoundryInventoryUnavailableError(
+            "Foundry private artifacts cannot be hashed safely because no no-follow "
+            "open flag is available"
+        )
+    flags = os.O_RDONLY | no_follow
+    if directory:
+        directory_flag = getattr(os, "O_DIRECTORY", None)
+        if not isinstance(directory_flag, int) or directory_flag == 0:
+            raise FoundryInventoryUnavailableError(
+                "Foundry private artifacts cannot be traversed safely because no directory "
+                "open flag is available"
+            )
+        flags |= directory_flag
+    flags |= int(getattr(os, "O_CLOEXEC", 0))
+    flags |= int(getattr(os, "O_BINARY", 0))
+    return flags
+
+
+def _private_file_identity(metadata: os.stat_result) -> tuple[int, int]:
+    return metadata.st_dev, metadata.st_ino
+
+
+def _private_file_snapshot(
+    metadata: os.stat_result,
+) -> tuple[int, int, int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _ensure_private_descriptor_noninheritable(descriptor: int, *, label: str) -> None:
+    if os.get_inheritable(descriptor):
+        os.set_inheritable(descriptor, False)
+    if os.get_inheritable(descriptor):
+        raise FoundryInventoryInvalidError(f"{label} descriptor is inheritable")
+
+
+@dataclass
+class _PrivateArtifactDirectoryChain:
+    """Retained descriptor chain from one trusted private root to an artifact tree."""
+
+    trusted_path: Path
+    descriptors: list[int]
+    opened: list[os.stat_result]
+    names: list[str]
+
+    @property
+    def descriptor(self) -> int:
+        return self.descriptors[-1]
+
+    @property
+    def root_opened(self) -> os.stat_result:
+        return self.opened[-1]
+
+
+def _open_private_artifact_directory(
+    path: Path | str,
+    *,
+    named_before: os.stat_result,
+    open_flags: int,
+    parent_descriptor: int | None,
+    require_stable_snapshot: bool,
+) -> tuple[int, os.stat_result]:
+    """Open one directory without following its name and bind it to its prior stat."""
+
+    if not stat.S_ISDIR(named_before.st_mode) or stat.S_ISLNK(named_before.st_mode):
+        raise FoundryInventoryInvalidError(
+            "Foundry private artifact directory is not a non-link directory"
+        )
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, open_flags, dir_fd=parent_descriptor)
+        _ensure_private_descriptor_noninheritable(
+            descriptor,
+            label="Foundry private artifact directory",
+        )
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or stat.S_ISLNK(opened.st_mode)
+            or _private_file_identity(named_before) != _private_file_identity(opened)
+            or (
+                require_stable_snapshot
+                and _private_file_snapshot(named_before) != _private_file_snapshot(opened)
+            )
+        ):
+            raise FoundryInventoryInvalidError(
+                "Foundry private artifact directory changed before it was traversed"
+            )
+        return descriptor, opened
+    except FoundryInventoryInvalidError:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise
+    except OSError as exc:
+        if descriptor is not None:
+            with suppress(OSError):
+                os.close(descriptor)
+        raise FoundryInventoryInvalidError(
+            "Foundry private artifact directory could not be opened safely"
+        ) from exc
+
+
+def _open_private_artifact_tree(
+    root: Path,
+    *,
+    trusted_root: Path,
+    open_flags: int,
+    require_stable_snapshot: bool,
+) -> _PrivateArtifactDirectoryChain:
+    """Open every target component relative to one retained trusted-root descriptor."""
+
+    trusted_path = Path(os.path.abspath(trusted_root))
+    target_path = Path(os.path.abspath(root))
+    try:
+        relative = target_path.relative_to(trusted_path)
+    except ValueError as exc:
+        raise FoundryInventoryInvalidError(
+            "Foundry private artifact tree lies outside its trusted root"
+        ) from exc
+    parts = relative.parts
+    if any(part in {"", ".", ".."} or "/" in part or "\x00" in part for part in parts):
+        raise FoundryInventoryInvalidError(
+            "Foundry private artifact tree has an invalid relative path"
+        )
+
+    try:
+        trusted_metadata = trusted_path.lstat()
+    except OSError as exc:
+        raise FoundryInventoryInvalidError(
+            "Foundry private artifact trusted root is unavailable"
+        ) from exc
+    trusted_descriptor, trusted_opened = _open_private_artifact_directory(
+        trusted_path,
+        named_before=trusted_metadata,
+        open_flags=open_flags,
+        parent_descriptor=None,
+        require_stable_snapshot=require_stable_snapshot,
+    )
+    chain = _PrivateArtifactDirectoryChain(
+        trusted_path=trusted_path,
+        descriptors=[trusted_descriptor],
+        opened=[trusted_opened],
+        names=[],
+    )
+    try:
+        for part in parts:
+            parent_descriptor = chain.descriptors[-1]
+            metadata = os.stat(
+                part,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            descriptor, opened = _open_private_artifact_directory(
+                part,
+                named_before=metadata,
+                open_flags=open_flags,
+                parent_descriptor=parent_descriptor,
+                require_stable_snapshot=require_stable_snapshot,
+            )
+            chain.names.append(part)
+            chain.descriptors.append(descriptor)
+            chain.opened.append(opened)
+        return chain
+    except BaseException:
+        _close_private_artifact_chain(chain, validate=False)
+        raise
+
+
+def _validate_private_artifact_chain(
+    chain: _PrivateArtifactDirectoryChain,
+    *,
+    require_stable_snapshot: bool,
+) -> None:
+    _validate_private_artifact_directory(
+        chain.descriptors[0],
+        chain.opened[0],
+        path=chain.trusted_path,
+        parent_descriptor=None,
+        require_stable_snapshot=require_stable_snapshot,
+    )
+    for index, name in enumerate(chain.names, start=1):
+        _validate_private_artifact_directory(
+            chain.descriptors[index],
+            chain.opened[index],
+            path=name,
+            parent_descriptor=chain.descriptors[index - 1],
+            require_stable_snapshot=require_stable_snapshot,
+        )
+
+
+def _close_private_artifact_chain(
+    chain: _PrivateArtifactDirectoryChain,
+    *,
+    validate: bool,
+    require_stable_snapshot: bool = True,
+) -> None:
+    pending_error: BaseException | None = None
+    if validate:
+        try:
+            _validate_private_artifact_chain(
+                chain,
+                require_stable_snapshot=require_stable_snapshot,
+            )
+        except BaseException as exc:
+            pending_error = exc
+    for descriptor in reversed(chain.descriptors):
+        try:
+            _close_private_artifact_descriptor(
+                descriptor,
+                label="Foundry private artifact directory chain",
+            )
+        except BaseException as exc:
+            if pending_error is None:
+                pending_error = exc
+    if pending_error is not None:
+        raise pending_error
+
+
+def _validate_private_artifact_directory(
+    descriptor: int,
+    opened_before: os.stat_result,
+    *,
+    path: Path | str,
+    parent_descriptor: int | None,
+    require_stable_snapshot: bool,
+) -> None:
+    """Verify the opened directory and its final name still identify one snapshot."""
+
+    try:
+        opened_after = os.fstat(descriptor)
+        named_after = (
+            Path(path).lstat()
+            if parent_descriptor is None
+            else os.stat(path, dir_fd=parent_descriptor, follow_symlinks=False)
+        )
+    except OSError as exc:
+        raise FoundryInventoryInvalidError(
+            "Foundry private artifact directory changed while it was traversed"
+        ) from exc
+    if (
+        not stat.S_ISDIR(opened_after.st_mode)
+        or not stat.S_ISDIR(named_after.st_mode)
+        or stat.S_ISLNK(named_after.st_mode)
+        or _private_file_identity(opened_before) != _private_file_identity(opened_after)
+        or _private_file_identity(opened_after) != _private_file_identity(named_after)
+        or (
+            require_stable_snapshot
+            and (
+                _private_file_snapshot(opened_before) != _private_file_snapshot(opened_after)
+                or _private_file_snapshot(opened_after) != _private_file_snapshot(named_after)
+            )
+        )
+    ):
+        raise FoundryInventoryInvalidError(
+            "Foundry private artifact directory changed while it was traversed"
+        )
+
+
+def _close_private_artifact_descriptor(descriptor: int, *, label: str) -> None:
+    try:
+        os.close(descriptor)
+    except OSError as exc:
+        raise FoundryInventoryInvalidError(f"{label} descriptor could not be closed") from exc
+
+
+def _private_artifact_file_sha256(
+    name: str,
+    *,
+    directory_descriptor: int,
+    named_before: os.stat_result,
+    open_flags: int,
+    maximum_bytes: int,
+    deadline: float | None = None,
+    capture_content: bool = False,
+) -> tuple[str, bytes | None]:
+    """Hash one bounded regular file through a single no-follow descriptor."""
+
+    if deadline is not None:
+        _remaining_deadline_seconds(deadline)
+    if (
+        not stat.S_ISREG(named_before.st_mode)
+        or stat.S_ISLNK(named_before.st_mode)
+        or named_before.st_nlink != 1
+    ):
+        raise FoundryInventoryInvalidError("Foundry private artifact is not a unique regular file")
+    if named_before.st_size > maximum_bytes:
+        raise FoundryInventoryOverflowError(
+            "Foundry private artifact exceeded the absolute file ceiling"
+        )
+
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(name, open_flags, dir_fd=directory_descriptor)
+        _ensure_private_descriptor_noninheritable(
+            descriptor,
+            label="Foundry private artifact",
+        )
+        opened_before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened_before.st_mode)
+            or opened_before.st_nlink != 1
+            or _private_file_identity(named_before) != _private_file_identity(opened_before)
+            or _private_file_snapshot(named_before) != _private_file_snapshot(opened_before)
+        ):
+            raise FoundryInventoryInvalidError(
+                "Foundry private artifact changed before it was hashed"
+            )
+        if deadline is not None:
+            _remaining_deadline_seconds(deadline)
+
+        digest = hashlib.sha256()
+        consumed = 0
+        captured: list[bytes] | None = [] if capture_content else None
+        while True:
+            if deadline is not None:
+                _remaining_deadline_seconds(deadline)
+            chunk = os.read(
+                descriptor,
+                min(1024 * 1024, maximum_bytes - consumed + 1),
+            )
+            if not chunk:
+                break
+            digest.update(chunk)
+            if captured is not None:
+                captured.append(chunk)
+            consumed += len(chunk)
+            if deadline is not None:
+                _remaining_deadline_seconds(deadline)
+            if consumed > maximum_bytes:
+                raise FoundryInventoryOverflowError(
+                    "Foundry private artifact exceeded the absolute file ceiling"
+                )
+
+        opened_after = os.fstat(descriptor)
+        named_after = os.stat(
+            name,
+            dir_fd=directory_descriptor,
+            follow_symlinks=False,
+        )
+        if (
+            _private_file_snapshot(opened_before) != _private_file_snapshot(opened_after)
+            or _private_file_identity(opened_after) != _private_file_identity(named_after)
+            or _private_file_snapshot(opened_after) != _private_file_snapshot(named_after)
+            or not stat.S_ISREG(named_after.st_mode)
+            or stat.S_ISLNK(named_after.st_mode)
+            or named_after.st_nlink != 1
+            or consumed != opened_before.st_size
+        ):
+            raise FoundryInventoryInvalidError(
+                "Foundry private artifact changed while it was hashed"
+            )
+        if deadline is not None:
+            _remaining_deadline_seconds(deadline)
+        return digest.hexdigest(), (b"".join(captured) if captured is not None else None)
+    except (
+        FoundryInventoryInvalidError,
+        FoundryInventoryOverflowError,
+        FoundryInventoryUnavailableError,
+    ):
+        raise
+    except OSError as exc:
+        raise FoundryInventoryInvalidError(
+            "Foundry private artifact could not be hashed safely"
+        ) from exc
+    finally:
+        if descriptor is not None:
+            _close_private_artifact_descriptor(
+                descriptor,
+                label="Foundry private artifact",
+            )
+
+
+def _private_artifact_live_file_size(
+    name: str,
+    *,
+    directory_descriptor: int,
+    named_before: os.stat_result,
+    open_flags: int,
+) -> int:
+    """Observe one live file without following names or requiring stable size/timestamps."""
+
+    if (
+        not stat.S_ISREG(named_before.st_mode)
+        or stat.S_ISLNK(named_before.st_mode)
+        or named_before.st_nlink != 1
+    ):
+        raise FoundryInventoryInvalidError("Foundry private artifact is not a unique regular file")
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(name, open_flags, dir_fd=directory_descriptor)
+        _ensure_private_descriptor_noninheritable(
+            descriptor,
+            label="Foundry private artifact",
+        )
+        opened_before = os.fstat(descriptor)
+        named_after = os.stat(
+            name,
+            dir_fd=directory_descriptor,
+            follow_symlinks=False,
+        )
+        opened_after = os.fstat(descriptor)
+        observed = (named_before, opened_before, opened_after, named_after)
+        if (
+            any(
+                not stat.S_ISREG(metadata.st_mode)
+                or stat.S_ISLNK(metadata.st_mode)
+                or metadata.st_nlink != 1
+                for metadata in observed
+            )
+            or len({_private_file_identity(metadata) for metadata in observed}) != 1
+        ):
+            raise FoundryInventoryInvalidError(
+                "Foundry private artifact changed while it was monitored"
+            )
+        return max(metadata.st_size for metadata in observed)
+    except (
+        FoundryInventoryInvalidError,
+        FoundryInventoryOverflowError,
+        FoundryInventoryUnavailableError,
+    ):
+        raise
+    except OSError as exc:
+        raise FoundryInventoryInvalidError(
+            "Foundry private artifact could not be monitored safely"
+        ) from exc
+    finally:
+        if descriptor is not None:
+            _close_private_artifact_descriptor(
+                descriptor,
+                label="Foundry private artifact",
+            )
+
+
+def _private_artifact_usage(
+    root: Path,
+    *,
+    hash_contents: bool = True,
+    deadline: float | None = None,
+    trusted_root: Path | None = None,
+    capture_relative_paths: frozenset[str] = frozenset(),
+    purpose: _PrivateArtifactTraversalPurpose = (_PrivateArtifactTraversalPurpose.STRICT_SNAPSHOT),
+) -> _PrivateArtifactUsage:
+    """Enumerate one generated tree without following links or ignoring cache artifacts."""
+
+    if deadline is not None:
+        _remaining_deadline_seconds(deadline)
+    if not isinstance(purpose, _PrivateArtifactTraversalPurpose):
+        raise FoundryInventoryInvalidError("Foundry private artifact traversal purpose is invalid")
+    require_stable_snapshot = purpose is _PrivateArtifactTraversalPurpose.STRICT_SNAPSHOT
+    if not require_stable_snapshot and (hash_contents or capture_relative_paths):
+        raise FoundryInventoryInvalidError(
+            "live Foundry artifact monitoring cannot produce content evidence"
+        )
+    directory_open_flags = _private_artifact_open_flags(directory=True)
+    file_open_flags = _private_artifact_open_flags()
+    if capture_relative_paths and not hash_contents:
+        raise FoundryInventoryInvalidError(
+            "Foundry private artifact capture requires content hashing"
+        )
+    if any(
+        not relative
+        or relative.startswith("/")
+        or any(part in {"", ".", ".."} for part in PurePosixPath(relative).parts)
+        for relative in capture_relative_paths
+    ):
+        raise FoundryInventoryInvalidError("Foundry private artifact capture path is invalid")
+
+    entries = 0
+    total_bytes = 0
+    bindings: list[dict[str, str | int | None]] = []
+    captured_files: list[_CapturedPrivateArtifact] = []
+    chain = _open_private_artifact_tree(
+        root,
+        trusted_root=trusted_root or root,
+        open_flags=directory_open_flags,
+        require_stable_snapshot=require_stable_snapshot,
+    )
+    root_descriptor = chain.descriptor
+    root_opened = chain.root_opened
+
+    def walk_directory(
+        directory_descriptor: int,
+        opened_before: os.stat_result,
+        *,
+        relative_prefix: str,
+        depth: int,
+    ) -> None:
+        nonlocal entries, total_bytes
+        if deadline is not None:
+            _remaining_deadline_seconds(deadline)
+        if depth > _MAX_PRIVATE_ARTIFACT_DIRECTORY_DEPTH:
+            raise FoundryInventoryOverflowError(
+                "Foundry private artifacts exceeded the directory-depth ceiling"
+            )
+        try:
+            current = os.fstat(directory_descriptor)
+            if (
+                not stat.S_ISDIR(current.st_mode)
+                or stat.S_ISLNK(current.st_mode)
+                or _private_file_identity(opened_before) != _private_file_identity(current)
+                or (
+                    require_stable_snapshot
+                    and _private_file_snapshot(opened_before) != _private_file_snapshot(current)
+                )
+            ):
+                raise FoundryInventoryInvalidError(
+                    "Foundry private artifact directory changed before it was traversed"
+                )
+            with os.scandir(directory_descriptor) as iterator:
+                children = sorted(iterator, key=lambda item: item.name)
+                for child in children:
+                    if deadline is not None:
+                        _remaining_deadline_seconds(deadline)
+                    entries += 1
+                    if entries > _MAX_PRIVATE_ARTIFACT_ENTRIES_TOTAL:
+                        raise FoundryInventoryOverflowError(
+                            "Foundry private artifacts exceeded the absolute entry ceiling"
+                        )
+                    name = child.name
+                    relative = name if not relative_prefix else f"{relative_prefix}/{name}"
+                    if (
+                        not relative
+                        or len(relative) > 4_000
+                        or any(
+                            ord(character) < 32 or ord(character) == 127 for character in relative
+                        )
+                    ):
+                        raise FoundryInventoryInvalidError(
+                            "Foundry private artifact path is not bounded printable text"
+                        )
+                    metadata = os.stat(
+                        name,
+                        dir_fd=directory_descriptor,
+                        follow_symlinks=False,
+                    )
+                    if stat.S_ISDIR(metadata.st_mode):
+                        bindings.append({"kind": "directory", "path": relative})
+                        child_descriptor, child_opened = _open_private_artifact_directory(
+                            name,
+                            named_before=metadata,
+                            open_flags=directory_open_flags,
+                            parent_descriptor=directory_descriptor,
+                            require_stable_snapshot=require_stable_snapshot,
+                        )
+                        try:
+                            walk_directory(
+                                child_descriptor,
+                                child_opened,
+                                relative_prefix=relative,
+                                depth=depth + 1,
+                            )
+                            _validate_private_artifact_directory(
+                                child_descriptor,
+                                child_opened,
+                                path=name,
+                                parent_descriptor=directory_descriptor,
+                                require_stable_snapshot=require_stable_snapshot,
+                            )
+                            if deadline is not None:
+                                _remaining_deadline_seconds(deadline)
+                        finally:
+                            _close_private_artifact_descriptor(
+                                child_descriptor,
+                                label="Foundry private artifact directory",
+                            )
+                        continue
+                    if (
+                        not stat.S_ISREG(metadata.st_mode)
+                        or metadata.st_nlink != 1
+                        or stat.S_ISLNK(metadata.st_mode)
+                    ):
+                        raise FoundryInventoryInvalidError(
+                            "Foundry private artifact is not a unique regular file"
+                        )
+                    observed_size = metadata.st_size
+                    if not hash_contents:
+                        observed_size = _private_artifact_live_file_size(
+                            name,
+                            directory_descriptor=directory_descriptor,
+                            named_before=metadata,
+                            open_flags=file_open_flags,
+                        )
+                    if observed_size > _MAX_PRIVATE_ARTIFACT_BYTES:
+                        raise FoundryInventoryOverflowError(
+                            "Foundry private artifact exceeded the absolute file ceiling"
+                        )
+                    total_bytes += observed_size
+                    if total_bytes > _MAX_PRIVATE_ARTIFACT_BYTES:
+                        raise FoundryInventoryOverflowError(
+                            "Foundry private artifacts exceeded the absolute byte ceiling"
+                        )
+                    digest: str | None = None
+                    if hash_contents:
+                        digest, captured = _private_artifact_file_sha256(
+                            name,
+                            directory_descriptor=directory_descriptor,
+                            named_before=metadata,
+                            open_flags=file_open_flags,
+                            maximum_bytes=_MAX_PRIVATE_ARTIFACT_BYTES,
+                            deadline=deadline,
+                            capture_content=relative in capture_relative_paths,
+                        )
+                        if captured is not None:
+                            captured_files.append(
+                                _CapturedPrivateArtifact(
+                                    relative_path=relative,
+                                    sha256=digest,
+                                    content=captured,
+                                )
+                            )
+                    bindings.append(
+                        {
+                            "kind": "file",
+                            "path": relative,
+                            "bytes": observed_size,
+                            "sha256": digest,
+                        }
+                    )
+        except (
+            FoundryInventoryInvalidError,
+            FoundryInventoryOverflowError,
+            FoundryInventoryUnavailableError,
+        ):
+            raise
+        except (OSError, TypeError) as exc:
+            raise FoundryInventoryInvalidError(
+                "Foundry private artifact tree could not be enumerated"
+            ) from exc
+
+    try:
+        walk_directory(
+            root_descriptor,
+            root_opened,
+            relative_prefix="",
+            depth=0,
+        )
+        _validate_private_artifact_chain(
+            chain,
+            require_stable_snapshot=require_stable_snapshot,
+        )
+        if {artifact.relative_path for artifact in captured_files} != set(capture_relative_paths):
+            raise FoundryInventoryInvalidError("Foundry private artifact capture is incomplete")
+        if deadline is not None:
+            _remaining_deadline_seconds(deadline)
+    finally:
+        _close_private_artifact_chain(chain, validate=False)
+
+    bindings.sort(key=lambda item: str(item["path"]))
     payload = {
-        "stderr_bytes": stderr_path.stat().st_size,
-        "stderr_sha256": _file_sha256(stderr_path),
-        "stdout_bytes": stdout_path.stat().st_size,
-        "stdout_sha256": _file_sha256(stdout_path),
+        "schema_version": "1.0",
+        "entries": entries,
+        "bytes": total_bytes,
+        "artifacts": bindings,
     }
-    return hashlib.sha256(
+    artifact_sha256 = hashlib.sha256(
         json.dumps(
             payload,
             sort_keys=True,
@@ -779,6 +1992,155 @@ def _process_output_sha256(stdout_path: Path, stderr_path: Path) -> str:
             allow_nan=False,
         ).encode("utf-8")
     ).hexdigest()
+    return _PrivateArtifactUsage(
+        entries=entries,
+        bytes=total_bytes,
+        artifact_sha256=artifact_sha256,
+        captured_files=tuple(sorted(captured_files, key=lambda artifact: artifact.relative_path)),
+    )
+
+
+def _invalid_private_artifact_usage() -> _PrivateArtifactUsage:
+    payload = {
+        "schema_version": "1.0",
+        "entries": 1,
+        "bytes": 0,
+        "artifacts": [
+            {
+                "kind": "invalid_artifact_tree",
+                "path": "[UNAVAILABLE]",
+                "bytes": 0,
+                "sha256": None,
+            }
+        ],
+    }
+    return _PrivateArtifactUsage(
+        entries=1,
+        bytes=0,
+        artifact_sha256=hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest(),
+    )
+
+
+def _bounded_stream_artifact_usage(
+    stdout_path: Path,
+    stderr_path: Path,
+    *,
+    deadline: float | None = None,
+    trusted_root: Path | None = None,
+) -> _PrivateArtifactUsage:
+    """Retain bounded stream evidence when the wider artifact tree is invalid."""
+
+    bindings: list[dict[str, str | int | None]] = []
+    captured_files: list[_CapturedPrivateArtifact] = []
+    total_bytes = 0
+    chain: _PrivateArtifactDirectoryChain | None = None
+    invalid = False
+    try:
+        if deadline is not None:
+            _remaining_deadline_seconds(deadline)
+        if stdout_path.parent != stderr_path.parent:
+            raise FoundryInventoryInvalidError(
+                "Foundry stream evidence does not share one private directory"
+            )
+        directory_open_flags = _private_artifact_open_flags(directory=True)
+        file_open_flags = _private_artifact_open_flags()
+        chain = _open_private_artifact_tree(
+            stdout_path.parent,
+            trusted_root=trusted_root or stdout_path.parent,
+            open_flags=directory_open_flags,
+            require_stable_snapshot=True,
+        )
+        directory_descriptor = chain.descriptor
+        for label, path in (("stdout.json", stdout_path), ("stderr.txt", stderr_path)):
+            metadata = os.stat(
+                path.name,
+                dir_fd=directory_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or stat.S_ISLNK(metadata.st_mode)
+                or metadata.st_nlink != 1
+                or metadata.st_size > _MAX_PRIVATE_ARTIFACT_BYTES
+            ):
+                raise OSError("unsafe stream evidence")
+            total_bytes += metadata.st_size
+            if total_bytes > _MAX_PRIVATE_ARTIFACT_BYTES:
+                raise OSError("oversized stream evidence")
+            digest, captured = _private_artifact_file_sha256(
+                path.name,
+                directory_descriptor=directory_descriptor,
+                named_before=metadata,
+                open_flags=file_open_flags,
+                maximum_bytes=_MAX_PRIVATE_ARTIFACT_BYTES,
+                deadline=deadline,
+                capture_content=label == "stdout.json",
+            )
+            bindings.append(
+                {
+                    "kind": "file",
+                    "path": label,
+                    "bytes": metadata.st_size,
+                    "sha256": digest,
+                }
+            )
+            if captured is not None:
+                captured_files.append(
+                    _CapturedPrivateArtifact(
+                        relative_path=label,
+                        sha256=digest,
+                        content=captured,
+                    )
+                )
+        _validate_private_artifact_chain(
+            chain,
+            require_stable_snapshot=True,
+        )
+        if deadline is not None:
+            _remaining_deadline_seconds(deadline)
+    except (
+        OSError,
+        FoundryInventoryInvalidError,
+        FoundryInventoryOverflowError,
+        FoundryInventoryUnavailableError,
+    ):
+        invalid = True
+    finally:
+        if chain is not None:
+            try:
+                _close_private_artifact_chain(chain, validate=False)
+            except FoundryInventoryInvalidError:
+                invalid = True
+    if invalid:
+        return _invalid_private_artifact_usage()
+    payload = {
+        "schema_version": "1.0",
+        "entries": len(bindings),
+        "bytes": total_bytes,
+        "artifacts": bindings,
+    }
+    return _PrivateArtifactUsage(
+        entries=len(bindings),
+        bytes=total_bytes,
+        artifact_sha256=hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest(),
+        captured_files=tuple(captured_files),
+    )
 
 
 def _execute_foundry_test(
@@ -797,14 +2159,15 @@ def _execute_foundry_test(
     fuzz_seed: str,
     fuzz_runs: int,
     invariant_runs: int,
-    timeout_seconds: float,
+    deadline: float,
     max_output_bytes: int,
     backend: ScannerIsolationBackend,
     base_environment: dict[str, str],
-) -> tuple[_FoundryTestObservation, int]:
+) -> tuple[_FoundryTestObservation, _PrivateArtifactUsage]:
     del selection
     started = time.monotonic()
-    execution_dir = private_dir / "repository-suite" / f"{output_index:05d}"
+    generated_root = _foundry_private_generated_root(backend, private_dir)
+    execution_dir = generated_root / "repository-suite" / "tests" / f"{output_index:05d}"
     execution_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
     raw_path = execution_dir / "stdout.json"
     error_path = execution_dir / "stderr.txt"
@@ -824,7 +2187,11 @@ def _execute_foundry_test(
                 started,
                 "selected Foundry project root is unavailable in the disposable workspace",
             ),
-            0,
+            _private_artifact_usage(
+                execution_dir,
+                deadline=deadline,
+                trusted_root=generated_root,
+            ),
         )
     display_command = _display_foundry_test_command(
         descriptor=descriptor,
@@ -863,8 +2230,17 @@ def _execute_foundry_test(
                 f"fork-test isolation setup failed: {type(exc).__name__}",
                 command_sha256=command_sha256,
             ),
-            0,
+            _private_artifact_usage(
+                execution_dir,
+                deadline=deadline,
+                trusted_root=generated_root,
+            ),
         )
+    environment = {
+        name: value
+        for name, value in environment.items()
+        if name in _FOUNDRY_HOST_ENVIRONMENT_ALLOWLIST
+    }
     environment.update(
         {
             "ETH_RPC_URL": rpc_url,
@@ -880,6 +2256,7 @@ def _execute_foundry_test(
     return_code: int | None = None
     process: subprocess.Popen[bytes] | None = None
     process_error: str | None = None
+    artifact_error: str | None = None
     try:
         with raw_path.open("wb") as stdout_handle, error_path.open("wb") as stderr_handle:
             process = subprocess.Popen(
@@ -897,125 +2274,184 @@ def _execute_foundry_test(
                 ),
                 preexec_fn=_limit_process if os.name != "nt" else None,
             )
-            deadline = time.monotonic() + timeout_seconds
             while process.poll() is None:
                 if time.monotonic() >= deadline:
                     timed_out = True
-                    _stop_process(process)
+                    _stop_process(process, deadline=deadline)
                     break
-                if raw_path.stat().st_size + error_path.stat().st_size > max_output_bytes:
+                try:
+                    current_usage = _private_artifact_usage(
+                        execution_dir,
+                        hash_contents=False,
+                        deadline=deadline,
+                        trusted_root=generated_root,
+                        purpose=(_PrivateArtifactTraversalPurpose.LIVE_LIMIT_MONITOR),
+                    )
+                except _FoundrySuiteDeadlineExpired:
+                    timed_out = True
+                    _stop_process(process, deadline=deadline)
+                    break
+                except (
+                    FoundryInventoryInvalidError,
+                    FoundryInventoryOverflowError,
+                    FoundryInventoryUnavailableError,
+                ) as exc:
+                    artifact_error = str(exc)
+                    _stop_process(process, deadline=deadline)
+                    break
+                if (
+                    current_usage.bytes > max_output_bytes
+                    or current_usage.entries > _MAX_PRIVATE_ARTIFACT_ENTRIES_PER_TEST
+                ):
                     output_exceeded = True
-                    _stop_process(process)
+                    _stop_process(process, deadline=deadline)
                     break
                 time.sleep(0.05)
-            return_code = process.wait(timeout=5)
+            return_code = process.wait(timeout=max(0.0, min(0.1, deadline - time.monotonic())))
     except subprocess.TimeoutExpired:
         timed_out = True
         if process is not None:
-            _stop_process(process)
+            _stop_process(process, deadline=deadline)
             return_code = process.returncode
-    except OSError as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         process_error = f"fork-test process failed: {type(exc).__name__}"
-    cleanup_error = _cleanup_error(backend, private_dir)
-    output_bytes = sum(path.stat().st_size for path in (raw_path, error_path) if path.is_file())
-    output_sha256 = (
-        _process_output_sha256(raw_path, error_path)
-        if raw_path.is_file() and error_path.is_file()
-        else None
-    )
-    duration_seconds = time.monotonic() - started
-    if cleanup_error or process_error:
-        return (
-            _FoundryTestObservation(
-                descriptor=descriptor,
-                status=RepositoryTestExecutionStatus.INVALID_OUTPUT,
-                terminal_detail=cleanup_error or process_error,
-                duration_seconds=duration_seconds,
-                command_sha256=command_sha256,
-                output_sha256=output_sha256,
-                output_bytes=output_bytes,
-                process_exit_code=return_code,
-                machine_output_validated=False,
-            ),
-            output_bytes,
-        )
-    if timed_out:
+
+    def timed_out_result(
+        artifact_usage: _PrivateArtifactUsage | None = None,
+    ) -> tuple[_FoundryTestObservation, _PrivateArtifactUsage]:
+        usage = artifact_usage or _invalid_private_artifact_usage()
         return (
             _FoundryTestObservation(
                 descriptor=descriptor,
                 status=RepositoryTestExecutionStatus.TIMED_OUT,
                 terminal_detail="Foundry repository test exceeded its fixed timeout",
-                duration_seconds=duration_seconds,
+                duration_seconds=time.monotonic() - started,
                 command_sha256=command_sha256,
-                output_sha256=output_sha256,
-                output_bytes=output_bytes,
+                output_sha256=usage.artifact_sha256,
+                output_bytes=usage.bytes,
                 process_exit_code=return_code,
                 machine_output_validated=False,
             ),
-            output_bytes,
+            usage,
         )
-    if output_exceeded or output_bytes > max_output_bytes:
+
+    cleanup_error = _cleanup_error(backend, private_dir)
+    if timed_out or time.monotonic() >= deadline:
+        return timed_out_result()
+    try:
+        try:
+            artifact_usage = _private_artifact_usage(
+                execution_dir,
+                deadline=deadline,
+                trusted_root=generated_root,
+                capture_relative_paths=frozenset({"stdout.json"}),
+            )
+        except (
+            FoundryInventoryInvalidError,
+            FoundryInventoryOverflowError,
+            FoundryInventoryUnavailableError,
+        ) as exc:
+            artifact_error = artifact_error or str(exc)
+            artifact_usage = _bounded_stream_artifact_usage(
+                raw_path,
+                error_path,
+                deadline=deadline,
+                trusted_root=generated_root,
+            )
+        _remaining_deadline_seconds(deadline)
+    except _FoundrySuiteDeadlineExpired:
+        return timed_out_result()
+    output_bytes = artifact_usage.bytes
+    output_sha256 = artifact_usage.artifact_sha256
+    if cleanup_error or process_error or artifact_error:
         return (
             _FoundryTestObservation(
                 descriptor=descriptor,
                 status=RepositoryTestExecutionStatus.INVALID_OUTPUT,
-                terminal_detail="Foundry repository test exceeded its output byte ceiling",
-                duration_seconds=duration_seconds,
+                terminal_detail=cleanup_error or process_error or artifact_error,
+                duration_seconds=time.monotonic() - started,
                 command_sha256=command_sha256,
                 output_sha256=output_sha256,
                 output_bytes=output_bytes,
                 process_exit_code=return_code,
                 machine_output_validated=False,
             ),
-            output_bytes,
+            artifact_usage,
+        )
+    if (
+        output_exceeded
+        or output_bytes > max_output_bytes
+        or artifact_usage.entries > _MAX_PRIVATE_ARTIFACT_ENTRIES_PER_TEST
+    ):
+        return (
+            _FoundryTestObservation(
+                descriptor=descriptor,
+                status=RepositoryTestExecutionStatus.INVALID_OUTPUT,
+                terminal_detail="Foundry repository test exceeded its artifact ceiling",
+                duration_seconds=time.monotonic() - started,
+                command_sha256=command_sha256,
+                output_sha256=output_sha256,
+                output_bytes=output_bytes,
+                process_exit_code=return_code,
+                machine_output_validated=False,
+            ),
+            artifact_usage,
         )
     try:
-        stdout = raw_path.read_text(encoding="utf-8")
+        _remaining_deadline_seconds(deadline)
+        stdout = artifact_usage.captured("stdout.json").decode("utf-8")
+        _remaining_deadline_seconds(deadline)
         precondition_error = _foundry_machine_result_precondition(
             return_code=return_code,
             stdout=stdout,
         )
+        _remaining_deadline_seconds(deadline)
         if precondition_error is not None:
             return (
                 _FoundryTestObservation(
                     descriptor=descriptor,
                     status=RepositoryTestExecutionStatus.INVALID_OUTPUT,
                     terminal_detail=precondition_error,
-                    duration_seconds=duration_seconds,
+                    duration_seconds=time.monotonic() - started,
                     command_sha256=command_sha256,
                     output_sha256=output_sha256,
                     output_bytes=output_bytes,
                     process_exit_code=return_code,
                     machine_output_validated=False,
                 ),
-                output_bytes,
+                artifact_usage,
             )
-        status, detail, summary, machine_result_sha256 = _parse_exact_foundry_test(
+        status, detail, summary, machine_result_sha256 = _parse_exact_foundry_test_with_deadline(
             stdout,
             descriptor=descriptor,
             return_code=return_code,
+            deadline=deadline,
         )
+    except _FoundrySuiteDeadlineExpired:
+        return timed_out_result(artifact_usage)
     except (OSError, UnicodeError, ValueError) as exc:
+        if time.monotonic() >= deadline:
+            return timed_out_result(artifact_usage)
         return (
             _FoundryTestObservation(
                 descriptor=descriptor,
                 status=RepositoryTestExecutionStatus.INVALID_OUTPUT,
                 terminal_detail=f"invalid exact Forge JSON result: {type(exc).__name__}",
-                duration_seconds=duration_seconds,
+                duration_seconds=time.monotonic() - started,
                 command_sha256=command_sha256,
                 output_sha256=output_sha256,
                 output_bytes=output_bytes,
                 process_exit_code=return_code,
                 machine_output_validated=False,
             ),
-            output_bytes,
+            artifact_usage,
         )
     return (
         _FoundryTestObservation(
             descriptor=descriptor,
             status=status,
             terminal_detail=detail,
-            duration_seconds=duration_seconds,
+            duration_seconds=time.monotonic() - started,
             command_sha256=command_sha256,
             output_sha256=output_sha256,
             output_bytes=output_bytes,
@@ -1032,7 +2468,7 @@ def _execute_foundry_test(
             machine_result_sha256=machine_result_sha256,
             summary=summary,
         ),
-        output_bytes,
+        artifact_usage,
     )
 
 
@@ -1070,6 +2506,30 @@ def _foundry_machine_result_precondition(
     return None
 
 
+def _parse_exact_foundry_test_with_deadline(
+    stdout: str,
+    *,
+    descriptor: RepositorySuiteTestDescriptor,
+    return_code: int | None,
+    deadline: float,
+) -> tuple[
+    RepositoryTestExecutionStatus,
+    str | None,
+    FoundryTestExecutionSummary,
+    str,
+]:
+    """Parse one bounded machine result without granting post-process time."""
+
+    _remaining_deadline_seconds(deadline)
+    result = _parse_exact_foundry_test(
+        stdout,
+        descriptor=descriptor,
+        return_code=return_code,
+    )
+    _remaining_deadline_seconds(deadline)
+    return result
+
+
 def _parse_exact_foundry_test(
     stdout: str,
     *,
@@ -1100,6 +2560,11 @@ def _parse_exact_foundry_test(
         or not isinstance(result, dict)
     ):
         raise ValueError("Forge JSON test identity differs from the selection")
+    if (
+        descriptor.declaration_signature is not None
+        and test_signature != descriptor.declaration_signature
+    ):
+        raise ValueError("Forge JSON test signature differs from compiler inventory")
     summary = _foundry_execution_summary(stdout)
     if summary is None:
         raise ValueError("Forge JSON contains no classified test result")
@@ -1221,17 +2686,33 @@ def _aggregate_foundry_summaries(
     )
 
 
-def _selection_sources_unchanged(root: Path, selection: RepositorySuiteSelection) -> bool:
+def _selection_sources_unchanged(
+    root: Path,
+    selection: RepositorySuiteSelection,
+    *,
+    deadline: float | None = None,
+) -> bool:
     try:
         resolved_root = root.resolve(strict=True)
         for descriptor in selection.tests:
-            path = resolved_root.joinpath(*PurePosixPath(descriptor.path).parts)
-            if path.is_symlink() or path.is_junction() or not path.is_file():
-                return False
-            if path.resolve(strict=True).relative_to(resolved_root).as_posix() != descriptor.path:
-                return False
-            if _file_sha256(path) != descriptor.source_sha256:
-                return False
+            sources = {
+                descriptor.path: descriptor.source_sha256,
+                descriptor.finding_path: descriptor.finding_source_sha256,
+            }
+            for relative_path, source_sha256 in sources.items():
+                if deadline is not None:
+                    _remaining_deadline_seconds(deadline)
+                path = resolved_root.joinpath(*PurePosixPath(relative_path).parts)
+                if path.is_symlink() or path.is_junction() or not path.is_file():
+                    return False
+                if path.resolve(strict=True).relative_to(resolved_root).as_posix() != relative_path:
+                    return False
+                if _file_sha256(path) != source_sha256:
+                    return False
+                if deadline is not None:
+                    _remaining_deadline_seconds(deadline)
+    except _FoundrySuiteDeadlineExpired:
+        raise
     except (OSError, ValueError):
         return False
     return True
@@ -1281,6 +2762,9 @@ def _repository_test_executions(
     compiler_version: str | None,
     compiler_sha256: str | None,
     execution_policy: RepositorySuiteExecutionPolicy | None,
+    inventory: RepositorySuiteInventoryEvidence | None,
+    post_inventory: RepositorySuiteInventoryEvidence | None,
+    deadline: float | None = None,
 ) -> list[RepositoryTestExecution]:
     by_descriptor = {
         observation.descriptor.descriptor_sha256: observation for observation in observations
@@ -1288,7 +2772,18 @@ def _repository_test_executions(
     if len(by_descriptor) != len(observations):
         raise ValueError("repository fork suite emitted duplicate execution observations")
     executions: list[RepositoryTestExecution] = []
+    stable_inventories = (
+        inventory is not None
+        and post_inventory is not None
+        and _foundry_inventory_semantics_match(inventory, post_inventory)
+    )
+    inventory_sha256 = inventory.inventory_sha256 if stable_inventories and inventory else None
+    post_inventory_sha256 = (
+        post_inventory.inventory_sha256 if stable_inventories and post_inventory else None
+    )
     for descriptor in selection.tests:
+        if deadline is not None:
+            _remaining_deadline_seconds(deadline)
         observation = by_descriptor.get(descriptor.descriptor_sha256) or _unavailable_observation(
             descriptor,
             fallback_detail,
@@ -1313,6 +2808,11 @@ def _repository_test_executions(
             RepositoryTestExecution.sealed(
                 selection_sha256=selection.selection_sha256,
                 descriptor_sha256=descriptor.descriptor_sha256,
+                inventory_sha256=inventory_sha256,
+                post_inventory_sha256=post_inventory_sha256,
+                inventory_record_sha256=(
+                    descriptor.inventory_record_sha256 if stable_inventories else None
+                ),
                 framework=descriptor.framework,
                 project_root=descriptor.project_root,
                 path=descriptor.path,
@@ -1347,6 +2847,8 @@ def _repository_test_executions(
                 safety_claim=False,
             )
         )
+        if deadline is not None:
+            _remaining_deadline_seconds(deadline)
     return executions
 
 
@@ -1354,6 +2856,8 @@ def _repository_test_findings(
     root: Path,
     executions: list[RepositoryTestExecution],
     selection: RepositorySuiteSelection,
+    *,
+    deadline: float | None = None,
 ) -> list[ScannerFinding]:
     descriptors = {descriptor.descriptor_sha256: descriptor for descriptor in selection.tests}
     failure_statuses = {
@@ -1363,6 +2867,8 @@ def _repository_test_findings(
     }
     findings: list[ScannerFinding] = []
     for execution in executions:
+        if deadline is not None:
+            _remaining_deadline_seconds(deadline)
         if execution.status not in failure_statuses:
             continue
         descriptor = descriptors[execution.descriptor_sha256]
@@ -1374,9 +2880,9 @@ def _repository_test_findings(
             title=f"Pinned-fork repository test failed: {execution.test_name}",
             severity=Severity.HIGH,
             message=detail,
-            path=descriptor.path,
-            start_line=descriptor.start_line,
-            end_line=descriptor.end_line,
+            path=descriptor.finding_path,
+            start_line=descriptor.finding_start_line,
+            end_line=descriptor.finding_end_line,
             metadata={
                 "class": "repository_fork_suite",
                 "fork_only": True,
@@ -1395,36 +2901,61 @@ def _repository_test_findings(
         if finding is None:
             raise ValueError("repository fork-test finding location could not be normalized")
         findings.append(finding)
+        if deadline is not None:
+            _remaining_deadline_seconds(deadline)
     return findings
 
 
 def _write_repository_suite_manifest(
     private_dir: Path,
     selection: RepositorySuiteSelection,
+    inventory: RepositorySuiteInventoryEvidence | None,
+    post_inventory: RepositorySuiteInventoryEvidence | None,
     execution_policy: RepositorySuiteExecutionPolicy | None,
     executions: list[RepositoryTestExecution],
+    *,
+    deadline: float,
 ) -> Path:
+    _remaining_deadline_seconds(deadline)
     path = private_dir / "repository-suite-execution.json"
+    selection_payload = selection.model_dump(mode="json")
+    _remaining_deadline_seconds(deadline)
+    inventory_payload = inventory.model_dump(mode="json") if inventory is not None else None
+    _remaining_deadline_seconds(deadline)
+    post_inventory_payload = (
+        post_inventory.model_dump(mode="json") if post_inventory is not None else None
+    )
+    _remaining_deadline_seconds(deadline)
+    policy_payload = (
+        execution_policy.model_dump(mode="json") if execution_policy is not None else None
+    )
+    _remaining_deadline_seconds(deadline)
+    execution_payloads: list[dict[str, Any]] = []
+    for execution in executions:
+        execution_payloads.append(execution.model_dump(mode="json"))
+        _remaining_deadline_seconds(deadline)
     payload = {
         "schema_version": "1.0",
-        "selection": selection.model_dump(mode="json"),
-        "execution_policy": (
-            execution_policy.model_dump(mode="json") if execution_policy is not None else None
-        ),
-        "executions": [execution.model_dump(mode="json") for execution in executions],
+        "selection": selection_payload,
+        "pre_execution_inventory": inventory_payload,
+        "post_execution_inventory": post_inventory_payload,
+        "execution_policy": policy_payload,
+        "executions": execution_payloads,
         "safety_claim": False,
     }
+    serialized = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    _remaining_deadline_seconds(deadline)
     path.write_text(
-        json.dumps(
-            payload,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-            allow_nan=False,
-        )
-        + "\n",
+        serialized + "\n",
         encoding="utf-8",
     )
+    _remaining_deadline_seconds(deadline)
     return path
 
 
@@ -1435,6 +2966,8 @@ def _finalize_foundry_repository_suite(
     backend: ScannerIsolationBackend | None,
     start: datetime,
     monotonic_start: float,
+    deadline: float,
+    total_timeout_seconds: float,
     status: ScannerStatus,
     error: str | None,
     selection: RepositorySuiteSelection | None,
@@ -1445,13 +2978,24 @@ def _finalize_foundry_repository_suite(
     compiler_version: str | None,
     compiler_sha256: str | None,
     execution_policy: RepositorySuiteExecutionPolicy | None,
+    inventory: RepositorySuiteInventoryEvidence | None,
+    post_inventory: RepositorySuiteInventoryEvidence | None,
     fuzz_seed: str,
 ) -> ScannerRun:
+    timeout_error = f"repository fork suite exceeded {total_timeout_seconds:.0f}s total timeout"
     cleanup_error = _cleanup_error(backend, private_dir)
-    if cleanup_error is not None:
+    deadline_crossed = time.monotonic() >= deadline
+    if deadline_crossed:
+        status = ScannerStatus.TIMED_OUT
+        error = timeout_error
+    elif cleanup_error is not None:
         status = ScannerStatus.FAILED
         error = cleanup_error
     attestation = isolation_attestation_sha256(backend)
+    if time.monotonic() >= deadline:
+        deadline_crossed = True
+        status = ScannerStatus.TIMED_OUT
+        error = timeout_error
     isolation_backend = str(getattr(backend, "name", "")) or None if backend is not None else None
     attempted_statuses = {
         RepositoryTestExecutionStatus.PASSED,
@@ -1461,7 +3005,15 @@ def _finalize_foundry_repository_suite(
         RepositoryTestExecutionStatus.TIMED_OUT,
         RepositoryTestExecutionStatus.INVALID_OUTPUT,
     }
-    attempted = any(observation.status in attempted_statuses for observation in observations)
+    attempted = inventory is not None or any(
+        observation.status in attempted_statuses for observation in observations
+    )
+    if execution_policy is not None and any(
+        observation.duration_seconds > execution_policy.per_test_timeout_seconds
+        for observation in observations
+    ):
+        status = ScannerStatus.TIMED_OUT
+        error = "one repository fork test exceeded its complete per-test deadline"
     repository_code_execution = (
         RepositoryCodeExecutionState.ISOLATED
         if attempted
@@ -1479,6 +3031,10 @@ def _finalize_foundry_repository_suite(
             and executable_sha256 is not None
             and version is not None
             and attestation is not None
+            and inventory is not None
+            and post_inventory is not None
+            and _foundry_inventory_semantics_match(inventory, post_inventory)
+            and not deadline_crossed
         )
         else ExecutionEvidenceKind.UNVERIFIED
     )
@@ -1486,55 +3042,110 @@ def _finalize_foundry_repository_suite(
     findings: list[ScannerFinding] = []
     foundry_summary: FoundryTestExecutionSummary | None = None
     manifest_path: Path | None = None
+
+    def build_evidence(
+        evidence: ExecutionEvidenceKind,
+        fallback_detail: str,
+    ) -> tuple[list[RepositoryTestExecution], list[ScannerFinding]]:
+        if selection is None:
+            return [], []
+        evidence_deadline = None if deadline_crossed else deadline
+        sealed_executions = _repository_test_executions(
+            selection=selection,
+            observations=observations,
+            fallback_detail=fallback_detail,
+            fork=fork,
+            fuzz_seed=fuzz_seed,
+            execution_evidence=evidence,
+            repository_code_execution=repository_code_execution,
+            isolation_backend=isolation_backend,
+            isolation_attestation=attestation,
+            compiler_version=compiler_version,
+            compiler_sha256=compiler_sha256,
+            execution_policy=execution_policy,
+            inventory=inventory,
+            post_inventory=post_inventory,
+            deadline=evidence_deadline,
+        )
+        return (
+            sealed_executions,
+            _repository_test_findings(
+                root,
+                sealed_executions,
+                selection,
+                deadline=evidence_deadline,
+            ),
+        )
+
+    def discard_manifest() -> None:
+        nonlocal manifest_path
+        candidate = manifest_path or (private_dir / "repository-suite-execution.json")
+        with suppress(OSError):
+            candidate.unlink(missing_ok=True)
+        manifest_path = None
+
+    def downgrade_for_expired_deadline() -> None:
+        nonlocal status, error, execution_evidence, executions, findings, foundry_summary
+        nonlocal deadline_crossed
+        deadline_crossed = True
+        status = ScannerStatus.TIMED_OUT
+        error = timeout_error
+        foundry_summary = None
+        discard_manifest()
+        if execution_evidence is not ExecutionEvidenceKind.UNVERIFIED:
+            execution_evidence = ExecutionEvidenceKind.UNVERIFIED
+            executions, findings = build_evidence(execution_evidence, error)
+
+    def check_final_deadline() -> None:
+        if time.monotonic() >= deadline:
+            downgrade_for_expired_deadline()
+            raise _FoundrySuiteDeadlineExpired
+
     if selection is not None:
         fallback_detail = error or "repository fork test was not executed"
         try:
-            executions = _repository_test_executions(
-                selection=selection,
-                observations=observations,
-                fallback_detail=fallback_detail,
-                fork=fork,
-                fuzz_seed=fuzz_seed,
-                execution_evidence=execution_evidence,
-                repository_code_execution=repository_code_execution,
-                isolation_backend=isolation_backend,
-                isolation_attestation=attestation,
-                compiler_version=compiler_version,
-                compiler_sha256=compiler_sha256,
-                execution_policy=execution_policy,
-            )
-            findings = _repository_test_findings(root, executions, selection)
+            check_final_deadline()
+            executions, findings = build_evidence(execution_evidence, fallback_detail)
+            check_final_deadline()
             if status is ScannerStatus.SUCCESS:
                 foundry_summary = _aggregate_foundry_summaries(observations)
                 if foundry_summary is None:
                     raise ValueError("successful repository suite lacks complete typed outcomes")
-            manifest_path = _write_repository_suite_manifest(
-                private_dir,
-                selection,
-                execution_policy,
-                executions,
-            )
+                check_final_deadline()
+            if not deadline_crossed:
+                manifest_path = _write_repository_suite_manifest(
+                    private_dir,
+                    selection,
+                    inventory,
+                    post_inventory,
+                    execution_policy,
+                    executions,
+                    deadline=deadline,
+                )
+                check_final_deadline()
+        except _FoundrySuiteDeadlineExpired:
+            if execution_evidence is not ExecutionEvidenceKind.UNVERIFIED:
+                downgrade_for_expired_deadline()
+            if not executions:
+                executions, findings = build_evidence(
+                    ExecutionEvidenceKind.UNVERIFIED,
+                    timeout_error,
+                )
         except (OSError, ValueError) as exc:
-            status = ScannerStatus.FAILED
-            error = f"repository fork-suite evidence finalization failed: {type(exc).__name__}"
+            if time.monotonic() >= deadline:
+                downgrade_for_expired_deadline()
+            else:
+                status = ScannerStatus.FAILED
+                error = f"repository fork-suite evidence finalization failed: {type(exc).__name__}"
             execution_evidence = ExecutionEvidenceKind.UNVERIFIED
-            executions = _repository_test_executions(
-                selection=selection,
-                observations=observations,
-                fallback_detail=error,
-                fork=fork,
-                fuzz_seed=fuzz_seed,
-                execution_evidence=execution_evidence,
-                repository_code_execution=repository_code_execution,
-                isolation_backend=isolation_backend,
-                isolation_attestation=attestation,
-                compiler_version=compiler_version,
-                compiler_sha256=compiler_sha256,
-                execution_policy=execution_policy,
+            executions, findings = build_evidence(
+                execution_evidence,
+                error or "repository fork-suite evidence finalization failed",
             )
-            findings = _repository_test_findings(root, executions, selection)
             foundry_summary = None
-            manifest_path = None
+            discard_manifest()
+    if time.monotonic() >= deadline and not deadline_crossed:
+        downgrade_for_expired_deadline()
     process_exit_code = (
         1
         if any(
@@ -1552,63 +3163,127 @@ def _finalize_foundry_repository_suite(
             else (0 if status is ScannerStatus.SUCCESS else None)
         )
     )
-    raw_output_path = (
-        str(manifest_path.relative_to(private_dir.parent)) if manifest_path is not None else None
-    )
-    run = ScannerRun(
-        scanner="foundry_fork",
-        status=status,
-        execution_evidence=execution_evidence,
-        version=version,
-        executable_sha256=executable_sha256,
-        command=(
-            [
-                "forge",
-                "test",
-                "[BOUNDED_PER_TEST_REPOSITORY_SUITE]",
-                selection.selection_sha256,
-            ]
-            if selection is not None and observations
-            else []
-        ),
-        started_at=start,
-        finished_at=datetime.now(UTC),
-        duration_seconds=time.monotonic() - monotonic_start,
-        findings=findings,
-        error=error,
-        raw_output_path=raw_output_path,
-        raw_output_sha256=(_file_sha256(manifest_path) if manifest_path is not None else None),
-        raw_output_bytes=manifest_path.stat().st_size if manifest_path is not None else 0,
-        process_exit_code=process_exit_code,
-        isolation_backend=isolation_backend,
-        isolation_attestation_sha256=attestation,
-        machine_output_validated=(status is ScannerStatus.SUCCESS and foundry_summary is not None),
-        foundry_summary=foundry_summary,
-        repository_suite_selection=selection,
-        repository_suite_execution_policy=execution_policy,
-        repository_test_executions=executions,
-        repository_code_execution=repository_code_execution,
-    )
-    return ScannerRun.model_validate(
-        {
-            **run.model_dump(mode="json"),
-            "execution_observation_sha256": run.expected_execution_observation_sha256(),
-        }
-    )
+    raw_output_path: str | None = None
+    raw_output_sha256: str | None = None
+    raw_output_bytes = 0
+    if manifest_path is not None and not deadline_crossed:
+        try:
+            check_final_deadline()
+            raw_output_path = str(manifest_path.relative_to(private_dir.parent))
+            raw_output_sha256 = _file_sha256(manifest_path)
+            check_final_deadline()
+            raw_output_bytes = manifest_path.stat().st_size
+            check_final_deadline()
+        except _FoundrySuiteDeadlineExpired:
+            raw_output_path = None
+            raw_output_sha256 = None
+            raw_output_bytes = 0
+        except (OSError, ValueError) as exc:
+            if time.monotonic() >= deadline:
+                downgrade_for_expired_deadline()
+            else:
+                status = ScannerStatus.FAILED
+                error = f"repository fork-suite evidence finalization failed: {type(exc).__name__}"
+                execution_evidence = ExecutionEvidenceKind.UNVERIFIED
+                executions, findings = build_evidence(execution_evidence, error)
+                foundry_summary = None
+                discard_manifest()
+            raw_output_path = None
+            raw_output_sha256 = None
+            raw_output_bytes = 0
+
+    def build_run() -> ScannerRun:
+        return ScannerRun(
+            scanner="foundry_fork",
+            status=status,
+            execution_evidence=execution_evidence,
+            version=version,
+            executable_sha256=executable_sha256,
+            command=(
+                [
+                    "forge",
+                    "test",
+                    "[BOUNDED_PER_TEST_REPOSITORY_SUITE]",
+                    selection.selection_sha256,
+                ]
+                if selection is not None and observations
+                else []
+            ),
+            started_at=start,
+            finished_at=datetime.now(UTC),
+            duration_seconds=time.monotonic() - monotonic_start,
+            findings=findings,
+            error=error,
+            raw_output_path=raw_output_path,
+            raw_output_sha256=raw_output_sha256,
+            raw_output_bytes=raw_output_bytes,
+            process_exit_code=process_exit_code,
+            isolation_backend=isolation_backend,
+            isolation_attestation_sha256=attestation,
+            machine_output_validated=(
+                status is ScannerStatus.SUCCESS and foundry_summary is not None
+            ),
+            foundry_summary=foundry_summary,
+            repository_suite_selection=selection,
+            repository_suite_inventory=inventory,
+            repository_suite_post_inventory=post_inventory,
+            repository_suite_execution_policy=execution_policy,
+            repository_test_executions=executions,
+            repository_code_execution=repository_code_execution,
+        )
+
+    def seal_run(run: ScannerRun) -> ScannerRun:
+        payload = run.model_dump(mode="json")
+        check_final_deadline()
+        payload["execution_observation_sha256"] = run.expected_execution_observation_sha256()
+        check_final_deadline()
+        sealed = ScannerRun.model_validate(payload)
+        check_final_deadline()
+        return sealed
+
+    try:
+        run = build_run()
+        check_final_deadline()
+        return seal_run(run)
+    except _FoundrySuiteDeadlineExpired:
+        downgrade_for_expired_deadline()
+        raw_output_path = None
+        raw_output_sha256 = None
+        raw_output_bytes = 0
+        timed_out_run = build_run()
+        payload = timed_out_run.model_dump(mode="json")
+        payload["execution_observation_sha256"] = (
+            timed_out_run.expected_execution_observation_sha256()
+        )
+        return ScannerRun.model_validate(payload)
 
 
-def _looks_like_foundry_project(root: Path) -> bool:
-    return (root / "foundry.toml").is_file() or any(
-        path.suffix == ".sol"
+def _looks_like_foundry_project(
+    root: Path,
+    *,
+    excluded_root: Path | None = None,
+) -> bool:
+    return (
+        (root / "foundry.toml").is_file()
+        and not _path_is_within_excluded_root(root / "foundry.toml", excluded_root)
+    ) or any(
+        path.suffix == ".sol" and not _path_is_within_excluded_root(path, excluded_root)
         for path in [*root.glob("src/**/*.sol"), *root.glob("contracts/**/*.sol")]
     )
 
 
-def _reject_unsafe_foundry_configuration(root: Path) -> None:
+def _reject_unsafe_foundry_configuration(
+    root: Path,
+    *,
+    excluded_root: Path | None = None,
+) -> None:
     foundry_configs = [
         path
         for path in root.glob("**/foundry.toml")
-        if not {".git", ".mmaudit", "node_modules"}.intersection(path.relative_to(root).parts)
+        if (
+            not {".git", ".mmaudit", "node_modules"}.intersection(path.relative_to(root).parts)
+            and not _path_is_within_excluded_root(path, excluded_root)
+        )
     ]
     if len(foundry_configs) > 1_000:
         raise ValueError("Foundry configuration count exceeds the fixed bound")
@@ -1653,6 +3328,7 @@ def _reject_unsafe_foundry_configuration(root: Path) -> None:
             ".git" in relative.parts
             or ".mmaudit" in relative.parts
             or "node_modules" in relative.parts
+            or _path_is_within_excluded_root(path, excluded_root)
         ):
             continue
         source_count += 1
@@ -1669,6 +3345,18 @@ def _reject_unsafe_foundry_configuration(root: Path) -> None:
         content = path.read_text(encoding="utf-8")
         if "vm.ffi" in content:
             raise ValueError("Foundry test uses vm.ffi; refusing to execute fork tests")
+
+
+def _path_is_within_excluded_root(path: Path, excluded_root: Path | None) -> bool:
+    if excluded_root is None:
+        return False
+    try:
+        path.resolve(strict=False).relative_to(excluded_root.resolve(strict=False))
+    except OSError:
+        return True
+    except ValueError:
+        return False
+    return True
 
 
 def _toml_contains_true(value: Any, key: str) -> bool:
@@ -1890,19 +3578,35 @@ def _foundry_nonnegative_integer(metadata: dict[str, Any], field: str) -> int:
 def _limit_process() -> None:
     try:
         import resource
+    except ImportError as exc:
+        raise RuntimeError("Foundry resource limit setup failed") from exc
 
-        resource.setrlimit(resource.RLIMIT_CPU, (900, 900))
-        resource.setrlimit(resource.RLIMIT_FSIZE, (50_000_000, 50_000_000))
-        resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
-        if sys.platform != "darwin" and hasattr(resource, "RLIMIT_NPROC"):
-            resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
-        if hasattr(resource, "RLIMIT_AS"):
-            resource.setrlimit(resource.RLIMIT_AS, (4 * 1024**3, 4 * 1024**3))
-    except (ImportError, OSError, ValueError):
-        return
+    limits = [
+        (resource.RLIMIT_CPU, (900, 900)),
+        (resource.RLIMIT_FSIZE, (50_000_000, 50_000_000)),
+        (resource.RLIMIT_NOFILE, (256, 256)),
+    ]
+    if sys.platform != "darwin" and hasattr(resource, "RLIMIT_NPROC"):
+        limits.append((resource.RLIMIT_NPROC, (64, 64)))
+    # Darwin exposes RLIMIT_AS but rejects setrlimit for it.
+    if sys.platform != "darwin" and hasattr(resource, "RLIMIT_AS"):
+        limits.append((resource.RLIMIT_AS, (4 * 1024**3, 4 * 1024**3)))
+
+    failures = 0
+    for resource_kind, value in limits:
+        try:
+            resource.setrlimit(resource_kind, value)
+        except (OSError, ValueError):
+            failures += 1
+    if failures:
+        raise RuntimeError(f"Foundry resource limit setup failed for {failures} limit(s)")
 
 
-def _stop_process(process: subprocess.Popen[bytes]) -> None:
+def _stop_process(
+    process: subprocess.Popen[bytes],
+    *,
+    deadline: float | None = None,
+) -> None:
     if process.poll() is not None:
         return
     try:
@@ -1910,6 +3614,7 @@ def _stop_process(process: subprocess.Popen[bytes]) -> None:
             process.kill()
         else:
             os.killpg(process.pid, signal.SIGKILL)
-        process.wait(timeout=5)
+        wait_seconds = 5.0 if deadline is None else max(0.0, deadline - time.monotonic())
+        process.wait(timeout=wait_seconds)
     except (OSError, subprocess.TimeoutExpired):
         process.kill()

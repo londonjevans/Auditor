@@ -114,6 +114,24 @@ class MacOSSandboxBackend:
             network_rule="(allow network-outbound)",
         )
 
+    def wrap_without_network(
+        self,
+        command: list[str],
+        *,
+        workspace: Path,
+        private_dir: Path,
+        rpc_port: int,
+    ) -> list[str]:
+        """Wrap a local-only compiler command with no network entitlement."""
+
+        del rpc_port
+        return self._wrap(
+            command,
+            workspace=workspace,
+            private_dir=private_dir,
+            network_rule="",
+        )
+
     def _wrap(
         self,
         command: list[str],

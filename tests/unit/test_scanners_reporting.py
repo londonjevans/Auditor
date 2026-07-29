@@ -60,7 +60,11 @@ from mmaudit.orchestration.run_status import minimum_analysis_floor_quality_gate
 from mmaudit.reporting.json_report import stable_json
 from mmaudit.reporting.markdown import render_markdown
 from mmaudit.reporting.sarif import generate_sarif
-from mmaudit.scanners.base import ScannerAdapter, sanitized_scanner_environment
+from mmaudit.scanners.base import (
+    ScannerAdapter,
+    sanitized_scanner_environment,
+    scanner_workspace_sha256,
+)
 from mmaudit.scanners.codeql import CodeQLScanner
 from mmaudit.scanners.fork_rpc import PinnedForkObservation
 from mmaudit.scanners.foundry import (
@@ -98,6 +102,7 @@ class _SyntheticProcessScanner(ScannerAdapter):
 
 class _PassthroughIsolation:
     name = "test-isolation"
+    supports_local_fork_rpc = True
 
     def wrap(
         self,
@@ -113,6 +118,21 @@ class _PassthroughIsolation:
 
 class _NoLocalForkIsolation(_PassthroughIsolation):
     supports_local_fork_rpc = False
+
+
+class _UndeclaredForkIsolation:
+    name = "undeclared-fork-isolation"
+
+    def wrap(
+        self,
+        command: list[str],
+        *,
+        workspace: Path,
+        private_dir: Path,
+        rpc_port: int,
+    ) -> list[str]:
+        del workspace, private_dir, rpc_port
+        return command
 
 
 class _SelfAssertedRealIsolation(_PassthroughIsolation):
@@ -439,6 +459,34 @@ def test_foundry_repository_suite_rejects_backend_without_local_rpc_before_tool_
     assert "loopback" in (result.error or "")
 
 
+def test_foundry_repository_suite_rejects_undeclared_local_rpc_capability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "repository"
+    test_dir = root / "test" / "audit"
+    test_dir.mkdir(parents=True)
+    (root / "foundry.toml").write_text("[profile.default]\n", encoding="utf-8")
+    (test_dir / "Portfolio.t.sol").write_text(
+        "contract PortfolioTest { function testUnit() public {} }\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "mmaudit.scanners.foundry.shutil.which",
+        lambda _executable: pytest.fail("undeclared capability must stop before tool lookup"),
+    )
+
+    result = FoundryForkScanner(SmartContractsConfig(allow_fork_probing=True)).run(
+        root,
+        tmp_path / "private-undeclared-local-rpc",
+        5,
+        backend=_UndeclaredForkIsolation(),
+    )
+
+    assert result.status is ScannerStatus.UNAVAILABLE
+    assert "explicit configured loopback" in (result.error or "")
+
+
 def test_foundry_repository_suite_missing_rpc_is_unavailable_before_execution(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -483,6 +531,44 @@ def test_foundry_repository_suite_missing_rpc_is_unavailable_before_execution(
 
     assert result.status is ScannerStatus.UNAVAILABLE
     assert "MMAUDIT_FORK_RPC_URL" in (result.error or "")
+
+
+def test_foundry_repository_suite_rejects_source_changed_after_pipeline_freeze(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "repository"
+    test_dir = root / "test" / "audit"
+    test_dir.mkdir(parents=True)
+    (root / "foundry.toml").write_text("[profile.default]\n", encoding="utf-8")
+    (test_dir / "Portfolio.t.sol").write_text(
+        "contract PortfolioTest { function testUnit() public {} }\n",
+        encoding="utf-8",
+    )
+    output = root / "custom-output"
+    frozen_sha256 = scanner_workspace_sha256(root, output)
+    (root / "src").mkdir()
+    (root / "src" / "Late.sol").write_text("contract Late {}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "mmaudit.scanners.foundry.shutil.which",
+        lambda _executable: pytest.fail("source mismatch must stop before tool lookup"),
+    )
+
+    result = FoundryForkScanner(
+        SmartContractsConfig(allow_fork_probing=True),
+        expected_repository_sha256=frozen_sha256,
+        repository_exclusion_root=output,
+    ).run(
+        root,
+        tmp_path / "private-source-mismatch",
+        5,
+        backend=_PassthroughIsolation(),
+    )
+
+    assert result.status is ScannerStatus.FAILED
+    assert "pipeline-frozen identity" in (result.error or "")
+    assert result.repository_suite_selection is None
+    assert not result.repository_test_executions
 
 
 def test_foundry_repository_suite_missing_forge_is_unavailable(
@@ -745,7 +831,7 @@ def test_scanner_location_annotation_reseals_execution_observation(
     assert ScannerRun.model_validate_json(annotated.model_dump_json()) == annotated
 
 
-def test_foundry_scanner_mocked_attested_execution_binds_one_selected_test(
+def test_foundry_scanner_rejects_self_asserted_real_inventory_provenance(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -845,29 +931,26 @@ def test_foundry_scanner_mocked_attested_execution_binds_one_selected_test(
         backend=_SelfAssertedRealIsolation(),
     )
 
-    assert run.status is ScannerStatus.SUCCESS
-    assert run.execution_evidence is ExecutionEvidenceKind.REAL
+    assert run.status is ScannerStatus.UNAVAILABLE
+    assert run.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
     assert run.isolation_backend == "sandbox-exec"
-    assert run.foundry_summary is not None
-    assert run.foundry_summary.unit_tests == 1
-    assert run.foundry_summary.fuzz_tests == 0
-    assert run.foundry_summary.invariant_tests == 0
+    assert run.error is not None
+    assert "inventory isolation lacks current attested execution evidence" in run.error
+    assert run.foundry_summary is None
     assert run.repository_suite_selection is not None
     assert run.repository_suite_selection.selected_test_count == 1
     assert len(run.repository_test_executions) == 1
     execution = run.repository_test_executions[0]
-    assert execution.status.value == "passed"
+    assert execution.status is RepositoryTestExecutionStatus.UNAVAILABLE
     assert execution.chain_id == 31_337
     assert execution.block_number == 42
     assert execution.block_hash == "0x" + ("b" * 64)
-    assert execution.test_kind is not None
+    assert execution.test_kind is None
     assert execution.compiler_sha256 == fake_solc_sha256
-    assert execution.execution_policy_sha256 is not None
+    assert execution.execution_policy_sha256 is None
     assert execution.safety_claim is False
     assert not run.findings
-    assert "forge" in run.command
-    assert "--color" not in run.command
-    assert "--invariant-runs" not in run.command
+    assert not run.command
     assert run.execution_observation_sha256 == run.expected_execution_observation_sha256()
     payload_with_tampered_output = run.model_dump(mode="json")
     payload_with_tampered_output["raw_output_bytes"] = run.raw_output_bytes + 1

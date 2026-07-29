@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import json
 import socket
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -82,6 +82,7 @@ from mmaudit.orchestration.verification import (
     verify_run_evidence,
 )
 from mmaudit.reporting.json_report import write_json
+from mmaudit.scanners.base import scanner_workspace_sha256
 
 runner = CliRunner()
 _NOW = datetime(2026, 7, 27, tzinfo=UTC)
@@ -100,8 +101,16 @@ class _LocalScannerRunner:
         skip_codeql: bool = False,
         allow_fork_probing: bool = False,
         projects: Sequence[SolidityProjectMetadata] = (),
+        expected_repository_sha256: str | None = None,
+        repository_exclusion_root: Path | None = None,
     ) -> list[ScannerRun]:
-        del root, private_dir, projects
+        del (
+            root,
+            private_dir,
+            projects,
+            expected_repository_sha256,
+            repository_exclusion_root,
+        )
         assert not skip_codeql
         assert not allow_fork_probing
         self.calls += 1
@@ -109,9 +118,17 @@ class _LocalScannerRunner:
 
 
 class _ForkAwareScannerRunner:
-    def __init__(self, runs: list[ScannerRun]) -> None:
+    def __init__(
+        self,
+        runs: list[ScannerRun],
+        *,
+        before_return: Callable[[], None] | None = None,
+    ) -> None:
         self.runs = runs
+        self.before_return = before_return
         self.allow_fork_probing: list[bool] = []
+        self.expected_repository_sha256: list[str | None] = []
+        self.repository_exclusion_root: list[Path | None] = []
 
     async def run_all(
         self,
@@ -121,10 +138,16 @@ class _ForkAwareScannerRunner:
         skip_codeql: bool = False,
         allow_fork_probing: bool = False,
         projects: Sequence[SolidityProjectMetadata] = (),
+        expected_repository_sha256: str | None = None,
+        repository_exclusion_root: Path | None = None,
     ) -> list[ScannerRun]:
         del root, private_dir, projects
         assert not skip_codeql
         self.allow_fork_probing.append(allow_fork_probing)
+        self.expected_repository_sha256.append(expected_repository_sha256)
+        self.repository_exclusion_root.append(repository_exclusion_root)
+        if self.before_return is not None:
+            self.before_return()
         return self.runs
 
 
@@ -192,6 +215,8 @@ def _repository_suite_scanner_run(
     compiler_sha256: str = "5" * 64,
     policy_fuzz_runs: int = 256,
     execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.MOCK,
+    repository_sha256: str = "2" * 64,
+    repository_exclusion_path: str = ".mmaudit",
 ) -> ScannerRun:
     descriptor = RepositorySuiteTestDescriptor.sealed(
         framework=RepositorySuiteFramework.FOUNDRY,
@@ -205,7 +230,8 @@ def _repository_suite_scanner_run(
     )
     selection = RepositorySuiteSelection.sealed(
         profile="legacy_audit",
-        repository_sha256="2" * 64,
+        repository_sha256=repository_sha256,
+        repository_exclusion_path=repository_exclusion_path,
         configuration_sha256="3" * 64,
         candidate_file_count=1,
         candidate_test_count=1,
@@ -648,7 +674,8 @@ def _orchestrator(
 async def test_sealed_repository_suite_replay_acknowledges_fork_probing(
     tmp_path: Path,
 ) -> None:
-    baseline = _repository_suite_scanner_run()
+    repository_sha256 = scanner_workspace_sha256(tmp_path, tmp_path / ".mmaudit")
+    baseline = _repository_suite_scanner_run(repository_sha256=repository_sha256)
     scanner = _ForkAwareScannerRunner([baseline])
     orchestrator = OfflineReplayOrchestrator(scanner_runner=scanner)
 
@@ -660,6 +687,8 @@ async def test_sealed_repository_suite_replay_acknowledges_fork_probing(
     )
 
     assert scanner.allow_fork_probing == [True]
+    assert scanner.expected_repository_sha256 == [repository_sha256]
+    assert scanner.repository_exclusion_root == [tmp_path / ".mmaudit"]
     assert len(components) == 1
     assert components[0].identifier == "foundry_fork"
     assert components[0].status is ReplayComponentStatus.MATCHED
@@ -669,15 +698,18 @@ async def test_sealed_repository_suite_replay_acknowledges_fork_probing(
 async def test_repository_suite_replay_ignores_volatility_but_retains_identities(
     tmp_path: Path,
 ) -> None:
+    repository_sha256 = scanner_workspace_sha256(tmp_path, tmp_path / ".mmaudit")
     baseline = _repository_suite_scanner_run(
         private_command_root="/private/original",
         scanner_duration_seconds=0.25,
         execution_duration_seconds=0.1,
+        repository_sha256=repository_sha256,
     )
     volatile_replay = _repository_suite_scanner_run(
         private_command_root="/private/replay",
         scanner_duration_seconds=4.5,
         execution_duration_seconds=3.25,
+        repository_sha256=repository_sha256,
     )
     assert baseline.command != volatile_replay.command
     assert baseline.raw_output_path != volatile_replay.raw_output_path
@@ -705,10 +737,22 @@ async def test_repository_suite_replay_ignores_volatility_but_retains_identities
     assert components[0].expected_sha256 == components[0].observed_sha256
 
     identity_changes = {
-        "toolchain": _repository_suite_scanner_run(compiler_sha256="b" * 64),
-        "block": _repository_suite_scanner_run(block_hash="0x" + ("c" * 64)),
-        "policy": _repository_suite_scanner_run(policy_fuzz_runs=257),
-        "evidence": _repository_suite_scanner_run(execution_evidence=ExecutionEvidenceKind.REAL),
+        "toolchain": _repository_suite_scanner_run(
+            compiler_sha256="b" * 64,
+            repository_sha256=repository_sha256,
+        ),
+        "block": _repository_suite_scanner_run(
+            block_hash="0x" + ("c" * 64),
+            repository_sha256=repository_sha256,
+        ),
+        "policy": _repository_suite_scanner_run(
+            policy_fuzz_runs=257,
+            repository_sha256=repository_sha256,
+        ),
+        "evidence": _repository_suite_scanner_run(
+            execution_evidence=ExecutionEvidenceKind.REAL,
+            repository_sha256=repository_sha256,
+        ),
     }
     statuses: dict[str, ReplayComponentStatus] = {}
     for identity, replay_run in identity_changes.items():
@@ -728,6 +772,119 @@ async def test_repository_suite_replay_ignores_volatility_but_retains_identities
         "policy": ReplayComponentStatus.DRIFTED,
         "evidence": ReplayComponentStatus.DRIFTED,
     }
+
+
+@pytest.mark.asyncio
+async def test_repository_suite_replay_reconstructs_custom_output_exclusion(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    output = repository / "custom-audit-output"
+    (repository / "src").mkdir(parents=True)
+    output.mkdir()
+    (repository / "src" / "Vault.sol").write_text("contract Vault {}", encoding="utf-8")
+    (output / "prior-report.json").write_text('{"prior":true}', encoding="utf-8")
+    repository_sha256 = scanner_workspace_sha256(repository, output)
+    assert repository_sha256 != scanner_workspace_sha256(
+        repository,
+        repository / ".mmaudit",
+    )
+
+    baseline = _repository_suite_scanner_run(
+        repository_sha256=repository_sha256,
+        repository_exclusion_path="custom-audit-output",
+    )
+    scanner = _ForkAwareScannerRunner([baseline])
+    orchestrator = OfflineReplayOrchestrator(scanner_runner=scanner)
+
+    components = await orchestrator._replay_scanners(
+        repository=repository,
+        private_dir=tmp_path / "private",
+        projects=[],
+        expected=[baseline],
+    )
+
+    assert scanner.expected_repository_sha256 == [repository_sha256]
+    assert scanner.repository_exclusion_root == [output]
+    assert components[0].status is ReplayComponentStatus.MATCHED
+
+
+@pytest.mark.asyncio
+async def test_repository_suite_replay_rejects_conflicting_exclusion_identities(
+    tmp_path: Path,
+) -> None:
+    repository_sha256 = scanner_workspace_sha256(tmp_path, tmp_path / ".mmaudit")
+    first = _repository_suite_scanner_run(repository_sha256=repository_sha256)
+    second = _repository_suite_scanner_run(
+        repository_sha256=repository_sha256,
+        repository_exclusion_path="custom-audit-output",
+    )
+    scanner = _ForkAwareScannerRunner([first])
+    orchestrator = OfflineReplayOrchestrator(scanner_runner=scanner)
+
+    components = await orchestrator._replay_scanners(
+        repository=tmp_path,
+        private_dir=tmp_path / "private",
+        projects=[],
+        expected=[first, second],
+    )
+
+    assert scanner.allow_fork_probing == []
+    assert len(components) == 2
+    assert all(component.status is ReplayComponentStatus.BLOCKED for component in components)
+
+
+@pytest.mark.asyncio
+async def test_repository_suite_replay_rejects_source_identity_mismatch_before_execution(
+    tmp_path: Path,
+) -> None:
+    baseline = _repository_suite_scanner_run(repository_sha256="f" * 64)
+    scanner = _ForkAwareScannerRunner([baseline])
+    orchestrator = OfflineReplayOrchestrator(scanner_runner=scanner)
+
+    components = await orchestrator._replay_scanners(
+        repository=tmp_path,
+        private_dir=tmp_path / "private",
+        projects=[],
+        expected=[baseline],
+    )
+
+    assert scanner.allow_fork_probing == []
+    assert len(components) == 1
+    assert components[0].status is ReplayComponentStatus.BLOCKED
+
+
+@pytest.mark.asyncio
+async def test_repository_suite_replay_rejects_source_drift_during_execution(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "Vault.sol"
+    source.write_text("contract Vault {}\n", encoding="utf-8")
+    repository_sha256 = scanner_workspace_sha256(tmp_path, tmp_path / ".mmaudit")
+    baseline = _repository_suite_scanner_run(repository_sha256=repository_sha256)
+
+    def mutate_source() -> None:
+        source.write_text(
+            "contract Vault { uint256 changed; }\n",
+            encoding="utf-8",
+        )
+
+    scanner = _ForkAwareScannerRunner(
+        [baseline],
+        before_return=mutate_source,
+    )
+    orchestrator = OfflineReplayOrchestrator(scanner_runner=scanner)
+
+    components = await orchestrator._replay_scanners(
+        repository=tmp_path,
+        private_dir=tmp_path / "private",
+        projects=[],
+        expected=[baseline],
+    )
+
+    assert scanner.allow_fork_probing == [True]
+    assert len(components) == 1
+    assert components[0].status is ReplayComponentStatus.BLOCKED
 
 
 def _rewrite_manifest_as_legacy(manifest_path: Path) -> None:

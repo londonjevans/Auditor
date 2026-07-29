@@ -77,6 +77,12 @@ from mmaudit.models.schemas import (
     RepositoryMap,
     RepositorySuiteExecutionPolicy,
     RepositorySuiteFramework,
+    RepositorySuiteInventoryArtifact,
+    RepositorySuiteInventoryEvidence,
+    RepositorySuiteInventoryKind,
+    RepositorySuiteInventoryPhase,
+    RepositorySuiteInventoryRecord,
+    RepositorySuiteProjectInventoryEvidence,
     RepositorySuiteSelection,
     RepositorySuiteTestDescriptor,
     RepositoryTestExecution,
@@ -118,6 +124,7 @@ from mmaudit.orchestration.assurance import (
     MaximumAssuranceContract,
     ProviderSessionProvenance,
     _issue_provider_session_provenance,
+    is_qualifying_real_foundry_portfolio,
 )
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.orchestration.replay import (
@@ -738,18 +745,28 @@ def _real_foundry_scanner(
         if config is not None and config.reproduction.pinned_block_number is not None
         else 42
     )
-    descriptors = tuple(
+    records = tuple(
         sorted(
             (
-                RepositorySuiteTestDescriptor.sealed(
-                    framework=RepositorySuiteFramework.FOUNDRY,
+                RepositorySuiteInventoryRecord.sealed(
                     project_root=".",
-                    path="test/audit/Portfolio.t.sol",
-                    suite_name="PortfolioTest",
+                    execution_path="test/audit/Portfolio.t.sol",
+                    execution_suite_name="PortfolioTest",
                     test_name=test_name,
-                    source_sha256="8" * 64,
-                    start_line=line,
-                    end_line=line,
+                    execution_signature=f"{test_name}()",
+                    execution_source_sha256="8" * 64,
+                    execution_start_line=line,
+                    execution_end_line=line,
+                    execution_contract_ast_id=100,
+                    declaration_path="test/audit/Portfolio.t.sol",
+                    declaration_suite_name="PortfolioTest",
+                    declaration_signature=f"{test_name}()",
+                    declaration_source_sha256="8" * 64,
+                    declaration_start_line=line,
+                    declaration_end_line=line,
+                    declaration_contract_ast_id=100,
+                    declaration_function_ast_id=100 + line,
+                    build_info_sha256="a" * 64,
                 )
                 for line, test_name in enumerate(
                     ("testUnit", "testFuzz_Portfolio", "invariant_Portfolio"),
@@ -759,9 +776,83 @@ def _real_foundry_scanner(
             key=lambda item: item.canonical_key,
         )
     )
+    artifact = RepositorySuiteInventoryArtifact(
+        name="portfolio-build-info.json",
+        sha256="a" * 64,
+        normalized_sha256="a" * 64,
+        bytes=1_000,
+    )
+    normalized_inventory_sha256 = canonical_sha256(
+        sorted(record.record_sha256 for record in records)
+    )
+    project_inventory = RepositorySuiteProjectInventoryEvidence.sealed(
+        project_root=".",
+        command_sha256="b" * 64,
+        stdout_sha256="c" * 64,
+        stdout_bytes=100,
+        stderr_sha256="d" * 64,
+        stderr_bytes=0,
+        build_info_artifacts=(artifact,),
+        build_info_bundle_sha256=canonical_sha256([artifact.model_dump(mode="json")]),
+        normalized_build_info_bundle_sha256=canonical_sha256([artifact.normalized_sha256]),
+        parser_inventory_sha256="f" * 64,
+        records=records,
+        normalized_inventory_sha256=normalized_inventory_sha256,
+    )
+    inventory_common = {
+        "framework": RepositorySuiteFramework.FOUNDRY,
+        "repository_sha256": "9" * 64,
+        "configuration_sha256": smart_contracts.repository_suite.stable_hash(),
+        "tool_version": "forge 1.3.2",
+        "tool_sha256": "5" * 64,
+        "compiler_version": "solc 0.8.30",
+        "compiler_sha256": smart_contracts.solc_sha256 or ("6" * 64),
+        "isolation_backend": "sandbox-exec",
+        "isolation_attestation_sha256": "7" * 64,
+        "execution_evidence": ExecutionEvidenceKind.REAL,
+        "repository_code_execution": RepositoryCodeExecutionState.ISOLATED,
+        "projects": (project_inventory,),
+        "project_bundle_sha256": canonical_sha256([project_inventory.project_inventory_sha256]),
+        "normalized_inventory_sha256": normalized_inventory_sha256,
+        "inventory_record_count": len(records),
+        "safety_claim": False,
+    }
+    inventory = RepositorySuiteInventoryEvidence.sealed(
+        phase=RepositorySuiteInventoryPhase.PRE_EXECUTION,
+        **inventory_common,
+    )
+    post_inventory = RepositorySuiteInventoryEvidence.sealed(
+        phase=RepositorySuiteInventoryPhase.POST_EXECUTION,
+        **inventory_common,
+    )
+    descriptors = tuple(
+        RepositorySuiteTestDescriptor.sealed(
+            framework=RepositorySuiteFramework.FOUNDRY,
+            project_root=record.project_root,
+            path=record.execution_path,
+            suite_name=record.execution_suite_name,
+            test_name=record.test_name,
+            source_sha256=record.execution_source_sha256,
+            start_line=record.execution_start_line,
+            end_line=record.execution_end_line,
+            inventory_sha256=inventory.normalized_inventory_sha256,
+            inventory_record_sha256=record.record_sha256,
+            execution_contract_ast_id=record.execution_contract_ast_id,
+            declaration_path=record.declaration_path,
+            declaration_suite_name=record.declaration_suite_name,
+            declaration_signature=record.declaration_signature,
+            declaration_source_sha256=record.declaration_source_sha256,
+            declaration_start_line=record.declaration_start_line,
+            declaration_end_line=record.declaration_end_line,
+            declaration_contract_ast_id=record.declaration_contract_ast_id,
+            declaration_function_ast_id=record.declaration_function_ast_id,
+        )
+        for record in records
+    )
     selection = RepositorySuiteSelection.sealed(
         profile="legacy_audit",
         repository_sha256="9" * 64,
+        repository_exclusion_path=".mmaudit",
         configuration_sha256=smart_contracts.repository_suite.stable_hash(),
         candidate_file_count=1,
         candidate_test_count=3,
@@ -770,6 +861,8 @@ def _real_foundry_scanner(
         omitted_file_count=0,
         omitted_test_count=0,
         limit_reached=False,
+        inventory_kind=RepositorySuiteInventoryKind.ISOLATED_FOUNDRY_BUILD_INFO,
+        inventory_sha256=inventory.normalized_inventory_sha256,
         tests=descriptors,
         safety_claim=False,
     )
@@ -806,6 +899,9 @@ def _real_foundry_scanner(
         RepositoryTestExecution.sealed(
             selection_sha256=selection.selection_sha256,
             descriptor_sha256=descriptor.descriptor_sha256,
+            inventory_sha256=inventory.inventory_sha256,
+            post_inventory_sha256=post_inventory.inventory_sha256,
+            inventory_record_sha256=descriptor.inventory_record_sha256,
             framework=descriptor.framework,
             project_root=descriptor.project_root,
             path=descriptor.path,
@@ -878,6 +974,8 @@ def _real_foundry_scanner(
             invariant_calls=8_192,
         ),
         repository_suite_selection=selection,
+        repository_suite_inventory=inventory,
+        repository_suite_post_inventory=post_inventory,
         repository_suite_execution_policy=execution_policy,
         repository_test_executions=executions,
         repository_code_execution=RepositoryCodeExecutionState.ISOLATED,
@@ -887,6 +985,185 @@ def _real_foundry_scanner(
             **run.model_dump(mode="json"),
             "execution_observation_sha256": run.expected_execution_observation_sha256(),
         }
+    )
+
+
+def _static_source_foundry_scanner(run: ScannerRun) -> ScannerRun:
+    selection = run.repository_suite_selection
+    execution_policy = run.repository_suite_execution_policy
+    assert selection is not None
+    assert execution_policy is not None
+    descriptors = tuple(
+        RepositorySuiteTestDescriptor.sealed(
+            framework=descriptor.framework,
+            project_root=descriptor.project_root,
+            path=descriptor.path,
+            suite_name=descriptor.suite_name,
+            test_name=descriptor.test_name,
+            source_sha256=descriptor.source_sha256,
+            start_line=descriptor.start_line,
+            end_line=descriptor.end_line,
+        )
+        for descriptor in selection.tests
+    )
+    static_selection = RepositorySuiteSelection.sealed(
+        profile=selection.profile,
+        repository_sha256=selection.repository_sha256,
+        repository_exclusion_path=selection.repository_exclusion_path,
+        configuration_sha256=selection.configuration_sha256,
+        candidate_file_count=selection.candidate_file_count,
+        candidate_test_count=selection.candidate_test_count,
+        selected_file_count=selection.selected_file_count,
+        selected_test_count=selection.selected_test_count,
+        omitted_file_count=selection.omitted_file_count,
+        omitted_test_count=selection.omitted_test_count,
+        limit_reached=selection.limit_reached,
+        tests=descriptors,
+        safety_claim=False,
+    )
+    static_policy = RepositorySuiteExecutionPolicy.sealed(
+        **execution_policy.model_dump(
+            mode="python",
+            exclude={
+                "policy_sha256",
+                "selection_sha256",
+                "selection_configuration_sha256",
+            },
+        ),
+        selection_sha256=static_selection.selection_sha256,
+        selection_configuration_sha256=static_selection.configuration_sha256,
+    )
+    prior_by_key = {
+        execution.canonical_key: execution for execution in run.repository_test_executions
+    }
+    executions = [
+        RepositoryTestExecution.sealed(
+            **prior_by_key[descriptor.canonical_key].model_dump(
+                mode="python",
+                exclude={
+                    "execution_sha256",
+                    "selection_sha256",
+                    "descriptor_sha256",
+                    "inventory_sha256",
+                    "post_inventory_sha256",
+                    "inventory_record_sha256",
+                    "execution_policy_sha256",
+                },
+            ),
+            selection_sha256=static_selection.selection_sha256,
+            descriptor_sha256=descriptor.descriptor_sha256,
+            execution_policy_sha256=static_policy.policy_sha256,
+        )
+        for descriptor in descriptors
+    ]
+    candidate = run.model_copy(
+        update={
+            "repository_suite_selection": static_selection,
+            "repository_suite_inventory": None,
+            "repository_suite_post_inventory": None,
+            "repository_suite_execution_policy": static_policy,
+            "repository_test_executions": executions,
+            "execution_observation_sha256": None,
+        }
+    )
+    return ScannerRun.model_validate(
+        {
+            **candidate.model_dump(mode="json"),
+            "execution_observation_sha256": candidate.expected_execution_observation_sha256(),
+        }
+    )
+
+
+def _foundry_scanner_with_post_build_info_drift(run: ScannerRun) -> ScannerRun:
+    post_inventory = run.repository_suite_post_inventory
+    assert post_inventory is not None
+    project = post_inventory.projects[0]
+    drifted_artifact = project.build_info_artifacts[0].model_copy(
+        update={
+            "name": "extra-build-info.json",
+            "sha256": "e" * 64,
+            "normalized_sha256": "e" * 64,
+        }
+    )
+    build_info_artifacts = tuple(
+        sorted(
+            (*project.build_info_artifacts, drifted_artifact),
+            key=lambda artifact: (artifact.name, artifact.sha256, artifact.bytes),
+        )
+    )
+    drifted_project = RepositorySuiteProjectInventoryEvidence.sealed(
+        **project.model_dump(
+            mode="python",
+            exclude={
+                "project_inventory_sha256",
+                "build_info_artifacts",
+                "build_info_bundle_sha256",
+                "normalized_build_info_bundle_sha256",
+                "records",
+            },
+        ),
+        build_info_artifacts=build_info_artifacts,
+        build_info_bundle_sha256=canonical_sha256(
+            [artifact.model_dump(mode="json") for artifact in build_info_artifacts]
+        ),
+        normalized_build_info_bundle_sha256=canonical_sha256(
+            sorted(artifact.normalized_sha256 for artifact in build_info_artifacts)
+        ),
+        records=project.records,
+    )
+    drifted_post = RepositorySuiteInventoryEvidence.sealed(
+        **post_inventory.model_dump(
+            mode="python",
+            exclude={
+                "inventory_sha256",
+                "projects",
+                "project_bundle_sha256",
+            },
+        ),
+        projects=(drifted_project,),
+        project_bundle_sha256=canonical_sha256([drifted_project.project_inventory_sha256]),
+    )
+    executions = [
+        RepositoryTestExecution.sealed(
+            **execution.model_dump(
+                mode="python",
+                exclude={"execution_sha256", "post_inventory_sha256"},
+            ),
+            post_inventory_sha256=drifted_post.normalized_inventory_sha256,
+        )
+        for execution in run.repository_test_executions
+    ]
+    candidate = run.model_copy(
+        update={
+            "repository_suite_post_inventory": drifted_post,
+            "repository_test_executions": executions,
+            "execution_observation_sha256": None,
+        }
+    )
+    return candidate.model_copy(
+        update={"execution_observation_sha256": candidate.expected_execution_observation_sha256()}
+    )
+
+
+def _reseal_foundry_inventory(
+    inventory: RepositorySuiteInventoryEvidence,
+    **updates: object,
+) -> RepositorySuiteInventoryEvidence:
+    payload = inventory.model_dump(mode="python", exclude={"inventory_sha256"})
+    payload["projects"] = inventory.projects
+    payload.update(updates)
+    return RepositorySuiteInventoryEvidence.sealed(**payload)
+
+
+def _reseal_scanner_observation(run: ScannerRun, **updates: object) -> ScannerRun:
+    candidate = run.model_copy(
+        update={
+            **updates,
+            "execution_observation_sha256": None,
+        }
+    )
+    return candidate.model_copy(
+        update={"execution_observation_sha256": candidate.expected_execution_observation_sha256()}
     )
 
 
@@ -947,6 +1224,7 @@ def _complete_runtime(config: AuditConfig | None = None) -> AssuranceRuntime:
         evidence_hash="b" * 64,
     )
     runtime = AssuranceRuntime(
+        repository_execution_sha256="9" * 64,
         projects=[project],
         compilations=[
             SolidityCompilationResult(
@@ -2683,6 +2961,296 @@ def test_non_successful_foundry_portfolio_never_satisfies_maximum_assurance(
     assert assessment.status is not MaximumAssuranceStatus.COMPLETE
     assert not clause.passed
     assert clause.blocking
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param("static_source", id="static_source_inventory_is_not_compiler_evidence"),
+        pytest.param("missing_post", id="missing_post_execution_inventory"),
+        pytest.param("drifted_post", id="post_execution_build_info_drift"),
+    ],
+)
+def test_real_foundry_qualification_requires_stable_compiler_inventory(
+    config_factory,
+    case: str,
+) -> None:
+    config = _maximum_config(config_factory)
+    foundry = _real_foundry_scanner(datetime.now(UTC), config)
+    assert is_qualifying_real_foundry_portfolio(
+        foundry,
+        config,
+        expected_repository_sha256="9" * 64,
+    )
+
+    if case == "static_source":
+        changed = _static_source_foundry_scanner(foundry)
+    elif case == "missing_post":
+        changed = foundry.model_copy(
+            update={
+                "repository_suite_post_inventory": None,
+                "execution_observation_sha256": None,
+            }
+        )
+        changed = changed.model_copy(
+            update={"execution_observation_sha256": changed.expected_execution_observation_sha256()}
+        )
+    else:
+        changed = _foundry_scanner_with_post_build_info_drift(foundry)
+
+    assert not is_qualifying_real_foundry_portfolio(
+        changed,
+        config,
+        expected_repository_sha256="9" * 64,
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("repository_sha256", "1" * 64, id="repository"),
+        pytest.param("configuration_sha256", "2" * 64, id="configuration"),
+        pytest.param("tool_version", "forge 9.9.9", id="tool_version"),
+        pytest.param("tool_sha256", "3" * 64, id="tool_hash"),
+        pytest.param("compiler_version", "solc 9.9.9", id="compiler_version"),
+        pytest.param("compiler_sha256", "4" * 64, id="compiler_hash"),
+        pytest.param("isolation_backend", "bubblewrap", id="isolation_backend"),
+        pytest.param(
+            "isolation_attestation_sha256",
+            "6" * 64,
+            id="isolation_attestation",
+        ),
+    ],
+)
+def test_real_foundry_qualification_revalidates_inventory_identity_bindings(
+    config_factory,
+    field: str,
+    value: object,
+) -> None:
+    config = _maximum_config(config_factory)
+    foundry = _real_foundry_scanner(datetime.now(UTC), config)
+    inventory = foundry.repository_suite_inventory
+    post_inventory = foundry.repository_suite_post_inventory
+    assert inventory is not None
+    assert post_inventory is not None
+    assert is_qualifying_real_foundry_portfolio(
+        foundry,
+        config,
+        expected_repository_sha256="9" * 64,
+    )
+
+    changed = _reseal_scanner_observation(
+        foundry,
+        repository_suite_inventory=_reseal_foundry_inventory(
+            inventory,
+            **{field: value},
+        ),
+        repository_suite_post_inventory=_reseal_foundry_inventory(
+            post_inventory,
+            **{field: value},
+        ),
+    )
+
+    assert not is_qualifying_real_foundry_portfolio(
+        changed,
+        config,
+        expected_repository_sha256="9" * 64,
+    )
+
+
+def test_real_foundry_qualification_resolves_each_execution_inventory_record(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    foundry = _real_foundry_scanner(datetime.now(UTC), config)
+    executions = list(foundry.repository_test_executions)
+    first = executions[0]
+    executions[0] = RepositoryTestExecution.sealed(
+        **first.model_dump(
+            mode="python",
+            exclude={"execution_sha256", "inventory_record_sha256"},
+        ),
+        inventory_record_sha256="e" * 64,
+    )
+    changed = _reseal_scanner_observation(
+        foundry,
+        repository_test_executions=executions,
+    )
+    assert changed.execution_observation_sha256 == (changed.expected_execution_observation_sha256())
+
+    assert not is_qualifying_real_foundry_portfolio(
+        changed,
+        config,
+        expected_repository_sha256="9" * 64,
+    )
+
+
+def test_real_foundry_qualification_requires_current_repository_identity(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    foundry = _real_foundry_scanner(datetime.now(UTC), config)
+
+    assert not is_qualifying_real_foundry_portfolio(
+        foundry,
+        config,
+        expected_repository_sha256="1" * 64,
+    )
+
+
+def test_real_foundry_qualification_requires_the_configured_tool_pin(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    foundry = _real_foundry_scanner(datetime.now(UTC), config)
+    changed_config = config.model_copy(
+        update={
+            "scanners": config.scanners.model_copy(
+                update={
+                    "foundry_fork": config.scanners.foundry_fork.model_copy(
+                        update={"version": "9.9.9"}
+                    )
+                }
+            )
+        }
+    )
+
+    assert not is_qualifying_real_foundry_portfolio(
+        foundry,
+        changed_config,
+        expected_repository_sha256="9" * 64,
+    )
+
+
+def test_real_foundry_qualification_binds_selection_profile_to_configuration(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    foundry = _real_foundry_scanner(datetime.now(UTC), config)
+    selection = foundry.repository_suite_selection
+    execution_policy = foundry.repository_suite_execution_policy
+    assert selection is not None
+    assert execution_policy is not None
+    selection_payload = selection.model_dump(
+        mode="python",
+        exclude={"selection_sha256", "profile"},
+    )
+    selection_payload["tests"] = selection.tests
+    changed_selection = RepositorySuiteSelection.sealed(
+        **selection_payload,
+        profile="explicit",
+    )
+    policy_payload = execution_policy.model_dump(
+        mode="python",
+        exclude={"policy_sha256", "selection_sha256"},
+    )
+    changed_policy = RepositorySuiteExecutionPolicy.sealed(
+        **policy_payload,
+        selection_sha256=changed_selection.selection_sha256,
+    )
+    changed_executions = [
+        RepositoryTestExecution.sealed(
+            **execution.model_dump(
+                mode="python",
+                exclude={
+                    "execution_sha256",
+                    "selection_sha256",
+                    "execution_policy_sha256",
+                },
+            ),
+            selection_sha256=changed_selection.selection_sha256,
+            execution_policy_sha256=changed_policy.policy_sha256,
+        )
+        for execution in foundry.repository_test_executions
+    ]
+    changed = _reseal_scanner_observation(
+        foundry,
+        repository_suite_selection=changed_selection,
+        repository_suite_execution_policy=changed_policy,
+        repository_test_executions=changed_executions,
+    )
+    ScannerRun.model_validate(changed.model_dump(mode="json"))
+
+    assert not is_qualifying_real_foundry_portfolio(
+        changed,
+        config,
+        expected_repository_sha256="9" * 64,
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "field"),
+    [
+        pytest.param(RepositoryTestKind.FUZZ, "fuzz_cases", id="fuzz"),
+        pytest.param(RepositoryTestKind.INVARIANT, "invariant_runs", id="invariant"),
+    ],
+)
+def test_real_foundry_qualification_requires_configured_campaign_strength(
+    config_factory,
+    kind: RepositoryTestKind,
+    field: str,
+) -> None:
+    config = _maximum_config(config_factory)
+    foundry = _real_foundry_scanner(datetime.now(UTC), config)
+    executions = list(foundry.repository_test_executions)
+    index = next(index for index, execution in enumerate(executions) if execution.test_kind is kind)
+    execution = executions[index]
+    executions[index] = RepositoryTestExecution.sealed(
+        **execution.model_dump(
+            mode="python",
+            exclude={"execution_sha256", field},
+        ),
+        **{field: 1},
+    )
+    summary = foundry.foundry_summary
+    assert summary is not None
+    changed = _reseal_scanner_observation(
+        foundry,
+        foundry_summary=summary.model_copy(update={field: 1}),
+        repository_test_executions=executions,
+    )
+
+    assert not is_qualifying_real_foundry_portfolio(
+        changed,
+        config,
+        expected_repository_sha256="9" * 64,
+    )
+
+
+@pytest.mark.parametrize("scope", ["suite", "test"])
+def test_real_foundry_qualification_rejects_execution_past_declared_deadline(
+    config_factory,
+    scope: str,
+) -> None:
+    config = _maximum_config(config_factory)
+    foundry = _real_foundry_scanner(datetime.now(UTC), config)
+    policy = foundry.repository_suite_execution_policy
+    assert policy is not None
+    if scope == "suite":
+        changed = _reseal_scanner_observation(
+            foundry,
+            duration_seconds=policy.total_timeout_seconds + 0.001,
+        )
+    else:
+        executions = list(foundry.repository_test_executions)
+        first = executions[0]
+        executions[0] = RepositoryTestExecution.sealed(
+            **first.model_dump(
+                mode="python",
+                exclude={"execution_sha256", "duration_seconds"},
+            ),
+            duration_seconds=policy.per_test_timeout_seconds + 0.001,
+        )
+        changed = _reseal_scanner_observation(
+            foundry,
+            repository_test_executions=executions,
+        )
+
+    assert not is_qualifying_real_foundry_portfolio(
+        changed,
+        config,
+        expected_repository_sha256="9" * 64,
+    )
 
 
 @pytest.mark.parametrize(

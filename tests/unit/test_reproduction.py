@@ -323,6 +323,29 @@ def test_macos_policy_allows_compiler_children_but_not_host_or_remote_access(
     assert str(Path.home()) not in policy
 
 
+def test_macos_inventory_policy_grants_no_network_entitlement(tmp_path: Path) -> None:
+    private = tmp_path / "private"
+    workspace = private / "workspace"
+    workspace.mkdir(parents=True)
+    compiler = private / "toolchain" / "solc"
+    compiler.parent.mkdir()
+    compiler.write_bytes(b"synthetic pinned compiler")
+    backend = MacOSSandboxBackend(executable="/usr/bin/sandbox-exec")
+
+    command = backend.wrap_without_network(
+        ["/usr/local/bin/forge", "test", "--use", str(compiler)],
+        workspace=workspace,
+        private_dir=private,
+        rpc_port=1,
+    )
+
+    policy = (private / "sandbox.sb").read_text(encoding="utf-8")
+    assert command[:2] == ["/usr/bin/sandbox-exec", "-f"]
+    assert "(allow process-exec)" in policy
+    assert "(allow network" not in policy
+    assert f'(literal "{compiler}")' in policy
+
+
 def test_bubblewrap_denies_network_and_mounts_only_private_workspace(
     tmp_path: Path,
 ) -> None:

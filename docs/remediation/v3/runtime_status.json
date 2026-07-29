@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-07-29T12:42:26Z",
-  "candidate_commit": "6c67db4e95567200d51038665c65bb18bf5b5f16",
+  "updated_at": "2026-07-29T16:48:16Z",
+  "candidate_commit": "a8c732f11e02ba65fc358f311ed5df3cc7b57037",
   "autorun_status": "ACTIVE",
   "current_milestone": "pinned_fork_repository_suite_execution",
   "current_ticket": "V3-FORKSUITE-001",
-  "last_checkpoint_commit": "6c67db4e95567200d51038665c65bb18bf5b5f16",
+  "last_checkpoint_commit": "a8c732f11e02ba65fc358f311ed5df3cc7b57037",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,

@@ -246,6 +246,7 @@ from mmaudit.repository.privacy_provenance import (
     validate_privacy_source_provenance_observation,
 )
 from mmaudit.repository.redaction import SecretSafetyError
+from mmaudit.scanners.base import scanner_workspace_sha256
 from mmaudit.scanners.runner import ScannerRunner
 from mmaudit.solidity.compile import compile_solidity_projects
 from mmaudit.solidity.coverage import (
@@ -606,6 +607,8 @@ class AuditPipeline:
         candidate_groups_count = 0
         validations: dict[str, LocationValidation] = {}
         discovery: DiscoveryResult
+        repository_execution_sha256: str | None = None
+        repository_execution_exclusion_root: Path | None = None
         assurance_contract = MaximumAssuranceContract(
             self.config,
             require=require_maximum_assurance,
@@ -641,7 +644,7 @@ class AuditPipeline:
         )
         matcher = IgnoreMatcher.from_file(ignore_path)
         if output_relative_to_repo is not None:
-            matcher.rules.append(output_relative_to_repo.as_posix().rstrip("/") + "/")
+            matcher.rules.append("/" + output_relative_to_repo.as_posix().rstrip("/") + "/")
         if self.config.prior_audit.path is not None:
             matcher.rules.append("/" + normalize_relative_path(self.config.prior_audit.path))
         if self.config.dependency_preparation.offline_snapshot_path is not None:
@@ -649,12 +652,54 @@ class AuditPipeline:
                 normalize_relative_path(self.config.dependency_preparation.offline_snapshot_path)
             ).parent
             matcher.rules.append("/" + snapshot_parent.as_posix().rstrip("/") + "/")
+        repository_suite_identity_required = bool(
+            self.config.scanners.foundry_fork.enabled
+            and self.config.smart_contracts.enabled
+            and self.config.smart_contracts.repository_suite.foundry_include_paths
+            and self.config.smart_contracts.repository_suite.foundry_include_tests
+        )
+        if repository_suite_identity_required:
+            repository_execution_exclusion_root = (
+                self.output.resolve(strict=True)
+                if output_relative_to_repo is not None
+                else self.repo_input.resolve(strict=True) / ".mmaudit"
+            )
+            try:
+                repository_execution_sha256 = scanner_workspace_sha256(
+                    self.repo_input,
+                    repository_execution_exclusion_root,
+                )
+            except (OSError, ValueError) as exc:
+                incomplete.append(
+                    "repository execution source identity could not be frozen before discovery: "
+                    f"{type(exc).__name__}"
+                )
+                if terminal_code is ExitCode.SUCCESS:
+                    terminal_code = ExitCode.INCOMPLETE
         unfiltered_discovery = discover_repository(
             self.repo_input,
             self.config.repository,
             matcher,
             changed_since=changed_since,
         )
+        if repository_execution_sha256 is not None:
+            try:
+                post_discovery_repository_sha256 = scanner_workspace_sha256(
+                    self.repo_input,
+                    repository_execution_exclusion_root,
+                )
+            except (OSError, ValueError) as exc:
+                incomplete.append(
+                    "repository execution source identity could not be revalidated after "
+                    f"discovery: {type(exc).__name__}"
+                )
+                if terminal_code is ExitCode.SUCCESS:
+                    terminal_code = ExitCode.INCOMPLETE
+            else:
+                if post_discovery_repository_sha256 != repository_execution_sha256:
+                    incomplete.append("repository execution source changed during discovery")
+                    if terminal_code is ExitCode.SUCCESS:
+                        terminal_code = ExitCode.INCOMPLETE
         (
             unfiltered_discovery,
             prior_material_withheld_from_discovery,
@@ -1027,8 +1072,30 @@ class AuditPipeline:
                 skip_codeql=skip_codeql,
                 allow_fork_probing=allow_fork_probing,
                 projects=solidity_projects,
+                expected_repository_sha256=repository_execution_sha256,
+                repository_exclusion_root=repository_execution_exclusion_root,
             )
         )
+        if repository_execution_sha256 is not None:
+            try:
+                post_scanner_repository_sha256 = scanner_workspace_sha256(
+                    discovery.root,
+                    repository_execution_exclusion_root,
+                )
+            except (OSError, ValueError) as exc:
+                incomplete.append(
+                    "repository execution source identity could not be revalidated after "
+                    f"scanner execution: {type(exc).__name__}"
+                )
+                if terminal_code is ExitCode.SUCCESS:
+                    terminal_code = ExitCode.INCOMPLETE
+            else:
+                if post_scanner_repository_sha256 != repository_execution_sha256:
+                    incomplete.append(
+                        "repository execution source changed during scanner execution"
+                    )
+                    if terminal_code is ExitCode.SUCCESS:
+                        terminal_code = ExitCode.INCOMPLETE
         scanner_runs = [_annotate_scanner_locations(discovery.root, run) for run in scanner_runs]
         all_scanner_findings = [finding for run in scanner_runs for finding in run.findings]
         allowed_scanner_paths = {discovered.relative_path for discovered in discovery.files}
@@ -2275,6 +2342,7 @@ class AuditPipeline:
             },
             scanner_only=scanner_only,
             model_surface_assignment_gate=model_surface_assignment_gate,
+            repository_execution_sha256=repository_execution_sha256,
         )
         if (
             not scanner_only
@@ -2476,6 +2544,7 @@ class AuditPipeline:
             usage_roles=successful_usage_roles,
             scanner_only=scanner_only,
             model_surface_assignment_gate=model_surface_assignment_gate,
+            repository_execution_sha256=repository_execution_sha256,
         )
         high_critical = {candidate.candidate_id for candidate in assurance_high_critical_candidates}
         feasible_high_critical = {
@@ -2515,6 +2584,7 @@ class AuditPipeline:
         traceability = build_traceability_matrix(repository_map.git_commit)
         maximum_assurance = assurance_contract.evaluate(
             AssuranceRuntime(
+                repository_execution_sha256=repository_execution_sha256,
                 projects=solidity_projects,
                 compilations=solidity_compilations,
                 index=solidity_index,
@@ -4411,6 +4481,7 @@ def _evaluate_quality_gates(
     usage_roles: set[str],
     scanner_only: bool,
     model_surface_assignment_gate: QualityGateResult,
+    repository_execution_sha256: str | None,
 ) -> list[QualityGateResult]:
     base_gates = [
         scope_quality_gate(scope_assessment),
@@ -4436,7 +4507,12 @@ def _evaluate_quality_gates(
     }
     reproduction_integrity_passed = eligible_candidate_ids <= integrity_verified_ids
     fork_executed = bool(attempted_candidates) or (
-        baseline is not None and is_qualifying_real_foundry_portfolio(baseline, config)
+        baseline is not None
+        and is_qualifying_real_foundry_portfolio(
+            baseline,
+            config,
+            expected_repository_sha256=repository_execution_sha256,
+        )
     )
     required_roles = {
         "threat_model",

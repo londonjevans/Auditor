@@ -498,6 +498,20 @@ class RepositorySuiteFramework(StrEnum):
     HARDHAT = "hardhat"
 
 
+class RepositorySuiteInventoryKind(StrEnum):
+    """How a repository-owned test inventory was established."""
+
+    STATIC_SOURCE = "static_source"
+    ISOLATED_FOUNDRY_BUILD_INFO = "isolated_foundry_build_info"
+
+
+class RepositorySuiteInventoryPhase(StrEnum):
+    """When an isolated repository-suite inventory was observed."""
+
+    PRE_EXECUTION = "pre_execution"
+    POST_EXECUTION = "post_execution"
+
+
 class RepositoryTestKind(StrEnum):
     """Machine-classified Foundry test campaign kind."""
 
@@ -2570,6 +2584,289 @@ def _repository_suite_text_is_safe(value: str) -> bool:
     )
 
 
+class RepositorySuiteInventoryArtifact(StrictModel):
+    """Hash-only identity for one private compiler inventory artifact."""
+
+    name: str = Field(min_length=1, max_length=255, pattern=r"^[A-Za-z0-9._-]+$")
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    normalized_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    bytes: int = Field(ge=1, le=100_000_000)
+
+
+class RepositorySuiteInventoryRecord(StrictModel):
+    """Compiler-bound execution and declaration identity for one runnable test."""
+
+    project_root: str = Field(min_length=1, max_length=1_000)
+    execution_path: str = Field(min_length=1, max_length=1_000)
+    execution_suite_name: str = Field(min_length=1, max_length=1_000)
+    test_name: str = Field(min_length=1, max_length=1_000)
+    execution_signature: str = Field(min_length=1, max_length=1_000)
+    execution_source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    execution_start_line: int = Field(ge=1)
+    execution_end_line: int = Field(ge=1)
+    execution_contract_ast_id: int = Field(ge=0)
+    declaration_path: str = Field(min_length=1, max_length=1_000)
+    declaration_suite_name: str = Field(min_length=1, max_length=1_000)
+    declaration_signature: str = Field(min_length=3, max_length=1_000)
+    declaration_source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    declaration_start_line: int = Field(ge=1)
+    declaration_end_line: int = Field(ge=1)
+    declaration_contract_ast_id: int = Field(ge=0)
+    declaration_function_ast_id: int = Field(ge=0)
+    build_info_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    record_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> RepositorySuiteInventoryRecord:
+        """Validate and self-hash one compiler-reconciled inventory record."""
+
+        if "record_sha256" in values:
+            raise ValueError("record_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, record_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"record_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "record_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator("project_root")
+    @classmethod
+    def project_root_is_safe(cls, value: str) -> str:
+        if not _repository_suite_path_is_safe(value, allow_root=True):
+            raise ValueError("repository inventory project root must be repository-relative")
+        return value
+
+    @field_validator("execution_path", "declaration_path")
+    @classmethod
+    def source_paths_are_safe(cls, value: str) -> str:
+        if not _repository_suite_path_is_safe(value, allow_root=False):
+            raise ValueError("repository inventory source path must be repository-relative")
+        return value
+
+    @field_validator(
+        "execution_suite_name",
+        "test_name",
+        "execution_signature",
+        "declaration_suite_name",
+        "declaration_signature",
+    )
+    @classmethod
+    def names_are_bounded_printable_text(cls, value: str) -> str:
+        if not _repository_suite_text_is_safe(value):
+            raise ValueError("repository inventory names must be bounded printable text")
+        return value
+
+    @model_validator(mode="after")
+    def paths_ranges_signature_and_hash_are_consistent(
+        self,
+    ) -> RepositorySuiteInventoryRecord:
+        if self.project_root != ".":
+            prefix = f"{self.project_root}/"
+            if not self.execution_path.startswith(prefix) or not self.declaration_path.startswith(
+                prefix
+            ):
+                raise ValueError("repository inventory source lies outside its project root")
+        if self.execution_end_line < self.execution_start_line:
+            raise ValueError("repository inventory execution range is reversed")
+        if self.declaration_end_line < self.declaration_start_line:
+            raise ValueError("repository inventory declaration range is reversed")
+        if not self.declaration_signature.startswith(f"{self.test_name}("):
+            raise ValueError("repository inventory signature differs from its test name")
+        if self.execution_signature.partition("(")[0] != self.test_name:
+            raise ValueError("repository inventory execution signature differs from test name")
+        if self.record_sha256 != self.expected_record_sha256():
+            raise ValueError("repository suite inventory record hash does not match")
+        return self
+
+    @property
+    def canonical_key(self) -> tuple[str, str, str, str]:
+        return (
+            self.project_root,
+            self.execution_path,
+            self.execution_suite_name,
+            self.test_name,
+        )
+
+    def expected_record_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"record_sha256"})
+        return _canonical_model_sha256(payload)
+
+
+class RepositorySuiteProjectInventoryEvidence(StrictModel):
+    """One isolated Forge inventory invocation for a canonical project root."""
+
+    project_root: str = Field(min_length=1, max_length=1_000)
+    command_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    process_exit_code: Literal[0] = 0
+    machine_output_validated: Literal[True] = True
+    stdout_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    stdout_bytes: int = Field(ge=2, le=100_000_000)
+    stderr_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    stderr_bytes: int = Field(ge=0, le=100_000_000)
+    build_info_artifacts: tuple[RepositorySuiteInventoryArtifact, ...] = Field(
+        min_length=1,
+        max_length=10_000,
+    )
+    build_info_bundle_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    normalized_build_info_bundle_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    parser_inventory_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    records: tuple[RepositorySuiteInventoryRecord, ...] = Field(
+        min_length=1,
+        max_length=10_000,
+    )
+    normalized_inventory_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    project_inventory_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> RepositorySuiteProjectInventoryEvidence:
+        """Validate and self-hash one project inventory."""
+
+        if "project_inventory_sha256" in values:
+            raise ValueError(
+                "project_inventory_sha256 is derived and cannot be supplied to sealed()"
+            )
+        provisional = cls.model_construct(**values, project_inventory_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"project_inventory_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "project_inventory_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator("project_root")
+    @classmethod
+    def project_root_is_safe(cls, value: str) -> str:
+        if not _repository_suite_path_is_safe(value, allow_root=True):
+            raise ValueError("repository inventory project root must be repository-relative")
+        return value
+
+    @model_validator(mode="after")
+    def artifacts_records_and_hash_are_consistent(
+        self,
+    ) -> RepositorySuiteProjectInventoryEvidence:
+        artifacts = tuple(
+            (
+                artifact.name,
+                artifact.sha256,
+                artifact.normalized_sha256,
+                artifact.bytes,
+            )
+            for artifact in self.build_info_artifacts
+        )
+        if artifacts != tuple(sorted(set(artifacts))):
+            raise ValueError("repository suite inventory artifacts must be unique and sorted")
+        if self.build_info_bundle_sha256 != _canonical_model_sha256(
+            [artifact.model_dump(mode="json") for artifact in self.build_info_artifacts]
+        ):
+            raise ValueError("repository suite build-info bundle hash does not match")
+        normalized_artifact_hashes = tuple(
+            artifact.normalized_sha256 for artifact in self.build_info_artifacts
+        )
+        if len(normalized_artifact_hashes) != len(set(normalized_artifact_hashes)):
+            raise ValueError("repository suite normalized build-info artifacts must be unique")
+        if self.normalized_build_info_bundle_sha256 != _canonical_model_sha256(
+            sorted(normalized_artifact_hashes)
+        ):
+            raise ValueError("repository suite normalized build-info bundle hash does not match")
+        artifact_hashes = set(normalized_artifact_hashes)
+        if any(record.build_info_sha256 not in artifact_hashes for record in self.records):
+            raise ValueError("repository suite inventory record lacks its build-info artifact")
+        record_keys = tuple(record.canonical_key for record in self.records)
+        record_hashes = tuple(record.record_sha256 for record in self.records)
+        if record_keys != tuple(sorted(set(record_keys))) or len(record_hashes) != len(
+            set(record_hashes)
+        ):
+            raise ValueError("repository suite inventory records must be unique and sorted")
+        if any(record.project_root != self.project_root for record in self.records):
+            raise ValueError("repository suite inventory record has the wrong project root")
+        if self.normalized_inventory_sha256 != _canonical_model_sha256(sorted(record_hashes)):
+            raise ValueError("repository suite normalized inventory hash does not match")
+        if self.project_inventory_sha256 != self.expected_project_inventory_sha256():
+            raise ValueError("repository suite project inventory hash does not match")
+        return self
+
+    def expected_project_inventory_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"project_inventory_sha256"})
+        return _canonical_model_sha256(payload)
+
+
+class RepositorySuiteInventoryEvidence(StrictModel):
+    """Self-hashed proof of isolated Forge list/build-info inventories."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    phase: RepositorySuiteInventoryPhase
+    framework: Literal[RepositorySuiteFramework.FOUNDRY] = RepositorySuiteFramework.FOUNDRY
+    repository_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    configuration_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    tool_version: str = Field(min_length=1, max_length=1_000)
+    tool_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    compiler_version: str = Field(min_length=1, max_length=1_000)
+    compiler_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    isolation_backend: str = Field(min_length=1, max_length=200)
+    isolation_attestation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    execution_evidence: ExecutionEvidenceKind
+    repository_code_execution: Literal[RepositoryCodeExecutionState.ISOLATED] = (
+        RepositoryCodeExecutionState.ISOLATED
+    )
+    projects: tuple[RepositorySuiteProjectInventoryEvidence, ...] = Field(
+        min_length=1,
+        max_length=1_000,
+    )
+    project_bundle_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    normalized_inventory_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    inventory_record_count: int = Field(ge=1, le=10_000)
+    safety_claim: Literal[False] = False
+    inventory_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> RepositorySuiteInventoryEvidence:
+        """Validate and self-hash one terminal isolated inventory."""
+
+        if "inventory_sha256" in values:
+            raise ValueError("inventory_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, inventory_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"inventory_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "inventory_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @model_validator(mode="after")
+    def projects_records_and_hash_are_consistent(
+        self,
+    ) -> RepositorySuiteInventoryEvidence:
+        project_keys = tuple(project.project_root for project in self.projects)
+        project_hashes = tuple(project.project_inventory_sha256 for project in self.projects)
+        if project_keys != tuple(sorted(set(project_keys))):
+            raise ValueError("repository suite project inventories must be unique and sorted")
+        if self.project_bundle_sha256 != _canonical_model_sha256(list(project_hashes)):
+            raise ValueError("repository suite project inventory bundle hash does not match")
+        records = tuple(record for project in self.projects for record in project.records)
+        record_hashes = tuple(sorted(record.record_sha256 for record in records))
+        if len(record_hashes) != len(set(record_hashes)):
+            raise ValueError("repository suite inventory contains duplicate record hashes")
+        if self.inventory_record_count != len(record_hashes):
+            raise ValueError("repository suite inventory record count does not match")
+        if self.normalized_inventory_sha256 != _canonical_model_sha256(list(record_hashes)):
+            raise ValueError("repository suite normalized inventory hash does not match")
+        if self.execution_evidence is ExecutionEvidenceKind.REAL and (
+            not self.isolation_backend or not self.isolation_attestation_sha256
+        ):
+            raise ValueError("real repository inventory requires isolation attestation")
+        if self.inventory_sha256 != self.expected_inventory_sha256():
+            raise ValueError("repository suite inventory evidence hash does not match")
+        return self
+
+    def expected_inventory_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"inventory_sha256"})
+        return _canonical_model_sha256(payload)
+
+
 class RepositorySuiteTestDescriptor(StrictModel):
     """Canonical source-bound identity for one selected repository-owned test."""
 
@@ -2581,6 +2878,20 @@ class RepositorySuiteTestDescriptor(StrictModel):
     source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     start_line: int = Field(ge=1)
     end_line: int = Field(ge=1)
+    inventory_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    inventory_record_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    execution_contract_ast_id: int | None = Field(default=None, ge=0)
+    declaration_path: str | None = Field(default=None, min_length=1, max_length=1_000)
+    declaration_suite_name: str | None = Field(default=None, min_length=1, max_length=1_000)
+    declaration_signature: str | None = Field(default=None, min_length=3, max_length=1_000)
+    declaration_source_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    declaration_start_line: int | None = Field(default=None, ge=1)
+    declaration_end_line: int | None = Field(default=None, ge=1)
+    declaration_contract_ast_id: int | None = Field(default=None, ge=0)
+    declaration_function_ast_id: int | None = Field(default=None, ge=0)
     descriptor_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @classmethod
@@ -2605,16 +2916,25 @@ class RepositorySuiteTestDescriptor(StrictModel):
             raise ValueError("repository suite project root must be repository-relative")
         return value
 
-    @field_validator("path")
+    @field_validator("path", "declaration_path")
     @classmethod
-    def path_is_safe(cls, value: str) -> str:
+    def path_is_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         if not _repository_suite_path_is_safe(value, allow_root=False):
             raise ValueError("repository suite test path must be repository-relative")
         return value
 
-    @field_validator("suite_name", "test_name")
+    @field_validator(
+        "suite_name",
+        "test_name",
+        "declaration_suite_name",
+        "declaration_signature",
+    )
     @classmethod
-    def names_are_bounded_printable_text(cls, value: str) -> str:
+    def names_are_bounded_printable_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         if not _repository_suite_text_is_safe(value):
             raise ValueError("repository suite and test names must be bounded printable text")
         return value
@@ -2625,6 +2945,39 @@ class RepositorySuiteTestDescriptor(StrictModel):
             raise ValueError("repository suite descriptor end line precedes its start line")
         if self.path != self.project_relative_path:
             raise ValueError("repository suite test path must reside under its project root")
+        inventory_fields = (
+            self.inventory_sha256,
+            self.inventory_record_sha256,
+            self.execution_contract_ast_id,
+            self.declaration_path,
+            self.declaration_suite_name,
+            self.declaration_signature,
+            self.declaration_source_sha256,
+            self.declaration_start_line,
+            self.declaration_end_line,
+            self.declaration_contract_ast_id,
+            self.declaration_function_ast_id,
+        )
+        populated = tuple(value is not None for value in inventory_fields)
+        if any(populated) and not all(populated):
+            raise ValueError("repository suite inventory descriptor fields must be all-or-none")
+        if all(populated):
+            if self.framework is not RepositorySuiteFramework.FOUNDRY:
+                raise ValueError("only Foundry descriptors may carry compiler inventory")
+            assert self.declaration_path is not None
+            assert self.declaration_signature is not None
+            assert self.declaration_start_line is not None
+            assert self.declaration_end_line is not None
+            if self.project_root != "." and not self.declaration_path.startswith(
+                f"{self.project_root}/"
+            ):
+                raise ValueError(
+                    "repository suite declaration path must reside under its project root"
+                )
+            if self.declaration_end_line < self.declaration_start_line:
+                raise ValueError("repository suite declaration range is reversed")
+            if not self.declaration_signature.startswith(f"{self.test_name}("):
+                raise ValueError("repository suite declaration signature differs from test name")
         if self.descriptor_sha256 != self.expected_descriptor_sha256():
             raise ValueError("repository suite descriptor hash does not match its fields")
         return self
@@ -2658,6 +3011,36 @@ class RepositorySuiteTestDescriptor(StrictModel):
             self.test_name.casefold(),
         )
 
+    @property
+    def inventory_bound(self) -> bool:
+        """Return whether compiler evidence binds execution to its declaration."""
+
+        return self.inventory_sha256 is not None
+
+    @property
+    def finding_path(self) -> str:
+        """Return the effective declaration path used for finding evidence."""
+
+        return self.declaration_path or self.path
+
+    @property
+    def finding_source_sha256(self) -> str:
+        """Return the effective declaration source hash."""
+
+        return self.declaration_source_sha256 or self.source_sha256
+
+    @property
+    def finding_start_line(self) -> int:
+        """Return the effective declaration start line."""
+
+        return self.declaration_start_line or self.start_line
+
+    @property
+    def finding_end_line(self) -> int:
+        """Return the effective declaration end line."""
+
+        return self.declaration_end_line or self.end_line
+
     def expected_descriptor_sha256(self) -> str:
         payload = self.model_dump(mode="json", exclude={"descriptor_sha256"})
         return _canonical_model_sha256(payload)
@@ -2669,6 +3052,7 @@ class RepositorySuiteSelection(StrictModel):
     schema_version: Literal["1.0"] = "1.0"
     profile: Literal["legacy_audit", "explicit"]
     repository_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    repository_exclusion_path: str = Field(min_length=1, max_length=1_000)
     configuration_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     candidate_file_count: int = Field(ge=0)
     candidate_test_count: int = Field(ge=0)
@@ -2677,6 +3061,8 @@ class RepositorySuiteSelection(StrictModel):
     omitted_file_count: int = Field(ge=0)
     omitted_test_count: int = Field(ge=0)
     limit_reached: bool
+    inventory_kind: RepositorySuiteInventoryKind = RepositorySuiteInventoryKind.STATIC_SOURCE
+    inventory_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     tests: tuple[RepositorySuiteTestDescriptor, ...] = Field(max_length=10_000)
     safety_claim: Literal[False] = False
     selection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -2695,6 +3081,15 @@ class RepositorySuiteSelection(StrictModel):
                 "selection_sha256": _canonical_model_sha256(payload),
             }
         )
+
+    @field_validator("repository_exclusion_path")
+    @classmethod
+    def repository_exclusion_path_is_safe(cls, value: str) -> str:
+        if not _repository_suite_path_is_safe(value, allow_root=False):
+            raise ValueError(
+                "repository suite exclusion path must be normalized and repository-relative"
+            )
+        return value
 
     @model_validator(mode="after")
     def counts_order_and_hash_are_consistent(self) -> RepositorySuiteSelection:
@@ -2721,12 +3116,205 @@ class RepositorySuiteSelection(StrictModel):
             raise ValueError("repository suite candidate and omission counts are inconsistent")
         if self.limit_reached:
             raise ValueError("repository suite selection must fail instead of truncating at limits")
+        if self.inventory_kind is RepositorySuiteInventoryKind.STATIC_SOURCE:
+            if self.inventory_sha256 is not None or any(
+                descriptor.inventory_bound for descriptor in self.tests
+            ):
+                raise ValueError("static repository selection cannot claim compiler inventory")
+        else:
+            if self.inventory_sha256 is None:
+                raise ValueError("compiler-backed repository selection requires inventory hash")
+            if any(
+                descriptor.inventory_sha256 != self.inventory_sha256 for descriptor in self.tests
+            ):
+                raise ValueError("compiler-backed descriptors must bind the selection inventory")
         if self.selection_sha256 != self.expected_selection_sha256():
             raise ValueError("repository suite selection hash does not match its fields")
         return self
 
     def expected_selection_sha256(self) -> str:
         payload = self.model_dump(mode="json", exclude={"selection_sha256"})
+        return _canonical_model_sha256(payload)
+
+
+class HardhatReporterInventory(StrictModel):
+    """Strict, self-hashed inventory emitted only by the trusted image reporter."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    reporter_name: Literal["mmaudit-hardhat-reporter"] = "mmaudit-hardhat-reporter"
+    reporter_version: str = Field(min_length=1, max_length=200)
+    reporter_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    repository_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    tests: tuple[RepositorySuiteTestDescriptor, ...] = Field(max_length=10_000)
+    completed: Literal[True] = True
+    safety_claim: Literal[False] = False
+    inventory_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> HardhatReporterInventory:
+        """Validate and self-hash one complete reporter inventory."""
+
+        if "inventory_sha256" in values:
+            raise ValueError("inventory_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, inventory_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"inventory_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "inventory_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @model_validator(mode="after")
+    def framework_order_and_hash_are_consistent(self) -> HardhatReporterInventory:
+        keys = tuple(test.canonical_key for test in self.tests)
+        collision_keys = tuple(test.collision_key for test in self.tests)
+        if any(
+            test.framework is not RepositorySuiteFramework.HARDHAT or test.inventory_bound
+            for test in self.tests
+        ):
+            raise ValueError("Hardhat reporter inventory must contain static Hardhat descriptors")
+        if keys != tuple(sorted(set(keys))):
+            raise ValueError(
+                "Hardhat reporter inventory descriptors must be unique and canonically sorted"
+            )
+        if len(collision_keys) != len(set(collision_keys)):
+            raise ValueError(
+                "Hardhat reporter inventory has a case-insensitive descriptor collision"
+            )
+        if self.inventory_sha256 != self.expected_inventory_sha256():
+            raise ValueError("Hardhat reporter inventory hash does not match its fields")
+        return self
+
+    def expected_inventory_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"inventory_sha256"})
+        return _canonical_model_sha256(payload)
+
+
+class HardhatReporterTestResult(StrictModel):
+    """One bounded terminal test record from the trusted Hardhat reporter."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    descriptor_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    path: str = Field(min_length=1, max_length=1_000)
+    suite_name: str = Field(min_length=1, max_length=1_000)
+    test_name: str = Field(min_length=1, max_length=1_000)
+    status: RepositoryTestExecutionStatus
+    terminal_detail: str | None = Field(default=None, max_length=8_000)
+    duration_seconds: float = Field(ge=0, le=1_800)
+    result_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> HardhatReporterTestResult:
+        """Validate and self-hash one trusted reporter result."""
+
+        if "result_sha256" in values:
+            raise ValueError("result_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, result_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"result_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "result_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator("path")
+    @classmethod
+    def path_is_safe(cls, value: str) -> str:
+        if not _repository_suite_path_is_safe(value, allow_root=False):
+            raise ValueError("Hardhat reporter result path must be repository-relative")
+        return value
+
+    @field_validator("suite_name", "test_name")
+    @classmethod
+    def names_are_bounded_printable_text(cls, value: str) -> str:
+        if not _repository_suite_text_is_safe(value):
+            raise ValueError("Hardhat reporter result names must be bounded printable text")
+        return value
+
+    @field_validator("terminal_detail")
+    @classmethod
+    def detail_is_bounded_printable_text(cls, value: str | None) -> str | None:
+        if value is not None and not _repository_suite_text_is_safe(value):
+            raise ValueError("Hardhat reporter result detail must be bounded printable text")
+        return value
+
+    @model_validator(mode="after")
+    def outcome_and_hash_are_consistent(self) -> HardhatReporterTestResult:
+        classified_statuses = {
+            RepositoryTestExecutionStatus.PASSED,
+            RepositoryTestExecutionStatus.FAILED,
+            RepositoryTestExecutionStatus.REVERTED,
+            RepositoryTestExecutionStatus.ASSERTION_FAILED,
+            RepositoryTestExecutionStatus.SKIPPED,
+        }
+        if self.status not in classified_statuses:
+            raise ValueError("Hardhat reporter result is not a classified terminal outcome")
+        failure_statuses = {
+            RepositoryTestExecutionStatus.FAILED,
+            RepositoryTestExecutionStatus.REVERTED,
+            RepositoryTestExecutionStatus.ASSERTION_FAILED,
+        }
+        if self.status in failure_statuses and self.terminal_detail is None:
+            raise ValueError("failing Hardhat reporter result requires terminal detail")
+        if self.status not in failure_statuses and self.terminal_detail is not None:
+            raise ValueError("non-failing Hardhat reporter result cannot carry failure detail")
+        if self.result_sha256 != self.expected_result_sha256():
+            raise ValueError("Hardhat reporter result hash does not match its fields")
+        return self
+
+    def expected_result_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"result_sha256"})
+        return _canonical_model_sha256(payload)
+
+
+class HardhatReporterExecution(StrictModel):
+    """Complete self-hashed reporter output bound to one explicit suite selection."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    reporter_name: Literal["mmaudit-hardhat-reporter"] = "mmaudit-hardhat-reporter"
+    reporter_version: str = Field(min_length=1, max_length=200)
+    reporter_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    repository_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    selection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    chain_id: int = Field(ge=1)
+    block_number: int = Field(ge=0)
+    block_hash: str = Field(pattern=r"^0x[0-9a-f]{64}$")
+    fuzz_seed: str = Field(pattern=r"^0x[0-9a-f]{64}$")
+    results: tuple[HardhatReporterTestResult, ...] = Field(max_length=10_000)
+    completed: Literal[True] = True
+    safety_claim: Literal[False] = False
+    report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> HardhatReporterExecution:
+        """Validate and self-hash one complete reporter execution."""
+
+        if "report_sha256" in values:
+            raise ValueError("report_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, report_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"report_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "report_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @model_validator(mode="after")
+    def result_order_and_hash_are_consistent(self) -> HardhatReporterExecution:
+        descriptor_hashes = tuple(result.descriptor_sha256 for result in self.results)
+        if descriptor_hashes != tuple(sorted(set(descriptor_hashes))):
+            raise ValueError(
+                "Hardhat reporter results must be unique and ordered by descriptor hash"
+            )
+        if self.report_sha256 != self.expected_report_sha256():
+            raise ValueError("Hardhat reporter execution hash does not match its fields")
+        return self
+
+    def expected_report_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"report_sha256"})
         return _canonical_model_sha256(payload)
 
 
@@ -2800,6 +3388,9 @@ class RepositoryTestExecution(StrictModel):
     schema_version: Literal["1.0"] = "1.0"
     selection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     descriptor_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    inventory_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    post_inventory_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    inventory_record_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     framework: RepositorySuiteFramework
     project_root: str = Field(min_length=1, max_length=1_000)
     path: str = Field(min_length=1, max_length=1_000)
@@ -2818,7 +3409,7 @@ class RepositoryTestExecution(StrictModel):
     duration_seconds: float = Field(ge=0, le=7_200)
     command_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     output_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    output_bytes: int = Field(default=0, ge=0, le=10_000_000)
+    output_bytes: int = Field(default=0, ge=0, le=100_000_000)
     machine_result_sha256: str | None = Field(
         default=None,
         pattern=r"^[0-9a-f]{64}$",
@@ -2969,6 +3560,15 @@ class RepositoryTestExecution(StrictModel):
             raise ValueError("unclassified repository test cannot claim campaign counts")
         if self.output_sha256 is None and self.output_bytes:
             raise ValueError("repository test output bytes require an output hash")
+        inventory_fields = (
+            self.inventory_sha256,
+            self.post_inventory_sha256,
+            self.inventory_record_sha256,
+        )
+        if any(value is not None for value in inventory_fields) and not all(
+            value is not None for value in inventory_fields
+        ):
+            raise ValueError("repository test inventory bindings must be all-or-none")
         if self.execution_sha256 != self.expected_execution_sha256():
             raise ValueError("repository test execution hash does not match its fields")
         return self
@@ -3034,6 +3634,8 @@ class ScannerRun(StrictModel):
     machine_output_validated: bool = False
     foundry_summary: FoundryTestExecutionSummary | None = None
     repository_suite_selection: RepositorySuiteSelection | None = None
+    repository_suite_inventory: RepositorySuiteInventoryEvidence | None = None
+    repository_suite_post_inventory: RepositorySuiteInventoryEvidence | None = None
     repository_suite_execution_policy: RepositorySuiteExecutionPolicy | None = None
     repository_test_executions: list[RepositoryTestExecution] = Field(
         default_factory=list,
@@ -3081,6 +3683,11 @@ class ScannerRun(StrictModel):
         if self.repository_test_executions and self.repository_suite_selection is None:
             raise ValueError("repository test executions require their selection evidence")
         if (
+            self.repository_suite_inventory is not None
+            or self.repository_suite_post_inventory is not None
+        ) and self.repository_suite_selection is None:
+            raise ValueError("repository inventory evidence requires its suite selection")
+        if (
             self.repository_suite_execution_policy is not None
             and self.repository_suite_selection is None
         ):
@@ -3091,6 +3698,9 @@ class ScannerRun(StrictModel):
                 raise ValueError("an empty repository suite selection cannot be successful")
             executions = self.repository_test_executions
             execution_policy = self.repository_suite_execution_policy
+            inventory = self.repository_suite_inventory
+            post_inventory = self.repository_suite_post_inventory
+            inventories_stable = False
             expected_framework = {
                 "foundry_fork": RepositorySuiteFramework.FOUNDRY,
                 "hardhat_fork": RepositorySuiteFramework.HARDHAT,
@@ -3101,6 +3711,156 @@ class ScannerRun(StrictModel):
                 )
             if any(test.framework is not expected_framework for test in selection.tests):
                 raise ValueError("repository suite descriptor framework differs from its scanner")
+            if selection.inventory_kind is RepositorySuiteInventoryKind.STATIC_SOURCE:
+                if inventory is not None or post_inventory is not None:
+                    raise ValueError("static repository selection cannot carry runtime inventory")
+            else:
+                if inventory is None:
+                    raise ValueError(
+                        "compiler-backed repository selection requires pre-execution inventory"
+                    )
+                if inventory.phase is not RepositorySuiteInventoryPhase.PRE_EXECUTION:
+                    raise ValueError("repository pre-execution inventory phase is invalid")
+                if self.status is ScannerStatus.SUCCESS and post_inventory is None:
+                    raise ValueError(
+                        "successful compiler-backed repository suite requires post inventory"
+                    )
+                if (
+                    post_inventory is not None
+                    and post_inventory.phase is not RepositorySuiteInventoryPhase.POST_EXECUTION
+                ):
+                    raise ValueError("repository post-execution inventory phase is invalid")
+                if selection.inventory_sha256 != inventory.normalized_inventory_sha256:
+                    raise ValueError(
+                        "repository selection differs from its pre-execution inventory"
+                    )
+                stable_inventory_fields = (
+                    "framework",
+                    "repository_sha256",
+                    "configuration_sha256",
+                    "tool_version",
+                    "tool_sha256",
+                    "compiler_version",
+                    "compiler_sha256",
+                    "isolation_backend",
+                    "isolation_attestation_sha256",
+                    "execution_evidence",
+                    "repository_code_execution",
+                    "safety_claim",
+                )
+                pre_records = {
+                    record.record_sha256: record
+                    for project in inventory.projects
+                    for record in project.records
+                }
+                if post_inventory is not None:
+                    if any(
+                        getattr(inventory, field) != getattr(post_inventory, field)
+                        for field in stable_inventory_fields
+                    ):
+                        raise ValueError("pre/post repository inventory identity differs")
+                    post_records = {
+                        record.record_sha256: record
+                        for project in post_inventory.projects
+                        for record in project.records
+                    }
+                    pre_project_semantics = tuple(
+                        (
+                            project.project_root,
+                            project.build_info_bundle_sha256,
+                            project.normalized_build_info_bundle_sha256,
+                            project.parser_inventory_sha256,
+                            project.normalized_inventory_sha256,
+                        )
+                        for project in inventory.projects
+                    )
+                    post_project_semantics = tuple(
+                        (
+                            project.project_root,
+                            project.build_info_bundle_sha256,
+                            project.normalized_build_info_bundle_sha256,
+                            project.parser_inventory_sha256,
+                            project.normalized_inventory_sha256,
+                        )
+                        for project in post_inventory.projects
+                    )
+                    inventories_stable = (
+                        inventory.normalized_inventory_sha256
+                        == post_inventory.normalized_inventory_sha256
+                        and inventory.inventory_record_count
+                        == post_inventory.inventory_record_count
+                        and pre_records == post_records
+                        and pre_project_semantics == post_project_semantics
+                    )
+                    if self.status is ScannerStatus.SUCCESS and not inventories_stable:
+                        raise ValueError("successful repository suite inventory evidence drifted")
+                if inventory.repository_sha256 != selection.repository_sha256:
+                    raise ValueError("repository inventory differs from selected repository")
+                if inventory.configuration_sha256 != selection.configuration_sha256:
+                    raise ValueError("repository inventory differs from selection configuration")
+                if inventory.framework is not expected_framework:
+                    raise ValueError("repository inventory framework differs from scanner")
+                if inventory.tool_version != self.version or inventory.tool_sha256 != (
+                    self.executable_sha256
+                ):
+                    raise ValueError("repository inventory tool identity differs from scanner")
+                if (
+                    inventory.isolation_backend != self.isolation_backend
+                    or inventory.isolation_attestation_sha256 != self.isolation_attestation_sha256
+                    or inventory.repository_code_execution is not self.repository_code_execution
+                ):
+                    raise ValueError("repository inventory provenance differs from scanner")
+                if (
+                    self.status is ScannerStatus.SUCCESS
+                    and inventory.execution_evidence is not self.execution_evidence
+                ):
+                    raise ValueError(
+                        "successful repository inventory evidence differs from scanner"
+                    )
+                for descriptor in selection.tests:
+                    if descriptor.inventory_record_sha256 not in pre_records:
+                        raise ValueError("repository descriptor is absent from compiler inventory")
+                    record = pre_records[descriptor.inventory_record_sha256]
+                    descriptor_record = (
+                        descriptor.project_root,
+                        descriptor.path,
+                        descriptor.suite_name,
+                        descriptor.test_name,
+                        descriptor.source_sha256,
+                        descriptor.start_line,
+                        descriptor.end_line,
+                        descriptor.execution_contract_ast_id,
+                        descriptor.declaration_path,
+                        descriptor.declaration_suite_name,
+                        descriptor.declaration_signature,
+                        descriptor.declaration_source_sha256,
+                        descriptor.declaration_start_line,
+                        descriptor.declaration_end_line,
+                        descriptor.declaration_contract_ast_id,
+                        descriptor.declaration_function_ast_id,
+                    )
+                    inventory_record = (
+                        record.project_root,
+                        record.execution_path,
+                        record.execution_suite_name,
+                        record.test_name,
+                        record.execution_source_sha256,
+                        record.execution_start_line,
+                        record.execution_end_line,
+                        record.execution_contract_ast_id,
+                        record.declaration_path,
+                        record.declaration_suite_name,
+                        record.declaration_signature,
+                        record.declaration_source_sha256,
+                        record.declaration_start_line,
+                        record.declaration_end_line,
+                        record.declaration_contract_ast_id,
+                        record.declaration_function_ast_id,
+                    )
+                    if descriptor_record != inventory_record:
+                        raise ValueError(
+                            "repository descriptor differs from compiler inventory record"
+                        )
             execution_keys = tuple(execution.canonical_key for execution in executions)
             execution_hashes = tuple(execution.execution_sha256 for execution in executions)
             if execution_keys != tuple(sorted(set(execution_keys))):
@@ -3118,6 +3878,40 @@ class ScannerRun(StrictModel):
                 descriptor = selected_by_hash[execution.descriptor_sha256]
                 if execution.selection_sha256 != selection.selection_sha256:
                     raise ValueError("repository test execution does not bind its suite selection")
+                if selection.inventory_kind is RepositorySuiteInventoryKind.STATIC_SOURCE:
+                    if (
+                        execution.inventory_sha256 is not None
+                        or execution.post_inventory_sha256 is not None
+                        or execution.inventory_record_sha256 is not None
+                    ):
+                        raise ValueError("static repository execution cannot claim inventory")
+                else:
+                    assert inventory is not None
+                    if post_inventory is None:
+                        if (
+                            execution.inventory_sha256 is not None
+                            or execution.post_inventory_sha256 is not None
+                            or execution.inventory_record_sha256 is not None
+                        ):
+                            raise ValueError(
+                                "repository execution cannot claim incomplete inventories"
+                            )
+                    elif inventories_stable:
+                        if (
+                            execution.inventory_sha256 != inventory.inventory_sha256
+                            or execution.post_inventory_sha256 != post_inventory.inventory_sha256
+                            or execution.inventory_record_sha256
+                            != descriptor.inventory_record_sha256
+                        ):
+                            raise ValueError(
+                                "repository test execution differs from compiler inventories"
+                            )
+                    elif (
+                        execution.inventory_sha256 is not None
+                        or execution.post_inventory_sha256 is not None
+                        or execution.inventory_record_sha256 is not None
+                    ):
+                        raise ValueError("repository execution cannot claim drifting inventories")
                 if execution.canonical_key != descriptor.canonical_key:
                     raise ValueError(
                         "repository test execution identity differs from its descriptor"
@@ -3263,9 +4057,9 @@ class ScannerRun(StrictModel):
                     )
                 descriptor = selected_by_hash[execution.descriptor_sha256]
                 if not any(
-                    location.path == descriptor.path
-                    and location.start_line >= descriptor.start_line
-                    and location.end_line <= descriptor.end_line
+                    location.path == descriptor.finding_path
+                    and location.start_line >= descriptor.finding_start_line
+                    and location.end_line <= descriptor.finding_end_line
                     for location in finding.locations
                 ):
                     raise ValueError(

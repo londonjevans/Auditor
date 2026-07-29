@@ -520,7 +520,22 @@ are invisible to source review by construction.
   `src/mmaudit/config.py`, `src/mmaudit/orchestration/pipeline.py`, scanner and finding
   schemas, `mmaudit.example.toml`, unit and local integration regressions.
 - **Dependencies:** `V3-TOKENS-001`.
-- **Status:** `IN_PROGRESS`
+- **Status:** `PARTIAL`
+- **Validated result:** The Foundry path is complete for the bounded pinned-fork
+  scope: compiler-backed inherited-test inventory, exact selection, hardened
+  loopback-only execution, per-test evidence, typed findings, cumulative output
+  ceilings, source/replay identity, and fail-closed prerequisite handling have
+  real local integration evidence. The final local gate passed `2645` tests with
+  `11` explicit unavailable external-prerequisite skips.
+- **Blocked subtask:** Real Hardhat execution is `BLOCKED_TECHNICAL`. The current
+  adapter safely validates configuration, selection, and reporter evidence but
+  cannot execute repository JavaScript or receive REAL credit until the
+  process-attested digest-pinned rootless single-loopback runtime and trusted
+  image-baked reporter described in `operator_prerequisites.md` are supplied.
+- **Next action:** Continue the independent Foundry-capable
+  `V3-FORKDIFF-001` work. Resume only the Hardhat integration subtask when its
+  external isolation and toolchain prerequisites exist; do not substitute a
+  mock or broad-network container.
 
 ## V3-FORKDIFF-001 — Differential and multi-state fork matrix
 

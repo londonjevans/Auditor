@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -13,6 +15,12 @@ from mmaudit.models.schemas import (
     RepositoryCodeExecutionState,
     RepositorySuiteExecutionPolicy,
     RepositorySuiteFramework,
+    RepositorySuiteInventoryArtifact,
+    RepositorySuiteInventoryEvidence,
+    RepositorySuiteInventoryKind,
+    RepositorySuiteInventoryPhase,
+    RepositorySuiteInventoryRecord,
+    RepositorySuiteProjectInventoryEvidence,
     RepositorySuiteSelection,
     RepositorySuiteTestDescriptor,
     RepositoryTestExecution,
@@ -28,6 +36,160 @@ HASH_A = "a" * 64
 HASH_B = "b" * 64
 HASH_C = "c" * 64
 SEED = "0x" + ("0" * 63) + "1"
+
+
+def _canonical_sha256(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode()
+    ).hexdigest()
+
+
+def _inventory_record(
+    *,
+    execution_source_sha256: str = HASH_A,
+    declaration_source_sha256: str = HASH_B,
+    declaration_start_line: int = 7,
+    declaration_end_line: int = 9,
+) -> RepositorySuiteInventoryRecord:
+    return RepositorySuiteInventoryRecord.sealed(
+        project_root="contracts",
+        execution_path="contracts/test/ConcreteVault.t.sol",
+        execution_suite_name="ConcreteVaultTest",
+        test_name="testInheritedInvariant",
+        execution_signature="testInheritedInvariant",
+        execution_source_sha256=execution_source_sha256,
+        execution_start_line=20,
+        execution_end_line=40,
+        execution_contract_ast_id=101,
+        declaration_path="contracts/test/VaultBase.t.sol",
+        declaration_suite_name="VaultBaseTest",
+        declaration_signature="testInheritedInvariant()",
+        declaration_source_sha256=declaration_source_sha256,
+        declaration_start_line=declaration_start_line,
+        declaration_end_line=declaration_end_line,
+        declaration_contract_ast_id=202,
+        declaration_function_ast_id=303,
+        build_info_sha256=HASH_C,
+    )
+
+
+def _project_inventory(
+    record: RepositorySuiteInventoryRecord,
+    *,
+    stdout_bytes: int = 100,
+) -> RepositorySuiteProjectInventoryEvidence:
+    artifact = RepositorySuiteInventoryArtifact(
+        name="build-info.json",
+        sha256=HASH_C,
+        normalized_sha256=HASH_C,
+        bytes=200,
+    )
+    artifact_payload = [artifact.model_dump(mode="json")]
+    record_hashes = [record.record_sha256]
+    return RepositorySuiteProjectInventoryEvidence.sealed(
+        project_root=record.project_root,
+        command_sha256=HASH_A,
+        process_exit_code=0,
+        machine_output_validated=True,
+        stdout_sha256=HASH_B,
+        stdout_bytes=stdout_bytes,
+        stderr_sha256=HASH_C,
+        stderr_bytes=0,
+        build_info_artifacts=(artifact,),
+        build_info_bundle_sha256=_canonical_sha256(artifact_payload),
+        normalized_build_info_bundle_sha256=_canonical_sha256([artifact.normalized_sha256]),
+        parser_inventory_sha256=HASH_A,
+        records=(record,),
+        normalized_inventory_sha256=_canonical_sha256(record_hashes),
+    )
+
+
+def _inventory(
+    phase: RepositorySuiteInventoryPhase,
+    *,
+    record: RepositorySuiteInventoryRecord | None = None,
+) -> RepositorySuiteInventoryEvidence:
+    selected_record = record or _inventory_record()
+    project = _project_inventory(selected_record)
+    record_hashes = [selected_record.record_sha256]
+    return RepositorySuiteInventoryEvidence.sealed(
+        phase=phase,
+        repository_sha256=HASH_B,
+        configuration_sha256=HASH_C,
+        tool_version="1.3.2",
+        tool_sha256=HASH_A,
+        compiler_version="solc 0.8.30",
+        compiler_sha256="d" * 64,
+        isolation_backend="synthetic-isolation",
+        isolation_attestation_sha256=HASH_C,
+        execution_evidence=ExecutionEvidenceKind.MOCK,
+        repository_code_execution=RepositoryCodeExecutionState.ISOLATED,
+        projects=(project,),
+        project_bundle_sha256=_canonical_sha256([project.project_inventory_sha256]),
+        normalized_inventory_sha256=_canonical_sha256(record_hashes),
+        inventory_record_count=1,
+    )
+
+
+def _inventory_descriptor(
+    inventory: RepositorySuiteInventoryEvidence,
+    *,
+    record: RepositorySuiteInventoryRecord | None = None,
+    inventory_sha256: str | None = None,
+    inventory_record_sha256: str | None = None,
+    execution_source_sha256: str | None = None,
+) -> RepositorySuiteTestDescriptor:
+    selected_record = record or inventory.projects[0].records[0]
+    return RepositorySuiteTestDescriptor.sealed(
+        framework=RepositorySuiteFramework.FOUNDRY,
+        project_root=selected_record.project_root,
+        path=selected_record.execution_path,
+        suite_name=selected_record.execution_suite_name,
+        test_name=selected_record.test_name,
+        source_sha256=execution_source_sha256 or selected_record.execution_source_sha256,
+        start_line=selected_record.execution_start_line,
+        end_line=selected_record.execution_end_line,
+        inventory_sha256=inventory_sha256 or inventory.normalized_inventory_sha256,
+        inventory_record_sha256=(inventory_record_sha256 or selected_record.record_sha256),
+        execution_contract_ast_id=selected_record.execution_contract_ast_id,
+        declaration_path=selected_record.declaration_path,
+        declaration_suite_name=selected_record.declaration_suite_name,
+        declaration_signature=selected_record.declaration_signature,
+        declaration_source_sha256=selected_record.declaration_source_sha256,
+        declaration_start_line=selected_record.declaration_start_line,
+        declaration_end_line=selected_record.declaration_end_line,
+        declaration_contract_ast_id=selected_record.declaration_contract_ast_id,
+        declaration_function_ast_id=selected_record.declaration_function_ast_id,
+    )
+
+
+def _inventory_selection(
+    descriptor: RepositorySuiteTestDescriptor,
+    *,
+    inventory_sha256: str | None = None,
+) -> RepositorySuiteSelection:
+    return RepositorySuiteSelection.sealed(
+        profile="explicit",
+        repository_sha256=HASH_B,
+        repository_exclusion_path=".mmaudit",
+        configuration_sha256=HASH_C,
+        candidate_file_count=1,
+        candidate_test_count=1,
+        selected_file_count=1,
+        selected_test_count=1,
+        omitted_file_count=0,
+        omitted_test_count=0,
+        limit_reached=False,
+        inventory_kind=RepositorySuiteInventoryKind.ISOLATED_FOUNDRY_BUILD_INFO,
+        inventory_sha256=inventory_sha256 or descriptor.inventory_sha256,
+        tests=(descriptor,),
+    )
 
 
 def _descriptor(
@@ -58,6 +220,7 @@ def _selection(
     return RepositorySuiteSelection.sealed(
         profile="explicit",
         repository_sha256=HASH_B,
+        repository_exclusion_path=".mmaudit",
         configuration_sha256=HASH_C,
         candidate_file_count=len(selected_files),
         candidate_test_count=len(selected),
@@ -75,6 +238,8 @@ def _execution(
     descriptor: RepositorySuiteTestDescriptor,
     *,
     status: RepositoryTestExecutionStatus = RepositoryTestExecutionStatus.PASSED,
+    inventory: RepositorySuiteInventoryEvidence | None = None,
+    post_inventory: RepositorySuiteInventoryEvidence | None = None,
 ) -> RepositoryTestExecution:
     failed = status in {
         RepositoryTestExecutionStatus.FAILED,
@@ -84,6 +249,13 @@ def _execution(
     return RepositoryTestExecution.sealed(
         selection_sha256=selection.selection_sha256,
         descriptor_sha256=descriptor.descriptor_sha256,
+        inventory_sha256=(inventory.inventory_sha256 if inventory is not None else None),
+        post_inventory_sha256=(
+            post_inventory.inventory_sha256 if post_inventory is not None else None
+        ),
+        inventory_record_sha256=(
+            descriptor.inventory_record_sha256 if inventory is not None else None
+        ),
         framework=descriptor.framework,
         project_root=descriptor.project_root,
         path=descriptor.path,
@@ -142,6 +314,8 @@ def _scanner_run(
     *,
     findings: list[ScannerFinding] | None = None,
     foundry_summary: FoundryTestExecutionSummary | None = None,
+    inventory: RepositorySuiteInventoryEvidence | None = None,
+    post_inventory: RepositorySuiteInventoryEvidence | None = None,
 ) -> ScannerRun:
     now = datetime.now(UTC)
     if foundry_summary is None and all(
@@ -188,6 +362,8 @@ def _scanner_run(
         machine_output_validated=True,
         foundry_summary=foundry_summary,
         repository_suite_selection=selection,
+        repository_suite_inventory=inventory,
+        repository_suite_post_inventory=post_inventory,
         repository_suite_execution_policy=_policy(selection),
         repository_test_executions=executions,
         repository_code_execution=RepositoryCodeExecutionState.ISOLATED,
@@ -292,6 +468,7 @@ def test_repository_suite_selection_requires_canonical_unique_descriptors_and_co
         RepositorySuiteSelection.sealed(
             profile="explicit",
             repository_sha256=HASH_A,
+            repository_exclusion_path=".mmaudit",
             configuration_sha256=HASH_B,
             candidate_file_count=2,
             candidate_test_count=2,
@@ -305,6 +482,7 @@ def test_repository_suite_selection_requires_canonical_unique_descriptors_and_co
     filtered = RepositorySuiteSelection.sealed(
         profile="explicit",
         repository_sha256=HASH_A,
+        repository_exclusion_path=".mmaudit",
         configuration_sha256=HASH_B,
         candidate_file_count=2,
         candidate_test_count=3,
@@ -320,6 +498,7 @@ def test_repository_suite_selection_requires_canonical_unique_descriptors_and_co
         RepositorySuiteSelection.sealed(
             profile="explicit",
             repository_sha256=HASH_A,
+            repository_exclusion_path=".mmaudit",
             configuration_sha256=HASH_B,
             candidate_file_count=2,
             candidate_test_count=3,
@@ -330,6 +509,35 @@ def test_repository_suite_selection_requires_canonical_unique_descriptors_and_co
             limit_reached=True,
             tests=(first, second),
         )
+
+
+def test_repository_suite_selection_requires_hash_bound_normalized_exclusion_path() -> None:
+    selection = _selection()
+    missing = selection.model_dump(mode="json")
+    missing.pop("repository_exclusion_path")
+    with pytest.raises(ValidationError, match="repository_exclusion_path"):
+        RepositorySuiteSelection.model_validate(missing)
+
+    for invalid in ("", ".", "../output", "/tmp/output", "output/../audit", ".env-output"):
+        values = selection.model_dump(
+            mode="python",
+            exclude={"repository_exclusion_path", "selection_sha256"},
+        )
+        values["inventory_kind"] = selection.inventory_kind
+        values["tests"] = selection.tests
+        with pytest.raises(
+            ValidationError,
+            match=r"repository_exclusion_path|exclusion path",
+        ):
+            RepositorySuiteSelection.sealed(
+                **values,
+                repository_exclusion_path=invalid,
+            )
+
+    tampered = selection.model_dump(mode="json")
+    tampered["repository_exclusion_path"] = "custom-audit-output"
+    with pytest.raises(ValidationError, match="selection hash"):
+        RepositorySuiteSelection.model_validate(tampered)
 
 
 def test_repository_suite_selection_rejects_casefold_identity_collisions() -> None:
@@ -555,3 +763,276 @@ def test_empty_repository_suite_selection_cannot_report_success() -> None:
 
     with pytest.raises(ValidationError, match="empty repository suite selection"):
         _scanner_run(selection, [])
+
+
+def test_repository_suite_inventory_layers_reject_self_hash_tampering() -> None:
+    record = _inventory_record()
+    record_payload = record.model_dump(mode="json")
+    record_payload["execution_start_line"] = record.execution_start_line + 1
+    with pytest.raises(ValidationError, match="inventory record hash"):
+        RepositorySuiteInventoryRecord.model_validate(record_payload)
+
+    project = _project_inventory(record)
+    project_payload = project.model_dump(mode="json")
+    project_payload["stdout_bytes"] = project.stdout_bytes + 1
+    with pytest.raises(ValidationError, match="project inventory hash"):
+        RepositorySuiteProjectInventoryEvidence.model_validate(project_payload)
+
+    inventory = _inventory(RepositorySuiteInventoryPhase.PRE_EXECUTION, record=record)
+    inventory_payload = inventory.model_dump(mode="json")
+    inventory_payload["tool_version"] = "1.3.3"
+    with pytest.raises(ValidationError, match="inventory evidence hash"):
+        RepositorySuiteInventoryEvidence.model_validate(inventory_payload)
+
+
+def test_project_inventory_rejects_duplicate_normalized_build_info_artifacts() -> None:
+    record = _inventory_record()
+    artifacts = (
+        RepositorySuiteInventoryArtifact(
+            name="build-info-a.json",
+            sha256=HASH_A,
+            normalized_sha256=HASH_C,
+            bytes=200,
+        ),
+        RepositorySuiteInventoryArtifact(
+            name="build-info-b.json",
+            sha256=HASH_B,
+            normalized_sha256=HASH_C,
+            bytes=200,
+        ),
+    )
+
+    with pytest.raises(ValidationError, match="normalized build-info artifacts must be unique"):
+        RepositorySuiteProjectInventoryEvidence.sealed(
+            project_root=record.project_root,
+            command_sha256=HASH_A,
+            process_exit_code=0,
+            machine_output_validated=True,
+            stdout_sha256=HASH_B,
+            stdout_bytes=100,
+            stderr_sha256=HASH_C,
+            stderr_bytes=0,
+            build_info_artifacts=artifacts,
+            build_info_bundle_sha256=_canonical_sha256(
+                [artifact.model_dump(mode="json") for artifact in artifacts]
+            ),
+            normalized_build_info_bundle_sha256=_canonical_sha256([HASH_C]),
+            parser_inventory_sha256=HASH_A,
+            records=(record,),
+            normalized_inventory_sha256=_canonical_sha256([record.record_sha256]),
+        )
+
+
+def test_repository_suite_rejects_pre_post_compiler_inventory_drift() -> None:
+    pre_inventory = _inventory(RepositorySuiteInventoryPhase.PRE_EXECUTION)
+    drifted_record = _inventory_record(declaration_end_line=10)
+    post_inventory = _inventory(
+        RepositorySuiteInventoryPhase.POST_EXECUTION,
+        record=drifted_record,
+    )
+    descriptor = _inventory_descriptor(pre_inventory)
+    selection = _inventory_selection(descriptor)
+    execution = _execution(
+        selection,
+        descriptor,
+        inventory=pre_inventory,
+        post_inventory=post_inventory,
+    )
+
+    with pytest.raises(ValidationError, match="inventory evidence drifted"):
+        _scanner_run(
+            selection,
+            [execution],
+            inventory=pre_inventory,
+            post_inventory=post_inventory,
+        )
+
+
+def test_repository_suite_cross_binds_selection_descriptor_inventory_and_execution() -> None:
+    pre_inventory = _inventory(RepositorySuiteInventoryPhase.PRE_EXECUTION)
+    post_inventory = _inventory(RepositorySuiteInventoryPhase.POST_EXECUTION)
+    descriptor = _inventory_descriptor(pre_inventory)
+    selection = _inventory_selection(descriptor)
+    execution = _execution(
+        selection,
+        descriptor,
+        inventory=pre_inventory,
+        post_inventory=post_inventory,
+    )
+
+    restored = ScannerRun.model_validate_json(
+        _scanner_run(
+            selection,
+            [execution],
+            inventory=pre_inventory,
+            post_inventory=post_inventory,
+        ).model_dump_json()
+    )
+    assert restored.repository_suite_inventory == pre_inventory
+    assert restored.repository_suite_post_inventory == post_inventory
+    assert restored.repository_test_executions[0].inventory_sha256 == (
+        pre_inventory.inventory_sha256
+    )
+    assert restored.repository_test_executions[0].post_inventory_sha256 == (
+        post_inventory.inventory_sha256
+    )
+    assert pre_inventory.inventory_sha256 != post_inventory.inventory_sha256
+
+    wrong_inventory_sha256 = "e" * 64
+    selection_mismatch_descriptor = _inventory_descriptor(
+        pre_inventory,
+        inventory_sha256=wrong_inventory_sha256,
+    )
+    selection_mismatch = _inventory_selection(
+        selection_mismatch_descriptor,
+        inventory_sha256=wrong_inventory_sha256,
+    )
+    selection_mismatch_execution = _execution(
+        selection_mismatch,
+        selection_mismatch_descriptor,
+        inventory=pre_inventory,
+        post_inventory=post_inventory,
+    )
+    with pytest.raises(ValidationError, match="selection differs from its pre-execution inventory"):
+        _scanner_run(
+            selection_mismatch,
+            [selection_mismatch_execution],
+            inventory=pre_inventory,
+            post_inventory=post_inventory,
+        )
+
+    absent_record_descriptor = _inventory_descriptor(
+        pre_inventory,
+        inventory_record_sha256="f" * 64,
+    )
+    absent_record_selection = _inventory_selection(absent_record_descriptor)
+    absent_record_execution = _execution(
+        absent_record_selection,
+        absent_record_descriptor,
+        inventory=pre_inventory,
+        post_inventory=post_inventory,
+    )
+    with pytest.raises(ValidationError, match="descriptor is absent from compiler inventory"):
+        _scanner_run(
+            absent_record_selection,
+            [absent_record_execution],
+            inventory=pre_inventory,
+            post_inventory=post_inventory,
+        )
+
+    divergent_descriptor = _inventory_descriptor(
+        pre_inventory,
+        execution_source_sha256="e" * 64,
+    )
+    divergent_selection = _inventory_selection(divergent_descriptor)
+    divergent_execution = _execution(
+        divergent_selection,
+        divergent_descriptor,
+        inventory=pre_inventory,
+        post_inventory=post_inventory,
+    )
+    with pytest.raises(ValidationError, match="descriptor differs from compiler inventory record"):
+        _scanner_run(
+            divergent_selection,
+            [divergent_execution],
+            inventory=pre_inventory,
+            post_inventory=post_inventory,
+        )
+
+    mismatched_execution_payload = execution.model_dump(
+        mode="python",
+        exclude={"execution_sha256"},
+    )
+    mismatched_execution_payload["inventory_sha256"] = wrong_inventory_sha256
+    mismatched_execution = RepositoryTestExecution.sealed(
+        **mismatched_execution_payload,
+    )
+    with pytest.raises(ValidationError, match="execution differs from compiler inventories"):
+        _scanner_run(
+            selection,
+            [mismatched_execution],
+            inventory=pre_inventory,
+            post_inventory=post_inventory,
+        )
+
+
+def test_inherited_repository_failure_uses_declaration_location() -> None:
+    pre_inventory = _inventory(RepositorySuiteInventoryPhase.PRE_EXECUTION)
+    post_inventory = _inventory(RepositorySuiteInventoryPhase.POST_EXECUTION)
+    descriptor = _inventory_descriptor(pre_inventory)
+    selection = _inventory_selection(descriptor)
+    execution = _execution(
+        selection,
+        descriptor,
+        status=RepositoryTestExecutionStatus.ASSERTION_FAILED,
+        inventory=pre_inventory,
+        post_inventory=post_inventory,
+    )
+    finding = ScannerFinding(
+        scanner="foundry_fork",
+        rule_id="repository-test-assertion",
+        title="Synthetic inherited repository assertion failed",
+        severity=Severity.MEDIUM,
+        message="A selected synthetic inherited test observed an incorrect state transition.",
+        locations=[
+            Location(
+                path="contracts/test/VaultBase.t.sol",
+                start_line=7,
+                end_line=9,
+            )
+        ],
+        metadata={"repository_test_execution_sha256": execution.execution_sha256},
+        fingerprint=HASH_C,
+    )
+
+    run = _scanner_run(
+        selection,
+        [execution],
+        findings=[finding],
+        inventory=pre_inventory,
+        post_inventory=post_inventory,
+    )
+    assert run.findings[0].locations[0].path == descriptor.declaration_path
+    assert descriptor.finding_path == "contracts/test/VaultBase.t.sol"
+    assert descriptor.finding_start_line == 7
+    assert descriptor.finding_end_line == 9
+
+    execution_location = finding.model_copy(
+        update={
+            "locations": [
+                Location(
+                    path=descriptor.path,
+                    start_line=descriptor.start_line,
+                    end_line=descriptor.end_line,
+                )
+            ]
+        }
+    )
+    with pytest.raises(ValidationError, match="location differs from its test descriptor"):
+        _scanner_run(
+            selection,
+            [execution],
+            findings=[execution_location],
+            inventory=pre_inventory,
+            post_inventory=post_inventory,
+        )
+
+
+def test_static_repository_selection_rejects_compiler_inventory_claims() -> None:
+    pre_inventory = _inventory(RepositorySuiteInventoryPhase.PRE_EXECUTION)
+    post_inventory = _inventory(RepositorySuiteInventoryPhase.POST_EXECUTION)
+    bound_descriptor = _inventory_descriptor(pre_inventory)
+
+    with pytest.raises(ValidationError, match="static repository selection"):
+        _selection((bound_descriptor,))
+
+    descriptor = _descriptor()
+    selection = _selection((descriptor,))
+    execution = _execution(selection, descriptor)
+    with pytest.raises(ValidationError, match="static repository selection"):
+        _scanner_run(
+            selection,
+            [execution],
+            inventory=pre_inventory,
+            post_inventory=post_inventory,
+        )

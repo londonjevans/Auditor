@@ -14,13 +14,18 @@ from pathlib import Path, PurePosixPath
 from mmaudit.config import SmartContractsConfig
 from mmaudit.models.schemas import (
     RepositorySuiteFramework,
+    RepositorySuiteInventoryKind,
+    RepositorySuiteInventoryRecord,
     RepositorySuiteSelection,
     RepositorySuiteTestDescriptor,
     SolidityProjectMetadata,
     SolidityProjectType,
 )
 from mmaudit.repository.ignore import normalize_relative_path
-from mmaudit.scanners.base import scanner_workspace_sha256
+from mmaudit.scanners.base import (
+    scanner_workspace_exclusion_path,
+    scanner_workspace_sha256,
+)
 
 _FOUNDRY_PROJECT_TYPES = frozenset(
     {
@@ -83,7 +88,12 @@ def select_foundry_repository_suite(
         raise RepositorySuiteSelectionError("Foundry repository-suite selection is disabled")
 
     root = _validated_repository_root(repository_root)
-    candidates = _discover_candidate_files(root, projects)
+    repository_exclusion_path = scanner_workspace_exclusion_path(root, private_dir)
+    candidates = _discover_candidate_files(
+        root,
+        projects,
+        excluded_root=private_dir,
+    )
     try:
         repository_sha256 = scanner_workspace_sha256(root, private_dir)
     except (OSError, ValueError) as exc:
@@ -190,6 +200,7 @@ def select_foundry_repository_suite(
     return RepositorySuiteSelection.sealed(
         profile=suite_config.profile,
         repository_sha256=repository_sha256,
+        repository_exclusion_path=repository_exclusion_path,
         configuration_sha256=suite_config.stable_hash(),
         candidate_file_count=len(candidate_files),
         candidate_test_count=candidate_test_count,
@@ -198,6 +209,137 @@ def select_foundry_repository_suite(
         omitted_file_count=len(candidate_files - selected_files),
         omitted_test_count=candidate_test_count - len(descriptors),
         limit_reached=False,
+        tests=tuple(descriptors),
+        safety_claim=False,
+    )
+
+
+def select_foundry_repository_suite_from_inventory(
+    records: Sequence[RepositorySuiteInventoryRecord],
+    smart_contracts: SmartContractsConfig,
+    *,
+    repository_sha256: str,
+    repository_exclusion_path: str,
+    inventory_sha256: str,
+) -> RepositorySuiteSelection:
+    """Select tests from isolated Forge/compiler inventory without losing inheritance."""
+
+    suite_config = smart_contracts.repository_suite
+    if not suite_config.foundry_include_paths or not suite_config.foundry_include_tests:
+        raise RepositorySuiteSelectionError("Foundry repository-suite selection is disabled")
+    if not records:
+        raise RepositorySuiteSelectionError("Foundry compiler inventory is empty")
+
+    all_records = tuple(sorted(records, key=lambda item: item.canonical_key))
+    record_keys = tuple(record.canonical_key for record in all_records)
+    if record_keys != tuple(sorted(set(record_keys))):
+        raise RepositorySuiteSelectionError("Foundry compiler inventory records are duplicated")
+    candidate_files = {(record.project_root, record.execution_path) for record in all_records}
+    descriptors: list[RepositorySuiteTestDescriptor] = []
+    exact_bare_matches: dict[str, set[tuple[str, str, str]]] = {
+        pattern: set()
+        for pattern in suite_config.foundry_include_tests
+        if not _has_glob_magic(pattern)
+    }
+    per_file_counts: dict[tuple[str, str], int] = {}
+
+    for record in all_records:
+        project_root = record.project_root
+        execution_path = record.execution_path
+        include_paths = _include_paths_for_project(
+            profile=suite_config.profile,
+            configured=suite_config.foundry_include_paths,
+            project_root=project_root,
+        )
+        if not _matches_any_path(execution_path, include_paths) or _matches_any_path(
+            execution_path,
+            suite_config.foundry_exclude_paths,
+        ):
+            continue
+        stable_id = _stable_test_id(
+            execution_path,
+            record.execution_suite_name,
+            record.test_name,
+        )
+        if not _matches_test(
+            record.test_name,
+            stable_id,
+            suite_config.foundry_include_tests,
+        ) or _matches_test(
+            record.test_name,
+            stable_id,
+            suite_config.foundry_exclude_tests,
+        ):
+            continue
+        file_key = (project_root, execution_path)
+        per_file_counts[file_key] = per_file_counts.get(file_key, 0) + 1
+        if per_file_counts[file_key] > suite_config.max_tests_per_file:
+            raise RepositorySuiteSelectionError(
+                f"selected Foundry tests exceed per-file ceiling for {execution_path}"
+            )
+        for exact_name in exact_bare_matches:
+            if record.test_name == exact_name:
+                exact_bare_matches[exact_name].add(
+                    (execution_path, record.execution_suite_name, record.test_name)
+                )
+        descriptors.append(
+            RepositorySuiteTestDescriptor.sealed(
+                framework=RepositorySuiteFramework.FOUNDRY,
+                project_root=project_root,
+                path=execution_path,
+                suite_name=record.execution_suite_name,
+                test_name=record.test_name,
+                source_sha256=record.execution_source_sha256,
+                start_line=record.execution_start_line,
+                end_line=record.execution_end_line,
+                inventory_sha256=inventory_sha256,
+                inventory_record_sha256=record.record_sha256,
+                execution_contract_ast_id=record.execution_contract_ast_id,
+                declaration_path=record.declaration_path,
+                declaration_suite_name=record.declaration_suite_name,
+                declaration_signature=record.declaration_signature,
+                declaration_source_sha256=record.declaration_source_sha256,
+                declaration_start_line=record.declaration_start_line,
+                declaration_end_line=record.declaration_end_line,
+                declaration_contract_ast_id=record.declaration_contract_ast_id,
+                declaration_function_ast_id=record.declaration_function_ast_id,
+            )
+        )
+
+    for exact_name, matches in exact_bare_matches.items():
+        if len(matches) > 1:
+            raise RepositorySuiteSelectionError(
+                f"exact bare test selector is ambiguous: {exact_name}"
+            )
+    descriptors.sort(key=lambda item: item.canonical_key)
+    if not descriptors:
+        raise RepositorySuiteSelectionError("Foundry repository-suite selection matched zero tests")
+    descriptor_keys = tuple(descriptor.canonical_key for descriptor in descriptors)
+    if descriptor_keys != tuple(sorted(set(descriptor_keys))):
+        raise RepositorySuiteSelectionError(
+            "selected compiler-bound Foundry test identities are duplicated"
+        )
+    selected_files = {(descriptor.project_root, descriptor.path) for descriptor in descriptors}
+    if len(selected_files) > suite_config.max_selected_files:
+        raise RepositorySuiteSelectionError("selected Foundry files exceed configured ceiling")
+    if len(descriptors) > suite_config.max_total_tests:
+        raise RepositorySuiteSelectionError(
+            "selected Foundry tests exceed configured total ceiling"
+        )
+    return RepositorySuiteSelection.sealed(
+        profile=suite_config.profile,
+        repository_sha256=repository_sha256,
+        repository_exclusion_path=repository_exclusion_path,
+        configuration_sha256=suite_config.stable_hash(),
+        candidate_file_count=len(candidate_files),
+        candidate_test_count=len(all_records),
+        selected_file_count=len(selected_files),
+        selected_test_count=len(descriptors),
+        omitted_file_count=len(candidate_files - selected_files),
+        omitted_test_count=len(all_records) - len(descriptors),
+        limit_reached=False,
+        inventory_kind=RepositorySuiteInventoryKind.ISOLATED_FOUNDRY_BUILD_INFO,
+        inventory_sha256=inventory_sha256,
         tests=tuple(descriptors),
         safety_claim=False,
     )
@@ -218,6 +360,8 @@ def _validated_repository_root(repository_root: Path) -> Path:
 def _discover_candidate_files(
     repository_root: Path,
     projects: Sequence[SolidityProjectMetadata],
+    *,
+    excluded_root: Path | None = None,
 ) -> tuple[_CandidateFile, ...]:
     project_roots: set[str] = set()
     owners: dict[str, tuple[str, str]] = {}
@@ -249,6 +393,11 @@ def _discover_candidate_files(
                 raise RepositorySuiteSelectionError(
                     f"Foundry test directory escapes its project root: {test_directory}"
                 )
+            if _path_is_within_excluded_root(
+                repository_root.joinpath(*PurePosixPath(test_directory).parts),
+                excluded_root,
+            ):
+                continue
             test_path = _validated_directory(
                 repository_root,
                 test_directory,
@@ -260,7 +409,10 @@ def _discover_candidate_files(
                 raise RepositorySuiteSelectionError(
                     f"Foundry test directory escapes its project root: {test_directory}"
                 ) from exc
-            for absolute_path in _walk_regular_files(test_path):
+            for absolute_path in _walk_regular_files(
+                test_path,
+                excluded_root=excluded_root,
+            ):
                 walked_entries += 1
                 if walked_entries > _MAX_WALKED_ENTRIES:
                     raise RepositorySuiteSelectionError(
@@ -300,8 +452,14 @@ def _discover_candidate_files(
     return tuple(sorted(candidates, key=lambda item: (item.project_root, item.path)))
 
 
-def _walk_regular_files(directory: Path) -> tuple[Path, ...]:
+def _walk_regular_files(
+    directory: Path,
+    *,
+    excluded_root: Path | None = None,
+) -> tuple[Path, ...]:
     result: list[Path] = []
+    if _path_is_within_excluded_root(directory, excluded_root):
+        return ()
     pending = [directory]
     seen_entries = 0
     while pending:
@@ -320,6 +478,8 @@ def _walk_regular_files(directory: Path) -> tuple[Path, ...]:
                     "Foundry test discovery exceeds the bounded entry ceiling"
                 )
             path = Path(entry.path)
+            if _path_is_within_excluded_root(path, excluded_root):
+                continue
             if entry.is_symlink() or path.is_junction():
                 raise RepositorySuiteSelectionError(
                     f"Foundry test directory contains a link: {path.name}"
@@ -338,6 +498,18 @@ def _walk_regular_files(directory: Path) -> tuple[Path, ...]:
                 raise RepositorySuiteSelectionError("Foundry test candidate is not a regular file")
         pending.extend(reversed(directories))
     return tuple(sorted(result))
+
+
+def _path_is_within_excluded_root(path: Path, excluded_root: Path | None) -> bool:
+    if excluded_root is None:
+        return False
+    try:
+        path.resolve(strict=False).relative_to(excluded_root.resolve(strict=False))
+    except OSError:
+        return True
+    except ValueError:
+        return False
+    return True
 
 
 def _read_regular_source(repository_root: Path, path: Path) -> bytes:

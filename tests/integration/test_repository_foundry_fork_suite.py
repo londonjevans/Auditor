@@ -19,6 +19,9 @@ from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     RepositoryCodeExecutionState,
     RepositorySuiteExecutionPolicy,
+    RepositorySuiteInventoryEvidence,
+    RepositorySuiteInventoryKind,
+    RepositorySuiteInventoryPhase,
     RepositorySuiteSelection,
     RepositoryTestExecution,
     RepositoryTestExecutionStatus,
@@ -122,7 +125,12 @@ def test_real_foundry_repository_suite_classifies_pinned_local_fork_portfolio(
                 "    uint256 public value;",
                 "    function setValue(uint256 next) external { value = next; }",
                 "}",
-                "contract RepositorySuiteTest {",
+                "abstract contract RepositorySuiteBase {",
+                "    function testInheritedPinnedForkFailure() public view {",
+                "        assert(block.chainid == 1);",
+                "    }",
+                "}",
+                "contract RepositorySuiteTest is RepositorySuiteBase {",
                 "    SyntheticInvariantState internal state;",
                 "    function setUp() public { state = new SyntheticInvariantState(); }",
                 "    function touch(uint256 next) public { state.setValue(next); }",
@@ -222,14 +230,39 @@ def test_real_foundry_repository_suite_classifies_pinned_local_fork_portfolio(
     assert run.execution_evidence is ExecutionEvidenceKind.REAL
     assert run.repository_code_execution is RepositoryCodeExecutionState.ISOLATED
     assert run.repository_suite_selection is not None
-    assert run.repository_suite_selection.selected_test_count == 6
-    assert len(run.repository_test_executions) == 6
+    assert (
+        run.repository_suite_selection.inventory_kind
+        is RepositorySuiteInventoryKind.ISOLATED_FOUNDRY_BUILD_INFO
+    )
+    assert run.repository_suite_selection.selected_test_count == 7
+    assert run.repository_suite_inventory is not None
+    assert run.repository_suite_post_inventory is not None
+    assert replay_run.repository_suite_inventory is not None
+    assert replay_run.repository_suite_post_inventory is not None
+    assert run.repository_suite_inventory.phase is RepositorySuiteInventoryPhase.PRE_EXECUTION
+    assert run.repository_suite_post_inventory.phase is RepositorySuiteInventoryPhase.POST_EXECUTION
+    assert (
+        run.repository_suite_selection.inventory_sha256
+        == run.repository_suite_inventory.normalized_inventory_sha256
+        == run.repository_suite_post_inventory.normalized_inventory_sha256
+    )
+    assert (
+        run.repository_suite_inventory.normalized_inventory_sha256
+        == replay_run.repository_suite_inventory.normalized_inventory_sha256
+    )
+    assert all(
+        project.normalized_build_info_bundle_sha256
+        for project in run.repository_suite_inventory.projects
+    )
+    assert len(run.repository_test_executions) == 7
     executions = {execution.test_name: execution for execution in run.repository_test_executions}
     assert executions["testPinnedForkPasses"].status is RepositoryTestExecutionStatus.PASSED
     assert executions["testFuzzPinnedFork"].status is RepositoryTestExecutionStatus.PASSED
     assert executions["invariantPinnedForkState"].status is RepositoryTestExecutionStatus.PASSED
     failure = executions["testPinnedForkAssertionFailure"]
     assert failure.status is RepositoryTestExecutionStatus.ASSERTION_FAILED
+    inherited_failure = executions["testInheritedPinnedForkFailure"]
+    assert inherited_failure.status is RepositoryTestExecutionStatus.ASSERTION_FAILED
     assert (
         executions["testPinnedForkRevertFailure"].status is RepositoryTestExecutionStatus.REVERTED
     )
@@ -239,12 +272,24 @@ def test_real_foundry_repository_suite_classifies_pinned_local_fork_portfolio(
     assert all(execution.compiler_sha256 == solc_sha256 for execution in executions.values())
     assert all(execution.machine_output_validated for execution in executions.values())
     assert all(execution.safety_claim is False for execution in executions.values())
+    assert all(
+        execution.inventory_sha256 == run.repository_suite_inventory.inventory_sha256
+        for execution in executions.values()
+    )
+    assert all(
+        execution.post_inventory_sha256 == run.repository_suite_post_inventory.inventory_sha256
+        for execution in executions.values()
+    )
+    assert (
+        run.repository_suite_inventory.inventory_sha256
+        != run.repository_suite_post_inventory.inventory_sha256
+    )
     assert run.foundry_summary is not None
-    assert run.foundry_summary.unit_tests == 4
+    assert run.foundry_summary.unit_tests == 5
     assert run.foundry_summary.fuzz_tests == 1
     assert run.foundry_summary.invariant_tests == 1
     assert run.foundry_summary.passed_tests == 3
-    assert run.foundry_summary.failed_tests == 3
+    assert run.foundry_summary.failed_tests == 4
     assert run.foundry_summary.fuzz_cases >= 4
     assert run.foundry_summary.invariant_runs >= 2
     assert run.foundry_summary.invariant_calls > 0
@@ -253,7 +298,7 @@ def test_real_foundry_repository_suite_classifies_pinned_local_fork_portfolio(
     assert len(observed_compiler_versions) == 1
     assert solc_version in next(iter(observed_compiler_versions))
     assert all(execution.execution_policy_sha256 is not None for execution in executions.values())
-    assert len(run.findings) == 3
+    assert len(run.findings) == 4
     assert all(finding.rule_id == "repository-fork-test-failure" for finding in run.findings)
     assert all(
         finding.evidence_strength is EvidenceStrength.DETERMINISTIC_ANALYZER
@@ -263,6 +308,11 @@ def test_real_foundry_repository_suite_classifies_pinned_local_fork_portfolio(
         finding.metadata["repository_test_execution_sha256"]: finding for finding in run.findings
     }
     assert failure.execution_sha256 in finding_by_execution
+    inherited_finding = finding_by_execution[inherited_failure.execution_sha256]
+    assert len(inherited_finding.locations) == 1
+    assert inherited_finding.locations[0].path == "test/audit/RepositorySuite.t.sol"
+    assert inherited_finding.locations[0].start_line == 7
+    assert inherited_finding.locations[0].end_line == 9
 
     manifest_path = tmp_path / "private-first" / "repository-suite-execution.json"
     manifest_bytes = manifest_path.read_bytes()
@@ -271,10 +321,18 @@ def test_real_foundry_repository_suite_classifies_pinned_local_fork_portfolio(
     assert run.raw_output_bytes == len(manifest_bytes)
     serialized_selection = RepositorySuiteSelection.model_validate(manifest["selection"])
     serialized_policy = RepositorySuiteExecutionPolicy.model_validate(manifest["execution_policy"])
+    serialized_pre_inventory = RepositorySuiteInventoryEvidence.model_validate(
+        manifest["pre_execution_inventory"]
+    )
+    serialized_post_inventory = RepositorySuiteInventoryEvidence.model_validate(
+        manifest["post_execution_inventory"]
+    )
     serialized_executions = [
         RepositoryTestExecution.model_validate(item) for item in manifest["executions"]
     ]
     assert serialized_selection == run.repository_suite_selection
     assert serialized_policy == run.repository_suite_execution_policy
+    assert serialized_pre_inventory == run.repository_suite_inventory
+    assert serialized_post_inventory == run.repository_suite_post_inventory
     assert serialized_executions == run.repository_test_executions
     assert manifest["safety_claim"] is False

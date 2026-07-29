@@ -8,9 +8,9 @@ AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Pinned fork repository suite execution
 CURRENT_TICKET: V3-FORKSUITE-001
 LAST_COMPLETED_TICKET: V3-FLOOR-001
-NEXT_ACTION: Checkpoint the validated direct-test Foundry slice, then implement the remaining safe inherited-test support using isolated Forge inventory plus compiler build-info AST reconciliation before addressing the independently blocked Hardhat boundary.
+NEXT_ACTION: Review the final ticket diff and artifact inventory, create and push the authorized cohesive SSH checkpoint, then mark V3-FORKDIFF-001 IN_PROGRESS.
 LAST_COMMAND: .venv/bin/pytest -q
-LAST_RESULT: PASS — final full suite passed 2498 tests with 11 explicit external-prerequisite skips in 645.50s; no paid provider path ran.
+LAST_RESULT: PASS — 2645 passed, 11 skipped in 297.43s; all skips are explicit unavailable external-engine, isolation, loopback, compiler, or opt-in paid-provider prerequisites.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 6c67db4e95567200d51038665c65bb18bf5b5f16
+LAST_CHECKPOINT_COMMIT: a8c732f11e02ba65fc358f311ed5df3cc7b57037
 
 ## 2026-07-29 — V3-FORKSUITE-001
 
@@ -198,6 +198,176 @@ LAST_CHECKPOINT_COMMIT: 6c67db4e95567200d51038665c65bb18bf5b5f16
   independently `BLOCKED_TECHNICAL` pending a REAL-attested rootless runtime,
   digest-pinned image, narrow Unix-socket RPC bridge, and trusted reporter; its
   safe mock/conditional adapter work will be audited after the inherited slice.
+- **Validated evidence checkpoint:** The direct-test and evidence-strength slice
+  was committed as `a8c732f11e02ba65fc358f311ed5df3cc7b57037`
+  (`Bind repository test execution strength`) and pushed to `origin/main` over
+  SSH.
+- **Inherited expected-red proof:** The real synthetic fixture now includes an
+  inherited abstract-base negative regression. The exact local integration
+  command recorded above failed as expected in `0.91s` because the existing
+  parser refuses inheritance before execution. This proves the next slice is
+  not already implemented; no target test, provider call, public RPC, secret, or
+  paid path ran.
+- **Compiler inventory implementation:** Added bounded isolated pre/post Forge
+  inventory execution, strict compiler build-info AST reconciliation, separate
+  execution and effective-declaration identity, self-hashed artifact and record
+  evidence, compiler-backed selection denominators, inherited/override/diamond
+  parser regressions, no-network execution support, and maximum-assurance/replay
+  bindings. The focused parser, runner, schema, selector, and fail-closed
+  provenance subsets are green; the real local integration command recorded
+  above is running next.
+- **First real inventory correction:** The unprivileged invocation skipped
+  because process-attested `sandbox-exec` is unavailable inside the outer
+  filesystem sandbox. The authorized local rerun reached compiler inventory and
+  failed closed in `0.96s` with `Forge version is invalid`; the attested
+  multiline Forge version is now normalized to bounded printable text only
+  after its trust-pin check. No public network, provider, or secret path ran.
+- **Second real inventory correction:** The next local rerun failed closed in
+  `1.19s` before compilation. Its isolated stderr recorded OS error 35 while
+  Forge attempted to start the regular, one-link, hash-matched private solc
+  copy. The inventory runner had applied `RLIMIT_NPROC=64` on Darwin, where that
+  limit counts all processes owned by the login user; the established per-test
+  runner already excludes Darwin for this reason. Inventory execution now
+  skips only `RLIMIT_NPROC` on Darwin while retaining CPU, file-size,
+  descriptor, address-space, sandbox, output, and deadline bounds. A synthetic
+  resource-module regression proves the platform-specific limit set, and the
+  runner unit suite passes `8` tests in `2.80s`. The real inherited-test
+  integration is the next validation; no external network, provider, secret,
+  or paid path is involved.
+- **Fresh-workspace replay correction:** The next real integration completed
+  both hardened scanner runs but failed its semantic replay assertion
+  (`1 failed in 6.76s`). Exact artifact comparison isolated all compiler
+  inventory drift to Forge's derived build ID and the private absolute
+  `basePath`, `allowPaths`, and `includePaths`; source, AST declaration,
+  selection semantics, toolchain, and fork identity agreed. Raw artifact
+  name/hash/bytes remain sealed forensic evidence. A duplicate-key-rejecting
+  normalizer now replaces only the validated volatile build ID and paths with
+  canonical stable values, rejects escapes and malformed/link paths, and emits
+  separate normalized artifact and bundle hashes. Selection, executions,
+  replay, and maximum-assurance qualification bind those normalized identities,
+  while each run still requires exact raw pre/post equality. The combined
+  parser, runner, and schema suite passed `45` tests; Ruff and strict mypy
+  passed. The real inherited-test integration is being rerun with no provider,
+  public network, secret, or paid operation.
+- **Normalized-evidence focused gate:** The affected compiler-inventory,
+  selection, schema, assurance, replay, scanner, benchmark-binding, and
+  configuration matrix passed `359` tests in `28.13s`. The macOS isolation
+  subset passed `3` tests, including an explicit inventory policy assertion
+  that grants no network entitlement. Affected Ruff passed and configured
+  strict mypy passed all `145` source files. The real two-workspace integration
+  is running next.
+- **Source and artifact containment closure:** Scanner workspace hashing and
+  copying now use one bounded descriptor-relative no-follow inventory. Foundry
+  inventory, process streams, generated artifacts, and Forge result parsing are
+  bound to retained descriptor snapshots. Exact custom output exclusion is a
+  normalized, self-hashed selection field; offline replay reconstructs that
+  exclusion, verifies the frozen repository hash before and after execution,
+  rejects conflicting identities, and passes the exact identity into the
+  scanner runner.
+- **Independent hardening findings:** Read-only review found a whole-path
+  compiler-inventory denominator omission, resource-limit callbacks that could
+  abandon later limits after one failure, missing direct credential-environment
+  evidence, duplicate normalized compiler-artifact multiplicity, and pathname
+  races in Hardhat configuration reads. Expected-red regressions reproduced
+  each unsafe condition. The implementation now requires global Forge/compiler
+  suite equality, attempts all applicable resource limits before failing
+  closed, uses an explicit Foundry subprocess environment allowlist, rejects
+  duplicate normalized artifacts, and reads Hardhat configuration/package
+  inputs through retained repository-root no-follow descriptors.
+- **Hardhat boundary result:** Strict self-hashed reporter inventory and result
+  schemas, explicit bounded selection, exact reporter/repository/fork/seed/test
+  bindings, deadline validation, and extensive malformed-evidence and
+  no-execution regressions are implemented. The current adapter always returns
+  `UNAVAILABLE`, `UNVERIFIED`, and repository execution `BLOCKED`; it cannot
+  invoke target JavaScript or receive REAL credit. Production execution remains
+  `BLOCKED_TECHNICAL` because no process-attested digest-pinned rootless
+  single-loopback backend or trusted image-baked reporter exists.
+- **Repeatability defect and correction:** The first real post-hardening
+  integration failed safely with `Foundry inventory generated root could not be
+  inspected`; a fresh rerun passed. A three-run assay then produced two passes
+  and one fail-closed `Foundry private artifact directory changed while it was
+  traversed`, proving a real flake. Live limit polling had incorrectly required
+  stable directory size/timestamps while trusted Forge/solc was actively
+  writing. Explicit `LIVE_LIMIT_MONITOR` and `STRICT_SNAPSHOT` purposes now
+  tolerate only stale live samples from benign metadata churn or vanished
+  same-type entries while preserving descriptor ancestry, no-follow/type/link
+  checks, identities, and ceilings. Every post-process content hash and captured
+  result still requires a strict stable snapshot.
+- **Real local repeatability evidence:** After that correction, five consecutive
+  invocations of
+  `MMAUDIT_TEST_SOLC_EXECUTABLE=/Users/josevans/.solc-select/artifacts/solc-0.8.30/solc-0.8.30
+  .venv/bin/pytest -q
+  tests/integration/test_repository_foundry_fork_suite.py -rs` passed in
+  `6.59s`, `6.49s`, `6.34s`, `6.51s`, and `6.24s`. Each invocation ran two
+  fresh hardened scanner workspaces against loopback-only Anvil. No provider,
+  public RPC, operator secret, wallet, signing, or paid path ran.
+- **Current focused gate:** The exact command recorded in `LAST_COMMAND` passed
+  `517` tests in `30.26s` before `LAST_COMMAND` advanced to the full suite. The
+  delegated Hardhat matrix passed `100` tests; the
+  live-monitor unit slice passed `49`; and the compiler denominator/resource/
+  environment slice passed `53`. Affected Ruff, formatting, strict mypy, and
+  `git diff --check` passed. The ticket remains `IN_PROGRESS` pending the
+  independent closure review and complete repository gates.
+- **Pre-full-suite gates:** `.venv/bin/ruff format .` reformatted `3` files and
+  left `328` unchanged; `.venv/bin/ruff check .` passed; `.venv/bin/mypy`
+  reported no issues in `145` source files; and
+  `.venv/bin/python scripts/generate_release_schemas.py` verified the committed
+  release schemas without drift. The complete pytest command recorded in
+  `LAST_COMMAND` ran with paid-provider tests disabled.
+- **Operator pause after complete gate:** `.venv/bin/pytest -q` passed `2642`
+  tests with `11` explicit unavailable external-engine, isolation, loopback,
+  compiler, and opt-in paid-provider prerequisite skips in `318.13s`. The
+  independent closure reviewer was stopped without edits, all delegated work
+  and child processes are inactive, and no provider request, public RPC,
+  operator-secret access, budget reservation, or paid spend occurred. The
+  ticket intentionally remains `IN_PROGRESS`; on resume, finish the read-only
+  closure review and final diff inspection before recording its terminal
+  disposition and checkpoint.
+- **Resume after complete gate:** Persistent-goal continuation reactivated the
+  same ticket from the preserved worktree. The complete 1417-line objective was
+  reread and hash-verified, repository instructions and both persistent queues
+  were inspected, `git diff --check` passed, and two independent read-only
+  closure reviews are running. No provider, public RPC, operator-secret, wallet,
+  signing, or paid path is involved.
+- **Final independent acceptance review:** Both read-only reviewers accept the
+  Foundry selection, compiler inventory, execution, replay, source identity,
+  typed evidence, and fail-closed semantics. They reject whole-ticket
+  completion because Hardhat remains deliberately non-executable without a
+  process-attested digest-pinned rootless single-loopback runtime and trusted
+  reporter. The correct disposition after final gates is `PARTIAL`, with only
+  the real Hardhat integration subtask `BLOCKED_TECHNICAL`.
+- **Closure-review corrections:** An isolation backend must now explicitly
+  attest `supports_local_fork_rpc is True`; an absent or merely truthy capability
+  stops before tool lookup. Compiler inventory stream, build-info, cache, and
+  output limits are now all capped by the suite's remaining byte budget, with a
+  combined stream-plus-generated ceiling checked during execution and after
+  strict capture. Pre- and post-inventory phases consume the same cumulative
+  suite budget rather than each receiving oversized defaults.
+- **Corrected focused evidence:** The explicit/undeclared loopback-capability
+  regressions passed `2` tests; the remaining-budget and combined-output
+  regressions passed with the existing stream-overflow control (`3 passed`);
+  Ruff passed. The exact real local integration in `LAST_COMMAND` passed in
+  `6.30s`, exercising two fresh process-attested workspaces against loopback
+  Anvil after the correction. No provider, public RPC, secret, wallet, signing,
+  or paid path ran.
+- **Corrected pre-final gates:** The complete affected matrix passed `520`
+  tests in `32.40s`; `.venv/bin/ruff format .` left `331` files unchanged;
+  Ruff check passed; strict mypy passed all `145` configured source files;
+  release-schema synchronization and `git diff --check` passed. The complete
+  pytest command recorded in `LAST_COMMAND` ran with paid-provider execution
+  disabled.
+- **Final complete gate:** `.venv/bin/pytest -q` passed `2645` tests with `11`
+  explicit unavailable external-engine, isolation, loopback, compiler, and
+  opt-in paid-provider prerequisite skips in `297.43s`.
+- **Ticket disposition:** `V3-FORKSUITE-001` is `PARTIAL`. The Foundry scope has
+  real local execution evidence and satisfies its bounded selection, pinned
+  state, isolation, source identity, typed evidence, replay, and failure
+  semantics. Real Hardhat execution remains the sole ticket subtask
+  `BLOCKED_TECHNICAL`: its current adapter cannot execute JavaScript or receive
+  REAL credit, and no approved process-attested digest-pinned rootless
+  single-loopback runtime or trusted image-baked reporter is available. The
+  independently actionable Foundry differential ticket may proceed without
+  weakening this blocker.
 
 ## 2026-07-29 — V3-FLOOR-001 implementation and focused validation
 
