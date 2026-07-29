@@ -5,12 +5,12 @@ The objective source has SHA-256
 Do not record credentials, raw private prompts, or raw provider completions here.
 
 AUTORUN_STATUS: ACTIVE
-CURRENT_MILESTONE: Pinned fork repository suite execution
-CURRENT_TICKET: V3-FORKSUITE-001
+CURRENT_MILESTONE: Differential and multi-state fork matrix
+CURRENT_TICKET: V3-FORKDIFF-001
 LAST_COMPLETED_TICKET: V3-FLOOR-001
-NEXT_ACTION: Review the final ticket diff and artifact inventory, create and push the authorized cohesive SSH checkpoint, then mark V3-FORKDIFF-001 IN_PROGRESS.
-LAST_COMMAND: .venv/bin/pytest -q
-LAST_RESULT: PASS — 2645 passed, 11 skipped in 297.43s; all skips are explicit unavailable external-engine, isolation, loopback, compiler, or opt-in paid-provider prerequisites.
+NEXT_ACTION: Inspect the pinned-state execution schemas, manifests, privacy evidence, reporting, replay, and existing comparison abstractions; then add expected-red multi-state/repeatability regressions before implementation.
+LAST_COMMAND: git commit -m "Harden pinned repository suite execution"
+LAST_RESULT: PASS — cohesive V3-FORKSUITE-001 Foundry implementation and honest partial/blocked disposition committed as aa7ea0f1eb5053c95d7d44c2d97ec1c776c3d7e1.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,23 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: a8c732f11e02ba65fc358f311ed5df3cc7b57037
+LAST_CHECKPOINT_COMMIT: aa7ea0f1eb5053c95d7d44c2d97ec1c776c3d7e1
+
+## 2026-07-29 — V3-FORKDIFF-001
+
+- **Status:** `IN_PROGRESS`.
+- **Defensive objective:** Execute the same bounded audited-repository suite
+  against a clean local state and one or more operator-pinned fork states, then
+  classify only repeated fresh-workspace agreement as typed divergence while a
+  single observation remains inconclusive.
+- **Starting state:** The cohesive predecessor checkpoint is
+  `aa7ea0f1eb5053c95d7d44c2d97ec1c776c3d7e1`. Its Foundry scope is validated
+  with real local loopback execution; its real Hardhat subtask remains
+  `BLOCKED_TECHNICAL` and will not be credited or emulated.
+- **Next safe action:** Inspect the existing execution, fork identity, manifest,
+  privacy, report, and replay abstractions; define the typed state/comparison
+  evidence and add expected-red tests before implementation. No live target,
+  public RPC, provider call, secret, wallet, signing, or paid path is involved.
 
 ## 2026-07-29 — V3-FORKSUITE-001
 

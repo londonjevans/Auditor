@@ -553,7 +553,7 @@ are invisible to source review by construction.
 - **Files expected to change:** fork execution and result schemas, comparison logic,
   reporting, regressions.
 - **Dependencies:** `V3-FORKSUITE-001`.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
 
 ## V3-EXECORIGIN-001 — Execution-originated candidates
 
