@@ -9,8 +9,8 @@ CURRENT_MILESTONE: Paused after explicit privacy and retention profiles
 CURRENT_TICKET: NONE
 LAST_COMPLETED_TICKET: V3-PRIVACY-001
 NEXT_ACTION: On operator resume, begin V3-OUTPUT-001.
-LAST_COMMAND: .venv/bin/python -c 'from pathlib import Path; from tests.unit.test_privacy_source_provenance import _discovery, _prove; evidence = _prove(_discovery(Path("tests/fixtures/solidity/provider_smoke"), relative_path="src/ProviderSmoke.sol")).evidence; print(evidence.proof_kind, evidence.distribution_commit, evidence.committed_file_count, evidence.evidence_sha256)'
-LAST_RESULT: PASS; source-mode proof returned DISTRIBUTION_COMMITTED_SYNTHETIC at commit 4da4fa08b66d0ebd04a2a8ae7d3bd181e140db33 for one declared file, evidence SHA-256 e03048b1471bd08af8fd41b0cb585767cf407aeee9bf7697baf51c0b29db4899.
+LAST_COMMAND: git push origin main
+LAST_RESULT: PASS; SSH origin advanced from 9856440 to state checkpoint 0195279 on main.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -1289,3 +1289,5 @@ LAST_CHECKPOINT_COMMIT: 4da4fa08b66d0ebd04a2a8ae7d3bd181e140db33
 - **Operator pause:** Autorun is paused at the requested clean ticket boundary.
   No process, reservation, provider call, or uncommitted implementation change
   is active. On resume, begin `V3-OUTPUT-001`.
+- **SSH publication:** Implementation checkpoint `4da4fa0` and state checkpoint
+  `0195279` were pushed to `git@github.com:londonjevans/Auditor.git` on `main`.
