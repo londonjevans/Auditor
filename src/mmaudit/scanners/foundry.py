@@ -28,6 +28,7 @@ from mmaudit.isolation.provenance import (
     isolation_execution_evidence,
 )
 from mmaudit.models.schemas import (
+    EvidenceStrength,
     ExecutionEvidenceKind,
     FoundryTestExecutionSummary,
     RepositoryCodeExecutionState,
@@ -1385,6 +1386,11 @@ def _repository_test_findings(
                 "block_number": execution.block_number,
                 "repository_test_execution_sha256": execution.execution_sha256,
             },
+            evidence_strength=(
+                EvidenceStrength.DETERMINISTIC_ANALYZER
+                if execution.execution_evidence is ExecutionEvidenceKind.REAL
+                else EvidenceStrength.NONE
+            ),
         )
         if finding is None:
             raise ValueError("repository fork-test finding location could not be normalized")

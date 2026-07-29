@@ -2533,6 +2533,7 @@ class ScannerFinding(StrictModel):
     locations: list[Location]
     cwe: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    evidence_strength: EvidenceStrength = EvidenceStrength.NONE
     fingerprint: str
 
 
@@ -3250,6 +3251,16 @@ class ScannerRun(StrictModel):
                         "repository test finding does not reference a failing execution"
                     )
                 execution = executions_by_hash[reference]
+                expected_strength = (
+                    EvidenceStrength.DETERMINISTIC_ANALYZER
+                    if execution.execution_evidence is ExecutionEvidenceKind.REAL
+                    else EvidenceStrength.NONE
+                )
+                if finding.evidence_strength is not expected_strength:
+                    raise ValueError(
+                        "repository suite finding evidence strength differs from its "
+                        "execution provenance"
+                    )
                 descriptor = selected_by_hash[execution.descriptor_sha256]
                 if not any(
                     location.path == descriptor.path

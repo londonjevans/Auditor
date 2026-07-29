@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_BY_OPERATOR
-CURRENT_MILESTONE: Paused during pinned fork repository suite execution
+AUTORUN_STATUS: ACTIVE
+CURRENT_MILESTONE: Pinned fork repository suite execution
 CURRENT_TICKET: V3-FORKSUITE-001
 LAST_COMPLETED_TICKET: V3-FLOOR-001
-NEXT_ACTION: On operator resume, run affected Ruff and strict mypy, rerun the affected pytest matrix, run the complete repository validation suite, review the final diff and artifact/secret scan, then checkpoint V3-FORKSUITE-001 with its Hardhat and inherited-test limitations explicit.
-LAST_COMMAND: .venv/bin/mypy
-LAST_RESULT: PASS — canonical strict mypy reported no issues in 143 source files in 10.79s. A prior noncanonical explicit-file invocation also included configured test modules and surfaced 70 existing test-only diagnostics; it is recorded as diagnostic output, not represented as a passing command.
+NEXT_ACTION: Checkpoint the validated direct-test Foundry slice, then implement the remaining safe inherited-test support using isolated Forge inventory plus compiler build-info AST reconciliation before addressing the independently blocked Hardhat boundary.
+LAST_COMMAND: .venv/bin/pytest -q
+LAST_RESULT: PASS — final full suite passed 2498 tests with 11 explicit external-prerequisite skips in 645.50s; no paid provider path ran.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -140,6 +140,64 @@ LAST_CHECKPOINT_COMMIT: 6c67db4e95567200d51038665c65bb18bf5b5f16
   `6c67db4e95567200d51038665c65bb18bf5b5f16` (`Add pinned repository suite
   execution`) and pushed to `origin/main` over SSH. This does not mark
   `V3-FORKSUITE-001` complete.
+- **Fourth resume checkpoint:** Persistent-goal continuation resumed the clean
+  synchronized metadata checkpoint `cae223ab6cc10c623dfc06f1207c0bee29eddebe`.
+  The full objective was reread and hash-verified, repository instructions and
+  current ticket state were reloaded, and the worktree was clean before
+  validation resumed. No provider, public RPC, secret, or paid operation is
+  involved.
+- **Final affected matrix:** The exact affected unit and pipeline command
+  recorded immediately before this entry passed `534` tests in `305.87s`.
+  Provider-gated tests were not enabled and no external network or secret path
+  ran.
+- **Final real Foundry integration:** With the explicit trusted native solc
+  path, `tests/integration/test_repository_foundry_fork_suite.py` passed `1`
+  test in `6.47s`, exercising two fresh hardened local executions and semantic
+  replay comparison against loopback-only Anvil.
+- **Acceptance-gap correction:** A typed scanner finding now carries
+  `DETERMINISTIC_ANALYZER` strength only when its hash-linked repository test
+  execution is REAL; mock/unverified execution cannot claim that strength.
+  Scanner-only report conversion preserves the typed strength without upgrading
+  status. Focused regressions now classify assertion, revert, and generic
+  failure outcomes; missing Forge or pinned solc emits typed `UNAVAILABLE`
+  executions without target execution. The focused schema/scanner matrix passed
+  `110` tests in `3.08s`.
+- **Expanded real outcome portfolio:** The real integration now executes six
+  selected tests and distinguishes unit, fuzz, invariant, assertion-failed,
+  reverted, and generic-failed outcomes. Three failing executions each produce
+  exactly one hash-bound typed finding with REAL deterministic evidence. The
+  two-fresh-workspace replay integration passed `1` test in `7.34s`.
+- **Pre-full-suite gates:** `.venv/bin/ruff format .` left all `325` files
+  unchanged; `.venv/bin/ruff check .` passed; `.venv/bin/mypy` reported no
+  issues in `143` source files; and
+  `.venv/bin/python scripts/generate_release_schemas.py` verified the committed
+  release schemas without drift.
+- **First full-suite result and fixes:** `.venv/bin/pytest -q` completed with
+  `2496 passed, 11 skipped, 2 failed in 345.13s`. One stale synthetic assurance
+  fixture omitted the newly required REAL deterministic strength. The second
+  failure exposed a real token-planning edge: serializing the default
+  `evidence_strength=none` on every scanner record could crowd all source
+  excerpts out at a tight boundary. The fixture now binds its REAL strength;
+  provider-visible scanner serialization omits only that semantically empty
+  default while retaining all non-default strength and forensic serialization.
+  The two exact failures passed, followed by `272` affected context, token,
+  assurance, schema, and scanner tests in `26.60s`. Ruff format/check, strict
+  mypy over `143` source files, and release-schema verification pass after the
+  correction.
+- **Final full-suite gate:** The corrected `.venv/bin/pytest -q` run passed
+  `2498` tests with `11` explicit external-prerequisite skips in `645.50s`.
+  The real provider test remained opt-in and skipped; no API key, provider
+  request, public RPC, or paid spend was involved.
+- **Closure review decision:** The ticket remains `IN_PROGRESS`, not complete or
+  partial-closed. Independent review confirmed the direct-test Foundry slice is
+  real and bounded, but inherited tests are a safe implementable gap. Safe
+  support requires an isolated, pinned `forge test --list --json --ast
+  --build-info` inventory reconciled to compiler AST
+  `linearizedBaseContracts`, with separate execution and declaration identity.
+  The current refusal remains until that binding exists. Hardhat remains
+  independently `BLOCKED_TECHNICAL` pending a REAL-attested rootless runtime,
+  digest-pinned image, narrow Unix-socket RPC bridge, and trusted reporter; its
+  safe mock/conditional adapter work will be audited after the inherited slice.
 
 ## 2026-07-29 — V3-FLOOR-001 implementation and focused validation
 

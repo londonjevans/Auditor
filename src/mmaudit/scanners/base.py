@@ -27,6 +27,7 @@ from mmaudit.isolation.provenance import (
 )
 from mmaudit.isolation.repository_code import contains_hardhat_repository_code
 from mmaudit.models.schemas import (
+    EvidenceStrength,
     ExecutionEvidenceKind,
     Location,
     RepositoryCodeExecutionState,
@@ -716,6 +717,7 @@ def make_finding(
     end_line: int | None = None,
     cwe: list[str] | None = None,
     metadata: dict[str, Any] | None = None,
+    evidence_strength: EvidenceStrength = EvidenceStrength.NONE,
 ) -> ScannerFinding | None:
     normalized = normalize_scanner_path(root, path)
     if normalized is None:
@@ -731,5 +733,6 @@ def make_finding(
         locations=[Location(path=normalized, start_line=line, end_line=final_line)],
         cwe=cwe or [],
         metadata=metadata or {},
+        evidence_strength=evidence_strength,
         fingerprint=scanner_fingerprint(scanner, rule_id, normalized, line, message),
     )

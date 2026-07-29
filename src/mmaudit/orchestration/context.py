@@ -13,6 +13,7 @@ from mmaudit.models.schemas import (
     ContextExcerpt,
     ContextPackage,
     EconomicSimulationPlan,
+    EvidenceStrength,
     FormalToolRun,
     InvariantExecutionResult,
     InvariantSuite,
@@ -52,6 +53,18 @@ class ContextCategoryMeasurement:
 
     content_sha256: str
     utf8_bytes: int
+
+
+def _scanner_context_payload(findings: Iterable[ScannerFinding]) -> list[dict[str, Any]]:
+    """Serialize scanner evidence compactly without dropping non-default strength."""
+
+    payloads: list[dict[str, Any]] = []
+    for finding in findings:
+        payload = finding.model_dump(mode="json")
+        if finding.evidence_strength is EvidenceStrength.NONE:
+            payload.pop("evidence_strength", None)
+        payloads.append(payload)
+    return payloads
 
 
 def _add_context_omission(
@@ -916,11 +929,8 @@ class ContextBuilder:
             elif scanner_limit:
                 previous_limit = scanner_limit
                 next_limit = scanner_limit // 2
-                before_scanners = [finding.model_dump(mode="json") for finding in selected_scanners]
-                after_scanners = [
-                    finding.model_dump(mode="json")
-                    for finding in self.scanner_findings[:next_limit]
-                ]
+                before_scanners = _scanner_context_payload(selected_scanners)
+                after_scanners = _scanner_context_payload(self.scanner_findings[:next_limit])
                 scanner_limit = next_limit
                 if before_scanners == after_scanners:
                     continue
@@ -1164,7 +1174,7 @@ def render_context(package: ContextPackage) -> str:
         "</REPOSITORY_MAP_JSON>",
         "<NORMALIZED_SCANNER_EVIDENCE_JSON>",
         json.dumps(
-            [finding.model_dump(mode="json") for finding in package.scanner_findings],
+            _scanner_context_payload(package.scanner_findings),
             sort_keys=True,
         ),
         "</NORMALIZED_SCANNER_EVIDENCE_JSON>",
@@ -1281,7 +1291,7 @@ def context_category_byte_counts(package: ContextPackage) -> dict[str, int]:
     source_bytes = sum(len(excerpt.content.encode("utf-8")) for excerpt in package.excerpts)
     scanner_bytes = len(
         json.dumps(
-            [finding.model_dump(mode="json") for finding in package.scanner_findings],
+            _scanner_context_payload(package.scanner_findings),
             sort_keys=True,
         ).encode("utf-8")
     )
@@ -1346,7 +1356,7 @@ def context_category_measurements(
     counts = context_category_byte_counts(package)
     rendered_sha256 = hashlib.sha256(render_context(package).encode("utf-8")).hexdigest()
     scanner_projection = json.dumps(
-        [finding.model_dump(mode="json") for finding in package.scanner_findings],
+        _scanner_context_payload(package.scanner_findings),
         sort_keys=True,
     )
     framework_projection = json.dumps(

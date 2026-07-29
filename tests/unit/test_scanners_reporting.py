@@ -21,6 +21,7 @@ from mmaudit.models.schemas import (
     EconomicMetrics,
     EconomicSimulationKind,
     EconomicSimulationPlan,
+    EvidenceStrength,
     ExecutionEvidenceKind,
     FinancialAssetKind,
     FinancialSettlementEvidence,
@@ -37,6 +38,9 @@ from mmaudit.models.schemas import (
     RepositoryCodeExecutionState,
     RepositoryFile,
     RepositoryMap,
+    RepositorySuiteFramework,
+    RepositorySuiteTestDescriptor,
+    RepositoryTestExecutionStatus,
     ReproductionResult,
     ReproductionState,
     ScannerFinding,
@@ -48,7 +52,10 @@ from mmaudit.models.schemas import (
     TransactionOrderingCapability,
     VerificationTest,
 )
-from mmaudit.orchestration.pipeline import _annotate_scanner_locations
+from mmaudit.orchestration.pipeline import (
+    _annotate_scanner_locations,
+    _scanner_findings_for_report,
+)
 from mmaudit.orchestration.run_status import minimum_analysis_floor_quality_gate
 from mmaudit.reporting.json_report import stable_json
 from mmaudit.reporting.markdown import render_markdown
@@ -60,6 +67,7 @@ from mmaudit.scanners.foundry import (
     FoundryForkScanner,
     _foundry_execution_summary,
     _foundry_machine_result_precondition,
+    _parse_exact_foundry_test,
     _reject_unsafe_foundry_configuration,
 )
 from mmaudit.scanners.gitleaks import GitleaksScanner
@@ -477,6 +485,111 @@ def test_foundry_repository_suite_missing_rpc_is_unavailable_before_execution(
     assert "MMAUDIT_FORK_RPC_URL" in (result.error or "")
 
 
+def test_foundry_repository_suite_missing_forge_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "repository"
+    test_dir = root / "test" / "audit"
+    test_dir.mkdir(parents=True)
+    (root / "foundry.toml").write_text("[profile.default]\n", encoding="utf-8")
+    (test_dir / "Portfolio.t.sol").write_text(
+        "contract PortfolioTest { function testUnit() public {} }\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MMAUDIT_FORK_RPC_URL", "http://127.0.0.1:8545")
+    monkeypatch.setattr("mmaudit.scanners.foundry.shutil.which", lambda _executable: None)
+    monkeypatch.setattr(
+        "mmaudit.scanners.foundry.isolation_execution_evidence",
+        lambda _backend: ExecutionEvidenceKind.REAL,
+    )
+    monkeypatch.setattr(
+        "mmaudit.scanners.foundry.isolation_attestation_sha256",
+        lambda _backend: "a" * 64,
+    )
+
+    result = FoundryForkScanner(
+        SmartContractsConfig(allow_fork_probing=True),
+        reproduction=ReproductionConfig(
+            expected_chain_id=31_337,
+            pinned_block_number=42,
+        ),
+    ).run(
+        root,
+        tmp_path / "private-missing-forge",
+        5,
+        backend=_PassthroughIsolation(),
+    )
+
+    assert result.status is ScannerStatus.UNAVAILABLE
+    assert result.error == "forge is not installed"
+    assert len(result.repository_test_executions) == 1
+    execution = result.repository_test_executions[0]
+    assert execution.status is RepositoryTestExecutionStatus.UNAVAILABLE
+    assert execution.command_sha256 is None
+    assert execution.output_sha256 is None
+    assert execution.repository_code_execution is RepositoryCodeExecutionState.BLOCKED
+    assert not result.findings
+
+
+def test_foundry_repository_suite_missing_pinned_solc_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "repository"
+    test_dir = root / "test" / "audit"
+    test_dir.mkdir(parents=True)
+    (root / "foundry.toml").write_text("[profile.default]\n", encoding="utf-8")
+    (test_dir / "Portfolio.t.sol").write_text(
+        "contract PortfolioTest { function testUnit() public {} }\n",
+        encoding="utf-8",
+    )
+    fake_forge = tmp_path / "forge"
+    fake_forge.write_text("#!/bin/sh\nexit 97\n", encoding="utf-8")
+    fake_forge.chmod(0o755)
+    monkeypatch.setenv("MMAUDIT_FORK_RPC_URL", "http://127.0.0.1:8545")
+    monkeypatch.delenv("MMAUDIT_SOLC_EXECUTABLE", raising=False)
+    monkeypatch.setattr(
+        "mmaudit.scanners.foundry.shutil.which",
+        lambda executable: str(fake_forge) if executable == "forge" else None,
+    )
+    monkeypatch.setattr(
+        "mmaudit.scanners.foundry.isolation_execution_evidence",
+        lambda _backend: ExecutionEvidenceKind.REAL,
+    )
+    monkeypatch.setattr(
+        "mmaudit.scanners.foundry.isolation_attestation_sha256",
+        lambda _backend: "a" * 64,
+    )
+
+    result = FoundryForkScanner(
+        SmartContractsConfig(
+            allow_fork_probing=True,
+            solc_version="0.8.30",
+            solc_sha256="b" * 64,
+        ),
+        reproduction=ReproductionConfig(
+            expected_chain_id=31_337,
+            pinned_block_number=42,
+        ),
+    ).run(
+        root,
+        tmp_path / "private-missing-solc",
+        5,
+        backend=_PassthroughIsolation(),
+    )
+
+    assert result.status is ScannerStatus.UNAVAILABLE
+    assert result.error == "MMAUDIT_SOLC_EXECUTABLE is not set"
+    assert len(result.repository_test_executions) == 1
+    execution = result.repository_test_executions[0]
+    assert execution.status is RepositoryTestExecutionStatus.UNAVAILABLE
+    assert execution.command_sha256 is None
+    assert execution.output_sha256 is None
+    assert execution.repository_code_execution is RepositoryCodeExecutionState.BLOCKED
+    assert not result.findings
+
+
 @pytest.mark.parametrize(
     ("return_code", "stdout", "expected"),
     [
@@ -502,6 +615,82 @@ def test_foundry_machine_result_precondition_rejects_crash_and_empty_output(
         assert result is None
     else:
         assert expected in (result or "")
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected_status"),
+    [
+        ("assertion failed", RepositoryTestExecutionStatus.ASSERTION_FAILED),
+        ("EvmError: Revert", RepositoryTestExecutionStatus.REVERTED),
+        ("synthetic machine failure", RepositoryTestExecutionStatus.FAILED),
+    ],
+)
+def test_foundry_machine_result_classifies_failure_kinds(
+    reason: str,
+    expected_status: RepositoryTestExecutionStatus,
+) -> None:
+    descriptor = RepositorySuiteTestDescriptor.sealed(
+        framework=RepositorySuiteFramework.FOUNDRY,
+        project_root=".",
+        path="test/audit/Portfolio.t.sol",
+        suite_name="PortfolioTest",
+        test_name="testFailure",
+        source_sha256="a" * 64,
+        start_line=1,
+        end_line=1,
+    )
+    stdout = json.dumps(
+        {
+            "test/audit/Portfolio.t.sol:PortfolioTest": {
+                "test_results": {
+                    "testFailure()": {
+                        "status": "Failure",
+                        "reason": reason,
+                        "kind": {"Unit": {"gas": 123}},
+                    }
+                }
+            }
+        },
+        separators=(",", ":"),
+    )
+
+    status, detail, summary, result_sha256 = _parse_exact_foundry_test(
+        stdout,
+        descriptor=descriptor,
+        return_code=1,
+    )
+
+    assert status is expected_status
+    assert detail == reason
+    assert summary.failed_tests == 1
+    assert len(result_sha256) == 64
+
+
+def test_real_repository_suite_scanner_strength_survives_report_conversion(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "Vault.t.sol"
+    source.write_text(
+        "contract VaultTest { function testInvariant() public {} }\n",
+        encoding="utf-8",
+    )
+    scanner = ScannerFinding(
+        scanner="foundry_fork",
+        rule_id="repository-fork-test-failure",
+        title="Synthetic repository test failure",
+        severity=Severity.HIGH,
+        message="A real isolated repository test observed an incorrect state transition.",
+        locations=[Location(path=source.name, start_line=1, end_line=1)],
+        metadata={"repository_test_execution_sha256": "a" * 64},
+        evidence_strength=EvidenceStrength.DETERMINISTIC_ANALYZER,
+        fingerprint="b" * 64,
+    )
+
+    findings = _scanner_findings_for_report(tmp_path, [scanner])
+
+    assert len(findings) == 1
+    assert findings[0].status is FindingStatus.NEEDS_REVIEW
+    assert findings[0].evidence_strength is EvidenceStrength.DETERMINISTIC_ANALYZER
 
 
 def test_scanner_location_annotation_reseals_execution_observation(

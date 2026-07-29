@@ -40,6 +40,7 @@ from mmaudit.models.schemas import (
     CoverageProvenance,
     EconomicSimulationKind,
     EconomicSimulationPlan,
+    EvidenceStrength,
     ExecutionEvidenceKind,
     FormalCampaignBounds,
     FormalCampaignObservation,
@@ -1826,6 +1827,7 @@ def test_foundry_negative_regression_is_conclusive_engine_execution(config_facto
         metadata={
             "repository_test_execution_sha256": failed_execution.execution_sha256,
         },
+        evidence_strength=EvidenceStrength.DETERMINISTIC_ANALYZER,
         fingerprint="f" * 64,
     )
     updated = foundry.model_copy(

@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from mmaudit.models.schemas import (
+    EvidenceStrength,
     ExecutionEvidenceKind,
     FoundryTestExecutionSummary,
     Location,
@@ -508,6 +509,11 @@ def test_failing_repository_execution_requires_hash_bound_finding() -> None:
         execution.execution_sha256
     )
 
+    overstated = finding.model_copy(
+        update={"evidence_strength": EvidenceStrength.DETERMINISTIC_ANALYZER}
+    )
+    with pytest.raises(ValidationError, match="evidence strength differs"):
+        _scanner_run(selection, [execution], findings=[overstated])
     wrong_scanner = finding.model_copy(update={"scanner": "other"})
     with pytest.raises(ValidationError, match="scanner differs"):
         _scanner_run(selection, [execution], findings=[wrong_scanner])

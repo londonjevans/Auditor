@@ -106,6 +106,7 @@ from mmaudit.models.schemas import (
     EconomicSimulationKind,
     EconomicSimulationPlan,
     Evidence,
+    EvidenceStrength,
     ExecutionEvidenceKind,
     FalsificationBatch,
     FalsificationVerdict,
@@ -3890,6 +3891,11 @@ def _scanner_findings_for_report(
                     "Scanner-only output has not been accepted by the independent verifier."
                 ),
                 contributing_candidate_ids=[scanner.fingerprint],
+                evidence_strength=(
+                    scanner.evidence_strength
+                    if status is not FindingStatus.REJECTED
+                    else EvidenceStrength.NONE
+                ),
             )
         )
     return findings
