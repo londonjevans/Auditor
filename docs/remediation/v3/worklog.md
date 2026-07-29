@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: af2ea7a690a573c887726291fdbebe32f59e4c8d
+LAST_CHECKPOINT_COMMIT: 41a3cf5977c33a66d8286f100c32d6c31dd7f23d
 
 ## 2026-07-29 — V3-FORKDIFF-001
 
@@ -304,6 +304,10 @@ LAST_CHECKPOINT_COMMIT: af2ea7a690a573c887726291fdbebe32f59e4c8d
   local differential execution and manifest-bound replay path; it does not
   resolve the separately blocked real Hardhat/rootless subtask or claim any
   public-chain execution.
+- **Implementation checkpoint:** Commit
+  `41a3cf5977c33a66d8286f100c32d6c31dd7f23d` (`Stabilize fork differential
+  replay`) contains the completed ticket implementation, regressions, and
+  evidence.
 - **Defensive objective:** Execute the same bounded audited-repository suite
   against a clean local state and one or more operator-pinned fork states, then
   classify only repeated fresh-workspace agreement as typed divergence while a
