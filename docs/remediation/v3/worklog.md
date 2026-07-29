@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: ACTIVE
+AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Endpoint-aware token budgets and context manifests
 CURRENT_TICKET: V3-TOKENS-001
 LAST_COMPLETED_TICKET: V3-OUTPUT-001
-NEXT_ACTION: Map the fixed byte-pool allocation, endpoint limit evidence, prompt construction, and context-manifest serialization; reproduce the equal-role allocation defect before implementation.
-LAST_COMMAND: git commit -m "Add adaptive structured output validation"
-LAST_RESULT: PASS; implementation checkpoint 4f04a6fd79ff96466b48bc14ddc7557bb3a809b5 created from the fully validated 46-file V3-OUTPUT-001 scope.
+NEXT_ACTION: On operator resume, add a permanent negative regression for peer-role-count coupling, then implement endpoint-bound token planning and context-manifest evidence.
+LAST_COMMAND: git status --short --branch && git rev-parse HEAD && git rev-parse @{u}
+LAST_RESULT: PASS; main is clean and synchronized with origin/main at 740a3fa696beab7d442bdb3762bc6dd67d7ec282.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -206,6 +206,15 @@ LAST_CHECKPOINT_COMMIT: 4f04a6fd79ff96466b48bc14ddc7557bb3a809b5
   division, endpoint capacity evidence, run manifests, and prompt usage
   reconciliation; then add a failing deterministic regression before changing
   production planning.
+- **Pause checkpoint:** The operator requested a pause before production
+  implementation began. Read-only mapping reproduced the allocation defect:
+  the same specialist receives `256000` bytes with `7` planned packages but
+  only `64516` bytes with `31`, solely because unrelated roles were added.
+  The existing focused context, budget, and endpoint-snapshot suite passed
+  `56` tests. Both remaining read-only mapping workers were stopped; no source
+  or test files changed, and no provider call, network access, secret access,
+  or spend occurred. The pre-pause branch was clean and synchronized with
+  `origin/main` at `740a3fa696beab7d442bdb3762bc6dd67d7ec282`.
 
 ## 2026-07-28 — V3-SMOKE-001
 
