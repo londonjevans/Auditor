@@ -191,10 +191,29 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   implicitly; private source never routes under weaker policy without validated
   consent; effective privacy evidence is recorded.
 - **Dependencies:** `V3-SMOKE-001`.
-- **Status:** `IN_PROGRESS`
-- **Next action:** Inspect the existing privacy schema, effective request routing,
-  operator-consent boundary, manifests, reports, and negative tests before
-  defining the smallest cohesive profile correction.
+- **Status:** `COMPLETE`
+- **Implementation:** Strict ZDR is the fail-closed default. Non-ZDR private-source
+  routing requires a descriptor-safe, self-hashed, source/model/provider/budget/
+  expiry-bound consent observation and its live process-local capability.
+  Synthetic egress requires exact committed or package-pinned source provenance.
+  Paid routes revalidate immutable effective-policy evidence before reservation
+  and again immediately before transport; no implicit, stale, mismatched, or
+  profile-less route receives execution credit.
+- **Evidence:** Effective policy and source provenance are bound through usage,
+  final report, metadata, and current-schema manifest validation. The combined
+  focused privacy suite passed `679` tests; all initially exposed legacy-fixture
+  groups passed `405`; Ruff, strict mypy over `135` source files, schema
+  synchronization, and diff checks passed; the complete suite passed `2092`
+  tests with `10` explicit prerequisite skips in `236.21s`. Clean-commit
+  source-mode proof returned `DISTRIBUTION_COMMITTED_SYNTHETIC` bound to
+  implementation checkpoint `4da4fa08b66d0ebd04a2a8ae7d3bd181e140db33`.
+  No network, paid provider call, or operator secret access occurred.
+- **Validated implementation checkpoint:**
+  `4da4fa08b66d0ebd04a2a8ae7d3bd181e140db33`.
+- **Remaining limitation:** Ordinary API-key metadata cannot independently prove
+  account-level ZDR guardrail state. Public benchmark classification remains
+  unavailable until independent publication provenance is implemented.
+- **Next action:** None; on operator resume continue with `V3-OUTPUT-001`.
 
 ## V3-OUTPUT-001 — Capability-adaptive structured output
 

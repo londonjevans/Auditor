@@ -48,15 +48,15 @@
       "id": "D",
       "title": "One successful real model call before large refactoring",
       "tickets": ["V3-SMOKE-001"],
-      "status": "IN_PROGRESS",
-      "current_evidence_class": "HISTORICAL_REJECTED",
+      "status": "COMPLETE",
+      "current_evidence_class": "REAL_RUNTIME",
       "evidence": [
-        "Eight bounded paid attempts, zero successful or credited calls, cumulative accounted cost 0.0032118825 USD.",
-        "The sixth response was schema-valid, non-truncated, and canonically bound before fresh generation-usage reconciliation rejected it.",
-        "The seventh exact Mistral/Venice route returned HTTP 429 before any completion; no model output or artifact was credited.",
-        "The eighth exact Qwen/AkashML response was structured and non-truncated but remained unbound because generation metadata appeared only after the fixed readiness window; the response and later metadata are retained as separate non-creditable private evidence."
+        "Ten bounded paid attempts produced one successful, credited call and nine typed rejections; cumulative accounted cost is 0.0033415625 USD.",
+        "Attempt ten completed against the pinned synthetic fixture using exact model qwen/qwen3.6-35b-a3b and exact endpoint akashml/fp8 under STRICT_ZDR.",
+        "The response was non-truncated, schema-valid, canonically model-and-endpoint bound, independently reconciled against generation evidence, and persisted as descriptor-safe self-hashed private evidence.",
+        "Attempt-ten actual and accounted cost are both 0.00006484 USD; the atomic ledger is terminal with zero reservation."
       ],
-      "remaining_proof": "One identity-bound, non-truncated, schema-valid synthetic completion with exact endpoint and reconciled cost."
+      "remaining_proof": null
     },
     {
       "id": "E",
@@ -74,10 +74,17 @@
       "id": "F",
       "title": "Explicit privacy profiles and consent",
       "tickets": ["V3-PRIVACY-001"],
-      "status": "QUEUED",
+      "status": "COMPLETE",
       "current_evidence_class": "LOCAL_IMPLEMENTATION",
-      "evidence": ["Current implementation exposes only a require_zdr flag and secret boundary controls."],
-      "remaining_proof": "STRICT_ZDR default, synthetic benchmark profile, and operator-authored retention consent that cannot activate silently."
+      "evidence": [
+        "STRICT_ZDR is the default; non-ZDR private-source routing requires descriptor-safe self-hashed operator consent and a live exact policy capability.",
+        "Synthetic benchmark egress requires exact committed or package-pinned source provenance; arbitrary, dirty, untracked, tampered, or public-without-publication-proof source fails closed.",
+        "Paid routes revalidate exact model, endpoint, budget, source, profile, and provenance before reservation and immediately before transport.",
+        "Usage, report, metadata, and current-schema manifest privacy evidence must agree; stale client usage and stale latest artifacts are rejected.",
+        "Focused privacy validation passed 679 tests; the complete local suite passed 2092 tests with 10 explicit prerequisite skips at implementation checkpoint 4da4fa08b66d0ebd04a2a8ae7d3bd181e140db33.",
+        "A clean-commit source-mode assay proved DISTRIBUTION_COMMITTED_SYNTHETIC for the exact declared provider-smoke fixture at that checkpoint."
+      ],
+      "remaining_proof": "Account-level OpenRouter ZDR guardrail state is not independently observable through ordinary API-key metadata; public benchmark classification awaits independent publication provenance."
     },
     {
       "id": "G",
@@ -138,8 +145,8 @@
       "title": "Staged aggregate USD 250 budget",
       "tickets": ["V3-SMOKE-001", "V3-QUALIFY-001", "V3-MULTI-AUDIT-001"],
       "status": "PARTIAL",
-      "current_evidence_class": "LOCAL_IMPLEMENTATION",
-      "evidence": ["Atomic ledger exists; used 0.00118674 USD, reserved 0, remaining 249.99881326 USD."],
+      "current_evidence_class": "REAL_RUNTIME",
+      "evidence": ["The ten-entry atomic ledger is fully terminal; used 0.0033415625 USD, reserved 0, and remaining 249.9966584375 USD. Attempt ten reconciled actual and accounted cost at 0.00006484 USD."],
       "remaining_proof": "Preflight/reservation/reconciliation evidence for every future real call and aggregate final reconciliation."
     },
     {

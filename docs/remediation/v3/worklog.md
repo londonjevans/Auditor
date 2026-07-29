@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: ACTIVE
-CURRENT_MILESTONE: Explicit privacy and retention profiles
-CURRENT_TICKET: V3-PRIVACY-001
-LAST_COMPLETED_TICKET: V3-SMOKE-001
-NEXT_ACTION: Create the isolated implementation checkpoint, verify source-mode provenance from that immutable commit, then finalize ticket ledgers and pause state.
-LAST_COMMAND: .venv/bin/pytest -q
-LAST_RESULT: PASS; 2092 passed and 10 explicit external/provider/isolation prerequisites skipped in 236.21s. Paid provider tests remained disabled.
+AUTORUN_STATUS: PAUSED_BY_OPERATOR
+CURRENT_MILESTONE: Paused after explicit privacy and retention profiles
+CURRENT_TICKET: NONE
+LAST_COMPLETED_TICKET: V3-PRIVACY-001
+NEXT_ACTION: On operator resume, begin V3-OUTPUT-001.
+LAST_COMMAND: .venv/bin/python -c 'from pathlib import Path; from tests.unit.test_privacy_source_provenance import _discovery, _prove; evidence = _prove(_discovery(Path("tests/fixtures/solidity/provider_smoke"), relative_path="src/ProviderSmoke.sol")).evidence; print(evidence.proof_kind, evidence.distribution_commit, evidence.committed_file_count, evidence.evidence_sha256)'
+LAST_RESULT: PASS; source-mode proof returned DISTRIBUTION_COMMITTED_SYNTHETIC at commit 4da4fa08b66d0ebd04a2a8ae7d3bd181e140db33 for one declared file, evidence SHA-256 e03048b1471bd08af8fd41b0cb585767cf407aeee9bf7697baf51c0b29db4899.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 98564402f87eed5391b6bce33fba404d44f1abcc
+LAST_CHECKPOINT_COMMIT: 4da4fa08b66d0ebd04a2a8ae7d3bd181e140db33
 
 ## 2026-07-28 — V3-SMOKE-001
 
@@ -1273,3 +1273,19 @@ LAST_CHECKPOINT_COMMIT: 98564402f87eed5391b6bce33fba404d44f1abcc
   header-redaction assertions; no credential or runtime/private artifact is
   staged. Ignored interpreter caches and pre-existing `.DS_Store` files remain
   outside version control.
+- **Validated implementation checkpoint:** Commit
+  `4da4fa08b66d0ebd04a2a8ae7d3bd181e140db33` contains the cohesive privacy
+  profile, consent, source-provenance, route enforcement, cross-artifact
+  validation, documentation, schema, and regression implementation.
+- **Clean-commit source proof:** From that immutable checkpoint, the declared
+  repository-owned provider-smoke fixture proved
+  `DISTRIBUTION_COMMITTED_SYNTHETIC`, exactly one declared file, commit
+  `4da4fa08b66d0ebd04a2a8ae7d3bd181e140db33`, and evidence SHA-256
+  `e03048b1471bd08af8fd41b0cb585767cf407aeee9bf7697baf51c0b29db4899`.
+- **Ticket result:** `V3-PRIVACY-001` is `COMPLETE`. This proves the local
+  fail-closed privacy control and evidence path, not account-level OpenRouter
+  guardrail state. Public benchmark provenance remains unavailable until
+  independently established.
+- **Operator pause:** Autorun is paused at the requested clean ticket boundary.
+  No process, reservation, provider call, or uncommitted implementation change
+  is active. On resume, begin `V3-OUTPUT-001`.
