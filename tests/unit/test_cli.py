@@ -38,7 +38,12 @@ from mmaudit.benchmark.mutations import (
     MutationTestOutcome,
     score_mutation_outcomes,
 )
-from mmaudit.cli import _audit_config_overrides, _load_audit_production_qualification, app
+from mmaudit.cli import (
+    _audit_config_overrides,
+    _load_audit_privacy_consent,
+    _load_audit_production_qualification,
+    app,
+)
 from mmaudit.config import (
     AuditConfig,
     AuditConfigOverrides,
@@ -51,6 +56,7 @@ from mmaudit.models.qualification_workflow import seal_qualification_release_bin
 from mmaudit.models.schemas import AuditProfile
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.manifest import canonical_sha256
+from mmaudit.privacy import PrivacyProfile
 from tests.conftest import base_config_data, model_registry_entry
 from tests.qualification_support import synthetic_release_observation
 from tests.unit import test_benchmark as benchmark_fixtures
@@ -153,6 +159,150 @@ def test_run_help_lists_fork_aliases() -> None:
     assert "--model-qualification-release-source-root" in result.stdout
     assert "--model-qualification-corpus" in result.stdout
     assert "--model-qualification-ground-truth" in result.stdout
+
+
+def test_run_help_lists_explicit_privacy_authorization_options() -> None:
+    result = runner.invoke(app, ["run", "--help"], env={"COLUMNS": "300"})
+
+    assert result.exit_code == 0
+    assert "--privacy-profile" in result.stdout
+    assert "--retention-consent" in result.stdout
+    assert "--privacy-source-classification" in result.stdout
+
+
+def test_configured_frontier_profile_cannot_implicitly_authorize_consent(
+    tmp_path: Path,
+    config_factory: Any,
+) -> None:
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT,
+            "require_zdr": False,
+            "maximum_model_retention": "temporary",
+        }
+    )
+
+    with pytest.raises(
+        ConfigError,
+        match="explicit matching --privacy-profile",
+    ):
+        _load_audit_privacy_consent(
+            config=config,
+            explicit_profile=None,
+            retention_consent=tmp_path / "operator-consent.json",
+            target_root=tmp_path / "target",
+        )
+
+
+def test_strict_privacy_profile_rejects_retention_consent_file(
+    tmp_path: Path,
+    config_factory: Any,
+) -> None:
+    with pytest.raises(
+        ConfigError,
+        match="STRICT_ZDR does not accept",
+    ):
+        _load_audit_privacy_consent(
+            config=config_factory(),
+            explicit_profile=PrivacyProfile.STRICT_ZDR,
+            retention_consent=tmp_path / "operator-consent.json",
+            target_root=tmp_path / "target",
+        )
+
+
+def test_zdr_synthetic_profile_uses_source_provenance_without_retention_consent(
+    tmp_path: Path,
+    config_factory: Any,
+) -> None:
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.SYNTHETIC_BENCHMARK,
+            "require_zdr": True,
+            "maximum_model_retention": "zero",
+        }
+    )
+
+    observation = _load_audit_privacy_consent(
+        config=config,
+        explicit_profile=PrivacyProfile.SYNTHETIC_BENCHMARK,
+        retention_consent=None,
+        target_root=tmp_path / "target",
+    )
+
+    assert observation is None
+
+
+def test_zdr_synthetic_profile_rejects_inapplicable_retention_consent(
+    tmp_path: Path,
+    config_factory: Any,
+) -> None:
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.SYNTHETIC_BENCHMARK,
+            "require_zdr": True,
+            "maximum_model_retention": "zero",
+        }
+    )
+
+    with pytest.raises(ConfigError, match="does not accept retention consent"):
+        _load_audit_privacy_consent(
+            config=config,
+            explicit_profile=PrivacyProfile.SYNTHETIC_BENCHMARK,
+            retention_consent=tmp_path / "operator-consent.json",
+            target_root=tmp_path / "target",
+        )
+
+
+def test_scanner_only_run_does_not_require_provider_retention_consent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT,
+            "require_zdr": False,
+            "maximum_model_retention": "temporary",
+        }
+    )
+    repository = _synthetic_run_repository(tmp_path)
+    constructed = False
+
+    class SyntheticPipelineResult:
+        run_dir = tmp_path / "synthetic-run"
+
+        def exit_for_findings(self, _fail_on: object) -> ExitCode:
+            return ExitCode.SUCCESS
+
+    class SyntheticPipeline:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            nonlocal constructed
+            constructed = True
+
+        async def run(self, **_kwargs: object) -> SyntheticPipelineResult:
+            return SyntheticPipelineResult()
+
+    _patch_loaded_audit_config(monkeypatch, config)
+    monkeypatch.setattr("mmaudit.cli.AuditPipeline", SyntheticPipeline)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--repo",
+            str(repository),
+            "--output",
+            str(tmp_path / "audit-output"),
+            "--scanner-only",
+            "--skip-codeql",
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.SUCCESS, result.stdout
+    assert constructed
 
 
 def test_explicit_cost_ledger_is_recorded_as_canonical_cli_provenance(
@@ -2142,6 +2292,92 @@ def test_doctor_reports_only_secret_and_authentication_state(
     assert str(secret_file) not in result.stdout
 
 
+def test_doctor_distinguishes_strict_and_frontier_account_zdr_compatibility(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    secret_file = tmp_path / "operator.env"
+    secret_file.write_text(
+        "OPENROUTER_API_KEY=synthetic-doctor-privacy-canary\n",
+        encoding="utf-8",
+    )
+    secret_file.chmod(0o600)
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    config_path = tmp_path / "synthetic.toml"
+    monkeypatch.setattr(
+        "mmaudit.cli._openrouter_authentication_valid",
+        lambda _config, _api_key: True,
+    )
+    monkeypatch.setattr(
+        "mmaudit.cli.default_isolation_backend",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            name="synthetic-rootless-isolation",
+            supports_local_fork_rpc=True,
+        ),
+    )
+
+    frontier = config_factory(
+        privacy={
+            "profile": PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT,
+            "require_zdr": False,
+            "maximum_model_retention": "temporary",
+        }
+    )
+    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: frontier)
+    frontier_result = runner.invoke(
+        app,
+        [
+            "doctor",
+            "--config",
+            str(config_path),
+            "--secrets-env-file",
+            str(secret_file),
+            "--repo",
+            str(repository),
+            "--output",
+            str(tmp_path / "frontier-output"),
+            "--no-color",
+        ],
+        env={"COLUMNS": "300"},
+    )
+    frontier_output = " ".join(frontier_result.stdout.split())
+
+    assert frontier_result.exit_code == ExitCode.SUCCESS, frontier_result.stdout
+    assert "Request-level Zero Data" in frontier_output
+    assert "omitted only for an explicitly consent-bound non-ZDR run" in frontier_output
+    assert "Account/guardrail ZDR" in frontier_output
+    assert "not observable from API-key metadata" in frontier_output
+    assert "successful exact-route consented runtime preflight" in frontier_output
+    assert "Configuration invalid" not in frontier_output
+
+    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config_factory())
+    strict_result = runner.invoke(
+        app,
+        [
+            "doctor",
+            "--config",
+            str(config_path),
+            "--secrets-env-file",
+            str(secret_file),
+            "--repo",
+            str(repository),
+            "--output",
+            str(tmp_path / "strict-output"),
+            "--no-color",
+        ],
+        env={"COLUMNS": "300"},
+    )
+    strict_output = " ".join(strict_result.stdout.split())
+
+    assert strict_result.exit_code == ExitCode.SUCCESS, strict_result.stdout
+    assert "Account/guardrail ZDR" in strict_output
+    assert "not observable from API-key metadata" in strict_output
+    assert "successful exact-route ZDR runtime preflight" in strict_output
+    assert "compatible with this ZDR-required profile" not in strict_output
+
+
 def test_scanner_only_cli_never_requires_api_key(
     tmp_path: Path, vulnerable_repo: Path, monkeypatch
 ) -> None:
@@ -2325,3 +2561,91 @@ def test_models_check_rejects_unavailable_exact_provider_endpoint(
     assert "Validated" not in result.stdout
     assert canary not in result.stdout
     assert str(secret_file) not in result.stdout
+
+
+def test_models_check_records_non_zdr_capability_without_authorizing_source_egress(
+    tmp_path: Path,
+    monkeypatch,
+    config_factory,
+) -> None:
+    secret_file = tmp_path / "operator.env"
+    secret_file.write_text("OPENROUTER_API_KEY=synthetic-frontier-check-key\n", encoding="utf-8")
+    secret_file.chmod(0o600)
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT,
+            "require_zdr": False,
+            "maximum_model_retention": "temporary",
+        }
+    )
+    model_ids = tuple(sorted(set(configured_model_ids(config, include_fallbacks=True))))
+    checked_models: list[str] = []
+
+    def endpoint_record(model_id: str) -> dict[str, object]:
+        return {
+            "model_id": model_id,
+            "tag": "synthetic-provider",
+            "provider_name": "Synthetic Provider",
+            "status": 0,
+            "context_length": 200_000,
+            "max_prompt_tokens": 180_000,
+            "max_completion_tokens": 20_000,
+            "supported_parameters": ["max_tokens", "response_format", "temperature"],
+            "pricing": {
+                "prompt": "0.000001",
+                "completion": "0.00001",
+                "request": "0",
+            },
+        }
+
+    class FrontierMetadataClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def list_models(self) -> list[dict[str, object]]:
+            return [
+                {
+                    "id": model_id,
+                    "supported_parameters": ["response_format"],
+                }
+                for model_id in model_ids
+            ]
+
+        async def list_zdr_endpoints(self) -> dict[str, object]:
+            return {"data": []}
+
+        async def get_model_endpoint_metadata(self, model_id: str) -> dict[str, object]:
+            checked_models.append(model_id)
+            endpoint = endpoint_record(model_id)
+            return {
+                "data": {
+                    "id": model_id,
+                    "endpoints": [endpoint],
+                }
+            }
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("mmaudit.cli.load_config", lambda _path: config)
+    monkeypatch.setattr("mmaudit.cli.OpenRouterClient", FrontierMetadataClient)
+
+    result = runner.invoke(
+        app,
+        [
+            "models",
+            "check",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--secrets-env-file",
+            str(secret_file),
+            "--refresh",
+            "--no-color",
+        ],
+        env={"COLUMNS": "500"},
+    )
+
+    assert result.exit_code == ExitCode.SUCCESS, result.stdout
+    assert checked_models == list(model_ids)
+    assert "Validated" in result.stdout
+    assert "retention-consent" not in result.stdout

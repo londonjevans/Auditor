@@ -40,6 +40,7 @@ from mmaudit.orchestration.model_review_evidence import (
 from mmaudit.orchestration.model_review_evidence import (
     seal_model_surface_review_artifact as _seal_model_surface_review_artifact,
 )
+from tests.identity_fixtures import synthetic_strict_zdr_privacy_routing
 
 _ROLE = "specialist:accounting_invariant"
 _PATH = "src/SyntheticVault.sol"
@@ -365,22 +366,8 @@ def _usage(batch: CandidateReviewBatch, *, role: str = _ROLE) -> UsageRecord:
     generation_id = "generation-surface-review"
     endpoint = "approved-provider"
     schema_sha256 = _canonical_sha256(strict_json_schema(CandidateReviewBatch))
-    return UsageRecord(
-        request_id="request-surface-review",
-        role=role,
-        execution_evidence=ExecutionEvidenceKind.MOCK,
-        requested_model="author/exact-model",
-        returned_model="author/exact-model",
-        actual_model="author/exact-model",
-        provider="Approved Provider",
-        model_family="author",
-        timestamp=started_at,
-        prompt_tokens=100,
-        completion_tokens=25,
-        total_tokens=125,
-        reported_cost_usd=0.01,
-        accounted_cost_usd=0.01,
-        routing={
+    routing = synthetic_strict_zdr_privacy_routing(
+        {
             "generation_id": generation_id,
             "selected_model": "author/exact-model",
             "selected_provider_endpoint": endpoint,
@@ -399,6 +386,24 @@ def _usage(batch: CandidateReviewBatch, *, role: str = _ROLE) -> UsageRecord:
             "latency_ms": 125,
             "certification_request": False,
         },
+        source_label=f"model-review-evidence:{role}",
+    )
+    return UsageRecord(
+        request_id="request-surface-review",
+        role=role,
+        execution_evidence=ExecutionEvidenceKind.MOCK,
+        requested_model="author/exact-model",
+        returned_model="author/exact-model",
+        actual_model="author/exact-model",
+        provider="Approved Provider",
+        model_family="author",
+        timestamp=started_at,
+        prompt_tokens=100,
+        completion_tokens=25,
+        total_tokens=125,
+        reported_cost_usd=0.01,
+        accounted_cost_usd=0.01,
+        routing=routing,
         prompt_sha256="c" * 64,
         response_sha256="d" * 64,
         validated_response_sha256=_canonical_sha256(batch.model_dump(mode="json")),

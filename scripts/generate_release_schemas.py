@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from mmaudit.privacy import PrivacyRetentionConsent
 from mmaudit.release_candidate import ReleaseCandidateObservation
 from mmaudit.release_gates import ReleaseGateEvidenceBundle
 from mmaudit.release_observations import BoundReleaseGateResult
@@ -21,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_ROOT = ROOT / "schemas"
 SCHEMA_BASE = "https://mmaudit.local/schemas"
 MODELS: dict[str, type[BaseModel]] = {
+    "privacy_retention_consent.schema.json": PrivacyRetentionConsent,
     "release_candidate_observation.schema.json": ReleaseCandidateObservation,
     "release_bound_gate_result.schema.json": BoundReleaseGateResult,
     "release_gate_evidence.schema.json": ReleaseGateEvidenceBundle,

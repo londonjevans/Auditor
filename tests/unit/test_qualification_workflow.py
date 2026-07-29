@@ -111,6 +111,14 @@ def _candidate_inputs(
         reasoning_supported=evidence.reasoning_supported,
         zdr_eligible=evidence.zdr_eligible,
         data_collection_deny_eligible=evidence.data_collection_deny_eligible,
+        data_collection_deny_request_policy_enforced=(
+            evidence.data_collection_deny_request_policy_enforced
+        ),
+        data_collection_deny_evidence_source=evidence.data_collection_deny_evidence_source,
+        data_collection_deny_evidence_sha256=evidence.data_collection_deny_evidence_sha256,
+        data_collection_deny_evidence_expires_at=(
+            evidence.data_collection_deny_evidence_expires_at
+        ),
         operational_status=CandidateOperationalStatus.AVAILABLE,
         benchmark_status=CandidateBenchmarkStatus.PENDING,
         approved_roles=("whole_protocol_review",),
@@ -190,6 +198,16 @@ def _as_real_report(
                 "catalog_snapshot_sha256": "6" * 64,
                 "discovery_provenance_sha256": "7" * 64,
                 "discovery_evidence_sha256": candidate.discovery_evidence_sha256,
+                "privacy_profile": "STRICT_ZDR",
+                "privacy_authorization": "STRICT_ZDR_ENFORCED",
+                "effective_privacy_policy_sha256": "8" * 64,
+                "privacy_source_sha256": "9" * 64,
+                "privacy_source_provenance_sha256": "a" * 64,
+                "privacy_source_classification": "PRIVATE_OPERATOR_SOURCE",
+                "privacy_consent_file_sha256": None,
+                "privacy_consent_sha256": None,
+                "privacy_consent_expires_at": None,
+                "privacy_endpoint_policy_class": "ZDR",
             }
         )
         usage.update(

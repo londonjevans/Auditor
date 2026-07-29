@@ -34,6 +34,7 @@ from mmaudit.operator_secrets import (
     COST_LEDGER_PATH_VARIABLE,
     RESERVED_OPERATOR_CONTROL_PLANE_NAMES,
 )
+from mmaudit.privacy import PrivacyProfile, PrivacySourceClassification
 
 
 class ConfigError(ValueError):
@@ -98,6 +99,7 @@ class PriorAuditConfig(ConfigModel):
 
 
 class PrivacyConfig(ConfigModel):
+    profile: PrivacyProfile = PrivacyProfile.STRICT_ZDR
     allow_code_egress: bool = False
     require_zdr: bool = True
     redact_secrets: bool = True
@@ -118,6 +120,29 @@ class PrivacyConfig(ConfigModel):
         if any(not re.fullmatch(r"sha256:[0-9a-f]{64}", lineage) for lineage in value):
             raise ValueError("approved model lineages must be lowercase sha256 identifiers")
         return value
+
+    @model_validator(mode="after")
+    def profile_has_consistent_retention_controls(self) -> PrivacyConfig:
+        if self.profile is PrivacyProfile.STRICT_ZDR:
+            if not self.require_zdr:
+                raise ValueError("STRICT_ZDR requires zero-data-retention routing")
+            if self.maximum_model_retention != "zero":
+                raise ValueError("STRICT_ZDR requires a zero model-retention ceiling")
+        elif self.profile is PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT:
+            if self.require_zdr:
+                raise ValueError(
+                    "frontier retention-consent profile must explicitly disable request ZDR"
+                )
+            if self.maximum_model_retention == "zero":
+                raise ValueError(
+                    "frontier retention-consent profile requires a disclosed nonzero "
+                    "retention ceiling"
+                )
+        elif self.require_zdr != (self.maximum_model_retention == "zero"):
+            raise ValueError(
+                "synthetic benchmark ZDR and model-retention controls are inconsistent"
+            )
+        return self
 
 
 class ExecutionConfig(ConfigModel):
@@ -922,7 +947,6 @@ class AuditConfig(ConfigModel):
 
         if self.profile is not AuditProfile.MAXIMUM_ASSURANCE:
             return self
-        privacy = self.privacy.model_copy(update={"require_zdr": True})
         execution = self.execution.model_copy(update={"max_json_repair_attempts": 0})
         smart_contracts = self.smart_contracts.model_copy(
             update={
@@ -1057,7 +1081,6 @@ class AuditConfig(ConfigModel):
         return self.model_copy(
             update={
                 "scope": scope,
-                "privacy": privacy,
                 "execution": execution,
                 "smart_contracts": smart_contracts,
                 "reproduction": reproduction,
@@ -1096,6 +1119,8 @@ _AUDIT_OVERRIDE_VALUE_TYPES: dict[str, tuple[type[object], ...]] = {
     "prior_audit.path": (str,),
     "prior_audit.required": (bool,),
     "privacy.allow_code_egress": (bool,),
+    "privacy.maximum_model_retention": (str,),
+    "privacy.profile": (str,),
     "privacy.require_zdr": (bool,),
     "profile": (str,),
     "repository.max_discovery_bytes": (int,),
@@ -1191,6 +1216,13 @@ class AuditRunOptions(ConfigModel):
     benchmark_repository_git_commit: str | None = Field(
         default=None,
         pattern=r"^[0-9a-f]{40,64}$",
+    )
+    privacy_source_classification: PrivacySourceClassification = (
+        PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE
+    )
+    retention_consent_file_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
     )
 
     @field_validator(

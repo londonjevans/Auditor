@@ -16,6 +16,7 @@ import httpx
 import pytest
 from pydantic import BaseModel, ConfigDict
 
+import mmaudit.models.openrouter as openrouter_module
 from mmaudit.constants import OPENROUTER_DEFAULT_BASE_URL
 from mmaudit.models.discovery import (
     _TRUSTED_OPENROUTER_DISCOVERY_ISSUER,
@@ -69,6 +70,19 @@ from mmaudit.models.usage import (
 )
 from mmaudit.orchestration.budgets import BudgetExhaustedError, BudgetManager
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
+from mmaudit.privacy import (
+    REQUIRED_PROHIBITED_CONTENT,
+    EffectivePrivacyPolicyEvidence,
+    EndpointPolicyClass,
+    EndpointPrivacyDisclosure,
+    PrivacyProfile,
+    PrivacyRetentionConsent,
+    PrivacySourceClassification,
+    TrustedPrivacyAuthorization,
+    load_privacy_retention_consent,
+    resolve_effective_privacy_policy,
+    resolve_trusted_privacy_authorization,
+)
 
 
 class Answer(BaseModel):
@@ -230,6 +244,7 @@ def _endpoint_snapshot(
     provider: str = "approved-provider",
     provider_name: str = "Approved Provider",
     pricing: dict[str, str] | None = None,
+    require_zdr: bool = True,
 ) -> OpenRouterEndpointSnapshotEvidence:
     endpoint = {
         "tag": provider,
@@ -251,8 +266,132 @@ def _endpoint_snapshot(
         configured_provider_endpoints=(provider,),
         provider_policy_mode="only",
         endpoint_payload={"data": {"id": model, "endpoints": [endpoint]}},
+        require_zdr=require_zdr,
+        zdr_payload=({"data": [{**endpoint, "model_id": model}]} if require_zdr else None),
+    )
+
+
+def _frontier_privacy_authorization(
+    tmp_path: Path,
+    *,
+    model: str = "alpha/atlas-secure",
+    provider: str = "approved-provider",
+    provider_policy_classes: tuple[tuple[str, EndpointPolicyClass], ...] | None = None,
+    evaluation_time: datetime | None = None,
+    issued_at: datetime | None = None,
+    expires_at: datetime | None = None,
+) -> tuple[
+    EffectivePrivacyPolicyEvidence,
+    TrustedPrivacyAuthorization,
+    tuple[str, ...],
+]:
+    evaluated_at = evaluation_time or datetime.now(UTC).replace(microsecond=0)
+    source_sha256 = "9" * 64
+    consent_canaries = (
+        "consent-disclosure-body-canary",
+        "operator-reference-body-canary",
+        "consent-path-body-canary",
+    )
+    endpoint_policy_pairs = provider_policy_classes or (
+        (provider, EndpointPolicyClass.NON_ZDR_DATA_COLLECTION_DENIED),
+    )
+    endpoint_policy_pairs = tuple(sorted(endpoint_policy_pairs))
+    disclosures = tuple(
+        EndpointPrivacyDisclosure(
+            provider_endpoint=endpoint,
+            policy_class=policy_class,
+            disclosed_retention=consent_canaries[0],
+            privacy_policy_reference=(
+                f"https://privacy.example.test/{hashlib.sha256(endpoint.encode()).hexdigest()}"
+            ),
+            privacy_policy_sha256="8" * 64,
+        )
+        for endpoint, policy_class in endpoint_policy_pairs
+    )
+    consent_payload = {
+        "schema_version": "1.0",
+        "selected_privacy_profile": (PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT),
+        "source_classification": PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
+        "permitted_source_sha256": source_sha256,
+        "permitted_model_ids": (model,),
+        "permitted_provider_endpoints": tuple(item[0] for item in endpoint_policy_pairs),
+        "permitted_endpoint_policy_classes": tuple(
+            sorted({item[1] for item in endpoint_policy_pairs}, key=lambda item: item.value)
+        ),
+        "endpoint_disclosures": disclosures,
+        "issued_at": issued_at or evaluated_at - timedelta(minutes=5),
+        "expires_at": expires_at or evaluated_at + timedelta(hours=1),
+        "operator_identity_reference": consent_canaries[1],
+        "signature_reference": None,
+        "maximum_cost_usd": "20",
+        "prohibited_content": REQUIRED_PROHIBITED_CONTENT,
+        "acknowledges_zdr_not_in_force": True,
+    }
+    consent = PrivacyRetentionConsent.model_validate(
+        {
+            **consent_payload,
+            "consent_sha256": hashlib.sha256(
+                json.dumps(
+                    PrivacyRetentionConsent.model_construct(
+                        **consent_payload,
+                        consent_sha256="0" * 64,
+                    ).model_dump(mode="json", exclude={"consent_sha256"}),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                    allow_nan=False,
+                ).encode()
+            ).hexdigest(),
+        }
+    )
+    target_root = tmp_path / "target"
+    target_root.mkdir(exist_ok=True)
+    consent_path = tmp_path / "operator-control" / f"{consent_canaries[2]}.json"
+    consent_path.parent.mkdir(exist_ok=True)
+    consent_path.write_text(
+        json.dumps(consent.model_dump(mode="json"), sort_keys=True),
+        encoding="utf-8",
+    )
+    consent_path.chmod(0o600)
+    observation = load_privacy_retention_consent(
+        consent_path.resolve(),
+        target_root=target_root.resolve(),
+    )
+    authorization = resolve_trusted_privacy_authorization(
+        profile=PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT,
+        require_zdr=False,
+        consent_observation=observation,
+        source_sha256=source_sha256,
+        source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
+        configured_model_ids=(model,),
+        configured_provider_endpoints=tuple(item[0] for item in endpoint_policy_pairs),
+        requested_budget_usd=Decimal("20"),
+        now=evaluated_at,
+    )
+    return authorization.evidence, authorization, consent_canaries
+
+
+def _strict_privacy_policy(
+    config: Any,
+    *,
+    models: tuple[str, ...] = ("alpha/atlas-secure",),
+    providers: tuple[str, ...] = ("approved-provider",),
+    requested_budget_usd: Decimal | None = None,
+) -> EffectivePrivacyPolicyEvidence:
+    return resolve_effective_privacy_policy(
+        profile=PrivacyProfile.STRICT_ZDR,
         require_zdr=True,
-        zdr_payload={"data": [{**endpoint, "model_id": model}]},
+        consent_observation=None,
+        source_sha256=hashlib.sha256(b"synthetic strict-ZDR test source").hexdigest(),
+        source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
+        configured_model_ids=tuple(sorted(models)),
+        configured_provider_endpoints=tuple(sorted(providers)),
+        requested_budget_usd=(
+            requested_budget_usd
+            if requested_budget_usd is not None
+            else Decimal(str(config.execution.budget_usd))
+        ),
+        now=datetime.now(UTC).replace(microsecond=0),
     )
 
 
@@ -562,6 +701,7 @@ def _client(
     provider_policy: OpenRouterProviderPolicy | None = None,
     reasoning: OpenRouterReasoning | None = None,
     qualification_routing: tuple[OpenRouterQualificationRoutingEvidence, ...] | None = None,
+    privacy_models: tuple[str, ...] = ("alpha/atlas-secure",),
 ) -> tuple[OpenRouterClient, httpx.AsyncClient, UsageLedger]:
     transport = httpx.MockTransport(handler)
     http_client = httpx.AsyncClient(
@@ -578,6 +718,15 @@ def _client(
     policy = provider_policy or OpenRouterProviderPolicy()
     if qualification_routing is None and policy.certification:
         qualification_routing = (_qualification_routing(provider=policy.configured_endpoints[0]),)
+    effective_privacy_policy = (
+        _strict_privacy_policy(
+            config,
+            models=privacy_models,
+            providers=policy.configured_endpoints,
+        )
+        if (config.privacy.profile is PrivacyProfile.STRICT_ZDR and policy.configured_endpoints)
+        else None
+    )
     client = OpenRouterClient(
         api_key=api_key,
         execution=config.execution,
@@ -589,6 +738,7 @@ def _client(
         provider_policy=policy,
         reasoning=reasoning,
         qualification_routing=qualification_routing or (),
+        effective_privacy_policy=effective_privacy_policy,
     )
     return client, http_client, usage
 
@@ -622,6 +772,17 @@ async def _paid_control_client_with_mock_transport(
                 if provider_policy.certification
                 else ()
             )
+        ),
+        effective_privacy_policy=_strict_privacy_policy(
+            config,
+            models=tuple(
+                sorted(
+                    {binding.exact_model_id for binding in (qualification_routing or ())}
+                    or {"alpha/atlas-secure"}
+                )
+            ),
+            providers=provider_policy.configured_endpoints,
+            requested_budget_usd=Decimal(str(budget.total_usd)),
         ),
     )
     assert client.execution_evidence is ExecutionEvidenceKind.MOCK
@@ -849,6 +1010,7 @@ async def test_real_completion_requires_frozen_identity_before_transport(
             only=("approved-provider",),
         ),
         qualification_routing=(_qualification_routing_for_endpoint_snapshot(endpoint_snapshot),),
+        effective_privacy_policy=_strict_privacy_policy(config),
     )
     client.register_certification_endpoint_snapshot(evidence=endpoint_snapshot)
     client._authentication_validated = True
@@ -914,6 +1076,10 @@ async def test_certification_requires_validated_endpoint_pricing_before_send(
             only=("approved-provider",),
         ),
         qualification_routing=(_qualification_routing_for_endpoint_snapshot(endpoint_snapshot),),
+        effective_privacy_policy=_strict_privacy_policy(
+            config,
+            requested_budget_usd=Decimal(str(budget.total_usd)),
+        ),
     )
     try:
         with pytest.raises(OpenRouterCostControlError, match="validated endpoint pricing"):
@@ -943,6 +1109,204 @@ async def test_certification_requires_validated_endpoint_pricing_before_send(
     assert calls == 1
     assert ledger.snapshot().active_reserved_usd == 0
     assert ledger.snapshot().spent_usd == Decimal("0.01")
+
+
+@pytest.mark.asyncio
+async def test_paid_request_without_effective_privacy_evidence_refuses_before_reservation(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    config = config_factory(execution={"max_json_repair_attempts": 0})
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "missing-privacy-policy-ledger.json",
+        cap_usd=Decimal("20"),
+    )
+    budget = BudgetManager(
+        total_usd=20,
+        max_output_tokens=config.execution.max_output_tokens_per_request,
+        conservative_usd_per_million_tokens=10,
+        max_requests_per_agent=2,
+        atomic_ledger=ledger,
+        require_endpoint_cost_bound=True,
+    )
+    snapshot = _endpoint_snapshot()
+    client, _usage, http_client = await _paid_control_client_with_mock_transport(
+        config,
+        budget=budget,
+        handler=handler,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(_qualification_routing_for_endpoint_snapshot(snapshot),),
+    )
+    client.effective_privacy_policy = None
+    try:
+        client.register_certification_endpoint_snapshot(evidence=snapshot)
+        with pytest.raises(OpenRouterPrivacyError, match="requires effective privacy evidence"):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert calls == 0
+    assert ledger.snapshot().entries == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("policy_defect", "expected_error"),
+    [
+        ("model", "model outside effective privacy evidence"),
+        ("provider", "endpoint outside effective privacy evidence"),
+        ("budget", "differs from the active model budget"),
+    ],
+)
+async def test_paid_request_privacy_binding_mismatch_refuses_before_reservation(
+    config_factory,
+    tmp_path: Path,
+    policy_defect: str,
+    expected_error: str,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    config = config_factory(execution={"max_json_repair_attempts": 0})
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / f"privacy-{policy_defect}-mismatch-ledger.json",
+        cap_usd=Decimal("20"),
+    )
+    budget = BudgetManager(
+        total_usd=20,
+        max_output_tokens=config.execution.max_output_tokens_per_request,
+        conservative_usd_per_million_tokens=10,
+        max_requests_per_agent=2,
+        atomic_ledger=ledger,
+        require_endpoint_cost_bound=True,
+    )
+    snapshot = _endpoint_snapshot()
+    client, _usage, http_client = await _paid_control_client_with_mock_transport(
+        config,
+        budget=budget,
+        handler=handler,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(_qualification_routing_for_endpoint_snapshot(snapshot),),
+    )
+    client.effective_privacy_policy = _strict_privacy_policy(
+        config,
+        models=(("other/model",) if policy_defect == "model" else ("alpha/atlas-secure",)),
+        providers=(("other-provider",) if policy_defect == "provider" else ("approved-provider",)),
+        requested_budget_usd=Decimal("19" if policy_defect == "budget" else "20"),
+    )
+    try:
+        client.register_certification_endpoint_snapshot(evidence=snapshot)
+        with pytest.raises(OpenRouterPrivacyError, match=expected_error):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert calls == 0
+    assert ledger.snapshot().entries == ()
+
+
+@pytest.mark.asyncio
+async def test_paid_privacy_policy_is_revalidated_after_reservation(
+    config_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    config = config_factory(execution={"max_json_repair_attempts": 0})
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "privacy-revalidation-ledger.json",
+        cap_usd=Decimal("20"),
+    )
+    budget = BudgetManager(
+        total_usd=20,
+        max_output_tokens=config.execution.max_output_tokens_per_request,
+        conservative_usd_per_million_tokens=10,
+        max_requests_per_agent=2,
+        atomic_ledger=ledger,
+        require_endpoint_cost_bound=True,
+    )
+    snapshot = _endpoint_snapshot()
+    client, _usage, http_client = await _paid_control_client_with_mock_transport(
+        config,
+        budget=budget,
+        handler=handler,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(_qualification_routing_for_endpoint_snapshot(snapshot),),
+    )
+    original_reserve = budget.reserve
+
+    async def reserve_then_replace_policy(*args: Any, **kwargs: Any) -> Any:
+        reservation = await original_reserve(*args, **kwargs)
+        client.effective_privacy_policy = _strict_privacy_policy(
+            config,
+            requested_budget_usd=Decimal("19"),
+        )
+        return reservation
+
+    monkeypatch.setattr(budget, "reserve", reserve_then_replace_policy)
+    try:
+        client.register_certification_endpoint_snapshot(evidence=snapshot)
+        with pytest.raises(OpenRouterPrivacyError, match="differs from the active model budget"):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    ledger_snapshot = ledger.snapshot()
+    assert calls == 0
+    assert ledger_snapshot.active_reserved_usd == 0
+    assert ledger_snapshot.spent_usd == 0
+    assert len(ledger_snapshot.entries) == 1
+    assert ledger_snapshot.entries[0].status.value == "released"
 
 
 @pytest.mark.asyncio
@@ -1169,6 +1533,734 @@ async def test_real_noncertification_completion_requires_endpoint_bound_budget_b
 
     assert calls == 0
     assert usage.records == []
+    assert budget.atomic_ledger is not None
+    assert budget.atomic_ledger.snapshot().entries == ()
+
+
+@pytest.mark.asyncio
+async def test_paid_non_zdr_completion_requires_live_consent_before_transport(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    calls = 0
+    credential_canary = "synthetic-paid-non-zdr-credential-canary"
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT,
+            "require_zdr": False,
+            "maximum_model_retention": "temporary",
+        },
+        execution={"max_json_repair_attempts": 0},
+    )
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://fake.test/api/v1/",
+    )
+    budget = BudgetManager(
+        total_usd=20,
+        max_output_tokens=config.execution.max_output_tokens_per_request,
+        conservative_usd_per_million_tokens=10,
+        max_requests_per_agent=2,
+        atomic_ledger=AtomicCostLedger.initialize(
+            tmp_path / "missing-privacy-authorization-ledger.json",
+            cap_usd=Decimal("20"),
+        ),
+        require_endpoint_cost_bound=True,
+    )
+    client = OpenRouterClient(
+        api_key=credential_canary,
+        execution=config.execution,
+        privacy=config.privacy,
+        budget=budget,
+        usage=UsageLedger(),
+        http_client=http_client,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("approved-provider",),
+            allow_fallbacks=False,
+        ),
+    )
+    try:
+        with pytest.raises(
+            OpenRouterPrivacyError,
+            match="requires live operator privacy authorization",
+        ) as caught:
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert calls == 0
+    assert budget.atomic_ledger is not None
+    assert budget.atomic_ledger.snapshot().entries == ()
+    assert credential_canary not in str(caught.value)
+    assert credential_canary not in repr(caught.value.__context__)
+
+
+@pytest.mark.asyncio
+async def test_non_zdr_model_membership_uses_validated_capability_snapshot(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    class PermissiveTuple(tuple[str, ...]):
+        def __contains__(self, _value: object) -> bool:
+            return True
+
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT,
+            "require_zdr": False,
+            "maximum_model_retention": "temporary",
+        },
+        execution={"max_json_repair_attempts": 0},
+    )
+    policy, authorization, _canaries = _frontier_privacy_authorization(tmp_path)
+    forged_policy = policy.model_copy()
+    object.__setattr__(
+        forged_policy,
+        "permitted_model_ids",
+        PermissiveTuple(policy.permitted_model_ids),
+    )
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://fake.test/api/v1/",
+    )
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "permissive-model-membership-ledger.json",
+        cap_usd=Decimal("20"),
+    )
+    client = OpenRouterClient(
+        api_key="synthetic-permissive-membership-key",
+        execution=config.execution,
+        privacy=config.privacy,
+        budget=BudgetManager(
+            total_usd=20,
+            max_output_tokens=config.execution.max_output_tokens_per_request,
+            conservative_usd_per_million_tokens=10,
+            max_requests_per_agent=2,
+            atomic_ledger=ledger,
+            require_endpoint_cost_bound=True,
+        ),
+        usage=UsageLedger(),
+        http_client=http_client,
+        provider_policy=OpenRouterProviderPolicy(only=("approved-provider",)),
+        effective_privacy_policy=forged_policy,
+        privacy_authorization=authorization,
+    )
+    try:
+        with pytest.raises(OpenRouterPrivacyError, match="model outside consent"):
+            await client.complete(
+                role="source_audit",
+                models=["outside/model"],
+                system_prompt="system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert calls == 0
+    assert ledger.snapshot().entries == ()
+
+
+@pytest.mark.asyncio
+async def test_certification_non_zdr_client_requires_live_consent_at_construction(
+    config_factory,
+) -> None:
+    calls = 0
+    credential_canary = "synthetic-certification-non-zdr-credential-canary"
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT,
+            "require_zdr": False,
+            "maximum_model_retention": "temporary",
+        },
+        execution={"max_json_repair_attempts": 0},
+    )
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://fake.test/api/v1/",
+    )
+    try:
+        with pytest.raises(
+            OpenRouterPrivacyError,
+            match="requires live operator privacy authorization",
+        ) as caught:
+            OpenRouterClient(
+                api_key=credential_canary,
+                execution=config.execution,
+                privacy=config.privacy,
+                budget=BudgetManager(
+                    total_usd=20,
+                    max_output_tokens=config.execution.max_output_tokens_per_request,
+                    conservative_usd_per_million_tokens=10,
+                    max_requests_per_agent=2,
+                ),
+                usage=UsageLedger(),
+                http_client=http_client,
+                provider_policy=OpenRouterProviderPolicy(
+                    certification=True,
+                    only=("approved-provider",),
+                    allow_fallbacks=False,
+                ),
+                qualification_routing=(_qualification_routing(provider="approved-provider"),),
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 0
+    assert credential_canary not in str(caught.value)
+    assert credential_canary not in repr(caught.value.__context__)
+
+
+@pytest.mark.asyncio
+async def test_client_copies_stateful_provider_policy_before_request_construction(
+    config_factory,
+) -> None:
+    class StatefulEndpointTuple(tuple[str, ...]):
+        emit_outside = False
+
+        def __iter__(self):
+            if self.emit_outside:
+                return iter(("outside-provider",))
+            return super().__iter__()
+
+    config = config_factory(execution={"max_json_repair_attempts": 0})
+    endpoints = StatefulEndpointTuple(("approved-provider",))
+    policy = OpenRouterProviderPolicy(only=endpoints)
+    client, http_client, _usage = _client(
+        config,
+        lambda _request: _completion_response('{"answer":"unused"}'),
+        provider_policy=policy,
+    )
+    endpoints.emit_outside = True
+    try:
+        body = client.build_request(
+            model="alpha/atlas-secure",
+            system_prompt="system",
+            user_prompt="synthetic local input",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert type(client.provider_policy.only) is tuple
+    assert body["provider"]["only"] == ["approved-provider"]
+    assert http_client.is_closed is True
+
+
+@pytest.mark.asyncio
+async def test_consent_bound_non_zdr_request_omits_zdr_and_serializes_only_hash_evidence(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    request_bodies: list[dict[str, Any]] = []
+    credential_canary = "synthetic-valid-non-zdr-credential-canary"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_bodies.append(json.loads(request.content))
+        return _completion_response(
+            '{"answer":"validated"}',
+            cost=0.001,
+            provider="approved-provider",
+        )
+
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT,
+            "require_zdr": False,
+            "maximum_model_retention": "temporary",
+        },
+        execution={"max_json_repair_attempts": 0},
+    )
+    policy, authorization, consent_canaries = _frontier_privacy_authorization(tmp_path)
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://fake.test/api/v1/",
+    )
+    budget = BudgetManager(
+        total_usd=20,
+        max_output_tokens=config.execution.max_output_tokens_per_request,
+        conservative_usd_per_million_tokens=10,
+        max_requests_per_agent=2,
+        atomic_ledger=AtomicCostLedger.initialize(
+            tmp_path / "valid-non-zdr-cost-ledger.json",
+            cap_usd=Decimal("20"),
+        ),
+        require_endpoint_cost_bound=True,
+    )
+    usage = UsageLedger()
+    client = OpenRouterClient(
+        api_key=credential_canary,
+        execution=config.execution,
+        privacy=config.privacy,
+        budget=budget,
+        usage=usage,
+        http_client=http_client,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("approved-provider",),
+            allow_fallbacks=False,
+        ),
+        effective_privacy_policy=policy,
+        privacy_authorization=authorization,
+    )
+    try:
+        client.register_endpoint_snapshot(
+            evidence=_endpoint_snapshot(require_zdr=False),
+        )
+        completion = await client.complete_with_evidence(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="synthetic local input",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert completion.value.answer == "validated"
+    assert len(request_bodies) == 1
+    provider_payload = request_bodies[0]["provider"]
+    assert provider_payload == {
+        "allow_fallbacks": False,
+        "require_parameters": True,
+        "data_collection": "deny",
+        "only": ["approved-provider"],
+        "max_price": provider_payload["max_price"],
+    }
+    assert "zdr" not in provider_payload
+    assert completion.usage_record.routing["privacy_authorization"] == ("CONSENT_BOUND_NON_ZDR")
+    assert completion.usage_record.routing["privacy_endpoint_policy_class"] == (
+        EndpointPolicyClass.NON_ZDR_DATA_COLLECTION_DENIED.value
+    )
+    assert completion.usage_record.routing["effective_privacy_policy_sha256"] == (
+        policy.evidence_sha256
+    )
+    serialized_evidence = json.dumps(
+        {
+            "request": request_bodies[0],
+            "usage": completion.usage_record.model_dump(mode="json"),
+        },
+        sort_keys=True,
+    )
+    assert credential_canary not in serialized_evidence
+    assert all(canary not in serialized_evidence for canary in consent_canaries)
+    assert usage.records == [completion.usage_record]
+
+
+@pytest.mark.asyncio
+async def test_non_zdr_consent_expiry_after_reservation_prevents_transport_and_releases_budget(
+    config_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    evaluated_at = datetime.now(UTC).replace(microsecond=0)
+    expires_at = evaluated_at + timedelta(minutes=10)
+
+    class ControlledDateTime(datetime):
+        current = evaluated_at
+
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:
+            value = cls.current
+            return value if tz is None else value.astimezone(tz)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT,
+            "require_zdr": False,
+            "maximum_model_retention": "temporary",
+        },
+        execution={"max_json_repair_attempts": 0},
+    )
+    policy, authorization, _canaries = _frontier_privacy_authorization(
+        tmp_path,
+        evaluation_time=evaluated_at,
+        expires_at=expires_at,
+    )
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://fake.test/api/v1/",
+    )
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "expiry-after-reservation-ledger.json",
+        cap_usd=Decimal("20"),
+    )
+    budget = BudgetManager(
+        total_usd=20,
+        max_output_tokens=config.execution.max_output_tokens_per_request,
+        conservative_usd_per_million_tokens=10,
+        max_requests_per_agent=2,
+        atomic_ledger=ledger,
+        require_endpoint_cost_bound=True,
+    )
+    client = OpenRouterClient(
+        api_key="synthetic-expiry-after-reservation-key",
+        execution=config.execution,
+        privacy=config.privacy,
+        budget=budget,
+        usage=UsageLedger(),
+        http_client=http_client,
+        provider_policy=OpenRouterProviderPolicy(
+            only=("approved-provider",),
+            allow_fallbacks=False,
+        ),
+        effective_privacy_policy=policy,
+        privacy_authorization=authorization,
+    )
+    original_reserve = budget.reserve
+
+    async def reserve_then_expire(*args: Any, **kwargs: Any) -> Any:
+        reservation = await original_reserve(*args, **kwargs)
+        ControlledDateTime.current = expires_at
+        return reservation
+
+    monkeypatch.setattr(openrouter_module, "datetime", ControlledDateTime)
+    monkeypatch.setattr(budget, "reserve", reserve_then_expire)
+    try:
+        client.register_endpoint_snapshot(evidence=_endpoint_snapshot(require_zdr=False))
+        with pytest.raises(OpenRouterPrivacyError, match="not currently valid"):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    snapshot = ledger.snapshot()
+    assert calls == 0
+    assert snapshot.active_reserved_usd == 0
+    assert snapshot.spent_usd == 0
+    assert len(snapshot.entries) == 1
+    assert snapshot.entries[0].status.value == "released"
+
+
+@pytest.mark.asyncio
+async def test_non_zdr_exact_request_endpoint_is_refused_before_reservation(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT,
+            "require_zdr": False,
+            "maximum_model_retention": "temporary",
+        },
+        execution={"max_json_repair_attempts": 0},
+    )
+    policy, authorization, _canaries = _frontier_privacy_authorization(tmp_path)
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://fake.test/api/v1/",
+    )
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "exact-route-revalidation-ledger.json",
+        cap_usd=Decimal("20"),
+    )
+    client = OpenRouterClient(
+        api_key="synthetic-exact-route-key",
+        execution=config.execution,
+        privacy=config.privacy,
+        budget=BudgetManager(
+            total_usd=20,
+            max_output_tokens=config.execution.max_output_tokens_per_request,
+            conservative_usd_per_million_tokens=10,
+            max_requests_per_agent=2,
+            atomic_ledger=ledger,
+            require_endpoint_cost_bound=True,
+        ),
+        usage=UsageLedger(),
+        http_client=http_client,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+            allow_fallbacks=False,
+        ),
+        effective_privacy_policy=policy,
+        privacy_authorization=authorization,
+    )
+    try:
+        client.register_endpoint_snapshot(evidence=_endpoint_snapshot(require_zdr=False))
+        with pytest.raises(
+            OpenRouterPrivacyError,
+            match="endpoint outside effective privacy evidence",
+        ):
+            await client._complete_one(
+                role="source_audit",
+                model="alpha/atlas-secure",
+                system_prompt="system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+                fallback_used=False,
+                qualification_binding=_qualification_routing(provider="outside-consent-provider"),
+            )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    snapshot = ledger.snapshot()
+    assert calls == 0
+    assert snapshot.active_reserved_usd == 0
+    assert snapshot.spent_usd == 0
+    assert snapshot.entries == ()
+
+
+@pytest.mark.asyncio
+async def test_non_zdr_exact_endpoint_requires_disclosure_before_reservation(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    calls = 0
+    providers = ("approved-provider", "zdr-only-provider")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT,
+            "require_zdr": False,
+            "maximum_model_retention": "temporary",
+        },
+        execution={"max_json_repair_attempts": 0},
+    )
+    policy, authorization, _canaries = _frontier_privacy_authorization(
+        tmp_path,
+        provider_policy_classes=(
+            (
+                "approved-provider",
+                EndpointPolicyClass.NON_ZDR_DATA_COLLECTION_DENIED,
+            ),
+            ("zdr-only-provider", EndpointPolicyClass.ZDR),
+        ),
+    )
+    endpoint_payloads = [
+        {
+            "tag": provider,
+            "provider_name": provider.replace("-", " ").title(),
+            "status": 0,
+            "context_length": 200_000,
+            "max_prompt_tokens": 180_000,
+            "max_completion_tokens": 20_000,
+            "supported_parameters": ["max_tokens", "response_format", "temperature"],
+            "pricing": {
+                "prompt": "0.000001",
+                "completion": "0.00001",
+                "request": "0",
+            },
+        }
+        for provider in providers
+    ]
+    endpoint_snapshot = validate_openrouter_endpoint_snapshot(
+        exact_model_id="alpha/atlas-secure",
+        configured_provider_endpoints=providers,
+        provider_policy_mode="only",
+        endpoint_payload={
+            "data": {
+                "id": "alpha/atlas-secure",
+                "endpoints": endpoint_payloads,
+            }
+        },
+        require_zdr=False,
+    )
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://fake.test/api/v1/",
+    )
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "exact-disclosure-revalidation-ledger.json",
+        cap_usd=Decimal("20"),
+    )
+    client = OpenRouterClient(
+        api_key="synthetic-exact-disclosure-key",
+        execution=config.execution,
+        privacy=config.privacy,
+        budget=BudgetManager(
+            total_usd=20,
+            max_output_tokens=config.execution.max_output_tokens_per_request,
+            conservative_usd_per_million_tokens=10,
+            max_requests_per_agent=2,
+            atomic_ledger=ledger,
+            require_endpoint_cost_bound=True,
+        ),
+        usage=UsageLedger(),
+        http_client=http_client,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=providers,
+            allow_fallbacks=False,
+        ),
+        effective_privacy_policy=policy,
+        privacy_authorization=authorization,
+    )
+    try:
+        client.register_endpoint_snapshot(evidence=endpoint_snapshot)
+        with pytest.raises(OpenRouterPrivacyError, match="without exact non-ZDR disclosure"):
+            await client._complete_one(
+                role="source_audit",
+                model="alpha/atlas-secure",
+                system_prompt="system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+                fallback_used=False,
+                qualification_binding=_qualification_routing(provider="zdr-only-provider"),
+            )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    snapshot = ledger.snapshot()
+    assert calls == 0
+    assert snapshot.active_reserved_usd == 0
+    assert snapshot.spent_usd == 0
+    assert snapshot.entries == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_authorization",
+    ["route_mismatch", "expired", "tampered"],
+)
+async def test_invalid_non_zdr_authorization_is_refused_before_transport(
+    config_factory,
+    tmp_path: Path,
+    invalid_authorization: str,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT,
+            "require_zdr": False,
+            "maximum_model_retention": "temporary",
+        },
+        execution={"max_json_repair_attempts": 0},
+    )
+    current = datetime.now(UTC).replace(microsecond=0)
+    if invalid_authorization == "expired":
+        policy, authorization, _canaries = _frontier_privacy_authorization(
+            tmp_path,
+            evaluation_time=current - timedelta(minutes=90),
+            issued_at=current - timedelta(hours=2),
+            expires_at=current - timedelta(hours=1),
+        )
+        provider = "approved-provider"
+        expected_error = "not currently valid"
+    elif invalid_authorization == "tampered":
+        policy, authorization, _canaries = _frontier_privacy_authorization(tmp_path)
+        object.__setattr__(
+            authorization,
+            "_evidence",
+            policy.model_copy(update={"evidence_sha256": "7" * 64}),
+        )
+        provider = "approved-provider"
+        expected_error = "binding is inconsistent"
+    else:
+        policy, authorization, _canaries = _frontier_privacy_authorization(tmp_path)
+        provider = "different-provider"
+        expected_error = "different exact route"
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://fake.test/api/v1/",
+    )
+    budget = BudgetManager(
+        total_usd=20,
+        max_output_tokens=config.execution.max_output_tokens_per_request,
+        conservative_usd_per_million_tokens=10,
+        max_requests_per_agent=2,
+        atomic_ledger=AtomicCostLedger.initialize(
+            tmp_path / f"invalid-{invalid_authorization}-ledger.json",
+            cap_usd=Decimal("20"),
+        ),
+        require_endpoint_cost_bound=True,
+    )
+    client = OpenRouterClient(
+        api_key="synthetic-invalid-authorization-key",
+        execution=config.execution,
+        privacy=config.privacy,
+        budget=budget,
+        usage=UsageLedger(),
+        http_client=http_client,
+        provider_policy=OpenRouterProviderPolicy(
+            only=(provider,),
+            allow_fallbacks=False,
+        ),
+        effective_privacy_policy=policy,
+        privacy_authorization=authorization,
+    )
+    try:
+        with pytest.raises(OpenRouterPrivacyError, match=expected_error):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert calls == 0
     assert budget.atomic_ledger is not None
     assert budget.atomic_ledger.snapshot().entries == ()
 
@@ -2834,7 +3926,7 @@ async def test_models_metadata_shape(config_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_certification_catalog_uses_fixed_zdr_structured_output_filters(
+async def test_certification_catalog_does_not_filter_privacy_or_output_mode(
     config_factory,
 ) -> None:
     observed: list[httpx.Request] = []
@@ -2850,10 +3942,7 @@ async def test_certification_catalog_uses_fixed_zdr_structured_output_filters(
         await http_client.aclose()
 
     assert observed[0].url.path == "/api/v1/models"
-    assert dict(observed[0].url.params) == {
-        "zdr": "true",
-        "supported_parameters": "response_format",
-    }
+    assert dict(observed[0].url.params) == {}
 
 
 @pytest.mark.asyncio
@@ -3864,11 +4953,15 @@ def test_certification_requires_provider_pin_zdr_and_no_repair(config_factory) -
         certification=True,
         only=("approved-provider", "second-provider"),
     ).configured_endpoints == ("approved-provider", "second-provider")
-    with pytest.raises(OpenRouterPrivacyError, match="zero-data-retention"):
+    with pytest.raises(OpenRouterPrivacyError, match="live operator privacy authorization"):
         _client(
             config_factory(
                 execution={"max_json_repair_attempts": 0},
-                privacy={"require_zdr": False},
+                privacy={
+                    "profile": "FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT",
+                    "require_zdr": False,
+                    "maximum_model_retention": "temporary",
+                },
             ),
             lambda _request: _completion_response('{"answer":"unexpected"}'),
             provider_policy=OpenRouterProviderPolicy(

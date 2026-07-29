@@ -34,7 +34,6 @@ _STRUCTURED_OUTPUT_PARAMETERS = frozenset(
 _BASE_REQUEST_PARAMETERS = frozenset(
     {
         "max_tokens",
-        "response_format",
         "temperature",
     }
 )
@@ -72,8 +71,8 @@ class OpenRouterEndpointEvidence(BaseModel):
     operational_status: str = Field(min_length=1, max_length=32)
     zdr_eligible: bool | None
     supported_parameters: tuple[str, ...] = Field(max_length=_MAX_PARAMETERS)
-    required_request_parameters: tuple[str, ...] = Field(min_length=3, max_length=4)
-    structured_output_parameters: tuple[str, ...] = Field(min_length=1, max_length=3)
+    required_request_parameters: tuple[str, ...] = Field(min_length=2, max_length=4)
+    structured_output_parameters: tuple[str, ...] = Field(max_length=3)
     context_length: int = Field(gt=0)
     max_prompt_tokens: int = Field(gt=0)
     max_prompt_tokens_source: Literal["metadata", "context_limit"]
@@ -205,6 +204,7 @@ def validate_openrouter_endpoint_snapshot(
     require_zdr: bool,
     zdr_payload: Any | None = None,
     reasoning_requested: bool = False,
+    structured_output_required: bool = True,
 ) -> OpenRouterEndpointSnapshotEvidence:
     """Validate provider snapshots and return canonical non-secret evidence.
 
@@ -231,6 +231,7 @@ def validate_openrouter_endpoint_snapshot(
             {
                 *_BASE_REQUEST_PARAMETERS,
                 *(("reasoning",) if reasoning_requested else ()),
+                *(("response_format",) if structured_output_required else ()),
             }
         )
     )
@@ -282,6 +283,10 @@ def validate_openrouter_endpoint_snapshot(
             raw_endpoint=raw_endpoint,
             required_request_parameters=required_request_parameters,
         )
+        if structured_output_required and not normalized["structured_output_parameters"]:
+            raise EndpointSnapshotValidationError(
+                "configured endpoint lacks structured-output parameter support"
+            )
         zdr_raw = zdr_matches[endpoint_id]
         zdr_hash: str | None = None
         zdr_eligible: bool | None = None if zdr_payload is None else False
@@ -365,10 +370,15 @@ def _required_mapping(value: Any, label: str) -> Mapping[str, Any]:
     return value
 
 
-def _required_endpoint_list(value: Any, label: str) -> list[Mapping[str, Any]]:
+def _required_endpoint_list(
+    value: Any,
+    label: str,
+    *,
+    allow_empty: bool = False,
+) -> list[Mapping[str, Any]]:
     if (
         not isinstance(value, list)
-        or not value
+        or (not value and not allow_empty)
         or len(value) > _MAX_ENDPOINTS
         or any(not isinstance(item, dict) for item in value)
     ):
@@ -410,7 +420,11 @@ def _match_zdr_endpoints(
     required_request_parameters: tuple[str, ...],
 ) -> tuple[dict[str, Mapping[str, Any] | None], dict[str, Any]]:
     envelope = _required_mapping(payload, "ZDR endpoint metadata")
-    raw_items = _required_endpoint_list(envelope.get("data"), "ZDR endpoint metadata")
+    raw_items = _required_endpoint_list(
+        envelope.get("data"),
+        "ZDR endpoint metadata",
+        allow_empty=True,
+    )
     exact_model_items: list[Mapping[str, Any]] = []
     for item in raw_items:
         item_model = item.get("model_id")
@@ -538,10 +552,6 @@ def _normalize_endpoint(
     status = _operational_status(raw_endpoint.get("status"))
     supported = _supported_parameters(raw_endpoint.get("supported_parameters"))
     structured = tuple(sorted(_STRUCTURED_OUTPUT_PARAMETERS.intersection(supported)))
-    if not structured:
-        raise EndpointSnapshotValidationError(
-            f"configured endpoint lacks structured-output parameter support: {configured_endpoint}"
-        )
     if not set(required_request_parameters).issubset(supported):
         missing = sorted(set(required_request_parameters) - set(supported))
         raise EndpointSnapshotValidationError(

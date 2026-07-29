@@ -51,7 +51,10 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.reporting.json_report import stable_json
-from tests.identity_fixtures import bind_synthetic_usage_identity
+from tests.identity_fixtures import (
+    bind_synthetic_usage_identity,
+    synthetic_strict_zdr_privacy_routing,
+)
 
 ROOT = Path(__file__).parents[2]
 CORPUS_PATH = ROOT / "benchmarks" / "model_corpus" / "manifest.json"
@@ -93,6 +96,9 @@ def _candidate_registry(
                 reasoning_supported=True,
                 zdr_eligible=True,
                 data_collection_deny_eligible=True,
+                data_collection_deny_request_policy_enforced=True,
+                data_collection_deny_evidence_source="ZDR_ENDPOINT_SNAPSHOT",
+                data_collection_deny_evidence_sha256="8" * 64,
                 operational_status=CandidateOperationalStatus.AVAILABLE,
                 benchmark_status=CandidateBenchmarkStatus.PENDING,
             )
@@ -189,22 +195,8 @@ def _usage_record(
         ]
     )
     response_sha256 = benchmark_models._validated_response_sha256(response)
-    return UsageRecord(
-        request_id=f"request-{target_slug}-{case_id}",
-        role="model_benchmark",
-        execution_evidence=execution_evidence,
-        requested_model=target.model_id,
-        returned_model=target.model_id,
-        actual_model=target.model_id,
-        provider="Synthetic",
-        model_family=target.model_id,
-        timestamp=started_at,
-        prompt_tokens=100,
-        completion_tokens=25,
-        total_tokens=125,
-        reported_cost_usd=0.01,
-        accounted_cost_usd=0.01,
-        routing={
+    routing = synthetic_strict_zdr_privacy_routing(
+        {
             "generation_id": generation_id,
             "selected_model": target.model_id,
             "selected_provider_endpoint": endpoint,
@@ -227,6 +219,24 @@ def _usage_record(
             "request_ended_at": ended_at.isoformat(),
             "latency_ms": 125,
         },
+        source_label=f"model-benchmark-portfolio:{target.model_id}:{case_id}",
+    )
+    return UsageRecord(
+        request_id=f"request-{target_slug}-{case_id}",
+        role="model_benchmark",
+        execution_evidence=execution_evidence,
+        requested_model=target.model_id,
+        returned_model=target.model_id,
+        actual_model=target.model_id,
+        provider="Synthetic",
+        model_family=target.model_id,
+        timestamp=started_at,
+        prompt_tokens=100,
+        completion_tokens=25,
+        total_tokens=125,
+        reported_cost_usd=0.01,
+        accounted_cost_usd=0.01,
+        routing=routing,
         prompt_sha256=prompt_sha256,
         response_sha256=response_sha256,
         validated_response_sha256=response_sha256,

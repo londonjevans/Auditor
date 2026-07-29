@@ -65,6 +65,7 @@ from mmaudit.models.usage import UsageLedger, is_creditable_usage_record
 from mmaudit.orchestration.budgets import BudgetManager
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.manifest import canonical_sha256
+from mmaudit.privacy import EndpointPolicyClass, PrivacyProfile, PrivacySourceClassification
 from tests.identity_fixtures import bind_synthetic_usage_identity
 
 ROOT = Path(__file__).parents[2]
@@ -323,8 +324,9 @@ def _discovery_and_registry(
             configured_provider_endpoints=(spec.provider_endpoint,),
             provider_policy_mode="only",
             endpoint_payload=endpoint_payload,
-            require_zdr=True,
+            require_zdr=config.privacy.require_zdr,
             zdr_payload=zdr_payload,
+            structured_output_required=False,
         )
         payloads.append(
             validate_openrouter_model_discovery(
@@ -418,6 +420,14 @@ def _discovery_and_registry(
                 reasoning_supported=item.reasoning_supported,
                 zdr_eligible=item.zdr_eligible,
                 data_collection_deny_eligible=item.data_collection_deny_eligible,
+                data_collection_deny_request_policy_enforced=(
+                    item.data_collection_deny_request_policy_enforced
+                ),
+                data_collection_deny_evidence_source=(item.data_collection_deny_evidence_source),
+                data_collection_deny_evidence_sha256=(item.data_collection_deny_evidence_sha256),
+                data_collection_deny_evidence_expires_at=(
+                    item.data_collection_deny_evidence_expires_at
+                ),
                 operational_status=CandidateOperationalStatus.AVAILABLE,
             )
         )
@@ -451,6 +461,50 @@ def _config(config_factory: Callable[..., AuditConfig]) -> AuditConfig:
         execution={"max_requests_per_agent": 512},
         models={"reasoning": {"effort": "high"}},
     )
+
+
+def test_discovery_and_candidate_snapshot_use_the_same_configured_privacy_mode(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = _config(config_factory)
+    spec = _CandidateSpec(
+        model_id="alpha/atlas-secure",
+        provider_endpoint="provider-alpha",
+        provider_name="Provider Alpha",
+    )
+    endpoint = _endpoint(spec)
+    endpoint_payload = {
+        "data": {
+            "id": spec.model_id,
+            "endpoints": [{key: value for key, value in endpoint.items() if key != "model_id"}],
+        }
+    }
+    zdr_payload = {"data": [endpoint]}
+
+    discovery_snapshot = validate_openrouter_endpoint_snapshot(
+        exact_model_id=spec.model_id,
+        configured_provider_endpoints=(spec.provider_endpoint,),
+        provider_policy_mode="only",
+        endpoint_payload=endpoint_payload,
+        require_zdr=config.privacy.require_zdr,
+        zdr_payload=zdr_payload,
+        structured_output_required=False,
+    )
+    candidate_snapshot = validate_openrouter_endpoint_snapshot(
+        exact_model_id=spec.model_id,
+        configured_provider_endpoints=(spec.provider_endpoint,),
+        provider_policy_mode="only",
+        endpoint_payload=endpoint_payload,
+        require_zdr=config.privacy.require_zdr,
+        zdr_payload=zdr_payload,
+        reasoning_requested=False,
+        structured_output_required=False,
+    )
+
+    assert config.privacy.profile is PrivacyProfile.STRICT_ZDR
+    assert discovery_snapshot.require_zdr is True
+    assert candidate_snapshot == discovery_snapshot
+    assert candidate_snapshot.snapshot_sha256 == discovery_snapshot.snapshot_sha256
 
 
 def _attested_candidate_usage() -> UsageRecord:
@@ -494,6 +548,18 @@ def _attested_candidate_usage() -> UsageRecord:
                 "validation_status": "valid",
                 "zdr_requested": True,
                 "data_collection": "deny",
+                "privacy_profile": PrivacyProfile.STRICT_ZDR.value,
+                "privacy_authorization": "STRICT_ZDR_ENFORCED",
+                "effective_privacy_policy_sha256": _canonical_hash("effective privacy policy"),
+                "privacy_source_sha256": _canonical_hash("privacy source"),
+                "privacy_source_provenance_sha256": _canonical_hash("privacy source provenance"),
+                "privacy_source_classification": (
+                    PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE.value
+                ),
+                "privacy_consent_file_sha256": None,
+                "privacy_consent_sha256": None,
+                "privacy_consent_expires_at": None,
+                "privacy_endpoint_policy_class": EndpointPolicyClass.ZDR.value,
                 "repair_used": False,
                 "repair_request": False,
                 "request_started_at": _NOW.isoformat(),
@@ -685,6 +751,22 @@ async def test_candidate_benchmark_uses_exact_mock_certification_route(
         }
         assert "max_price" in body["provider"]
     assert all(body["reasoning"]["effort"] == "high" for body in factory.request_bodies)
+    effective_policy = factory.clients[0].effective_privacy_policy
+    assert effective_policy is not None
+    assert effective_policy.privacy_profile is PrivacyProfile.STRICT_ZDR
+    assert effective_policy.source_sha256 == suite.corpus_sha256
+    assert effective_policy.source_classification is (
+        PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE
+    )
+    assert effective_policy.permitted_model_ids == (spec.model_id,)
+    assert effective_policy.permitted_provider_endpoints == (spec.provider_endpoint,)
+    for case in report.results[0].cases:
+        assert case.usage_record is not None
+        assert (
+            case.usage_record.routing["effective_privacy_policy_sha256"]
+            == effective_policy.evidence_sha256
+        )
+        assert case.usage_record.routing["privacy_source_sha256"] == suite.corpus_sha256
     assert all(not client._credential for client in factory.clients)
     assert canary not in result.model_dump_json()
 

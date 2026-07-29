@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,7 @@ from mmaudit.config import (
     AuditRunOptions,
     canonical_audit_config_json,
 )
-from mmaudit.models.schemas import AuditProfile
+from mmaudit.models.schemas import AuditProfile, AuditReport, RepositoryMap
 from mmaudit.orchestration.manifest import (
     ManifestBindingSet,
     ManifestFileBinding,
@@ -90,6 +91,80 @@ def _run_configuration(config: AuditConfig) -> RunConfigurationBinding:
     )
 
 
+def _report(
+    config: AuditConfig,
+    *,
+    run_id: str,
+    commit: str,
+) -> AuditReport:
+    effective = config.effective()
+    return AuditReport(
+        schema_version="1.0",
+        run_id=run_id,
+        generated_at=datetime(2026, 1, 2, tzinfo=UTC),
+        completed=True,
+        incomplete_reasons=[],
+        repository=RepositoryMap(
+            root_name="synthetic-target-repository",
+            git_commit=commit,
+            languages={},
+            frameworks=[],
+            manifests=[],
+            entry_points=[],
+            api_surfaces=[],
+            auth_components=[],
+            data_layers=[],
+            network_clients=[],
+            file_handlers=[],
+            configuration_files=[],
+            sensitive_processing=[],
+            security_tests=[],
+            files=[],
+        ),
+        configuration_hash=effective.stable_hash(),
+        model_configuration_hash=effective.model_hash(),
+        privacy={
+            "profile": effective.privacy.profile.value,
+            "code_egress_enabled": False,
+            "effective_policy": None,
+            "source_provenance": None,
+        },
+        scanner_runs=[],
+        usage=[],
+        budget_usd=effective.execution.budget_usd,
+        accounted_cost_usd=0,
+        findings=[],
+        rejected_findings=[],
+        audit_profile=effective.profile,
+    )
+
+
+def _write_report_artifacts(run_dir: Path, report: AuditReport) -> None:
+    (run_dir / "final-findings.json").write_text(
+        report.model_dump_json(),
+        encoding="utf-8",
+    )
+    (run_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "schema_version": report.schema_version,
+                "run_id": report.run_id,
+                "generated_at": report.generated_at.isoformat(),
+                "completed": report.completed,
+                "incomplete_reasons": report.incomplete_reasons,
+                "configuration_hash": report.configuration_hash,
+                "model_configuration_hash": report.model_configuration_hash,
+                "privacy": report.privacy,
+                "metadata": report.metadata,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def _write_run(
     run_dir: Path,
     config: AuditConfig,
@@ -113,6 +188,14 @@ def _write_run(
     required_artifacts.discard("maximum_assurance_traceability.json")
     for name in sorted(required_artifacts):
         (run_dir / name).write_text('{"synthetic":true}\n', encoding="utf-8")
+    _write_report_artifacts(
+        run_dir,
+        _report(
+            config,
+            run_id=run_id,
+            commit=commit,
+        ),
+    )
     source = ManifestFileBinding(
         path="contracts/Synthetic.sol",
         sha256=_sha("synthetic target source"),

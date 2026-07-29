@@ -1054,11 +1054,14 @@ def render_markdown(report: AuditReport) -> str:
             f"{usage.accounted_cost_usd:.4f} | "
             f"{bool(usage.routing.get('zdr_requested'))} |"
         )
+    effective_privacy = report.privacy.get("effective_policy")
+    effective_privacy = effective_privacy if isinstance(effective_privacy, dict) else {}
     lines.extend(
         [
             "",
             "## Privacy and cost",
             "",
+            f"- Privacy profile: **{report.privacy.get('profile', 'UNKNOWN')}**",
             f"- Source-code egress enabled: **{bool(report.privacy.get('code_egress_enabled'))}**",
             f"- ZDR required: **{bool(report.privacy.get('require_zdr'))}**",
             f"- Secret redaction enabled: **{bool(report.privacy.get('redact_secrets'))}**",
@@ -1073,10 +1076,50 @@ def render_markdown(report: AuditReport) -> str:
             "Provider and routing metadata are retained in the JSON report. Prompts, responses, "
             "credentials, and authorization headers are omitted by default.",
             "",
-            "## Findings",
-            "",
         ]
     )
+    if effective_privacy:
+        consent_sha256 = effective_privacy.get("consent_sha256")
+        if consent_sha256:
+            retention_consent = (
+                f"`{consent_sha256}`; expires {effective_privacy.get('consent_expires_at')}"
+            )
+        elif effective_privacy.get("privacy_profile") == "STRICT_ZDR":
+            retention_consent = "not applicable under STRICT_ZDR"
+        elif (
+            effective_privacy.get("privacy_profile") == "SYNTHETIC_BENCHMARK"
+            and effective_privacy.get("require_zdr") is True
+        ):
+            retention_consent = "not applicable to ZDR-enforced synthetic benchmark source"
+        else:
+            retention_consent = "missing from non-strict effective privacy evidence"
+        lines.extend(
+            [
+                "- Effective privacy evidence: "
+                f"`{effective_privacy.get('evidence_sha256', 'unavailable')}`",
+                "- Provider-visible source scope: "
+                f"`{effective_privacy.get('source_sha256', 'unavailable')}` "
+                f"({effective_privacy.get('source_classification', 'UNKNOWN')})",
+                "- Privacy-permitted exact model routes: "
+                + ", ".join(
+                    f"`{model}`"
+                    for model in effective_privacy.get("permitted_model_ids", [])
+                    if isinstance(model, str)
+                ),
+                "- Privacy-permitted exact provider endpoints: "
+                + ", ".join(
+                    f"`{endpoint}`"
+                    for endpoint in effective_privacy.get("permitted_provider_endpoints", [])
+                    if isinstance(endpoint, str)
+                ),
+                f"- Retention consent: {retention_consent}",
+            ]
+        )
+        privacy_limitations = effective_privacy.get("limitations")
+        if isinstance(privacy_limitations, list):
+            lines.extend(f"- Privacy limitation: {item}" for item in privacy_limitations)
+        lines.append("")
+    lines.extend(["## Findings", ""])
     ordered = sorted(
         report.findings,
         key=lambda finding: (

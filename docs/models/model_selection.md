@@ -120,16 +120,20 @@ Every qualification and release-certification request must enforce:
 - `provider.allow_fallbacks = false`;
 - `provider.require_parameters = true`;
 - `provider.data_collection = "deny"`;
-- `provider.zdr = true`;
+- `provider.zdr = true` under the default `STRICT_ZDR` profile;
 - an exact non-alias model ID;
 - a complete structured-output schema;
 - bounded timeout, retries, and output tokens.
 
-The endpoint must appear in the contemporaneous official ZDR endpoint snapshot and
-must support every parameter actually emitted. A missing, unavailable, substituted,
-or policy-incompatible endpoint fails the request. An operator-approved privacy
-exception, if one is ever permitted, must be a separate, explicit, time-bounded
-artifact; it does not silently preserve maximum-assurance eligibility.
+Under `STRICT_ZDR`, the endpoint must appear in the contemporaneous official ZDR
+endpoint snapshot. A non-ZDR request is permitted only under
+`FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT` or `SYNTHETIC_BENCHMARK`, with a
+descriptor-safe external consent artifact bound to the exact source hash, source
+classification, models, providers, retention disclosures, expiry, and cost ceiling.
+Synthetic consent cannot authorize private source. Every endpoint must support every
+parameter actually emitted. A missing, unavailable, substituted, unconsented, or
+policy-incompatible endpoint fails the request; no privacy exception silently
+inherits another profile's qualification or claim.
 
 ## Independent benchmark qualification
 

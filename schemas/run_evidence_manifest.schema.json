@@ -218,6 +218,8 @@
             "prior_audit.path",
             "prior_audit.required",
             "privacy.allow_code_egress",
+            "privacy.maximum_model_retention",
+            "privacy.profile",
             "privacy.require_zdr",
             "profile",
             "repository.max_discovery_bytes",
@@ -343,6 +345,8 @@
               "enum": [
                 "execution.cost_ledger_path",
                 "prior_audit.path",
+                "privacy.maximum_model_retention",
+                "privacy.profile",
                 "profile",
                 "reproduction.rootless_container_image",
                 "reproduction.rootless_container_runtime",
@@ -369,7 +373,7 @@
       "properties": {
         "entries": {
           "type": "array",
-          "maxItems": 38,
+          "maxItems": 40,
           "items": {
             "$ref": "#/$defs/auditConfigOverride"
           }
@@ -390,7 +394,9 @@
         "allow_fork_probing",
         "require_maximum_assurance",
         "allow_maximum_assurance_downgrade",
-        "benchmark_repository_git_commit"
+        "benchmark_repository_git_commit",
+        "privacy_source_classification",
+        "retention_consent_file_sha256"
       ],
       "properties": {
         "scanner_only": {
@@ -463,6 +469,23 @@
             {
               "type": "string",
               "pattern": "^[0-9a-f]{40,64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "privacy_source_classification": {
+          "enum": [
+            "PRIVATE_OPERATOR_SOURCE",
+            "SYNTHETIC_COMMITTED",
+            "PUBLIC_BENCHMARK"
+          ]
+        },
+        "retention_consent_file_sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
             },
             {
               "type": "null"

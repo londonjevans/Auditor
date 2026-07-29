@@ -76,10 +76,14 @@ def test_qualification_controls_require_endpoint_zdr_no_repair_and_no_provider_f
             ),
             certification=True,
         )
-    with pytest.raises(ConfigError, match="zero-data-retention"):
+    with pytest.raises(ConfigError, match="live operator privacy authorization"):
         build_openrouter_runtime_controls(
             config_factory(
-                privacy={"require_zdr": False},
+                privacy={
+                    "profile": "FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT",
+                    "require_zdr": False,
+                    "maximum_model_retention": "temporary",
+                },
                 execution={"max_json_repair_attempts": 0},
                 models={"provider_policy": {"only": ["anthropic"]}},
             ),

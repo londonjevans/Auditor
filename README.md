@@ -35,9 +35,13 @@ the default `fail_on_detected_secret = true`, a high-confidence secret blocks ev
 
 Review OpenRouter's current [ZDR documentation](https://openrouter.ai/docs/guides/features/zdr),
 [provider routing controls](https://openrouter.ai/docs/guides/routing/provider-selection), and your
-organization's policies before enabling egress. `require_zdr = true` requests only ZDR endpoints,
-sets provider data collection to `deny`, checks advertised ZDR eligibility, and fails closed when
-eligibility cannot be established. Provider policies and endpoint support can still change.
+organization's policies before enabling egress. `STRICT_ZDR` is the default: it requests only ZDR
+endpoints, sets provider data collection to `deny`, checks advertised ZDR eligibility, and fails
+closed when eligibility cannot be established. `FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT` requires
+both an explicit per-run profile selection and an external, self-hashed operator consent bound to
+the exact source, models, providers, retention disclosures, expiry, and cost ceiling.
+`SYNTHETIC_BENCHMARK` cannot authorize private operator source. Configuration alone never grants
+retention consent. Provider policies and endpoint support can still change.
 
 ## Installation
 
@@ -403,6 +407,10 @@ allow_code_egress = true
 ```
 
 or as `--allow-code-egress` on that run. Reports record the acknowledgement but never credentials.
+For a non-ZDR provider run, also pass the matching `--privacy-profile`,
+`--privacy-source-classification`, and absolute `--retention-consent` path. The consent file must be
+an operator-controlled regular file outside the audited repository. Reports retain only validated
+policy evidence and hashes, not the consent path or operator references.
 
 ## Docker
 
@@ -622,8 +630,10 @@ compilation is enabled for an isolated local workspace.
 
 ## Troubleshooting and limitations
 
-- `doctor` intentionally fails when the API key, exact model IDs, egress acknowledgement, ZDR, or
-  safe privacy defaults are absent. It never prints the key.
+- `doctor` intentionally fails when the API key, exact model IDs, egress acknowledgement, or safe
+  privacy defaults are absent. It never prints the key. For a non-ZDR profile it reports
+  account/guardrail ZDR compatibility as unobservable from ordinary API-key metadata; a successful
+  consented exact-route runtime preflight is required before a frontier-ensemble claim.
 - `models check` requires network access. Metadata is cached under `.mmaudit/cache` for six hours;
   use `--refresh` after model/provider changes.
 - Environment-derived HTTP proxy settings are ignored to avoid accidental source/key disclosure.

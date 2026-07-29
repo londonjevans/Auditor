@@ -110,6 +110,17 @@ class OpenRouterIdentityEndpointCapabilities(BaseModel):
     reasoning_supported: bool
     zdr_eligible: bool
     data_collection_deny_eligible: bool
+    data_collection_deny_request_policy_enforced: bool
+    data_collection_deny_evidence_source: Literal[
+        "ZDR_ENDPOINT_SNAPSHOT",
+        "CONSENT_BOUND_ROUTER_REQUEST_POLICY",
+        "UNVERIFIED",
+    ]
+    data_collection_deny_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+    )
+    data_collection_deny_evidence_expires_at: datetime | None = None
 
     @field_validator(
         "supported_parameters",
@@ -140,6 +151,33 @@ class OpenRouterIdentityEndpointCapabilities(BaseModel):
             raise ValueError("reasoning capability status is inconsistent")
         if self.output_tokens > self.context_tokens:
             raise ValueError("endpoint output capacity exceeds its context capacity")
+        if self.data_collection_deny_evidence_source == "ZDR_ENDPOINT_SNAPSHOT":
+            if (
+                self.data_collection_deny_eligible is not True
+                or self.data_collection_deny_request_policy_enforced is not True
+                or self.data_collection_deny_evidence_sha256 is None
+                or self.data_collection_deny_evidence_expires_at is not None
+            ):
+                raise ValueError("identity ZDR privacy evidence is incomplete")
+        elif self.data_collection_deny_evidence_source == "CONSENT_BOUND_ROUTER_REQUEST_POLICY":
+            expiry = self.data_collection_deny_evidence_expires_at
+            if (
+                self.data_collection_deny_eligible is not False
+                or self.data_collection_deny_request_policy_enforced is not True
+                or self.data_collection_deny_evidence_sha256 is None
+                or expiry is None
+                or expiry.tzinfo is None
+                or expiry.utcoffset() != timedelta(0)
+                or expiry.microsecond != 0
+            ):
+                raise ValueError("identity consent-bound request-policy evidence is incomplete")
+        elif (
+            self.data_collection_deny_eligible is not False
+            or self.data_collection_deny_request_policy_enforced is not False
+            or self.data_collection_deny_evidence_sha256 is not None
+            or self.data_collection_deny_evidence_expires_at is not None
+        ):
+            raise ValueError("unverified identity privacy evidence cannot receive credit")
         return self
 
 

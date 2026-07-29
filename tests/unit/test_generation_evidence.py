@@ -46,6 +46,7 @@ from mmaudit.models.usage import (
     is_generation_bindable_usage_record,
 )
 from mmaudit.orchestration.budgets import BudgetManager
+from tests.identity_fixtures import synthetic_strict_zdr_privacy_routing
 
 _MODEL = "alpha/atlas-secure"
 _CANONICAL_MODEL = "alpha/atlas-secure-20260727"
@@ -186,6 +187,10 @@ def _usage_record(
         "repair_used": False,
         "repair_request": False,
     }
+    routing = synthetic_strict_zdr_privacy_routing(
+        routing,
+        source_label=f"generation-evidence:{request_id}",
+    )
     usage = UsageRecord(
         request_id=request_id,
         role="accounting",

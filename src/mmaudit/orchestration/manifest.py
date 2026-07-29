@@ -302,6 +302,23 @@ def build_run_evidence_manifest(
         ),
         key=lambda item: item.path,
     )
+    source_tree_sha256 = canonical_sha256([source.model_dump(mode="json") for source in sources])
+    validate_report_privacy_consistency(
+        report,
+        source_tree_sha256=source_tree_sha256,
+        expected_source_classification=run_configuration.run_options.privacy_source_classification,
+    )
+    _validate_report_artifact_consistency(root, report)
+    for artifact_name, report_key in (
+        ("privacy-policy.json", "effective_policy"),
+        ("privacy-source-provenance.json", "source_provenance"),
+    ):
+        path = root / artifact_name
+        reported = report.privacy.get(report_key)
+        if path.exists() != (reported is not None):
+            raise ValueError(f"{artifact_name} presence differs from the final report")
+        if reported is not None and _read_json_artifact(root, artifact_name) != reported:
+            raise ValueError(f"{artifact_name} differs from the final report")
     compilation = _read_json_artifact(root, "solidity-compilation.json")
     harness_plan = _read_json_artifact(root, "invariant-harness-plan.json")
     property_corpus = _read_json_artifact(root, "property-corpus.json")
@@ -357,6 +374,103 @@ def build_run_evidence_manifest(
         bindings=bindings,
         artifacts=_collect_artifacts(root),
     )
+
+
+def validate_report_privacy_consistency(
+    report: AuditReport,
+    *,
+    source_tree_sha256: str,
+    expected_source_classification: object | None = None,
+) -> None:
+    """Fail closed when serialized privacy claims disagree across run evidence."""
+
+    from mmaudit.privacy import EffectivePrivacyPolicyEvidence
+    from mmaudit.repository.privacy_provenance import PrivacySourceProvenanceEvidence
+
+    effective_payload = report.privacy.get("effective_policy")
+    provenance_payload = report.privacy.get("source_provenance")
+    effective = (
+        EffectivePrivacyPolicyEvidence.model_validate(effective_payload)
+        if effective_payload is not None
+        else None
+    )
+    provenance = (
+        PrivacySourceProvenanceEvidence.model_validate(provenance_payload)
+        if provenance_payload is not None
+        else None
+    )
+
+    if provenance is not None and provenance.source_sha256 != source_tree_sha256:
+        raise ValueError("privacy source provenance differs from the manifest source tree")
+    expected_classification = (
+        getattr(
+            expected_source_classification,
+            "value",
+            expected_source_classification,
+        )
+        if expected_source_classification is not None
+        else None
+    )
+    if (
+        provenance is not None
+        and expected_classification is not None
+        and provenance.source_classification != expected_classification
+    ):
+        raise ValueError("run source classification differs from source provenance")
+    if effective is not None:
+        if provenance is None:
+            raise ValueError("effective privacy policy lacks trusted source provenance")
+        if effective.source_sha256 != source_tree_sha256:
+            raise ValueError("effective privacy policy differs from the manifest source tree")
+        if effective.source_sha256 != provenance.source_sha256:
+            raise ValueError("effective privacy policy and source provenance disagree")
+        if effective.source_classification.value != provenance.source_classification:
+            raise ValueError("effective privacy policy and source classification disagree")
+        if effective.source_provenance_sha256 != provenance.evidence_sha256:
+            raise ValueError("effective privacy policy binds different source provenance")
+        configured_profile = report.privacy.get("profile")
+        if configured_profile != effective.privacy_profile.value:
+            raise ValueError("report privacy profile differs from its effective policy")
+        if (
+            expected_classification is not None
+            and expected_classification != effective.source_classification.value
+        ):
+            raise ValueError("run source classification differs from its effective policy")
+
+    for usage in report.usage:
+        routing = usage.routing
+        if effective is None or provenance is None:
+            raise ValueError("provider usage lacks effective privacy and provenance evidence")
+        consent_expiry = (
+            effective.consent_expires_at.isoformat()
+            if effective.consent_expires_at is not None
+            else None
+        )
+        expected_routing = {
+            "data_collection": effective.data_collection,
+            "zdr_requested": effective.require_zdr,
+            "privacy_profile": effective.privacy_profile.value,
+            "privacy_authorization": (
+                "STRICT_ZDR_ENFORCED" if effective.require_zdr else "CONSENT_BOUND_NON_ZDR"
+            ),
+            "privacy_source_classification": effective.source_classification.value,
+            "privacy_source_sha256": effective.source_sha256,
+            "effective_privacy_policy_sha256": effective.evidence_sha256,
+            "privacy_source_provenance_sha256": provenance.evidence_sha256,
+            "privacy_consent_file_sha256": effective.consent_file_sha256,
+            "privacy_consent_sha256": effective.consent_sha256,
+            "privacy_consent_expires_at": consent_expiry,
+        }
+        if any(routing.get(key) != value for key, value in expected_routing.items()):
+            raise ValueError("provider usage privacy routing disagrees with report evidence")
+
+
+def _validate_report_artifact_consistency(root: Path, report: AuditReport) -> None:
+    """Require emitted report summaries to agree before sealing their byte hashes."""
+
+    metadata = _read_json_artifact(root, "metadata.json")
+    if metadata.get("privacy") != report.privacy:
+        raise ValueError("metadata.json privacy differs from the final report")
 
 
 def _run_configuration_binding(
@@ -500,6 +614,41 @@ def validate_manifest_artifacts(
         observed = actual[path]
         if observed.size != binding.size or observed.sha256 != binding.sha256:
             raise ValueError(f"run artifact hash mismatch: {path}")
+    if manifest.schema_version == "1.1":
+        for required_artifact in ("final-findings.json", "metadata.json"):
+            if required_artifact not in expected:
+                raise ValueError(
+                    f"current run manifest requires emitted artifact: {required_artifact}"
+                )
+    if "final-findings.json" in expected:
+        report = AuditReport.model_validate(_read_json_artifact(root, "final-findings.json"))
+        _validate_report_artifact_consistency(root, report)
+        expected_classification = (
+            manifest.run_configuration.run_options.privacy_source_classification
+            if manifest.run_configuration is not None
+            else None
+        )
+        validate_report_privacy_consistency(
+            report,
+            source_tree_sha256=manifest.source_tree_sha256,
+            expected_source_classification=expected_classification,
+        )
+        for artifact_name, report_key in (
+            ("privacy-policy.json", "effective_policy"),
+            ("privacy-source-provenance.json", "source_provenance"),
+        ):
+            reported = report.privacy.get(report_key)
+            if (artifact_name in expected) != (reported is not None):
+                raise ValueError(f"{artifact_name} presence differs from the final report")
+            if (
+                artifact_name in expected
+                and _read_json_artifact(
+                    root,
+                    artifact_name,
+                )
+                != reported
+            ):
+                raise ValueError(f"{artifact_name} differs from the final report")
 
 
 def _configuration_bindings(config: AuditConfig) -> list[ManifestHashBinding]:

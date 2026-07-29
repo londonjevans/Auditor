@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 from datetime import UTC, datetime
@@ -16,6 +17,7 @@ from mmaudit.models.discovery import (
     _TRUSTED_OPENROUTER_DISCOVERY_ISSUER,
     OPENROUTER_CATALOG_QUERY,
     OPENROUTER_ZDR_QUERY,
+    DataCollectionDenyEvidenceSource,
     DiscoveryCandidateRoute,
     DiscoveryEndpointMetadataBinding,
     DiscoveryModelMetadataBinding,
@@ -37,6 +39,13 @@ from mmaudit.models.endpoint_snapshots import (
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterPrivacyError
 from mmaudit.models.usage import UsageLedger
 from mmaudit.orchestration.budgets import BudgetManager
+from mmaudit.privacy import (
+    EffectivePrivacyPolicyEvidence,
+    EndpointPolicyClass,
+    EndpointPrivacyDisclosure,
+    PrivacyProfile,
+    PrivacySourceClassification,
+)
 
 
 def _endpoint(
@@ -130,6 +139,54 @@ def _model(
     }
 
 
+def _consent_bound_policy() -> EffectivePrivacyPolicyEvidence:
+    disclosure = EndpointPrivacyDisclosure(
+        provider_endpoint="approved-provider/fp8",
+        policy_class=EndpointPolicyClass.NON_ZDR_DATA_COLLECTION_DENIED,
+        disclosed_retention="Synthetic retention disclosure.",
+        privacy_policy_reference="https://privacy.example.test/approved-provider",
+        privacy_policy_sha256="a" * 64,
+    )
+    payload: dict[str, Any] = {
+        "schema_version": "1.0",
+        "privacy_profile": PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT,
+        "source_classification": PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
+        "source_sha256": "b" * 64,
+        "source_provenance_sha256": "f" * 64,
+        "source_proof_kind": "PRIVATE_DEFAULT",
+        "source_distribution_commit": None,
+        "source_distribution_scope": None,
+        "source_synthetic_declaration_sha256": None,
+        "source_synthetic_declaration_entry_sha256": None,
+        "require_zdr": False,
+        "data_collection": "deny",
+        "permitted_model_ids": ("alpha/atlas-secure",),
+        "permitted_provider_endpoints": ("approved-provider/fp8",),
+        "endpoint_policy_classes": (EndpointPolicyClass.NON_ZDR_DATA_COLLECTION_DENIED,),
+        "endpoint_disclosures": (disclosure,),
+        "consent_file_sha256": "c" * 64,
+        "consent_file_size": 1_024,
+        "consent_sha256": "d" * 64,
+        "consent_issued_at": datetime(2026, 7, 28, tzinfo=UTC),
+        "consent_expires_at": datetime(2026, 7, 30, tzinfo=UTC),
+        "operator_reference_sha256": "e" * 64,
+        "consent_maximum_cost_usd": "20",
+        "requested_budget_usd": "20",
+        "limitations": (
+            "At least one consent-bound provider endpoint does not enforce zero-data-retention.",
+        ),
+    }
+    provisional = EffectivePrivacyPolicyEvidence.model_construct(
+        **payload,
+        evidence_sha256="0" * 64,
+    )
+    serialized = provisional.model_dump(mode="json", exclude={"evidence_sha256"})
+    payload["evidence_sha256"] = hashlib.sha256(
+        json.dumps(serialized, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return EffectivePrivacyPolicyEvidence.model_validate(payload)
+
+
 def _discover(
     *,
     models: list[dict[str, Any]] | None = None,
@@ -212,6 +269,13 @@ def test_current_like_null_limits_are_derived_and_exact_endpoint_is_bound() -> N
     assert evidence.operational is True
     assert evidence.zdr_eligible is True
     assert evidence.data_collection_deny_eligible is True
+    assert evidence.data_collection_deny_request_policy_enforced is True
+    assert (
+        evidence.data_collection_deny_evidence_source
+        is DataCollectionDenyEvidenceSource.ZDR_ENDPOINT_SNAPSHOT
+    )
+    assert evidence.data_collection_deny_evidence_sha256
+    assert evidence.data_collection_deny_evidence_expires_at is None
     assert evidence.structured_output_supported is True
     assert evidence.reasoning_supported is True
     assert len(evidence.catalog_identity_binding_sha256) == 64
@@ -220,6 +284,148 @@ def test_current_like_null_limits_are_derived_and_exact_endpoint_is_bound() -> N
     assert evidence.provenance.execution_evidence.value == "real"
     assert evidence.provenance.authenticated_metadata is True
     assert evidence.provenance.retrieved_at.microsecond == 0
+
+
+def test_catalog_discovery_does_not_pre_filter_privacy_or_output_capability() -> None:
+    assert OPENROUTER_CATALOG_QUERY == "/models"
+
+
+def test_non_zdr_non_native_endpoint_remains_a_capability_candidate() -> None:
+    model = _model()
+    model["supported_parameters"] = ["max_tokens", "temperature"]
+    endpoint = _endpoint()
+    endpoint["supported_parameters"] = ["max_tokens", "temperature"]
+    snapshot = validate_openrouter_endpoint_snapshot(
+        exact_model_id="alpha/atlas-secure",
+        configured_provider_endpoints=("approved-provider/fp8",),
+        provider_policy_mode="only",
+        endpoint_payload={
+            "data": {
+                "id": "alpha/atlas-secure",
+                "endpoints": [{key: value for key, value in endpoint.items() if key != "model_id"}],
+            }
+        },
+        require_zdr=False,
+        structured_output_required=False,
+    )
+
+    payload = validate_openrouter_model_discovery(
+        exact_model_id="alpha/atlas-secure",
+        models_payload={"data": [model]},
+        single_model_payload={"data": copy.deepcopy(model)},
+        endpoint_snapshot=snapshot,
+    )
+
+    assert payload.zdr_eligible is None
+    assert payload.data_collection_deny_eligible is False
+    assert payload.data_collection_deny_request_policy_enforced is False
+    assert (
+        payload.data_collection_deny_evidence_source is DataCollectionDenyEvidenceSource.UNVERIFIED
+    )
+    assert payload.data_collection_deny_evidence_sha256 is None
+    assert payload.structured_output_supported is False
+    assert payload.structured_output_parameters == ()
+
+
+def test_non_zdr_endpoint_without_policy_remains_unverified() -> None:
+    model = _model()
+    endpoint = _endpoint()
+    snapshot = validate_openrouter_endpoint_snapshot(
+        exact_model_id="alpha/atlas-secure",
+        configured_provider_endpoints=("approved-provider/fp8",),
+        provider_policy_mode="only",
+        endpoint_payload={
+            "data": {
+                "id": "alpha/atlas-secure",
+                "endpoints": [{key: value for key, value in endpoint.items() if key != "model_id"}],
+            }
+        },
+        require_zdr=False,
+        structured_output_required=False,
+    )
+
+    payload = validate_openrouter_model_discovery(
+        exact_model_id="alpha/atlas-secure",
+        models_payload={"data": [model]},
+        single_model_payload={"data": copy.deepcopy(model)},
+        endpoint_snapshot=snapshot,
+    )
+
+    assert payload.data_collection_deny_eligible is False
+    assert payload.data_collection_deny_request_policy_enforced is False
+    assert (
+        payload.data_collection_deny_evidence_source is DataCollectionDenyEvidenceSource.UNVERIFIED
+    )
+    assert payload.data_collection_deny_evidence_sha256 is None
+
+
+def test_non_zdr_endpoint_credits_exact_consent_bound_policy_hash() -> None:
+    model = _model()
+    endpoint = _endpoint()
+    snapshot = validate_openrouter_endpoint_snapshot(
+        exact_model_id="alpha/atlas-secure",
+        configured_provider_endpoints=("approved-provider/fp8",),
+        provider_policy_mode="only",
+        endpoint_payload={
+            "data": {
+                "id": "alpha/atlas-secure",
+                "endpoints": [{key: value for key, value in endpoint.items() if key != "model_id"}],
+            }
+        },
+        require_zdr=False,
+        structured_output_required=False,
+    )
+    policy = _consent_bound_policy()
+
+    payload = validate_openrouter_model_discovery(
+        exact_model_id="alpha/atlas-secure",
+        models_payload={"data": [model]},
+        single_model_payload={"data": copy.deepcopy(model)},
+        endpoint_snapshot=snapshot,
+        effective_privacy_policy=policy,
+    )
+
+    assert payload.data_collection_deny_eligible is False
+    assert payload.data_collection_deny_request_policy_enforced is True
+    assert (
+        payload.data_collection_deny_evidence_source
+        is DataCollectionDenyEvidenceSource.CONSENT_BOUND_ROUTER_REQUEST_POLICY
+    )
+    assert payload.data_collection_deny_evidence_sha256 == policy.evidence_sha256
+    assert payload.data_collection_deny_evidence_expires_at == policy.consent_expires_at
+
+
+def test_non_zdr_route_does_not_claim_zdr_snapshot_request_policy() -> None:
+    model = _model()
+    endpoint = _endpoint()
+    snapshot = validate_openrouter_endpoint_snapshot(
+        exact_model_id="alpha/atlas-secure",
+        configured_provider_endpoints=("approved-provider/fp8",),
+        provider_policy_mode="only",
+        endpoint_payload={
+            "data": {
+                "id": "alpha/atlas-secure",
+                "endpoints": [{key: value for key, value in endpoint.items() if key != "model_id"}],
+            }
+        },
+        require_zdr=False,
+        zdr_payload={"data": [endpoint]},
+        structured_output_required=False,
+    )
+
+    payload = validate_openrouter_model_discovery(
+        exact_model_id="alpha/atlas-secure",
+        models_payload={"data": [model]},
+        single_model_payload={"data": copy.deepcopy(model)},
+        endpoint_snapshot=snapshot,
+    )
+
+    assert payload.zdr_eligible is True
+    assert payload.data_collection_deny_eligible is False
+    assert payload.data_collection_deny_request_policy_enforced is False
+    assert (
+        payload.data_collection_deny_evidence_source is DataCollectionDenyEvidenceSource.UNVERIFIED
+    )
 
 
 def test_evidence_is_deterministic_and_excludes_freeform_catalog_fields() -> None:
@@ -376,12 +582,12 @@ def test_catalog_and_exact_endpoint_limits_must_be_compatible() -> None:
     assert evidence.output_limit == 200_000
 
 
-def test_catalog_must_support_the_exact_request_shape() -> None:
+def test_native_snapshot_rejects_catalog_without_its_required_output_parameter() -> None:
     model = _model()
     model["supported_parameters"].remove("response_format")
     model["supported_parameters"].remove("structured_outputs")
 
-    with pytest.raises(ModelDiscoveryValidationError, match="required request parameters"):
+    with pytest.raises(ValidationError, match="parameter required by the exact endpoint"):
         _discover(models=[model])
 
 

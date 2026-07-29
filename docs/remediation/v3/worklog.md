@@ -8,9 +8,9 @@ AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Explicit privacy and retention profiles
 CURRENT_TICKET: V3-PRIVACY-001
 LAST_COMPLETED_TICKET: V3-SMOKE-001
-NEXT_ACTION: Inspect the existing privacy schema, effective OpenRouter routing, explicit operator-consent boundary, manifests, reports, and negative tests before implementing the smallest cohesive profile correction.
-LAST_COMMAND: .venv/bin/python -c <typed descriptor-safe attempt-ten success-artifact and atomic-ledger validation>
-LAST_RESULT: PASS; the real success artifact is mode 0600, self-hashed, identity-bound, success-only, canary-free, and exactly reconciles the ten-entry zero-reservation ledger.
+NEXT_ACTION: Create the isolated implementation checkpoint, verify source-mode provenance from that immutable commit, then finalize ticket ledgers and pause state.
+LAST_COMMAND: .venv/bin/pytest -q
+LAST_RESULT: PASS; 2092 passed and 10 explicit external/provider/isolation prerequisites skipped in 236.21s. Paid provider tests remained disabled.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 0ff4918568a304bcefc3ad108903ee74b197389b
+LAST_CHECKPOINT_COMMIT: 98564402f87eed5391b6bce33fba404d44f1abcc
 
 ## 2026-07-28 — V3-SMOKE-001
 
@@ -1094,3 +1094,182 @@ LAST_CHECKPOINT_COMMIT: 0ff4918568a304bcefc3ad108903ee74b197389b
   reports, CLI surfaces, and negative tests before selecting the smallest
   cohesive correction. No additional provider spend is authorized for this
   inspection slice.
+- **Implemented slice:** Added typed `STRICT_ZDR`,
+  `FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT`, and `SYNTHETIC_BENCHMARK`
+  profiles; a self-hashed descriptor-safe consent schema and loader; exact
+  source/model/provider/policy/expiry/cost binding; and a noncopyable,
+  nonserializable, process-local authorization capability. Default configuration
+  remains strict ZDR. Configuration alone cannot mint or activate consent.
+- **Provider enforcement:** Real or cost-ledger-backed non-ZDR execution now
+  revalidates the live capability before endpoint registration and immediately
+  before a completion. Valid non-ZDR routing omits request-level `zdr`, retains
+  `data_collection=deny`, exact provider routing, and disabled fallbacks.
+  Invalid, expired, route-mismatched, or tampered authority fails before
+  transport and before a cost reservation.
+- **Discovery correction:** Candidate discovery now begins from the unfiltered
+  `/models` catalog and records endpoint-specific ZDR and structured-output
+  capabilities rather than globally excluding non-ZDR or non-native candidates.
+- **Evidence and reporting:** Each provider audit resolves a self-hashed
+  effective privacy policy from the exact repository inventory, persists
+  `privacy-policy.json`, binds it into the run manifest and latest evidence
+  directory, includes it in JSON/Markdown reports, and states the strict-profile
+  ensemble limitation. Consent paths and operator references are not persisted.
+- **Fail-closed regressions:** Added synthetic negatives for implicit consent,
+  internal/symlink/writable/shared consent files, stale and mismatched authority,
+  private source under synthetic policy, cross-profile source labels, malformed
+  or expired usage evidence, scanner-only no-egress behavior, and transport
+  non-execution. Canary checks cover requests, usage evidence, artifacts, and
+  exceptions.
+- **Diagnostic honesty:** `mmaudit doctor` now names the active profile and
+  reports that account/guardrail ZDR compatibility is not observable from
+  ordinary API-key metadata for non-ZDR routing; a successful exact-route
+  consented runtime preflight is required before a frontier claim.
+- **Validation so far:** Release-schema verification passed; the initial focused
+  privacy/config/discovery/runtime slice passed `209` tests; focused transport,
+  usage, CLI, and pipeline privacy slices passed; affected Ruff passed; strict
+  mypy passed over `130` source files. No network or paid provider call ran and
+  cumulative spend remains unchanged.
+- **Expanded-suite correction:** The first expanded run passed `636` tests and
+  exposed two integration defects: the manually published run-manifest schema
+  lacked the new privacy run-option and override fields, and the pipeline's
+  asynchronous finalizer retained the consent observation even though its public
+  credential clearer discarded it. The manifest schema is updated without
+  weakening bounds, and every run finalizer now drops the live authorization and
+  consent observation. Both exact failing regressions pass after correction.
+- **Post-review authorization hardening:** An independent adversarial review
+  found that consent could expire between retries and that nominally frozen
+  Pydantic evidence could be mutated with low-level attribute replacement. The
+  transport now revalidates the exact model, exact pending provider route,
+  complete capability content, current expiry, and budget immediately after
+  every reservation and immediately before every POST. Pre-send refusal releases
+  the reservation. Live weak identity registries and canonical content digests
+  reject reconstructed or mutated consent observations and capabilities.
+- **Consent-boundary hardening:** Loader failures now discard path/content-bearing
+  exception state before raising fixed messages. Regression canaries cover
+  formatted tracebacks, causes, contexts, and serialized exception projections.
+  Persisted privacy-policy references reject user information, queries, and
+  fragments. The ZDR acknowledgement is an explicit boolean required only when
+  non-ZDR routing is authorized.
+- **Source-provenance correction:** `SYNTHETIC_COMMITTED` no longer trusts an
+  operator enum. Live pipeline execution requires a non-empty, clean,
+  HEAD-matching provider-visible scope under this installed distribution's
+  committed `tests/fixtures` or `benchmarks` tree, using a fixed trusted Git
+  binary and sanitized environment. Arbitrary, modified, untracked, or
+  out-of-distribution source is refused. `PUBLIC_BENCHMARK` fails closed until
+  independent publication provenance exists. Private source remains the
+  fail-closed default.
+- **Endpoint privacy matrix:** Discovery no longer injects an unconditional
+  data-collection-denial claim. Each exact endpoint now records either exact ZDR
+  snapshot evidence, exact consent-bound effective-policy evidence, or
+  `UNVERIFIED`; the last receives no qualification credit. ZDR synthetic runs
+  require an explicit matching profile and committed-source provenance but no
+  inapplicable retention-consent artifact.
+- **Diagnostic and latest-artifact honesty:** Doctor reports account/guardrail
+  ZDR state as unobservable for both strict and frontier profiles and requires
+  an exact-route runtime preflight for a claim. Each run now removes optional
+  artifacts absent from the new run's `latest/` view, preventing an older
+  privacy policy or provenance record from surviving a scanner-only refresh.
+- **Focused validation:** Privacy/OpenRouter acceptance passed `66` selected
+  tests; privacy provenance/discovery/pipeline validation passed `312` broader
+  tests in `81.98s`; the stale-latest regression passed `2` focused tests.
+  Affected Ruff and strict mypy passed. Schema generation initially and
+  correctly reported the changed consent schema as stale; regeneration with
+  `.venv/bin/python scripts/generate_release_schemas.py --write` followed by
+  verification passed. No provider completion, credential access, or spend
+  occurred.
+- **Next safe action:** Complete independent adversarial re-review, then run the
+  final formatter, Ruff, strict mypy, and complete pytest gates before
+  checkpointing and pausing at the operator-requested clean boundary.
+- **Independent adversarial re-review:** Three read-only reviewers found
+  fail-closed gaps in mutable route-policy handling, exact non-ZDR disclosure
+  selection, consent-free synthetic-ZDR usage credit, declared synthetic-source
+  custody, Git replacement-object handling, current-byte/Git-blob binding,
+  Unicode source hashing, run-local state reset, and semantic agreement among
+  policy, provenance, usage, report, and manifest evidence. The earlier focused
+  suites remained green, so these are adversarial acceptance defects rather
+  than reproduced ordinary-suite failures.
+- **Remediation in progress:** The ticket remains `IN_PROGRESS`. Work is bounded
+  to immutable exact-route snapshots, a distribution-controlled synthetic-source
+  declaration with descriptor-safe current-byte and clean-commit proof, live
+  provenance capabilities, evidence-source/expiry preservation, and deterministic
+  cross-artifact consistency checks. No provider call, network request, secret
+  file read, or additional spend is part of this slice.
+- **Adversarial remediation closure:** Git proof now disables replacement objects
+  and binds descriptor-safe current bytes to the exact clean Git blob. Installed
+  distributions instead require a code-pinned declaration and exact packaged
+  synthetic fixture. Unicode inventory hashing, noncopyable live observations,
+  immutable canonical route policies, exact non-ZDR disclosures, evidence
+  source/expiry preservation, and run-local privacy-state reset close the
+  identified provenance and route gaps.
+- **Paid-route and benchmark closure:** Every paid completion now requires a
+  canonical effective privacy policy before reservation and revalidates its exact
+  model, endpoint, active budget, and profile after reservation immediately
+  before transport. Candidate benchmarking binds strict-ZDR evidence to its
+  versioned synthetic corpus and exact candidate route. Profile-less legacy
+  usage receives no execution credit. Discovery and candidate benchmark endpoint
+  snapshots now use the same configured ZDR requirement.
+- **Cross-artifact closure:** A provider audit refuses a reused client with any
+  pre-existing usage record. Current manifests require the emitted report and
+  metadata artifacts, validate their privacy payloads against each other, and
+  require every serialized provider usage record to contain the complete policy,
+  source, provenance, and routing bindings.
+- **Independent closure evidence:** The provenance suite passed `75` tests; the
+  route/privacy suite passed `378`; the pipeline stale-ledger regressions passed
+  `55`; and focused manifest regressions passed `13`. A locally cached,
+  offline-built wheel contained the pinned declaration and fixture and passed
+  packaged-source proof; independent source and declaration tampering were both
+  rejected. Temporary wheel-review directories were removed and no distribution
+  artifact was written into the repository.
+- **Pre-complete gate state:** The combined focused privacy suite and complete
+  formatter, Ruff, strict mypy, pytest, schema-synchronization, diff, artifact,
+  and secret-pattern checks remain to run. No network, provider, or operator
+  secret access is authorized for these gates.
+- **Combined focused gate:** The privacy, provenance, configuration, endpoint,
+  discovery, identity, qualification, candidate benchmark, runtime, transport,
+  usage, CLI, manifest, and pipeline suite passed `679` tests in `91.03s`.
+  `.venv/bin/python scripts/generate_release_schemas.py` then verified that the
+  committed release schemas are synchronized. Paid provider tests remained
+  disabled; no network, credential, or provider access occurred.
+- **Pre-full-gate state:** The ticket remains `IN_PROGRESS` while the complete
+  local release gate runs. The cumulative OpenRouter spend remains
+  `0.0033415625 USD` with zero reservation.
+- **Static complete gates:** `.venv/bin/ruff format .` reformatted `5` affected
+  files and left `296` unchanged; `.venv/bin/ruff check .` passed; configured
+  strict `.venv/bin/mypy` passed `135` source files. The complete pytest gate is
+  the remaining long-running validation.
+- **First complete pytest result:** `.venv/bin/pytest -q` failed with `127`
+  failures, `1964` passes, and `10` explicit external/provider/isolation
+  prerequisite skips in `233.06s`. The failures exposed that older synthetic
+  REAL-usage helpers do not construct the newly mandatory policy/source/
+  provenance routing, and older current-schema release-run helpers do not emit
+  the now-required metadata artifact. Production checks remain fail-closed; the
+  corrective scope is limited to coherent synthetic test fixtures.
+- **Legacy-fixture correction:** The shared synthetic identity helper now adds a
+  complete strict-ZDR policy/source/provenance route only when all privacy fields
+  are absent and the fixture already declares ZDR plus denied data collection.
+  Partial, malformed, or tampered privacy evidence remains untouched for
+  negative tests. Direct generation, portfolio, and model-review builders use
+  the same helper.
+- **Release-fixture correction:** Current-schema release fixture writers now emit
+  typed `final-findings.json` and privacy-identical `metadata.json` before
+  sealing their manifests. The fail-closed production requirement was not
+  changed.
+- **Harness-canary correction:** The test-only paid-provider evidence writer
+  distinguishes the non-secret `privacy_authorization` evidence label from an
+  exact `Authorization` JSON key or a Bearer value. Credential-bearing surfaces
+  and supplied canary values remain prohibited, with a two-sided regression.
+- **Affected regression result:** The exact groups that accounted for the first
+  complete-suite failures passed `405` tests in `13.68s`. A subsequent full
+  static gate left `301` files unchanged, passed Ruff, passed strict mypy over
+  `135` source files, verified schema synchronization, and passed
+  `git diff --check`.
+- **Complete local gate:** The second `.venv/bin/pytest -q` run passed `2092`
+  tests with `10` explicit external-engine, isolation, loopback, and paid-provider
+  prerequisite skips in `236.21s`. Paid provider execution remained disabled.
+- **Final scope review before checkpoint:** `git diff --check` passed. The
+  repository has only the intended privacy implementation, schema, packaged
+  synthetic declaration/fixture, documentation, and regression changes.
+  Secret-pattern review found only named synthetic test canaries and explicit
+  header-redaction assertions; no credential or runtime/private artifact is
+  staged. Ignored interpreter caches and pre-existing `.DS_Store` files remain
+  outside version control.

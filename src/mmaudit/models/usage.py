@@ -9,7 +9,7 @@ import re
 import threading
 import weakref
 from collections.abc import Callable
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import ValidationError
@@ -21,6 +21,7 @@ from mmaudit.models.schemas import (
     ModelRequestValidationStatus,
     UsageRecord,
 )
+from mmaudit.privacy import EndpointPolicyClass, PrivacyProfile, PrivacySourceClassification
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -178,8 +179,7 @@ def _is_strict_usage_record(
         and _is_sha256(routing.get("router_metadata_sha256"))
         and _is_sha256(routing.get("provider_policy_sha256"))
         and routing.get("validation_status") == "valid"
-        and routing.get("zdr_requested") is True
-        and routing.get("data_collection") == "deny"
+        and _has_valid_privacy_routing(record)
         and routing.get("repair_used") is False
         and routing.get("repair_request") is False
         and routing.get("request_started_at") == record.started_at.isoformat()
@@ -245,6 +245,79 @@ def _is_strict_usage_record(
 
 def _is_sha256(value: Any) -> bool:
     return isinstance(value, str) and _SHA256.fullmatch(value) is not None
+
+
+def _has_valid_privacy_routing(record: UsageRecord) -> bool:
+    routing = record.routing
+    if routing.get("data_collection") != "deny":
+        return False
+    profile = routing.get("privacy_profile")
+    if profile is None:
+        return False
+    if (
+        not _is_sha256(routing.get("effective_privacy_policy_sha256"))
+        or not _is_sha256(routing.get("privacy_source_sha256"))
+        or not _is_sha256(routing.get("privacy_source_provenance_sha256"))
+    ):
+        return False
+    if profile == PrivacyProfile.STRICT_ZDR.value:
+        return (
+            routing.get("zdr_requested") is True
+            and routing.get("privacy_authorization") == "STRICT_ZDR_ENFORCED"
+            and routing.get("privacy_endpoint_policy_class") == EndpointPolicyClass.ZDR.value
+        )
+    if profile not in {
+        PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT.value,
+        PrivacyProfile.SYNTHETIC_BENCHMARK.value,
+    }:
+        return False
+    source_classification = routing.get("privacy_source_classification")
+    if (
+        profile == PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT.value
+        and source_classification != PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE.value
+    ):
+        return False
+    if profile == PrivacyProfile.SYNTHETIC_BENCHMARK.value and source_classification not in {
+        PrivacySourceClassification.SYNTHETIC_COMMITTED.value,
+        PrivacySourceClassification.PUBLIC_BENCHMARK.value,
+    }:
+        return False
+    if routing.get("zdr_requested") is True:
+        return (
+            routing.get("privacy_authorization") == "STRICT_ZDR_ENFORCED"
+            and routing.get("privacy_endpoint_policy_class") == EndpointPolicyClass.ZDR.value
+        )
+    if (
+        not _is_sha256(routing.get("privacy_consent_file_sha256"))
+        or not _is_sha256(routing.get("privacy_consent_sha256"))
+        or not _valid_consent_expiry(record)
+    ):
+        return False
+    return (
+        routing.get("zdr_requested") is False
+        and routing.get("privacy_authorization") == "CONSENT_BOUND_NON_ZDR"
+        and routing.get("privacy_endpoint_policy_class")
+        == EndpointPolicyClass.NON_ZDR_DATA_COLLECTION_DENIED.value
+    )
+
+
+def _valid_consent_expiry(record: UsageRecord) -> bool:
+    value = record.routing.get("privacy_consent_expires_at")
+    if not isinstance(value, str):
+        return False
+    try:
+        expires_at = datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    if (
+        expires_at.tzinfo is None
+        or expires_at.utcoffset() != UTC.utcoffset(expires_at)
+        or expires_at.microsecond != 0
+        or expires_at.isoformat() != value
+        or record.ended_at is None
+    ):
+        return False
+    return expires_at > record.ended_at
 
 
 def _build_owned_real_usage_authority() -> tuple[

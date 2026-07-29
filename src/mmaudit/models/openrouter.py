@@ -93,6 +93,12 @@ from mmaudit.orchestration.budgets import (
     Reservation,
     UnprovenCostBoundError,
 )
+from mmaudit.privacy import (
+    EffectivePrivacyPolicyEvidence,
+    EndpointPolicyClass,
+    TrustedPrivacyAuthorization,
+    validate_trusted_privacy_authorization,
+)
 from mmaudit.reporting.json_report import stable_json
 
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
@@ -200,6 +206,53 @@ class OpenRouterProviderPolicy:
         elif self.order:
             payload["order"] = list(self.order)
         return payload
+
+
+def _canonical_provider_policy(
+    policy: OpenRouterProviderPolicy,
+) -> OpenRouterProviderPolicy:
+    """Copy caller-owned routing state into one validated immutable snapshot."""
+
+    if not isinstance(policy, OpenRouterProviderPolicy):
+        raise OpenRouterProviderPolicyError("provider routing policy has an invalid type")
+    certification = policy.certification
+    only_source = policy.only
+    order_source = policy.order
+    allow_fallbacks = policy.allow_fallbacks
+    if type(certification) is not bool or type(allow_fallbacks) is not bool:
+        raise OpenRouterProviderPolicyError("provider routing booleans must be explicit")
+    try:
+        only = tuple(only_source)
+        order = tuple(order_source)
+    except (TypeError, ValueError):
+        raise OpenRouterProviderPolicyError("provider routing endpoints are invalid") from None
+    if any(type(endpoint) is not str for endpoint in (*only, *order)):
+        raise OpenRouterProviderPolicyError("provider routing endpoint identifiers must be strings")
+    try:
+        return OpenRouterProviderPolicy(
+            certification=certification,
+            only=only,
+            order=order,
+            allow_fallbacks=allow_fallbacks,
+        )
+    except ValueError as exc:
+        raise OpenRouterProviderPolicyError(f"provider routing policy is invalid: {exc}") from None
+
+
+def _canonical_effective_privacy_policy(
+    evidence: EffectivePrivacyPolicyEvidence,
+) -> EffectivePrivacyPolicyEvidence:
+    """Return a strict defensive copy of self-validating privacy evidence."""
+
+    if type(evidence) is not EffectivePrivacyPolicyEvidence:
+        raise OpenRouterPrivacyError("effective privacy evidence has an invalid type")
+    try:
+        return EffectivePrivacyPolicyEvidence.model_validate(
+            evidence.model_dump(mode="python"),
+            strict=True,
+        )
+    except (AttributeError, ValidationError):
+        raise OpenRouterPrivacyError("effective privacy evidence is invalid") from None
 
 
 @dataclass(frozen=True, slots=True)
@@ -636,6 +689,8 @@ class OpenRouterClient:
         provider_policy: OpenRouterProviderPolicy | None = None,
         reasoning: OpenRouterReasoning | None = None,
         qualification_routing: tuple[OpenRouterQualificationRoutingEvidence, ...] = (),
+        effective_privacy_policy: EffectivePrivacyPolicyEvidence | None = None,
+        privacy_authorization: TrustedPrivacyAuthorization | None = None,
     ) -> None:
         if (
             not api_key
@@ -651,8 +706,16 @@ class OpenRouterClient:
         self.run_dir = run_dir
         self.logger = logger or logging.getLogger("mmaudit.openrouter")
         self._random = random.Random(random_seed)
-        self.provider_policy = provider_policy or OpenRouterProviderPolicy()
+        self.provider_policy = _canonical_provider_policy(
+            provider_policy if provider_policy is not None else OpenRouterProviderPolicy()
+        )
         self.reasoning = reasoning
+        self.effective_privacy_policy = (
+            _canonical_effective_privacy_policy(effective_privacy_policy)
+            if effective_privacy_policy is not None
+            else None
+        )
+        self._privacy_authorization = privacy_authorization
         self._endpoint_pricing: dict[str, _RegisteredEndpointPolicy] = {}
         self._model_identities: dict[str, _RegisteredModelIdentity] = {}
         qualification_model_ids = tuple(binding.exact_model_id for binding in qualification_routing)
@@ -666,8 +729,25 @@ class OpenRouterClient:
         self._metadata_observations: dict[str, str] = {}
         self._unbound_completions: dict[str, StructuredCompletion[Any]] = {}
         self._authentication_validated = False
+        if (effective_privacy_policy is None) != (privacy_authorization is None) and (
+            not self.privacy.require_zdr
+        ):
+            raise OpenRouterPrivacyError(
+                "non-ZDR privacy evidence and live authorization must be supplied together"
+            )
+        if self.effective_privacy_policy is not None and (
+            self.effective_privacy_policy.privacy_profile is not self.privacy.profile
+            or self.effective_privacy_policy.require_zdr is not self.privacy.require_zdr
+        ):
+            raise OpenRouterPrivacyError(
+                "effective privacy evidence differs from configured provider privacy"
+            )
         if self.provider_policy.certification and not self.privacy.require_zdr:
-            raise OpenRouterPrivacyError("certification requires zero-data-retention routing")
+            self._validate_non_zdr_privacy_authorization(
+                self.effective_privacy_policy.permitted_model_ids
+                if self.effective_privacy_policy is not None
+                else ()
+            )
         if self.execution.max_json_repair_attempts:
             raise OpenRouterSchemaError(
                 "model-output repair is disabled because repaired output cannot count as a review"
@@ -761,6 +841,171 @@ class OpenRouterClient:
             )
         self._unbound_completions[request_id] = completion
 
+    def _validate_non_zdr_privacy_authorization(
+        self,
+        requested_models: tuple[str, ...] | list[str],
+        *,
+        request_provider_endpoints: tuple[str, ...] | list[str] | None = None,
+    ) -> EffectivePrivacyPolicyEvidence:
+        evidence = self.effective_privacy_policy
+        authorization = self._privacy_authorization
+        if evidence is None or authorization is None:
+            raise OpenRouterPrivacyError(
+                "non-ZDR provider execution requires live operator privacy authorization"
+            )
+        try:
+            expected_models = tuple(evidence.permitted_model_ids)
+            pending_models = tuple(requested_models)
+            pending_endpoints = (
+                tuple(request_provider_endpoints)
+                if request_provider_endpoints is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            raise OpenRouterPrivacyError(
+                "non-ZDR provider privacy authorization contains invalid route state"
+            ) from None
+        try:
+            validated = validate_trusted_privacy_authorization(
+                authorization,
+                evidence_sha256=evidence.evidence_sha256,
+                source_sha256=evidence.source_sha256,
+                source_classification=evidence.source_classification,
+                configured_model_ids=expected_models,
+                configured_provider_endpoints=self.provider_policy.configured_endpoints,
+                requested_budget_usd=Decimal(str(self.budget.total_usd)),
+                now=datetime.now(UTC).replace(microsecond=0),
+            )
+        except ValueError as exc:
+            raise OpenRouterPrivacyError(
+                f"non-ZDR provider privacy authorization failed: {exc}"
+            ) from None
+        if not pending_models or any(
+            model not in validated.permitted_model_ids for model in pending_models
+        ):
+            raise OpenRouterPrivacyError(
+                "non-ZDR provider execution requested a model outside consent"
+            )
+        if pending_endpoints is not None:
+            if not pending_endpoints or any(
+                endpoint not in validated.permitted_provider_endpoints
+                for endpoint in pending_endpoints
+            ):
+                raise OpenRouterPrivacyError(
+                    "non-ZDR provider execution requested an endpoint outside consent"
+                )
+            disclosed_non_zdr_endpoints = frozenset(
+                disclosure.provider_endpoint
+                for disclosure in validated.endpoint_disclosures
+                if disclosure.policy_class is EndpointPolicyClass.NON_ZDR_DATA_COLLECTION_DENIED
+            )
+            if any(endpoint not in disclosed_non_zdr_endpoints for endpoint in pending_endpoints):
+                raise OpenRouterPrivacyError(
+                    "non-ZDR provider execution requested an endpoint without exact "
+                    "non-ZDR disclosure"
+                )
+        return validated
+
+    def _validate_paid_privacy_policy(
+        self,
+        requested_models: tuple[str, ...] | list[str],
+        *,
+        request_provider_endpoints: tuple[str, ...] | list[str],
+    ) -> EffectivePrivacyPolicyEvidence:
+        """Require canonical policy evidence for the exact pending paid route."""
+
+        evidence = self.effective_privacy_policy
+        if evidence is None:
+            raise OpenRouterPrivacyError(
+                "paid provider execution requires effective privacy evidence"
+            )
+        validated = _canonical_effective_privacy_policy(evidence)
+        if (
+            validated.privacy_profile is not self.privacy.profile
+            or validated.require_zdr is not self.privacy.require_zdr
+        ):
+            raise OpenRouterPrivacyError(
+                "effective privacy evidence differs from configured provider privacy"
+            )
+        if Decimal(validated.requested_budget_usd) != Decimal(str(self.budget.total_usd)):
+            raise OpenRouterPrivacyError(
+                "effective privacy evidence differs from the active model budget"
+            )
+        try:
+            pending_models = tuple(requested_models)
+            pending_endpoints = tuple(request_provider_endpoints)
+        except (TypeError, ValueError):
+            raise OpenRouterPrivacyError(
+                "effective privacy evidence contains invalid pending route state"
+            ) from None
+        if not pending_models or any(
+            model not in validated.permitted_model_ids for model in pending_models
+        ):
+            raise OpenRouterPrivacyError(
+                "paid provider execution requested a model outside effective privacy evidence"
+            )
+        if not pending_endpoints or any(
+            endpoint not in validated.permitted_provider_endpoints for endpoint in pending_endpoints
+        ):
+            raise OpenRouterPrivacyError(
+                "paid provider execution requested an endpoint outside effective privacy evidence"
+            )
+        if self.privacy.require_zdr:
+            return validated
+        return self._validate_non_zdr_privacy_authorization(
+            pending_models,
+            request_provider_endpoints=pending_endpoints,
+        )
+
+    def bind_effective_privacy_context(
+        self,
+        *,
+        effective_privacy_policy: EffectivePrivacyPolicyEvidence,
+        privacy_authorization: TrustedPrivacyAuthorization | None,
+    ) -> None:
+        """Bind one canonical source policy before any provider state is observed."""
+
+        if self.effective_privacy_policy is not None or self._privacy_authorization is not None:
+            raise OpenRouterPrivacyError("provider privacy context is already bound")
+        if (
+            self._endpoint_pricing
+            or self._model_identities
+            or self._metadata_observations
+            or self._unbound_completions
+            or self._authentication_validated
+        ):
+            raise OpenRouterPrivacyError(
+                "provider privacy context must be bound before provider state"
+            )
+        policy = _canonical_effective_privacy_policy(effective_privacy_policy)
+        if (
+            policy.privacy_profile is not self.privacy.profile
+            or policy.require_zdr is not self.privacy.require_zdr
+        ):
+            raise OpenRouterPrivacyError(
+                "effective privacy evidence differs from configured provider privacy"
+            )
+        if policy.require_zdr:
+            if privacy_authorization is not None:
+                raise OpenRouterPrivacyError("ZDR privacy context rejects retention authorization")
+            self.effective_privacy_policy = policy
+            return
+        if privacy_authorization is None:
+            raise OpenRouterPrivacyError(
+                "non-ZDR privacy evidence and live authorization must be supplied together"
+            )
+        self.effective_privacy_policy = policy
+        self._privacy_authorization = privacy_authorization
+        try:
+            self._validate_non_zdr_privacy_authorization(
+                policy.permitted_model_ids,
+                request_provider_endpoints=self.provider_policy.configured_endpoints,
+            )
+        except Exception:
+            self.effective_privacy_policy = None
+            self._privacy_authorization = None
+            raise
+
     def clear_credentials(self) -> None:
         """Drop retained authorization values without serializing them."""
 
@@ -768,6 +1013,7 @@ class OpenRouterClient:
         self._credential[:] = b"\x00" * len(self._credential)
         self._credential.clear()
         self._headers.clear()
+        self._privacy_authorization = None
         if (
             self._owned_client_identity is not None
             and self._owned_client_identity.headers.get("Authorization") == authorization
@@ -789,11 +1035,10 @@ class OpenRouterClient:
         return _validated_model_catalog(response)
 
     async def list_certification_models(self) -> list[dict[str, Any]]:
-        """Return the current ZDR/structured-output candidate catalog.
+        """Return the unfiltered current candidate catalog.
 
-        Filtering at the fixed provider route prevents an unrelated malformed or
-        non-chat catalog entry from weakening validation of the exact candidate set.
-        Every returned identifier is still validated locally.
+        Privacy and output capabilities are resolved later from exact endpoint
+        evidence. Every returned identifier is still validated locally.
         """
 
         response = await self.get_certification_model_metadata()
@@ -965,14 +1210,21 @@ class OpenRouterClient:
                     configured_provider_endpoints=(route.approved_provider_endpoint,),
                     provider_policy_mode="only",
                     endpoint_payload=payload,
-                    require_zdr=True,
+                    require_zdr=supplied_discovery.endpoint_snapshot.require_zdr,
                     zdr_payload=zdr_payload,
+                    structured_output_required=(
+                        "response_format"
+                        in supplied_discovery.endpoint_snapshot.endpoints[
+                            0
+                        ].required_request_parameters
+                    ),
                 )
                 observed_payload = validate_openrouter_model_discovery(
                     exact_model_id=model_id,
                     models_payload=models_payload,
                     single_model_payload=single_model_payload,
                     endpoint_snapshot=observed_endpoint_snapshot,
+                    effective_privacy_policy=self.effective_privacy_policy,
                 )
             except (ValueError, ValidationError):
                 raise OpenRouterPrivacyError(
@@ -1736,10 +1988,17 @@ class OpenRouterClient:
             raise OpenRouterProviderPolicyError(
                 "endpoint pricing does not match the exact configured provider policy"
             )
-        if not evidence.require_zdr or not self.privacy.require_zdr:
+        if evidence.require_zdr is not self.privacy.require_zdr:
             raise OpenRouterPrivacyError(
-                "paid endpoint pricing requires current ZDR eligibility evidence"
+                "paid endpoint pricing privacy mode differs from the configured route"
             )
+        if self.privacy.require_zdr:
+            if any(endpoint.zdr_eligible is not True for endpoint in evidence.endpoints):
+                raise OpenRouterPrivacyError(
+                    "paid endpoint pricing requires current ZDR eligibility evidence"
+                )
+        else:
+            self._validate_non_zdr_privacy_authorization((evidence.exact_model_id,))
         registered: list[_RegisteredEndpointPricing] = []
         pricing_hashes: dict[str, str] = {}
         identity_owners: dict[str, str] = {}
@@ -1970,6 +2229,7 @@ class OpenRouterClient:
     ) -> dict[str, Any]:
         _require_exact_model_id(model)
         effective_provider_policy = provider_policy or self.provider_policy
+        effective_provider_policy = _canonical_provider_policy(effective_provider_policy)
         body: dict[str, Any] = {
             "model": model,
             "messages": [
@@ -2063,9 +2323,7 @@ class OpenRouterClient:
                 "real provider completions require endpoint-bound maximum cost proof"
             )
         if self._requires_paid_controls and not self.privacy.require_zdr:
-            raise OpenRouterPrivacyError(
-                "real provider completions require zero-data-retention routing"
-            )
+            self._validate_non_zdr_privacy_authorization(models)
         if self._requires_paid_controls and not self.provider_policy.configured_endpoints:
             raise OpenRouterProviderPolicyError(
                 "real provider completions require an explicit provider endpoint allowlist"
@@ -2351,6 +2609,12 @@ class OpenRouterClient:
             if qualification_binding is not None and self.provider_policy.certification
             else self.provider_policy
         )
+        request_provider_policy = _canonical_provider_policy(request_provider_policy)
+        if self._requires_paid_controls:
+            self._validate_paid_privacy_policy(
+                (model,),
+                request_provider_endpoints=request_provider_policy.configured_endpoints,
+            )
         prompt_hash = _canonical_sha256(
             [
                 {"role": "system", "content": system_prompt},
@@ -2466,6 +2730,13 @@ class OpenRouterClient:
                     },
                 )
                 try:
+                    if self._requires_paid_controls:
+                        self._validate_paid_privacy_policy(
+                            (model,),
+                            request_provider_endpoints=(
+                                request_provider_policy.configured_endpoints
+                            ),
+                        )
                     active_network_attempted = True
                     response = await self._bounded_request(
                         "POST",
@@ -2841,6 +3112,56 @@ class OpenRouterClient:
             key=lambda bound: (bound.maximum_cost_usd, bound.provider_endpoint),
         )
 
+    def _privacy_routing_evidence(
+        self,
+        *,
+        selected_provider_endpoint: str | None,
+    ) -> dict[str, Any]:
+        policy = self.effective_privacy_policy
+        if policy is None:
+            return {}
+        endpoint_policy_class: str | None = None
+        if self.privacy.require_zdr:
+            endpoint_policy_class = EndpointPolicyClass.ZDR.value
+        elif policy is not None and selected_provider_endpoint is not None:
+            disclosure = next(
+                (
+                    item
+                    for item in policy.endpoint_disclosures
+                    if item.provider_endpoint.casefold() == selected_provider_endpoint.casefold()
+                ),
+                None,
+            )
+            endpoint_policy_class = (
+                disclosure.policy_class.value if disclosure is not None else None
+            )
+        return {
+            "privacy_profile": self.privacy.profile.value,
+            "privacy_authorization": (
+                "STRICT_ZDR_ENFORCED" if self.privacy.require_zdr else "CONSENT_BOUND_NON_ZDR"
+            ),
+            "effective_privacy_policy_sha256": (
+                policy.evidence_sha256 if policy is not None else None
+            ),
+            "privacy_source_sha256": policy.source_sha256 if policy is not None else None,
+            "privacy_source_provenance_sha256": (
+                policy.source_provenance_sha256 if policy is not None else None
+            ),
+            "privacy_source_classification": (
+                policy.source_classification.value if policy is not None else None
+            ),
+            "privacy_consent_file_sha256": (
+                policy.consent_file_sha256 if policy is not None else None
+            ),
+            "privacy_consent_sha256": policy.consent_sha256 if policy is not None else None,
+            "privacy_consent_expires_at": (
+                policy.consent_expires_at.isoformat()
+                if policy is not None and policy.consent_expires_at is not None
+                else None
+            ),
+            "privacy_endpoint_policy_class": endpoint_policy_class,
+        }
+
     def _routing_evidence(
         self,
         *,
@@ -2972,6 +3293,11 @@ class OpenRouterClient:
             "repair_used": repair_used,
             "repair_request": repair_request,
         }
+        evidence.update(
+            self._privacy_routing_evidence(
+                selected_provider_endpoint=envelope.selected_provider,
+            )
+        )
         if qualification_binding is not None:
             evidence.update(qualification_binding.routing_evidence())
         return evidence
@@ -3020,6 +3346,15 @@ class OpenRouterClient:
             "provider_error_classification": _provider_error_classification(error),
             "identity_strength": ModelIdentityStrength.UNBOUND.value,
         }
+        evidence.update(
+            self._privacy_routing_evidence(
+                selected_provider_endpoint=(
+                    provider_policy.configured_endpoints[0]
+                    if len(provider_policy.configured_endpoints) == 1
+                    else None
+                ),
+            )
+        )
         identity_diagnostic = _identity_failure_diagnostic(
             payload=payload,
             requested_model=requested_model,
@@ -3100,6 +3435,14 @@ def _identity_snapshot_from_discovery(
         reasoning_supported=bool(evidence.reasoning_parameters),
         zdr_eligible=endpoint.zdr_eligible is True,
         data_collection_deny_eligible=evidence.data_collection_deny_eligible,
+        data_collection_deny_request_policy_enforced=(
+            evidence.data_collection_deny_request_policy_enforced
+        ),
+        data_collection_deny_evidence_source=(evidence.data_collection_deny_evidence_source.value),
+        data_collection_deny_evidence_sha256=(evidence.data_collection_deny_evidence_sha256),
+        data_collection_deny_evidence_expires_at=(
+            evidence.data_collection_deny_evidence_expires_at
+        ),
     )
     pricing = tuple(
         OpenRouterIdentityPricingEntry(unit=unit, usd_per_unit=value)

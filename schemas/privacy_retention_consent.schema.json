@@ -1,0 +1,212 @@
+{
+  "$defs": {
+    "EndpointPolicyClass": {
+      "description": "Retention class independently disclosed for an exact provider endpoint.",
+      "enum": [
+        "ZDR",
+        "NON_ZDR_DATA_COLLECTION_DENIED"
+      ],
+      "title": "EndpointPolicyClass",
+      "type": "string"
+    },
+    "EndpointPrivacyDisclosure": {
+      "additionalProperties": false,
+      "description": "Bounded operator-reviewed privacy disclosure for one exact endpoint.",
+      "properties": {
+        "disclosed_retention": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Disclosed Retention",
+          "type": "string"
+        },
+        "policy_class": {
+          "$ref": "#/$defs/EndpointPolicyClass"
+        },
+        "privacy_policy_reference": {
+          "maxLength": 2048,
+          "minLength": 9,
+          "title": "Privacy Policy Reference",
+          "type": "string"
+        },
+        "privacy_policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Privacy Policy Sha256",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Provider Endpoint",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider_endpoint",
+        "policy_class",
+        "disclosed_retention",
+        "privacy_policy_reference",
+        "privacy_policy_sha256"
+      ],
+      "title": "EndpointPrivacyDisclosure",
+      "type": "object"
+    },
+    "PrivacyProfile": {
+      "description": "Explicit source-disclosure policy selected for one provider campaign.",
+      "enum": [
+        "STRICT_ZDR",
+        "FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT",
+        "SYNTHETIC_BENCHMARK"
+      ],
+      "title": "PrivacyProfile",
+      "type": "string"
+    },
+    "PrivacySourceClassification": {
+      "description": "Operator-controlled classification of the provider-visible source scope.",
+      "enum": [
+        "PRIVATE_OPERATOR_SOURCE",
+        "SYNTHETIC_COMMITTED",
+        "PUBLIC_BENCHMARK"
+      ],
+      "title": "PrivacySourceClassification",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/privacy_retention_consent.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Self-hashed operator-authored authorization for one non-strict source scope.",
+  "properties": {
+    "acknowledges_zdr_not_in_force": {
+      "title": "Acknowledges Zdr Not In Force",
+      "type": "boolean"
+    },
+    "consent_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Consent Sha256",
+      "type": "string"
+    },
+    "endpoint_disclosures": {
+      "items": {
+        "$ref": "#/$defs/EndpointPrivacyDisclosure"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "title": "Endpoint Disclosures",
+      "type": "array"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+    },
+    "issued_at": {
+      "format": "date-time",
+      "title": "Issued At",
+      "type": "string"
+    },
+    "maximum_cost_usd": {
+      "maxLength": 32,
+      "minLength": 1,
+      "title": "Maximum Cost Usd",
+      "type": "string"
+    },
+    "operator_identity_reference": {
+      "anyOf": [
+        {
+          "maxLength": 500,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Operator Identity Reference"
+    },
+    "permitted_endpoint_policy_classes": {
+      "items": {
+        "$ref": "#/$defs/EndpointPolicyClass"
+      },
+      "maxItems": 2,
+      "minItems": 1,
+      "title": "Permitted Endpoint Policy Classes",
+      "type": "array"
+    },
+    "permitted_model_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "title": "Permitted Model Ids",
+      "type": "array"
+    },
+    "permitted_provider_endpoints": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "title": "Permitted Provider Endpoints",
+      "type": "array"
+    },
+    "permitted_source_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Permitted Source Sha256",
+      "type": "string"
+    },
+    "prohibited_content": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "title": "Prohibited Content",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "selected_privacy_profile": {
+      "$ref": "#/$defs/PrivacyProfile"
+    },
+    "signature_reference": {
+      "anyOf": [
+        {
+          "maxLength": 2048,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Signature Reference"
+    },
+    "source_classification": {
+      "$ref": "#/$defs/PrivacySourceClassification"
+    }
+  },
+  "required": [
+    "selected_privacy_profile",
+    "source_classification",
+    "permitted_source_sha256",
+    "permitted_model_ids",
+    "permitted_provider_endpoints",
+    "permitted_endpoint_policy_classes",
+    "endpoint_disclosures",
+    "issued_at",
+    "expires_at",
+    "maximum_cost_usd",
+    "prohibited_content",
+    "acknowledges_zdr_not_in_force",
+    "consent_sha256"
+  ],
+  "title": "PrivacyRetentionConsent",
+  "type": "object"
+}

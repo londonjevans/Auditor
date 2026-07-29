@@ -33,7 +33,9 @@ from mmaudit.orchestration.manifest import (
     RunEvidenceManifest,
     build_run_evidence_manifest,
     canonical_sha256,
+    collect_run_artifacts,
     load_run_evidence_manifest,
+    seal_run_evidence_manifest,
     validate_manifest_artifacts,
     write_run_evidence_manifest,
 )
@@ -103,7 +105,7 @@ def _report(config) -> AuditReport:
     )
 
 
-def _write_required_artifacts(run_dir: Path) -> None:
+def _write_required_artifacts(run_dir: Path, report: AuditReport) -> None:
     payloads = {
         "solidity-compilation.json": {"schema_version": "1.0", "results": []},
         "invariant-harness-plan.json": {
@@ -147,6 +149,29 @@ def _write_required_artifacts(run_dir: Path) -> None:
             json.dumps(payload, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+    (run_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "schema_version": report.schema_version,
+                "run_id": report.run_id,
+                "generated_at": report.generated_at.isoformat(),
+                "completed": report.completed,
+                "incomplete_reasons": report.incomplete_reasons,
+                "configuration_hash": report.configuration_hash,
+                "model_configuration_hash": report.model_configuration_hash,
+                "privacy": report.privacy,
+                "metadata": report.metadata,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "final-findings.json").write_text(
+        report.model_dump_json(),
+        encoding="utf-8",
+    )
 
 
 def _write_verifiable_run(
@@ -178,7 +203,7 @@ def _write_verifiable_run(
         }
     )
     run_dir = root / "run"
-    _write_required_artifacts(run_dir)
+    _write_required_artifacts(run_dir, report)
     (run_dir / "metadata.json").write_text(
         json.dumps(
             {
@@ -225,17 +250,18 @@ def test_manifest_serialization_and_all_required_bindings_are_stable(
     config = config_factory()
     first_run = tmp_path / "first"
     second_run = tmp_path / "second"
-    _write_required_artifacts(first_run)
-    _write_required_artifacts(second_run)
+    report = _report(config)
+    _write_required_artifacts(first_run, report)
+    _write_required_artifacts(second_run, report)
 
     first = build_run_evidence_manifest(
         run_dir=first_run,
-        report=_report(config),
+        report=report,
         config=config,
     )
     second = build_run_evidence_manifest(
         run_dir=second_run,
-        report=_report(config),
+        report=report,
         config=config,
     )
 
@@ -263,10 +289,11 @@ def test_manifest_self_hash_and_artifact_hashes_reject_tampering(
 ) -> None:
     config = config_factory()
     run_dir = tmp_path / "run"
-    _write_required_artifacts(run_dir)
+    report = _report(config)
+    _write_required_artifacts(run_dir, report)
     manifest = build_run_evidence_manifest(
         run_dir=run_dir,
-        report=_report(config),
+        report=report,
         config=config,
     )
     manifest_path = run_dir / "run-evidence-manifest.json"
@@ -286,16 +313,56 @@ def test_manifest_self_hash_and_artifact_hashes_reject_tampering(
         validate_manifest_artifacts(manifest, run_dir)
 
 
+def test_manifest_rejects_resealed_metadata_privacy_disagreement(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    _repository, run_dir, manifest, report = _write_verifiable_run(tmp_path, config)
+    metadata_path = run_dir / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["privacy"] = {
+        **metadata["privacy"],
+        "code_egress_enabled": not metadata["privacy"]["code_egress_enabled"],
+    }
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"metadata\.json privacy"):
+        build_run_evidence_manifest(
+            run_dir=run_dir,
+            report=report,
+            config=config,
+        )
+
+    assert manifest.run_configuration is not None
+    resealed = seal_run_evidence_manifest(
+        run_id=manifest.run_id,
+        repository_root_name=manifest.repository_root_name,
+        git_commit=manifest.git_commit,
+        sources=manifest.sources,
+        run_configuration=manifest.run_configuration,
+        bindings=manifest.bindings,
+        artifacts=collect_run_artifacts(run_dir),
+        tool_version=manifest.tool_version,
+    )
+    with pytest.raises(ValueError, match=r"metadata\.json privacy"):
+        validate_manifest_artifacts(resealed, run_dir)
+
+
 def test_manifest_provenance_hashes_fail_closed_and_v1_0_remains_readable(
     tmp_path: Path,
     config_factory,
 ) -> None:
     config = config_factory()
     run_dir = tmp_path / "run"
-    _write_required_artifacts(run_dir)
+    report = _report(config)
+    _write_required_artifacts(run_dir, report)
     manifest = build_run_evidence_manifest(
         run_dir=run_dir,
-        report=_report(config),
+        report=report,
         config=config,
     )
 
@@ -350,7 +417,8 @@ def test_manifest_semantically_binds_runtime_model_qualification(
     )
     assert validation.valid
     run_dir = tmp_path / "qualified-run"
-    _write_required_artifacts(run_dir)
+    report = _report(config)
+    _write_required_artifacts(run_dir, report)
     qualification_path = run_dir / "model-qualification-runtime.json"
     qualification_path.write_text(
         json.dumps(validation.as_dict(), indent=2, sort_keys=True) + "\n",
@@ -359,7 +427,7 @@ def test_manifest_semantically_binds_runtime_model_qualification(
 
     manifest = build_run_evidence_manifest(
         run_dir=run_dir,
-        report=_report(config),
+        report=report,
         config=config,
     )
 
@@ -411,7 +479,7 @@ def test_manifest_semantically_binds_runtime_model_qualification(
     with pytest.raises(ValidationError, match="self-hash"):
         build_run_evidence_manifest(
             run_dir=run_dir,
-            report=_report(config),
+            report=report,
             config=config,
         )
 
@@ -424,7 +492,7 @@ def test_manifest_semantically_binds_runtime_model_qualification(
     with pytest.raises(ValidationError, match="self-hash"):
         build_run_evidence_manifest(
             run_dir=run_dir,
-            report=_report(config),
+            report=report,
             config=config,
         )
 
@@ -434,7 +502,9 @@ def test_manifest_rejects_linked_artifacts(
     config_factory,
 ) -> None:
     run_dir = tmp_path / "run"
-    _write_required_artifacts(run_dir)
+    config = config_factory()
+    report = _report(config)
+    _write_required_artifacts(run_dir, report)
     outside = tmp_path / "outside.json"
     outside.write_text("{}\n", encoding="utf-8")
     try:
@@ -445,8 +515,8 @@ def test_manifest_rejects_linked_artifacts(
     with pytest.raises(ValueError, match="links"):
         build_run_evidence_manifest(
             run_dir=run_dir,
-            report=_report(config_factory()),
-            config=config_factory(),
+            report=report,
+            config=config,
         )
 
 
@@ -547,11 +617,13 @@ def test_published_manifest_schema_is_strict_and_bounded() -> None:
 
 def test_manifest_loader_rejects_duplicate_json_keys(tmp_path: Path, config_factory) -> None:
     run_dir = tmp_path / "run"
-    _write_required_artifacts(run_dir)
+    config = config_factory()
+    report = _report(config)
+    _write_required_artifacts(run_dir, report)
     manifest = build_run_evidence_manifest(
         run_dir=run_dir,
-        report=_report(config_factory()),
-        config=config_factory(),
+        report=report,
+        config=config,
     )
     path = run_dir / "run-evidence-manifest.json"
     write_run_evidence_manifest(path, manifest)

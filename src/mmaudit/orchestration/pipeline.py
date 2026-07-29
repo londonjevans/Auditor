@@ -13,6 +13,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
@@ -73,6 +74,7 @@ from mmaudit.models.openrouter import (
     OpenRouterAuthenticationError,
     OpenRouterClient,
     OpenRouterError,
+    OpenRouterPrivacyError,
     OpenRouterQualificationRoutingEvidence,
 )
 from mmaudit.models.qualification import VerifiedProductionQualification
@@ -122,6 +124,7 @@ from mmaudit.models.schemas import (
     PropertyCorpus,
     QualityGateResult,
     ReportQualityReview,
+    RepositoryMap,
     ReproductionIntegrityStatus,
     ReproductionResolutionKind,
     ReproductionResult,
@@ -171,6 +174,7 @@ from mmaudit.orchestration.context import (
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.manifest import (
     build_run_evidence_manifest,
+    canonical_sha256,
     validate_manifest_artifacts,
     write_run_evidence_manifest,
 )
@@ -190,6 +194,15 @@ from mmaudit.orchestration.scope import (
     filter_discovery_for_scope,
     scope_quality_gate,
 )
+from mmaudit.privacy import (
+    EffectivePrivacyPolicyEvidence,
+    PrivacyRetentionConsentObservation,
+    PrivacySourceClassification,
+    TrustedPrivacyAuthorization,
+    resolve_effective_privacy_policy,
+    resolve_trusted_privacy_authorization,
+    validate_trusted_privacy_authorization,
+)
 from mmaudit.reporting.json_report import write_json
 from mmaudit.reporting.markdown import render_markdown
 from mmaudit.reporting.sarif import generate_sarif
@@ -201,6 +214,12 @@ from mmaudit.repository.discovery import (
 from mmaudit.repository.ignore import IgnoreMatcher, normalize_relative_path, safe_ignore_file
 from mmaudit.repository.locations import validate_candidate, validate_location
 from mmaudit.repository.mapping import build_repository_map
+from mmaudit.repository.privacy_provenance import (
+    PrivacySourceProvenanceEvidence,
+    PrivacySourceProvenanceObservation,
+    prove_privacy_source_classification,
+    validate_privacy_source_provenance_observation,
+)
 from mmaudit.repository.redaction import SecretSafetyError
 from mmaudit.scanners.runner import ScannerRunner
 from mmaudit.solidity.compile import compile_solidity_projects
@@ -251,6 +270,20 @@ class PipelineResult:
         return ExitCode.SUCCESS
 
 
+def _repository_source_scope_sha256(repository_map: RepositoryMap) -> str:
+    """Bind consent to the exact discovered source inventory used by the run manifest."""
+
+    payload = [
+        {
+            "path": item.path,
+            "sha256": item.sha256,
+            "size": item.size,
+        }
+        for item in sorted(repository_map.files, key=lambda candidate: candidate.path)
+    ]
+    return canonical_sha256(payload)
+
+
 class AuditPipeline:
     """Coordinates trusted scanners and constrained model roles."""
 
@@ -272,6 +305,10 @@ class AuditPipeline:
         invariant_runner: FoundryInvariantRunner | None = None,
         formal_runner: FormalRunner | None = None,
         production_qualification: VerifiedProductionQualification | None = None,
+        privacy_consent_observation: PrivacyRetentionConsentObservation | None = None,
+        privacy_source_classification: PrivacySourceClassification = (
+            PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE
+        ),
     ) -> None:
         self.config = config.effective()
         self.file_config = file_config or self.config
@@ -288,6 +325,13 @@ class AuditPipeline:
         self.cost_ledger = cost_ledger
         self.api_key = api_key or ""
         self.production_qualification = production_qualification
+        self.privacy_consent_observation = privacy_consent_observation
+        self.privacy_source_classification = privacy_source_classification
+        self.privacy_source_provenance_observation: PrivacySourceProvenanceObservation | None = None
+        self.privacy_source_provenance: PrivacySourceProvenanceEvidence | None = None
+        self.effective_privacy_policy: EffectivePrivacyPolicyEvidence | None = None
+        self.privacy_authorization: TrustedPrivacyAuthorization | None = None
+        self.privacy_source_sha256: str | None = None
         self.logger = logger or logging.getLogger("mmaudit.pipeline")
         self.reproduction_runner = reproduction_runner or ForkReproductionRunner(
             self.config.reproduction,
@@ -325,6 +369,9 @@ class AuditPipeline:
         self.api_key = ""
         if self.client is not None:
             self.client.clear_credentials()
+        self.privacy_authorization = None
+        self.privacy_consent_observation = None
+        self.privacy_source_provenance_observation = None
 
     async def run(
         self,
@@ -366,6 +413,9 @@ class AuditPipeline:
                     await self.client.close()
                 else:
                     self.client.clear_credentials()
+            self.privacy_authorization = None
+            self.privacy_consent_observation = None
+            self.privacy_source_provenance_observation = None
 
     async def _run_with_provider(
         self,
@@ -383,6 +433,13 @@ class AuditPipeline:
         benchmark_verification: BenchmarkCertificateVerification | None = None,
         benchmark_repository_git_commit: str | None = None,
     ) -> PipelineResult:
+        # A pipeline object may be reused for a later scanner-only run.  Derived
+        # privacy state is run-local and must never survive that boundary.
+        self.privacy_source_provenance = None
+        self.privacy_source_provenance_observation = None
+        self.effective_privacy_policy = None
+        self.privacy_authorization = None
+        self.privacy_source_sha256 = None
         run_options = AuditRunOptions(
             scanner_only=scanner_only,
             allow_code_egress=allow_code_egress,
@@ -395,9 +452,17 @@ class AuditPipeline:
             require_maximum_assurance=require_maximum_assurance,
             allow_maximum_assurance_downgrade=allow_maximum_assurance_downgrade,
             benchmark_repository_git_commit=benchmark_repository_git_commit,
+            privacy_source_classification=self.privacy_source_classification,
+            retention_consent_file_sha256=(
+                self.privacy_consent_observation.file_sha256
+                if self.privacy_consent_observation is not None
+                else None
+            ),
         )
         if not scanner_only and self.client is None and self.cost_ledger is None:
             raise ValueError("provider audits require an explicit existing cumulative cost ledger")
+        if not scanner_only and self.client is not None and self.client.usage.records:
+            raise ValueError("provider audits require a fresh empty client usage ledger")
         if (
             not scanner_only
             and self.client is not None
@@ -582,6 +647,95 @@ class AuditPipeline:
         )
         repository_map = build_repository_map(discovery, changed_since=changed_since)
         write_json(run_dir / "repository-map.json", repository_map)
+        self.privacy_source_sha256 = _repository_source_scope_sha256(repository_map)
+        if not scanner_only:
+            configured_privacy_models = tuple(
+                sorted(set(configured_model_ids(self.config, include_fallbacks=True)))
+            )
+            configured_privacy_endpoints = tuple(
+                sorted(
+                    set(self.config.models.provider_policy.only)
+                    | set(self.config.models.provider_policy.order)
+                )
+            )
+            privacy_now = datetime.now(UTC).replace(microsecond=0)
+            try:
+                self.privacy_source_provenance_observation = prove_privacy_source_classification(
+                    discovery,
+                    requested_classification=self.privacy_source_classification,
+                    source_sha256=self.privacy_source_sha256,
+                    now=privacy_now,
+                )
+                self.privacy_source_provenance = validate_privacy_source_provenance_observation(
+                    self.privacy_source_provenance_observation,
+                    source_sha256=self.privacy_source_sha256,
+                    source_classification=self.privacy_source_classification,
+                )
+                write_json(
+                    run_dir / "privacy-source-provenance.json",
+                    self.privacy_source_provenance,
+                )
+                if self.config.privacy.require_zdr:
+                    self.effective_privacy_policy = resolve_effective_privacy_policy(
+                        profile=self.config.privacy.profile,
+                        require_zdr=True,
+                        consent_observation=self.privacy_consent_observation,
+                        source_sha256=self.privacy_source_sha256,
+                        source_classification=self.privacy_source_classification,
+                        source_provenance_observation=(self.privacy_source_provenance_observation),
+                        configured_model_ids=configured_privacy_models,
+                        configured_provider_endpoints=configured_privacy_endpoints,
+                        requested_budget_usd=Decimal(str(self.config.execution.budget_usd)),
+                        now=privacy_now,
+                    )
+                else:
+                    self.privacy_authorization = resolve_trusted_privacy_authorization(
+                        profile=self.config.privacy.profile,
+                        require_zdr=False,
+                        consent_observation=self.privacy_consent_observation,
+                        source_sha256=self.privacy_source_sha256,
+                        source_classification=self.privacy_source_classification,
+                        source_provenance_observation=(self.privacy_source_provenance_observation),
+                        configured_model_ids=configured_privacy_models,
+                        configured_provider_endpoints=configured_privacy_endpoints,
+                        requested_budget_usd=Decimal(str(self.config.execution.budget_usd)),
+                        now=privacy_now,
+                    )
+                    self.effective_privacy_policy = validate_trusted_privacy_authorization(
+                        self.privacy_authorization,
+                        evidence_sha256=self.privacy_authorization.evidence.evidence_sha256,
+                        source_sha256=self.privacy_source_sha256,
+                        source_classification=self.privacy_source_classification,
+                        source_provenance_sha256=(self.privacy_source_provenance.evidence_sha256),
+                        configured_model_ids=configured_privacy_models,
+                        configured_provider_endpoints=configured_privacy_endpoints,
+                        requested_budget_usd=Decimal(str(self.config.execution.budget_usd)),
+                        now=privacy_now,
+                    )
+                if (
+                    self.client is not None
+                    and self.effective_privacy_policy is not None
+                    and self.client.effective_privacy_policy is None
+                ):
+                    self.client.bind_effective_privacy_context(
+                        effective_privacy_policy=self.effective_privacy_policy,
+                        privacy_authorization=self.privacy_authorization,
+                    )
+                elif (
+                    self.client is not None
+                    and self.client.effective_privacy_policy != self.effective_privacy_policy
+                ):
+                    raise OpenRouterPrivacyError(
+                        "injected provider client binds different effective privacy evidence"
+                    )
+                write_json(
+                    run_dir / "privacy-policy.json",
+                    self.effective_privacy_policy,
+                )
+            except (ValueError, OpenRouterPrivacyError) as exc:
+                incomplete.append(f"privacy authorization failed: {exc}")
+                if terminal_code is ExitCode.SUCCESS:
+                    terminal_code = ExitCode.PRIVACY_REFUSAL
 
         try:
             solidity_projects = discover_solidity_projects(
@@ -947,10 +1101,14 @@ class AuditPipeline:
                 ):
                     final_findings.append(finding)
         model_certification_required = maximum_assurance_model_certification_required(self.config)
-        usage = self.client.usage if self.client is not None else UsageLedger()
+        usage = (
+            UsageLedger()
+            if scanner_only
+            else (self.client.usage if self.client is not None else UsageLedger())
+        )
         budget = (
             self.client.budget
-            if self.client is not None
+            if self.client is not None and not scanner_only
             else BudgetManager(
                 total_usd=self.config.execution.budget_usd,
                 max_output_tokens=self.config.execution.max_output_tokens_per_request,
@@ -979,6 +1137,8 @@ class AuditPipeline:
                     self.config,
                     certification=model_certification_required,
                     require_single_model_per_role=model_certification_required,
+                    effective_privacy_policy=self.effective_privacy_policy,
+                    privacy_authorization=self.privacy_authorization,
                 )
                 self.client = OpenRouterClient(
                     api_key=self.api_key or "",
@@ -993,6 +1153,8 @@ class AuditPipeline:
                     qualification_routing=_openrouter_qualification_routing(
                         self.production_qualification
                     ),
+                    effective_privacy_policy=self.effective_privacy_policy,
+                    privacy_authorization=self.privacy_authorization,
                 )
                 self._owns_client = True
                 self.api_key = ""
@@ -2321,8 +2483,8 @@ class AuditPipeline:
         )
         if not qualification_validation.valid:
             raise OpenRouterError("; ".join(qualification_validation.errors))
-        if source_egress_requested and not self.config.privacy.require_zdr:
-            raise OpenRouterError("source egress requires zero-data-retention provider routing")
+        if source_egress_requested and self.effective_privacy_policy is None:
+            raise OpenRouterError("source egress lacks resolved effective privacy evidence")
         if source_egress_requested and not provider_policy.configured_endpoints:
             raise OpenRouterError("source egress requires an explicit provider endpoint allowlist")
         real_provider_client = (
@@ -2345,10 +2507,10 @@ class AuditPipeline:
         assert models is not None
         zdr_ids: set[str] | None = None
         zdr_payload: dict[str, Any] | None = None
-        if self.config.privacy.require_zdr:
+        if self.config.privacy.require_zdr or real_provider_client:
             zdr_payload = await self.client.list_zdr_endpoints()
             zdr_ids = extract_zdr_model_ids(zdr_payload)
-            if not zdr_ids:
+            if self.config.privacy.require_zdr and not zdr_ids:
                 raise OpenRouterError(
                     "ZDR endpoint eligibility could not be verified; refusing code egress"
                 )
@@ -2429,6 +2591,7 @@ class AuditPipeline:
                             models_payload=models_payload,
                             single_model_payload=single_model_payload,
                             endpoint_snapshot=snapshot,
+                            effective_privacy_policy=self.effective_privacy_policy,
                         )
                     )
                 else:
@@ -2463,6 +2626,11 @@ class AuditPipeline:
                     lineage.model_dump(mode="json") for lineage in self.config.models.registry
                 ],
                 "zdr_required": self.config.privacy.require_zdr,
+                "effective_privacy_policy": (
+                    self.effective_privacy_policy.model_dump(mode="json")
+                    if self.effective_privacy_policy is not None
+                    else None
+                ),
                 "endpoint_snapshots": [
                     snapshot.model_dump(mode="json") for snapshot in endpoint_snapshots
                 ],
@@ -2549,6 +2717,16 @@ class AuditPipeline:
             privacy={
                 **self.config.privacy.model_dump(mode="json"),
                 "code_egress_enabled": code_egress_enabled,
+                "effective_policy": (
+                    self.effective_privacy_policy.model_dump(mode="json")
+                    if self.effective_privacy_policy is not None
+                    else None
+                ),
+                "source_provenance": (
+                    self.privacy_source_provenance.model_dump(mode="json")
+                    if self.privacy_source_provenance is not None
+                    else None
+                ),
             },
             scanner_runs=scanner_runs,
             usage=usage.records,
@@ -2947,6 +3125,8 @@ class AuditPipeline:
         for filename in (
             "metadata.json",
             "repository-map.json",
+            "privacy-source-provenance.json",
+            "privacy-policy.json",
             "scanner-results.json",
             "candidate-findings.json",
             "verification-results.json",
@@ -2976,14 +3156,14 @@ class AuditPipeline:
             "run-evidence-manifest.json",
         ):
             source = run_dir / filename
+            destination = latest / filename
+            if destination.is_symlink():
+                raise ValueError(f"refusing symlinked latest report destination: {filename}")
+            if destination.exists():
+                if not destination.is_file():
+                    raise ValueError(f"refusing non-file latest report destination: {filename}")
+                destination.unlink()
             if source.exists():
-                destination = latest / filename
-                if destination.is_symlink():
-                    raise ValueError(f"refusing symlinked latest report destination: {filename}")
-                if destination.exists():
-                    if not destination.is_file():
-                        raise ValueError(f"refusing non-file latest report destination: {filename}")
-                    destination.unlink()
                 shutil.copy2(source, destination)
 
 

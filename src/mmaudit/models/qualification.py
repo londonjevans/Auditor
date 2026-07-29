@@ -30,6 +30,7 @@ from mmaudit.benchmark.models import (
     verify_model_benchmark_report_structure,
 )
 from mmaudit.models.discovery import (
+    DataCollectionDenyEvidenceSource,
     OpenRouterModelDiscoveryEvidence,
     OpenRouterModelDiscoveryRunManifest,
 )
@@ -223,6 +224,23 @@ class CandidateModel(StrictModel):
     reasoning_supported: bool
     zdr_eligible: bool
     data_collection_deny_eligible: bool
+    data_collection_deny_request_policy_enforced: bool | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    data_collection_deny_evidence_source: DataCollectionDenyEvidenceSource | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    data_collection_deny_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    data_collection_deny_evidence_expires_at: datetime | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     operational_status: CandidateOperationalStatus
     benchmark_status: CandidateBenchmarkStatus = CandidateBenchmarkStatus.PENDING
     benchmark_artifact_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
@@ -250,8 +268,60 @@ class CandidateModel(StrictModel):
             else _validate_utc_second(value, label="candidate qualification expiry")
         )
 
+    @field_validator("data_collection_deny_evidence_expires_at")
+    @classmethod
+    def privacy_evidence_expiry_is_utc(cls, value: datetime | None) -> datetime | None:
+        return (
+            None
+            if value is None
+            else _validate_utc_second(value, label="candidate privacy evidence expiry")
+        )
+
     @model_validator(mode="after")
     def lineage_and_benchmark_state_are_consistent(self) -> CandidateModel:
+        privacy_values = (
+            self.data_collection_deny_request_policy_enforced,
+            self.data_collection_deny_evidence_source,
+            self.data_collection_deny_evidence_sha256,
+            self.data_collection_deny_evidence_expires_at,
+        )
+        if any(value is not None for value in privacy_values):
+            if (
+                self.data_collection_deny_request_policy_enforced is None
+                or self.data_collection_deny_evidence_source is None
+            ):
+                raise ValueError("candidate data-collection evidence is incomplete")
+            if (
+                self.data_collection_deny_evidence_source
+                is DataCollectionDenyEvidenceSource.ZDR_ENDPOINT_SNAPSHOT
+            ):
+                if (
+                    self.data_collection_deny_eligible is not True
+                    or self.data_collection_deny_request_policy_enforced is not True
+                    or self.data_collection_deny_evidence_sha256 is None
+                    or self.data_collection_deny_evidence_expires_at is not None
+                ):
+                    raise ValueError("candidate ZDR evidence is inconsistent")
+            elif (
+                self.data_collection_deny_evidence_source
+                is DataCollectionDenyEvidenceSource.CONSENT_BOUND_ROUTER_REQUEST_POLICY
+            ):
+                if (
+                    self.data_collection_deny_eligible is not False
+                    or self.data_collection_deny_request_policy_enforced is not True
+                    or self.data_collection_deny_evidence_sha256 is None
+                    or self.data_collection_deny_evidence_expires_at is None
+                ):
+                    raise ValueError(
+                        "candidate consent-bound request-policy evidence is incomplete"
+                    )
+            elif (
+                self.data_collection_deny_eligible is not False
+                or self.data_collection_deny_request_policy_enforced is not False
+                or self.data_collection_deny_evidence_sha256 is not None
+                or self.data_collection_deny_evidence_expires_at is not None
+            ):
+                raise ValueError("unverified candidate privacy evidence cannot receive credit")
         if self.exact_model_id not in self.lineage_review.reviewed_model_ids:
             raise ValueError("candidate exact model ID is outside its lineage review")
         approved = self.lineage_review.status is LineageReviewStatus.APPROVED
@@ -426,6 +496,10 @@ def validate_candidate_registry_discovery(
             item.reasoning_supported,
             item.zdr_eligible,
             item.data_collection_deny_eligible,
+            item.data_collection_deny_request_policy_enforced,
+            item.data_collection_deny_evidence_source,
+            item.data_collection_deny_evidence_sha256,
+            item.data_collection_deny_evidence_expires_at,
         )
         observed = (
             candidate.canonical_model_slug,
@@ -441,6 +515,10 @@ def validate_candidate_registry_discovery(
             candidate.reasoning_supported,
             candidate.zdr_eligible,
             candidate.data_collection_deny_eligible,
+            candidate.data_collection_deny_request_policy_enforced,
+            candidate.data_collection_deny_evidence_source,
+            candidate.data_collection_deny_evidence_sha256,
+            candidate.data_collection_deny_evidence_expires_at,
         )
         if observed != expected or (
             candidate.operational_status is not CandidateOperationalStatus.AVAILABLE
@@ -1530,6 +1608,11 @@ def verify_model_qualification(
                 and candidate.structured_output_supported
                 and candidate.zdr_eligible
                 and candidate.data_collection_deny_eligible
+                and candidate.data_collection_deny_request_policy_enforced is True
+                and candidate.data_collection_deny_evidence_source
+                is DataCollectionDenyEvidenceSource.ZDR_ENDPOINT_SNAPSHOT
+                and candidate.data_collection_deny_evidence_sha256 is not None
+                and candidate.data_collection_deny_evidence_expires_at is None
                 and bool(candidate.approved_roles)
                 and result.expires_at > now
             )

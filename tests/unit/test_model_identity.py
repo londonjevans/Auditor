@@ -61,6 +61,10 @@ def _capabilities() -> OpenRouterIdentityEndpointCapabilities:
         reasoning_supported=True,
         zdr_eligible=True,
         data_collection_deny_eligible=True,
+        data_collection_deny_request_policy_enforced=True,
+        data_collection_deny_evidence_source="ZDR_ENDPOINT_SNAPSHOT",
+        data_collection_deny_evidence_sha256="8" * 64,
+        data_collection_deny_evidence_expires_at=None,
     )
 
 

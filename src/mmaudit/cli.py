@@ -155,6 +155,12 @@ from mmaudit.orchestration.verification import (
     verify_run_evidence,
     write_run_verification,
 )
+from mmaudit.privacy import (
+    PrivacyProfile,
+    PrivacyRetentionConsentObservation,
+    PrivacySourceClassification,
+    load_privacy_retention_consent,
+)
 from mmaudit.repository.discovery import RepositorySafetyError, safe_repository_root
 from mmaudit.repository.secrets import is_sensitive_workspace_name
 from mmaudit.scanners.runner import ScannerRunner
@@ -511,10 +517,74 @@ def doctor_command(
     )
     checks.append(
         (
-            "Zero Data Retention",
-            config.privacy.require_zdr,
-            "required" if config.privacy.require_zdr else "not required",
+            "Privacy profile",
             True,
+            config.privacy.profile.value,
+            True,
+        )
+    )
+    zdr_control_consistent = (
+        config.privacy.profile is PrivacyProfile.STRICT_ZDR
+        and config.privacy.require_zdr
+        and config.privacy.maximum_model_retention == "zero"
+    ) or (
+        config.privacy.profile is not PrivacyProfile.STRICT_ZDR
+        and (config.privacy.require_zdr == (config.privacy.maximum_model_retention == "zero"))
+    )
+    checks.append(
+        (
+            "Request-level Zero Data Retention",
+            zdr_control_consistent,
+            (
+                "enforced; no request-level downgrade is permitted"
+                if config.privacy.require_zdr
+                else "omitted only for an explicitly consent-bound non-ZDR run"
+            ),
+            True,
+        )
+    )
+    checks.append(
+        (
+            "Retention-consent boundary",
+            True,
+            (
+                "not applicable; STRICT_ZDR rejects retention consent"
+                if config.privacy.profile is PrivacyProfile.STRICT_ZDR
+                else (
+                    (
+                        "not applicable; ZDR-enforced synthetic runs require committed "
+                        "source provenance instead of retention consent"
+                    )
+                    if (
+                        config.privacy.profile is PrivacyProfile.SYNTHETIC_BENCHMARK
+                        and config.privacy.require_zdr
+                    )
+                    else (
+                        "configuration is non-authorizing; each provider run requires an "
+                        "explicit matching --privacy-profile and external consent artifact"
+                    )
+                )
+            ),
+            True,
+        )
+    )
+    checks.append(
+        (
+            "Account/guardrail ZDR compatibility",
+            False,
+            (
+                (
+                    "not observable from API-key metadata; a ZDR claim requires a "
+                    "successful exact-route ZDR runtime preflight"
+                )
+                if config.privacy.require_zdr
+                else (
+                    "not observable from API-key metadata; account or guardrail ZDR can "
+                    "block the consented non-ZDR endpoint, so a frontier claim requires "
+                    "a successful exact-route consented runtime preflight"
+                )
+            ),
+            False,
         )
     )
     fork_acknowledged = config.smart_contracts.allow_fork_probing or allow_fork_probing
@@ -624,8 +694,6 @@ def models_discover(
         candidates = _parse_model_discovery_candidates(candidate)
         _preflight_model_discovery_output_dir(output_dir)
         config = load_config(config_path)
-        if not config.privacy.require_zdr:
-            raise ConfigError("models discover requires zero-data-retention routing")
         budget, usage = _budget_and_usage(config)
         with load_operator_secrets(secrets_env_file, required=True) as operator_secrets:
             if not operator_secrets.openrouter_api_key_present:
@@ -660,8 +728,9 @@ def models_discover(
                         configured_provider_endpoints=(provider_endpoint,),
                         provider_policy_mode="only",
                         endpoint_payload=endpoint_payload,
-                        require_zdr=True,
+                        require_zdr=config.privacy.require_zdr,
                         zdr_payload=zdr_payload,
+                        structured_output_required=False,
                     )
                     structural_payloads.append(
                         validate_openrouter_model_discovery(
@@ -743,7 +812,7 @@ def models_check(
                     registry.save_cache(metadata)
                 zdr_payload = await client.list_zdr_endpoints()
                 zdr_ids = extract_zdr_model_ids(zdr_payload)
-                if not zdr_ids:
+                if config.privacy.require_zdr and not zdr_ids:
                     errors.append("ZDR endpoint eligibility could not be verified")
                 errors.extend(
                     registry.validate(
@@ -772,7 +841,7 @@ def models_check(
                                     ),
                                     provider_policy_mode=policy_mode,
                                     endpoint_payload=endpoint_payload,
-                                    require_zdr=True,
+                                    require_zdr=config.privacy.require_zdr,
                                     zdr_payload=zdr_payload,
                                     reasoning_requested=controls.reasoning is not None,
                                 )
@@ -1722,6 +1791,9 @@ def scan_command(
         skip_codeql=skip_codeql,
         allow_code_egress=False,
         require_zdr=False,
+        privacy_profile=None,
+        retention_consent=None,
+        privacy_source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
         profile=profile,
         scope=scope,
         require_complete_scope=require_complete_scope,
@@ -1819,6 +1891,27 @@ def run_command(
     skip_codeql: Annotated[bool, typer.Option("--skip-codeql")] = False,
     allow_code_egress: Annotated[bool, typer.Option("--allow-code-egress")] = False,
     require_zdr: Annotated[bool, typer.Option("--require-zdr")] = False,
+    privacy_profile: Annotated[
+        PrivacyProfile | None,
+        typer.Option(
+            "--privacy-profile",
+            help="Explicit privacy profile for this invocation.",
+        ),
+    ] = None,
+    retention_consent: Annotated[
+        Path | None,
+        typer.Option(
+            "--retention-consent",
+            help="Operator-authored privacy consent outside the audited repository.",
+        ),
+    ] = None,
+    privacy_source_classification: Annotated[
+        PrivacySourceClassification,
+        typer.Option(
+            "--privacy-source-classification",
+            help="Operator-declared source class bound into privacy authorization.",
+        ),
+    ] = PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
     profile: Annotated[
         AuditProfile | None,
         typer.Option("--profile", help="Audit profile override."),
@@ -1957,6 +2050,9 @@ def run_command(
         skip_codeql=skip_codeql,
         allow_code_egress=allow_code_egress,
         require_zdr=require_zdr,
+        privacy_profile=privacy_profile,
+        retention_consent=retention_consent,
+        privacy_source_classification=privacy_source_classification,
         profile=profile,
         scope=scope,
         require_complete_scope=require_complete_scope,
@@ -2508,6 +2604,9 @@ def _execute_audit(
     skip_codeql: bool,
     allow_code_egress: bool,
     require_zdr: bool,
+    privacy_profile: PrivacyProfile | None,
+    retention_consent: Path | None,
+    privacy_source_classification: PrivacySourceClassification,
     profile: AuditProfile | None,
     scope: AuditScope | None,
     require_complete_scope: bool | None,
@@ -2546,6 +2645,7 @@ def _execute_audit(
             max_context_bytes=max_context_bytes,
             concurrency=concurrency,
             require_zdr=require_zdr,
+            privacy_profile=privacy_profile,
             profile=profile,
             scope=scope,
             require_complete_scope=require_complete_scope,
@@ -2646,6 +2746,19 @@ def _execute_audit(
                 "benchmark certificate inputs require --benchmark-gate or a configured gate"
             )
         repo_path = _repo_path(config, config_path, repo)
+        if scanner_only:
+            if retention_consent is not None:
+                raise ConfigError(
+                    "scanner-only execution does not accept a provider-retention consent artifact"
+                )
+            consent_observation = None
+        else:
+            consent_observation = _load_audit_privacy_consent(
+                config=config,
+                explicit_profile=privacy_profile,
+                retention_consent=retention_consent,
+                target_root=repo_path,
+            )
         output_path = resolve_safe_output_root(output or (repo_path / ".mmaudit"))
         if config.privacy.store_raw_prompts or config.privacy.store_raw_responses:
             Console(no_color=no_color).print(
@@ -2664,6 +2777,8 @@ def _execute_audit(
             api_key=operator_secrets.openrouter_api_key,
             logger=logger,
             production_qualification=production_qualification,
+            privacy_consent_observation=consent_observation,
+            privacy_source_classification=privacy_source_classification,
         )
         result = asyncio.run(
             pipeline.run(
@@ -2705,6 +2820,35 @@ SecretlessErrors = (
 )
 
 
+def _load_audit_privacy_consent(
+    *,
+    config: AuditConfig,
+    explicit_profile: PrivacyProfile | None,
+    retention_consent: Path | None,
+    target_root: Path,
+) -> PrivacyRetentionConsentObservation | None:
+    """Load only explicit operator consent; configuration alone cannot authorize retention."""
+
+    if config.privacy.profile is PrivacyProfile.STRICT_ZDR:
+        if retention_consent is not None:
+            raise ConfigError("STRICT_ZDR does not accept a retention-consent artifact")
+        return None
+    if explicit_profile is not config.privacy.profile:
+        raise ConfigError("non-strict privacy requires an explicit matching --privacy-profile")
+    if config.privacy.profile is PrivacyProfile.SYNTHETIC_BENCHMARK and config.privacy.require_zdr:
+        if retention_consent is not None:
+            raise ConfigError(
+                "ZDR-enforced synthetic benchmark execution does not accept retention consent"
+            )
+        return None
+    if retention_consent is None:
+        raise ConfigError("non-strict privacy requires an explicit --retention-consent artifact")
+    return load_privacy_retention_consent(
+        retention_consent,
+        target_root=target_root,
+    )
+
+
 def _audit_config_overrides(
     *,
     budget_usd: float | None,
@@ -2714,6 +2858,7 @@ def _audit_config_overrides(
     max_context_bytes: int | None,
     concurrency: int | None,
     require_zdr: bool,
+    privacy_profile: PrivacyProfile | None = None,
     profile: AuditProfile | None = None,
     scope: AuditScope | None = None,
     require_complete_scope: bool | None = None,
@@ -2737,6 +2882,11 @@ def _audit_config_overrides(
             "--require-maximum-assurance and --allow-maximum-assurance-downgrade "
             "cannot be used together"
         )
+    privacy_profile_override: str | None = None
+    if require_zdr:
+        privacy_profile_override = PrivacyProfile.STRICT_ZDR.value
+    elif privacy_profile is not None:
+        privacy_profile_override = privacy_profile.value
     values: dict[str, bool | int | float | str | None] = {
         "execution.budget_usd": budget_usd,
         "execution.cost_ledger_path": (
@@ -2746,7 +2896,19 @@ def _audit_config_overrides(
         "repository.max_files": max_files,
         "repository.max_file_bytes": max_file_bytes,
         "repository.max_total_context_bytes": max_context_bytes,
-        "privacy.require_zdr": True if require_zdr else None,
+        "privacy.profile": privacy_profile_override,
+        "privacy.require_zdr": (
+            True
+            if require_zdr or privacy_profile is PrivacyProfile.STRICT_ZDR
+            else (
+                False
+                if privacy_profile is PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT
+                else None
+            )
+        ),
+        "privacy.maximum_model_retention": (
+            "zero" if require_zdr or privacy_profile is PrivacyProfile.STRICT_ZDR else None
+        ),
         "profile": profile.value if profile is not None else None,
         "scope.mode": scope.value if scope is not None else None,
         "scope.require_complete": require_complete_scope,

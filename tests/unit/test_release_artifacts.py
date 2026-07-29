@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -19,7 +20,7 @@ from mmaudit.config import (
     AuditRunOptions,
     canonical_audit_config_json,
 )
-from mmaudit.models.schemas import AuditProfile
+from mmaudit.models.schemas import AuditProfile, AuditReport, RepositoryMap
 from mmaudit.orchestration.manifest import (
     ManifestBindingSet,
     ManifestHashBinding,
@@ -118,6 +119,75 @@ def _seal_manifest(
     return manifest
 
 
+def _report(config: AuditConfig, *, commit: str = COMMIT) -> AuditReport:
+    effective = config.effective()
+    return AuditReport(
+        schema_version="1.0",
+        run_id=RUN_ID,
+        generated_at=datetime(2026, 1, 2, tzinfo=UTC),
+        completed=True,
+        incomplete_reasons=[],
+        repository=RepositoryMap(
+            root_name="synthetic-release-repository",
+            git_commit=commit,
+            languages={},
+            frameworks=[],
+            manifests=[],
+            entry_points=[],
+            api_surfaces=[],
+            auth_components=[],
+            data_layers=[],
+            network_clients=[],
+            file_handlers=[],
+            configuration_files=[],
+            sensitive_processing=[],
+            security_tests=[],
+            files=[],
+        ),
+        configuration_hash=effective.stable_hash(),
+        model_configuration_hash=effective.model_hash(),
+        privacy={
+            "profile": effective.privacy.profile.value,
+            "code_egress_enabled": False,
+            "effective_policy": None,
+            "source_provenance": None,
+        },
+        scanner_runs=[],
+        usage=[],
+        budget_usd=effective.execution.budget_usd,
+        accounted_cost_usd=0,
+        findings=[],
+        rejected_findings=[],
+        audit_profile=effective.profile,
+    )
+
+
+def _write_report_artifacts(run_dir: Path, report: AuditReport) -> None:
+    (run_dir / "final-findings.json").write_text(
+        report.model_dump_json(),
+        encoding="utf-8",
+    )
+    (run_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "schema_version": report.schema_version,
+                "run_id": report.run_id,
+                "generated_at": report.generated_at.isoformat(),
+                "completed": report.completed,
+                "incomplete_reasons": report.incomplete_reasons,
+                "configuration_hash": report.configuration_hash,
+                "model_configuration_hash": report.model_configuration_hash,
+                "privacy": report.privacy,
+                "metadata": report.metadata,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def _write_run(run_dir: Path, config: AuditConfig) -> RunEvidenceManifest:
     run_dir.mkdir(parents=True)
     traceability = build_traceability_matrix(COMMIT)
@@ -135,6 +205,7 @@ def _write_run(run_dir: Path, config: AuditConfig) -> RunEvidenceManifest:
     required_artifacts.discard("maximum_assurance_traceability.json")
     for name in sorted(required_artifacts):
         (run_dir / name).write_text('{"synthetic":true}\n', encoding="utf-8")
+    _write_report_artifacts(run_dir, _report(config))
     return _seal_manifest(run_dir, config)
 
 
@@ -302,7 +373,10 @@ def test_observer_rejects_resealed_manifest_missing_required_runtime_artifact(
     (run_dir / "final-findings.json").unlink()
     _seal_manifest(run_dir, config)
 
-    with pytest.raises(ValueError, match="lacks runtime artifacts"):
+    with pytest.raises(
+        ValueError,
+        match=r"requires emitted artifact: final-findings\.json|lacks runtime artifacts",
+    ):
         observe_release_artifacts(run_dir, ROOT)
 
 

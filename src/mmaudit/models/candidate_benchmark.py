@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Protocol
@@ -49,6 +50,12 @@ from mmaudit.orchestration.cost_ledger import (
     CostLedgerSnapshot,
 )
 from mmaudit.orchestration.manifest import canonical_sha256
+from mmaudit.privacy import (
+    EffectivePrivacyPolicyEvidence,
+    PrivacyProfile,
+    PrivacySourceClassification,
+    resolve_effective_privacy_policy,
+)
 
 _ENDPOINT_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$"
 _ERROR_KIND_PATTERN = r"^[A-Za-z][A-Za-z0-9_]{0,99}$"
@@ -500,6 +507,28 @@ def _build_concrete_client(
     )
 
 
+def _candidate_benchmark_privacy_policy(
+    *,
+    config: AuditConfig,
+    budget: BudgetManager,
+    benchmark_suite: ModelBenchmarkSuite,
+    candidate: CandidateModel,
+) -> EffectivePrivacyPolicyEvidence:
+    """Bind one strict-ZDR candidate request to the exact versioned synthetic corpus."""
+
+    return resolve_effective_privacy_policy(
+        profile=PrivacyProfile.STRICT_ZDR,
+        require_zdr=True,
+        consent_observation=None,
+        source_sha256=benchmark_suite.corpus_sha256,
+        source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
+        configured_model_ids=(candidate.exact_model_id,),
+        configured_provider_endpoints=(candidate.approved_provider_endpoint,),
+        requested_budget_usd=Decimal(str(budget.total_usd)),
+        now=datetime.now(UTC).replace(microsecond=0),
+    )
+
+
 async def _execute_candidate(
     *,
     config: AuditConfig,
@@ -523,6 +552,12 @@ async def _execute_candidate(
             allow_fallbacks=False,
         )
         try:
+            effective_privacy_policy = _candidate_benchmark_privacy_policy(
+                config=config,
+                budget=budget,
+                benchmark_suite=benchmark_suite,
+                candidate=candidate,
+            )
             created_client = factory(
                 api_key=operator_api_key,
                 config=config,
@@ -535,6 +570,15 @@ async def _execute_candidate(
             if type(created_client) is not OpenRouterClient:
                 raise TypeError("candidate benchmark client is not the concrete client")
             client = created_client
+            if client.effective_privacy_policy is None:
+                client.bind_effective_privacy_context(
+                    effective_privacy_policy=effective_privacy_policy,
+                    privacy_authorization=None,
+                )
+            elif client.effective_privacy_policy != effective_privacy_policy:
+                raise ValueError(
+                    "candidate benchmark client binds different effective privacy evidence"
+                )
         except Exception:
             return (
                 await _unverified_failure_report(
@@ -569,9 +613,10 @@ async def _execute_candidate(
                 configured_provider_endpoints=(candidate.approved_provider_endpoint,),
                 provider_policy_mode="only",
                 endpoint_payload=endpoint_payload,
-                require_zdr=True,
+                require_zdr=config.privacy.require_zdr,
                 zdr_payload=zdr_payload,
                 reasoning_requested=False,
+                structured_output_required=False,
             )
             if current_endpoint_evidence != endpoint_evidence.endpoint_snapshot:
                 raise ValueError("current endpoint metadata differs from frozen discovery evidence")
@@ -693,6 +738,8 @@ def validate_candidate_benchmark_egress(
 
     if not explicitly_allowed:
         raise ValueError("candidate benchmarks require explicit synthetic-source egress approval")
+    if config.privacy.profile is not PrivacyProfile.STRICT_ZDR:
+        raise ValueError("candidate benchmarks require the STRICT_ZDR privacy profile")
     if not config.privacy.require_zdr:
         raise ValueError("candidate benchmarks require zero-data-retention routing")
     if config.privacy.store_raw_prompts or config.privacy.store_raw_responses:

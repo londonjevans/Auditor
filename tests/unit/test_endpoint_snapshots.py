@@ -242,13 +242,33 @@ def test_configured_provider_display_name_must_be_unique_across_exact_model_endp
         )
 
 
-def test_structured_output_support_is_required_on_exact_endpoint() -> None:
+def test_structured_output_capability_can_be_discovered_without_requiring_it() -> None:
     endpoint = _endpoint()
-    endpoint["supported_parameters"] = ["max_tokens", "reasoning"]
+    endpoint["supported_parameters"] = ["max_tokens", "reasoning", "temperature"]
+
+    evidence = validate_openrouter_endpoint_snapshot(
+        exact_model_id="alpha/atlas-secure",
+        configured_provider_endpoints=("approved-provider",),
+        provider_policy_mode="only",
+        endpoint_payload=_endpoint_payload(endpoint),
+        require_zdr=False,
+        structured_output_required=False,
+    )
+
+    assert evidence.endpoints[0].structured_output_parameters == ()
+    assert evidence.endpoints[0].required_request_parameters == (
+        "max_tokens",
+        "temperature",
+    )
+
+
+def test_structured_output_remains_required_for_native_schema_requests() -> None:
+    endpoint = _endpoint()
+    endpoint["supported_parameters"] = ["max_tokens", "reasoning", "temperature"]
 
     with pytest.raises(
         EndpointSnapshotValidationError,
-        match="lacks structured-output parameter support",
+        match="emitted request parameter support: response_format",
     ):
         _validate(endpoint_payload=_endpoint_payload(endpoint))
 
@@ -350,6 +370,13 @@ def test_optional_zdr_snapshot_records_unknown_or_false_without_promoting_it() -
     )
     assert absent.endpoints[0].zdr_eligible is False
     assert absent.zdr_metadata_sha256 is not None
+
+
+def test_optional_zdr_snapshot_accepts_an_authenticated_empty_catalog() -> None:
+    evidence = _validate(require_zdr=False, zdr_payload={"data": []})
+
+    assert evidence.endpoints[0].zdr_eligible is False
+    assert evidence.zdr_metadata_sha256 is not None
 
 
 def test_token_limits_must_be_positive_and_internally_bounded() -> None:

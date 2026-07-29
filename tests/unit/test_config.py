@@ -25,6 +25,7 @@ from mmaudit.config import (
     validate_model_independence,
 )
 from mmaudit.models.schemas import AuditProfile, AuditScope, Severity
+from mmaudit.privacy import PrivacyProfile
 from tests.conftest import base_config_data
 
 
@@ -71,6 +72,60 @@ def test_load_configuration_and_defaults(tmp_path: Path) -> None:
     assert config.execution.max_request_bytes == 4_000_000
     assert config.reporting.json_report is True
     assert config.models.provider_policy.allow_fallbacks is False
+    assert config.privacy.profile is PrivacyProfile.STRICT_ZDR
+    assert config.privacy.require_zdr is True
+
+
+def test_strict_privacy_profile_cannot_be_weakened_by_boolean_only(
+    config_factory,
+) -> None:
+    with pytest.raises(ValueError, match="STRICT_ZDR"):
+        config_factory(privacy={"require_zdr": False})
+
+
+def test_frontier_privacy_profile_requires_explicit_nonzero_retention_controls(
+    config_factory,
+) -> None:
+    with pytest.raises(ValueError, match="disable request ZDR"):
+        config_factory(
+            privacy={
+                "profile": PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT,
+            }
+        )
+    with pytest.raises(ValueError, match="nonzero retention"):
+        config_factory(
+            privacy={
+                "profile": PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT,
+                "require_zdr": False,
+            }
+        )
+
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT,
+            "require_zdr": False,
+            "maximum_model_retention": "temporary",
+        }
+    )
+    assert config.privacy.profile is PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT
+    assert config.privacy.require_zdr is False
+
+
+def test_maximum_assurance_preserves_explicit_frontier_privacy_profile(config_factory) -> None:
+    frontier = config_factory(
+        profile=AuditProfile.MAXIMUM_ASSURANCE,
+        privacy={
+            "profile": PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT,
+            "require_zdr": False,
+            "maximum_model_retention": "temporary",
+        },
+    )
+
+    effective = frontier.effective()
+
+    assert effective.privacy.profile is PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT
+    assert effective.privacy.require_zdr is False
+    assert effective.privacy.maximum_model_retention == "temporary"
 
 
 def test_environment_overrides_are_typed(tmp_path: Path) -> None:
@@ -302,7 +357,6 @@ def test_reproduction_capability_names_are_safe_and_unique(
 def test_maximum_assurance_profile_forces_exact_engine_portfolio(config_factory) -> None:
     config = config_factory(
         profile=AuditProfile.MAXIMUM_ASSURANCE,
-        privacy={"require_zdr": False},
         execution={"max_json_repair_attempts": 1},
         smart_contracts={"compile": False},
         reproduction={"repetitions": 1, "required_for_solidity": False},
@@ -323,6 +377,7 @@ def test_maximum_assurance_profile_forces_exact_engine_portfolio(config_factory)
     assert config.scanners.foundry_fork.enabled is True
     assert config.scanners.foundry_fork.required is True
     assert config.maximum_assurance.benchmark_gate is True
+    assert config.privacy.profile is PrivacyProfile.STRICT_ZDR
     assert config.privacy.require_zdr is True
     assert config.execution.max_json_repair_attempts == 0
     assert config.models.provider_policy.allow_fallbacks is False

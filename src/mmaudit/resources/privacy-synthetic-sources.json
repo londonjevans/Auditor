@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0",
+  "entries": [
+    {
+      "scope": "src/mmaudit/resources/synthetic/provider_smoke",
+      "purpose": "Packaged minimal synthetic source for privacy-safe provider smoke validation.",
+      "files": [
+        {
+          "path": "src/ProviderSmoke.sol",
+          "sha256": "bbb0127919f734caedffb6f9143a634b6925ff4451985d1410a47e1637f1517b",
+          "size": 332
+        }
+      ]
+    },
+    {
+      "scope": "tests/fixtures/solidity/provider_smoke",
+      "purpose": "Repository-owned minimal synthetic source for privacy-safe provider smoke validation.",
+      "files": [
+        {
+          "path": "src/ProviderSmoke.sol",
+          "sha256": "bbb0127919f734caedffb6f9143a634b6925ff4451985d1410a47e1637f1517b",
+          "size": 332
+        }
+      ]
+    }
+  ]
+}

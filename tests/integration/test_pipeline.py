@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -17,6 +17,7 @@ from mmaudit.benchmark.certificate import (
     CertificateVerificationStatus,
     FileBackedBenchmarkVerificationEvidence,
 )
+from mmaudit.config import configured_model_ids
 from mmaudit.constants import ALL_SPECIALIST_ROLES, ExitCode
 from mmaudit.isolation.dependencies import dependency_tree_sha256
 from mmaudit.models.openrouter import OpenRouterClient
@@ -71,9 +72,20 @@ from mmaudit.orchestration.manifest import (
     RunEvidenceManifest,
     canonical_sha256,
     validate_manifest_artifacts,
+    validate_report_privacy_consistency,
 )
 from mmaudit.orchestration.pipeline import AuditPipeline
 from mmaudit.orchestration.prior_audit import build_prior_audit_comparison
+from mmaudit.privacy import (
+    REQUIRED_PROHIBITED_CONTENT,
+    EndpointPolicyClass,
+    EndpointPrivacyDisclosure,
+    PrivacyProfile,
+    PrivacyRetentionConsent,
+    PrivacyRetentionConsentObservation,
+    PrivacySourceClassification,
+    load_privacy_retention_consent,
+)
 from mmaudit.scanners.base import scanner_fingerprint
 from mmaudit.solidity.compile import CompilationRun
 from mmaudit.solidity.invariant_execution import FoundryInvariantRunner
@@ -322,6 +334,81 @@ async def test_real_injected_client_is_rejected_even_with_selected_ledger(
 
 
 @pytest.mark.asyncio
+async def test_injected_provider_client_rejects_stale_usage_before_work(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    stale_usage = UsageLedger()
+    stale_usage.add(
+        UsageRecord(
+            request_id="stale-before-run",
+            role="source_audit",
+            execution_evidence=ExecutionEvidenceKind.MOCK,
+            requested_model="bravo/borealis-secure",
+            model_family="bravo/borealis-secure",
+            timestamp=datetime(2025, 1, 1, tzinfo=UTC),
+            accounted_cost_usd=1.25,
+            prompt_sha256="a" * 64,
+            status="failed",
+            attempts=1,
+        )
+    )
+    fake = FakeOpenRouter()
+    client, http_client = _provider(config, fake, usage=stale_usage)
+    output = tmp_path / "provider-output"
+    pipeline = AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=output,
+        client=client,
+        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+    )
+    try:
+        with pytest.raises(ValueError, match="fresh empty client usage ledger"):
+            await pipeline.run(allow_code_egress=True)
+    finally:
+        await http_client.aclose()
+
+    assert fake.requests == []
+    assert not (output / "runs").exists()
+    assert [record.request_id for record in stale_usage.records] == ["stale-before-run"]
+
+
+@pytest.mark.asyncio
+async def test_reused_provider_client_cannot_carry_usage_into_another_provider_run(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    fake = FakeOpenRouter()
+    client, http_client = _provider(config, fake)
+    output = tmp_path / "provider-output"
+    pipeline = AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=output,
+        client=client,
+        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+    )
+    try:
+        first = await pipeline.run(allow_code_egress=True)
+        request_count = len(fake.requests)
+        run_directories = tuple((output / "runs").iterdir())
+        with pytest.raises(ValueError, match="fresh empty client usage ledger"):
+            await pipeline.run(allow_code_egress=True)
+    finally:
+        await http_client.aclose()
+
+    assert first.exit_code is ExitCode.SUCCESS
+    assert request_count > 0
+    assert len(fake.requests) == request_count
+    assert tuple((output / "runs").iterdir()) == run_directories
+
+
+@pytest.mark.asyncio
 async def test_mock_provider_session_rejects_usage_relabelled_as_real(
     config_factory,
     vulnerable_repo: Path,
@@ -447,6 +534,68 @@ async def _run(
     finally:
         await http_client.aclose()
     return result
+
+
+def _privacy_consent_observation(
+    *,
+    config,
+    target_root: Path,
+    control_root: Path,
+    profile: PrivacyProfile,
+    source_classification: PrivacySourceClassification,
+    source_sha256: str,
+) -> PrivacyRetentionConsentObservation:
+    models = tuple(sorted(set(configured_model_ids(config, include_fallbacks=True))))
+    providers = tuple(
+        sorted(set(config.models.provider_policy.only) | set(config.models.provider_policy.order))
+    )
+    disclosures = tuple(
+        EndpointPrivacyDisclosure(
+            provider_endpoint=provider,
+            policy_class=EndpointPolicyClass.NON_ZDR_DATA_COLLECTION_DENIED,
+            disclosed_retention="Synthetic operator-reviewed temporary retention terms.",
+            privacy_policy_reference=f"https://privacy.example.test/provider/{index}",
+            privacy_policy_sha256=f"{index + 1:064x}",
+        )
+        for index, provider in enumerate(providers)
+    )
+    now = datetime.now(UTC).replace(microsecond=0)
+    provisional = PrivacyRetentionConsent.model_construct(
+        schema_version="1.0",
+        selected_privacy_profile=profile,
+        source_classification=source_classification,
+        permitted_source_sha256=source_sha256,
+        permitted_model_ids=models,
+        permitted_provider_endpoints=providers,
+        permitted_endpoint_policy_classes=(EndpointPolicyClass.NON_ZDR_DATA_COLLECTION_DENIED,),
+        endpoint_disclosures=disclosures,
+        issued_at=now - timedelta(minutes=5),
+        expires_at=now + timedelta(hours=1),
+        operator_identity_reference="operator-record:privacy-regression",
+        signature_reference=None,
+        maximum_cost_usd="250",
+        prohibited_content=REQUIRED_PROHIBITED_CONTENT,
+        acknowledges_zdr_not_in_force=True,
+        consent_sha256="0" * 64,
+    )
+    payload = provisional.model_dump(mode="json", exclude={"consent_sha256"})
+    consent = PrivacyRetentionConsent.model_validate(
+        {
+            **payload,
+            "consent_sha256": canonical_sha256(payload),
+        }
+    )
+    control_root.mkdir(parents=True)
+    consent_path = control_root / "privacy-consent.json"
+    consent_path.write_text(
+        json.dumps(consent.model_dump(mode="json"), sort_keys=True),
+        encoding="utf-8",
+    )
+    consent_path.chmod(0o600)
+    return load_privacy_retention_consent(
+        consent_path,
+        target_root=target_root,
+    )
 
 
 class SyntheticForkReproductionRunner:
@@ -802,6 +951,347 @@ async def test_successful_multi_agent_audit(
     assert all(
         getattr(manifest.bindings, category)
         for category in manifest.bindings.__class__.model_fields
+    )
+
+
+@pytest.mark.asyncio
+async def test_strict_default_links_effective_privacy_evidence_to_report_and_manifest(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    fake = FakeOpenRouter()
+
+    result = await _run(config, vulnerable_repo, tmp_path, fake)
+
+    assert result.exit_code is ExitCode.SUCCESS
+    effective = result.report.privacy["effective_policy"]
+    assert isinstance(effective, dict)
+    assert effective["privacy_profile"] == PrivacyProfile.STRICT_ZDR
+    assert effective["require_zdr"] is True
+    assert effective["source_classification"] == (
+        PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE
+    )
+    assert effective["consent_sha256"] is None
+    source_provenance = result.report.privacy["source_provenance"]
+    assert isinstance(source_provenance, dict)
+    assert source_provenance["proof_kind"] == "PRIVATE_DEFAULT"
+    assert source_provenance["source_sha256"] == effective["source_sha256"]
+    persisted = json.loads((result.run_dir / "privacy-policy.json").read_text(encoding="utf-8"))
+    persisted_provenance = json.loads(
+        (result.run_dir / "privacy-source-provenance.json").read_text(encoding="utf-8")
+    )
+    metadata = json.loads((result.run_dir / "metadata.json").read_text(encoding="utf-8"))
+    manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    privacy_binding = next(
+        artifact for artifact in manifest.artifacts if artifact.path == "privacy-policy.json"
+    )
+    provenance_binding = next(
+        artifact
+        for artifact in manifest.artifacts
+        if artifact.path == "privacy-source-provenance.json"
+    )
+    privacy_bytes = (result.run_dir / "privacy-policy.json").read_bytes()
+    provenance_bytes = (result.run_dir / "privacy-source-provenance.json").read_bytes()
+    markdown = (result.run_dir / "audit-report.md").read_text(encoding="utf-8")
+
+    assert persisted == effective
+    assert persisted_provenance == source_provenance
+    assert (
+        json.loads(
+            (tmp_path / "output" / "latest" / "privacy-policy.json").read_text(encoding="utf-8")
+        )
+        == effective
+    )
+    assert (
+        json.loads(
+            (tmp_path / "output" / "latest" / "privacy-source-provenance.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        == source_provenance
+    )
+    assert metadata["privacy"]["effective_policy"] == effective
+    assert metadata["privacy"]["source_provenance"] == source_provenance
+    assert manifest.source_tree_sha256 == effective["source_sha256"]
+    assert privacy_binding.sha256 == hashlib.sha256(privacy_bytes).hexdigest()
+    assert provenance_binding.sha256 == hashlib.sha256(provenance_bytes).hexdigest()
+    assert effective["evidence_sha256"] in markdown
+    assert effective["source_sha256"] in markdown
+    assert "Privacy-permitted exact model routes:" in markdown
+    assert "Privacy-permitted exact provider endpoints:" in markdown
+    assert "Retention consent: not applicable under STRICT_ZDR" in markdown
+    validate_manifest_artifacts(manifest, result.run_dir)
+
+
+@pytest.mark.asyncio
+async def test_unicode_source_inventory_has_one_privacy_and_manifest_hash(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "unicode-repository"
+    shutil.copytree(vulnerable_repo, repository)
+    (repository / "café.sol").write_text(
+        "contract UnicodePrivacyFixture {}\n",
+        encoding="utf-8",
+    )
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+
+    result = await _run(config, repository, tmp_path, FakeOpenRouter())
+
+    effective = result.report.privacy["effective_policy"]
+    provenance = result.report.privacy["source_provenance"]
+    manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    assert effective["source_sha256"] == provenance["source_sha256"]
+    assert effective["source_sha256"] == manifest.source_tree_sha256
+    assert effective["source_provenance_sha256"] == provenance["evidence_sha256"]
+    validate_manifest_artifacts(manifest, result.run_dir)
+
+
+@pytest.mark.asyncio
+async def test_privacy_semantic_validation_rejects_source_and_usage_disagreement(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    result = await _run(config, vulnerable_repo, tmp_path, FakeOpenRouter())
+    effective = result.report.privacy["effective_policy"]
+    assert isinstance(effective, dict)
+
+    with pytest.raises(ValueError, match="manifest source tree"):
+        validate_report_privacy_consistency(
+            result.report,
+            source_tree_sha256="f" * 64,
+            expected_source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
+        )
+
+    usage = result.report.usage[0]
+    mismatched_usage = usage.model_copy(
+        update={
+            "routing": {
+                **usage.routing,
+                "privacy_source_provenance_sha256": "e" * 64,
+            }
+        }
+    )
+    mismatched_report = result.report.model_copy(update={"usage": [mismatched_usage]})
+    with pytest.raises(ValueError, match="usage privacy routing"):
+        validate_report_privacy_consistency(
+            mismatched_report,
+            source_tree_sha256=effective["source_sha256"],
+            expected_source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
+        )
+
+    missing_privacy_routing = usage.model_copy(
+        update={
+            "routing": {
+                key: value
+                for key, value in usage.routing.items()
+                if key
+                not in {
+                    "privacy_profile",
+                    "effective_privacy_policy_sha256",
+                    "privacy_source_sha256",
+                    "privacy_source_provenance_sha256",
+                }
+            }
+        }
+    )
+    missing_privacy_report = result.report.model_copy(update={"usage": [missing_privacy_routing]})
+    with pytest.raises(ValueError, match="usage privacy routing"):
+        validate_report_privacy_consistency(
+            missing_privacy_report,
+            source_tree_sha256=effective["source_sha256"],
+            expected_source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
+        )
+
+    no_policy_report = result.report.model_copy(
+        update={
+            "privacy": {
+                **result.report.privacy,
+                "effective_policy": None,
+                "source_provenance": None,
+            },
+            "usage": [missing_privacy_routing],
+        }
+    )
+    with pytest.raises(ValueError, match="lacks effective privacy and provenance"):
+        validate_report_privacy_consistency(
+            no_policy_report,
+            source_tree_sha256=effective["source_sha256"],
+            expected_source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
+        )
+
+    manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    missing_policy_payload = manifest.model_dump(mode="json", exclude={"manifest_sha256"})
+    missing_policy_payload["artifacts"] = [
+        artifact
+        for artifact in missing_policy_payload["artifacts"]
+        if artifact["path"] != "privacy-policy.json"
+    ]
+    missing_policy_manifest = RunEvidenceManifest.model_validate(
+        {
+            **missing_policy_payload,
+            "manifest_sha256": canonical_sha256(missing_policy_payload),
+        }
+    )
+    (result.run_dir / "privacy-policy.json").unlink()
+    with pytest.raises(ValueError, match=r"privacy-policy\.json presence"):
+        validate_manifest_artifacts(missing_policy_manifest, result.run_dir)
+
+
+@pytest.mark.parametrize("consent_state", ["missing", "source_mismatch"])
+@pytest.mark.asyncio
+async def test_frontier_privacy_refuses_before_model_request_without_exact_consent(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+    consent_state: str,
+) -> None:
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT,
+            "require_zdr": False,
+            "maximum_model_retention": "temporary",
+            "fail_on_detected_secret": False,
+        }
+    )
+    observation = (
+        None
+        if consent_state == "missing"
+        else _privacy_consent_observation(
+            config=config,
+            target_root=vulnerable_repo,
+            control_root=tmp_path / "operator-control",
+            profile=PrivacyProfile.FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT,
+            source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
+            source_sha256="f" * 64,
+        )
+    )
+    fake = FakeOpenRouter()
+    client, http_client = _provider(config, fake)
+    pipeline = AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=tmp_path / "frontier-output",
+        client=client,
+        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+        privacy_consent_observation=observation,
+        privacy_source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
+    )
+    try:
+        result = await pipeline.run(allow_code_egress=True)
+    finally:
+        await http_client.aclose()
+
+    assert result.exit_code is ExitCode.PRIVACY_REFUSAL
+    assert fake.chat_calls == 0
+    assert fake.requests == []
+    assert result.report.privacy["effective_policy"] is None
+    assert not (result.run_dir / "privacy-policy.json").exists()
+    assert pipeline.privacy_authorization is None
+    assert pipeline.privacy_consent_observation is None
+    expected = (
+        "descriptor-safe consent evidence"
+        if consent_state == "missing"
+        else "different source hash"
+    )
+    assert any(expected in reason for reason in result.report.incomplete_reasons)
+
+
+@pytest.mark.asyncio
+async def test_synthetic_benchmark_profile_cannot_authorize_private_operator_source(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.SYNTHETIC_BENCHMARK,
+            "require_zdr": False,
+            "maximum_model_retention": "temporary",
+            "fail_on_detected_secret": False,
+        }
+    )
+    observation = _privacy_consent_observation(
+        config=config,
+        target_root=vulnerable_repo,
+        control_root=tmp_path / "operator-control",
+        profile=PrivacyProfile.SYNTHETIC_BENCHMARK,
+        source_classification=PrivacySourceClassification.SYNTHETIC_COMMITTED,
+        source_sha256="e" * 64,
+    )
+    fake = FakeOpenRouter()
+    client, http_client = _provider(config, fake)
+    pipeline = AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=tmp_path / "synthetic-output",
+        client=client,
+        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+        privacy_consent_observation=observation,
+        privacy_source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
+    )
+    try:
+        result = await pipeline.run(allow_code_egress=True)
+    finally:
+        await http_client.aclose()
+
+    assert result.exit_code is ExitCode.PRIVACY_REFUSAL
+    assert fake.chat_calls == 0
+    assert fake.requests == []
+    assert result.report.privacy["effective_policy"] is None
+    assert any(
+        "different source classification" in reason for reason in result.report.incomplete_reasons
+    )
+
+
+@pytest.mark.asyncio
+async def test_synthetic_benchmark_enum_cannot_bypass_committed_source_provenance(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = config_factory(
+        privacy={
+            "profile": PrivacyProfile.SYNTHETIC_BENCHMARK,
+            "require_zdr": True,
+            "maximum_model_retention": "zero",
+            "fail_on_detected_secret": False,
+        }
+    )
+    fake = FakeOpenRouter()
+    client, http_client = _provider(config, fake)
+    pipeline = AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=tmp_path / "synthetic-provenance-output",
+        client=client,
+        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+        privacy_source_classification=PrivacySourceClassification.SYNTHETIC_COMMITTED,
+    )
+    try:
+        result = await pipeline.run(allow_code_egress=True)
+    finally:
+        await http_client.aclose()
+
+    assert result.exit_code is ExitCode.PRIVACY_REFUSAL
+    assert fake.chat_calls == 0
+    assert fake.requests == []
+    assert result.report.privacy["effective_policy"] is None
+    assert result.report.privacy["source_provenance"] is None
+    assert any(
+        "distribution-owned fixture or benchmark scope" in reason
+        for reason in result.report.incomplete_reasons
     )
 
 
@@ -3323,3 +3813,71 @@ async def test_latest_report_refresh_does_not_follow_hardlink(
         .read_text(encoding="utf-8")
         .startswith("# Corrovera Security Assurance Report")
     )
+
+
+@pytest.mark.asyncio
+async def test_scanner_only_latest_refresh_removes_stale_provider_privacy_artifacts(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "output"
+    latest = output / "latest"
+    latest.mkdir(parents=True)
+    stale_names = (
+        "privacy-source-provenance.json",
+        "privacy-policy.json",
+    )
+    for name in stale_names:
+        (latest / name).write_text('{"stale":true}\n', encoding="utf-8")
+
+    pipeline = AuditPipeline(
+        config_factory(),
+        repo=vulnerable_repo,
+        output=output,
+        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+    )
+    result = await pipeline.run(scanner_only=True)
+
+    assert result.exit_code is ExitCode.SUCCESS
+    for name in stale_names:
+        assert not (result.run_dir / name).exists()
+        assert not (latest / name).exists()
+
+
+@pytest.mark.asyncio
+async def test_reused_pipeline_does_not_leak_provider_privacy_state_into_scanner_run(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    fake = FakeOpenRouter()
+    client, http_client = _provider(config, fake)
+    pipeline = AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=tmp_path / "reused-output",
+        client=client,
+        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+    )
+    try:
+        provider_result = await pipeline.run(allow_code_egress=True)
+        scanner_result = await pipeline.run(scanner_only=True)
+    finally:
+        await http_client.aclose()
+
+    assert provider_result.report.privacy["effective_policy"] is not None
+    assert provider_result.report.privacy["source_provenance"] is not None
+    assert scanner_result.report.privacy["effective_policy"] is None
+    assert scanner_result.report.privacy["source_provenance"] is None
+    assert pipeline.effective_privacy_policy is None
+    assert pipeline.privacy_source_provenance is None
+    assert pipeline.privacy_authorization is None
+    assert not (scanner_result.run_dir / "privacy-policy.json").exists()
+    assert not (scanner_result.run_dir / "privacy-source-provenance.json").exists()
+    scanner_metadata = json.loads(
+        (scanner_result.run_dir / "metadata.json").read_text(encoding="utf-8")
+    )
+    assert scanner_metadata["privacy"]["effective_policy"] is None
+    assert scanner_metadata["privacy"]["source_provenance"] is None

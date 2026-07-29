@@ -46,6 +46,7 @@ from mmaudit.models.schemas import (
     UsageRecord,
 )
 from mmaudit.orchestration.manifest import canonical_sha256
+from mmaudit.privacy import EndpointPolicyClass, PrivacyProfile, PrivacySourceClassification
 from tests.conftest import model_registry_entry
 
 ROOT = Path(__file__).parents[2]
@@ -238,6 +239,18 @@ def _mock_usage_record(
             "validation_status": "valid",
             "zdr_requested": True,
             "data_collection": "deny",
+            "privacy_profile": PrivacyProfile.STRICT_ZDR.value,
+            "privacy_authorization": "STRICT_ZDR_ENFORCED",
+            "effective_privacy_policy_sha256": "1" * 64,
+            "privacy_source_sha256": "2" * 64,
+            "privacy_source_provenance_sha256": "3" * 64,
+            "privacy_source_classification": (
+                PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE.value
+            ),
+            "privacy_consent_file_sha256": None,
+            "privacy_consent_sha256": None,
+            "privacy_consent_expires_at": None,
+            "privacy_endpoint_policy_class": EndpointPolicyClass.ZDR.value,
             "repair_used": False,
             "repair_request": False,
             "request_started_at": started_at.isoformat(),

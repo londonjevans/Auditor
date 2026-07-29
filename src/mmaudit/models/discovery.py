@@ -16,11 +16,19 @@ import stat
 import tempfile
 from collections.abc import Mapping
 from datetime import datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from mmaudit.models.endpoint_snapshots import OpenRouterEndpointSnapshotEvidence
 from mmaudit.models.identifiers import (
@@ -28,6 +36,10 @@ from mmaudit.models.identifiers import (
     is_exact_openrouter_model_id,
 )
 from mmaudit.models.schemas import ExecutionEvidenceKind
+from mmaudit.privacy import (
+    EffectivePrivacyPolicyEvidence,
+    EndpointPolicyClass,
+)
 from mmaudit.reporting.json_report import stable_json
 from mmaudit.repository.secrets import is_sensitive_workspace_name
 
@@ -41,7 +53,7 @@ _RUN_SCHEMA_VERSION = "1.0"
 _MAX_DISCOVERY_CANDIDATES = 64
 _RUN_MANIFEST_NAME = "model-discovery-manifest.json"
 OPENROUTER_API_IDENTITY = "https://openrouter.ai/api/v1"
-OPENROUTER_CATALOG_QUERY = "/models?zdr=true&supported_parameters=response_format"
+OPENROUTER_CATALOG_QUERY = "/models"
 OPENROUTER_ZDR_QUERY = "/endpoints/zdr"
 _STRUCTURED_OUTPUT_PARAMETERS = frozenset(
     {
@@ -60,7 +72,6 @@ _REASONING_PARAMETERS = frozenset(
 _REQUIRED_CATALOG_PARAMETERS = frozenset(
     {
         "max_tokens",
-        "response_format",
         "temperature",
     }
 )
@@ -69,6 +80,14 @@ _TRUSTED_OPENROUTER_DISCOVERY_ISSUER = object()
 
 class ModelDiscoveryValidationError(ValueError):
     """Raised when public metadata cannot prove an exact production candidate."""
+
+
+class DataCollectionDenyEvidenceSource(StrEnum):
+    """Evidence source for exact-route request-policy or endpoint eligibility."""
+
+    ZDR_ENDPOINT_SNAPSHOT = "ZDR_ENDPOINT_SNAPSHOT"
+    CONSENT_BOUND_ROUTER_REQUEST_POLICY = "CONSENT_BOUND_ROUTER_REQUEST_POLICY"
+    UNVERIFIED = "UNVERIFIED"
 
 
 class DiscoveryCandidateRoute(BaseModel):
@@ -141,7 +160,7 @@ class OpenRouterDiscoveryRunProvenance(BaseModel):
     execution_evidence: Literal[ExecutionEvidenceKind.REAL]
     authenticated_metadata: Literal[True]
     source_api_identity: Literal["https://openrouter.ai/api/v1"]
-    catalog_api_query: Literal["/models?zdr=true&supported_parameters=response_format"]
+    catalog_api_query: Literal["/models"]
     zdr_api_query: Literal["/endpoints/zdr"]
     client_fingerprint_sha256: str = Field(pattern=_SHA256_PATTERN)
     provider_fingerprint_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -221,9 +240,9 @@ class OpenRouterModelDiscoveryPayload(BaseModel):
     catalog_output_limit: int = Field(gt=0, le=2**31 - 1)
     catalog_output_limit_source: Literal["metadata", "provider_context"]
     model_supported_parameters: tuple[str, ...] = Field(max_length=_MAX_PARAMETERS)
-    structured_output_parameters: tuple[str, ...] = Field(min_length=1, max_length=3)
+    structured_output_parameters: tuple[str, ...] = Field(max_length=3)
     reasoning_parameters: tuple[str, ...] = Field(max_length=3)
-    structured_output_supported: Literal[True]
+    structured_output_supported: bool
     reasoning_supported: bool
     approved_provider_endpoint: str = Field(min_length=1, max_length=128)
     provider_name: str = Field(min_length=1, max_length=128)
@@ -231,14 +250,33 @@ class OpenRouterModelDiscoveryPayload(BaseModel):
     endpoint_slug: str | None
     operational: Literal[True]
     operational_status: str = Field(min_length=1, max_length=32)
-    zdr_eligible: Literal[True]
-    data_collection_deny_eligible: Literal[True]
+    zdr_eligible: bool | None
+    data_collection_deny_eligible: bool
+    data_collection_deny_request_policy_enforced: bool
+    data_collection_deny_evidence_source: DataCollectionDenyEvidenceSource
+    data_collection_deny_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+    )
+    data_collection_deny_evidence_expires_at: datetime | None = None
     context_size: int = Field(gt=0, le=2**31 - 1)
     output_limit: int = Field(gt=0, le=2**31 - 1)
     endpoint_record_sha256: str = Field(pattern=_SHA256_PATTERN)
     endpoint_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
     pricing_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
     endpoint_snapshot: OpenRouterEndpointSnapshotEvidence
+
+    @field_validator("data_collection_deny_evidence_expires_at")
+    @classmethod
+    def privacy_evidence_expiry_is_whole_second_utc(
+        cls,
+        value: datetime | None,
+    ) -> datetime | None:
+        if value is not None and (
+            value.tzinfo is None or value.utcoffset() != timedelta(0) or value.microsecond != 0
+        ):
+            raise ValueError("data-collection evidence expiry must be whole-second UTC")
+        return value
 
     @model_validator(mode="after")
     def facts_are_canonical_and_endpoint_bound(self) -> OpenRouterModelDiscoveryPayload:
@@ -307,10 +345,45 @@ class OpenRouterModelDiscoveryPayload(BaseModel):
             raise ValueError("inherited endpoint discovery facts are inconsistent")
         if self.endpoint_snapshot_sha256 != self.endpoint_snapshot.snapshot_sha256:
             raise ValueError("endpoint policy hash is inconsistent")
-        if self.zdr_eligible is not True or self.endpoint_snapshot.require_zdr is not True:
-            raise ValueError("production discovery requires exact ZDR endpoint evidence")
-        if self.data_collection_deny_eligible is not True:
-            raise ValueError("production discovery requires data-collection denial eligibility")
+        if self.endpoint_snapshot.require_zdr and self.zdr_eligible is not True:
+            raise ValueError("ZDR-required discovery lacks exact endpoint eligibility evidence")
+        if (
+            self.data_collection_deny_evidence_source
+            is DataCollectionDenyEvidenceSource.ZDR_ENDPOINT_SNAPSHOT
+        ):
+            if (
+                self.data_collection_deny_eligible is not True
+                or self.data_collection_deny_request_policy_enforced is not True
+                or self.zdr_eligible is not True
+                or self.endpoint_snapshot.require_zdr is not True
+                or self.data_collection_deny_evidence_sha256
+                != endpoint.zdr_endpoint_snapshot_sha256
+                or self.data_collection_deny_evidence_expires_at is not None
+            ):
+                raise ValueError(
+                    "data-collection denial eligibility lacks exact ZDR endpoint evidence"
+                )
+        elif (
+            self.data_collection_deny_evidence_source
+            is DataCollectionDenyEvidenceSource.CONSENT_BOUND_ROUTER_REQUEST_POLICY
+        ):
+            if (
+                self.data_collection_deny_eligible is not False
+                or self.data_collection_deny_request_policy_enforced is not True
+                or self.endpoint_snapshot.require_zdr
+                or self.data_collection_deny_evidence_sha256 is None
+                or self.data_collection_deny_evidence_expires_at is None
+            ):
+                raise ValueError(
+                    "router data-collection request policy lacks consent-bound evidence"
+                )
+        elif (
+            self.data_collection_deny_eligible is not False
+            or self.data_collection_deny_request_policy_enforced is not False
+            or self.data_collection_deny_evidence_sha256 is not None
+            or self.data_collection_deny_evidence_expires_at is not None
+        ):
+            raise ValueError("unverified data-collection denial eligibility cannot receive credit")
         if self.context_size > max(
             self.catalog_context_size,
             self.catalog_provider_context_size,
@@ -473,6 +546,7 @@ def validate_openrouter_model_discovery(
     models_payload: Any,
     single_model_payload: Any,
     endpoint_snapshot: OpenRouterEndpointSnapshotEvidence,
+    effective_privacy_policy: EffectivePrivacyPolicyEvidence | None = None,
 ) -> OpenRouterModelDiscoveryPayload:
     """Validate untrusted metadata without claiming provider execution provenance."""
 
@@ -528,11 +602,40 @@ def validate_openrouter_model_discovery(
     endpoint = endpoint_snapshot.endpoints[0]
     common_parameters = set(model_supported_parameters).intersection(endpoint.supported_parameters)
     structured_output_parameters = tuple(sorted(_STRUCTURED_OUTPUT_PARAMETERS & common_parameters))
-    if not structured_output_parameters:
-        raise ModelDiscoveryValidationError(
-            "catalog and approved endpoint lack common structured-output support"
-        )
     reasoning_parameters = tuple(sorted(_REASONING_PARAMETERS & common_parameters))
+    deny_eligible: bool
+    deny_request_policy_enforced: bool
+    deny_evidence_source: DataCollectionDenyEvidenceSource
+    deny_evidence_sha256: str | None
+    deny_evidence_expires_at: datetime | None
+    if endpoint_snapshot.require_zdr and endpoint.zdr_eligible is True:
+        if endpoint.zdr_endpoint_snapshot_sha256 is None:
+            raise ModelDiscoveryValidationError(
+                "ZDR endpoint omits exact data-collection denial evidence"
+            )
+        deny_eligible = True
+        deny_request_policy_enforced = True
+        deny_evidence_source = DataCollectionDenyEvidenceSource.ZDR_ENDPOINT_SNAPSHOT
+        deny_evidence_sha256 = endpoint.zdr_endpoint_snapshot_sha256
+        deny_evidence_expires_at = None
+    elif _policy_proves_data_collection_denial(
+        policy=effective_privacy_policy,
+        exact_model_id=exact_model_id,
+        provider_endpoint=endpoint.provider_endpoint,
+    ):
+        assert effective_privacy_policy is not None
+        assert effective_privacy_policy.consent_expires_at is not None
+        deny_eligible = False
+        deny_request_policy_enforced = True
+        deny_evidence_source = DataCollectionDenyEvidenceSource.CONSENT_BOUND_ROUTER_REQUEST_POLICY
+        deny_evidence_sha256 = effective_privacy_policy.evidence_sha256
+        deny_evidence_expires_at = effective_privacy_policy.consent_expires_at
+    else:
+        deny_eligible = False
+        deny_request_policy_enforced = False
+        deny_evidence_source = DataCollectionDenyEvidenceSource.UNVERIFIED
+        deny_evidence_sha256 = None
+        deny_evidence_expires_at = None
 
     metadata_values: dict[str, Any] = {
         "schema_version": _SCHEMA_VERSION,
@@ -548,7 +651,7 @@ def validate_openrouter_model_discovery(
         "model_supported_parameters": model_supported_parameters,
         "structured_output_parameters": structured_output_parameters,
         "reasoning_parameters": reasoning_parameters,
-        "structured_output_supported": True,
+        "structured_output_supported": bool(structured_output_parameters),
         "reasoning_supported": bool(reasoning_parameters),
         "approved_provider_endpoint": endpoint.provider_endpoint,
         "provider_name": endpoint.provider_name,
@@ -557,8 +660,11 @@ def validate_openrouter_model_discovery(
         "operational": endpoint.operational,
         "operational_status": endpoint.operational_status,
         "zdr_eligible": endpoint.zdr_eligible,
-        # An exact ZDR endpoint is strictly eligible for a data_collection=deny route.
-        "data_collection_deny_eligible": endpoint.zdr_eligible is True,
+        "data_collection_deny_eligible": deny_eligible,
+        "data_collection_deny_request_policy_enforced": deny_request_policy_enforced,
+        "data_collection_deny_evidence_source": deny_evidence_source,
+        "data_collection_deny_evidence_sha256": deny_evidence_sha256,
+        "data_collection_deny_evidence_expires_at": deny_evidence_expires_at,
         "context_size": endpoint.context_length,
         "output_limit": endpoint.max_completion_tokens,
         "endpoint_record_sha256": endpoint.endpoint_snapshot_sha256,
@@ -571,6 +677,43 @@ def validate_openrouter_model_discovery(
         _model_metadata_projection(provisional)
     )
     return OpenRouterModelDiscoveryPayload.model_validate(metadata_values)
+
+
+def _policy_proves_data_collection_denial(
+    *,
+    policy: EffectivePrivacyPolicyEvidence | None,
+    exact_model_id: str,
+    provider_endpoint: str,
+) -> bool:
+    """Credit only a self-validating non-ZDR policy bound to the exact route."""
+
+    if type(policy) is not EffectivePrivacyPolicyEvidence:
+        return False
+    try:
+        policy = EffectivePrivacyPolicyEvidence.model_validate(
+            policy.model_dump(mode="python"),
+            strict=True,
+        )
+    except (AttributeError, ValidationError):
+        return False
+    if (
+        policy.require_zdr
+        or policy.data_collection != "deny"
+        or exact_model_id not in policy.permitted_model_ids
+        or provider_endpoint not in policy.permitted_provider_endpoints
+        or EndpointPolicyClass.NON_ZDR_DATA_COLLECTION_DENIED not in policy.endpoint_policy_classes
+        or policy.consent_expires_at is None
+    ):
+        return False
+    matching = tuple(
+        disclosure
+        for disclosure in policy.endpoint_disclosures
+        if disclosure.provider_endpoint == provider_endpoint
+    )
+    return (
+        len(matching) == 1
+        and matching[0].policy_class is EndpointPolicyClass.NON_ZDR_DATA_COLLECTION_DENIED
+    )
 
 
 def _seal_real_model_discovery_evidence(

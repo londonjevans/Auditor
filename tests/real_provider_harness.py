@@ -1195,8 +1195,7 @@ def write_real_provider_smoke_evidence(
         forbidden_paths=(),
     )
     serialized = stable_json(evidence)
-    lowered = serialized.casefold()
-    if "authorization" in lowered or "bearer " in lowered:
+    if _contains_forbidden_authorization_surface(serialized):
         raise ValueError("smoke evidence contains a forbidden authorization surface")
     if any(value and value in serialized for value in forbidden_values):
         raise ValueError("smoke evidence contains a forbidden value")
@@ -1221,8 +1220,7 @@ def write_real_provider_smoke_rejection_evidence(
         internal_request_id=evidence.internal_request_id,
     )
     serialized = stable_json(evidence)
-    lowered = serialized.casefold()
-    if "authorization" in lowered or "bearer " in lowered:
+    if _contains_forbidden_authorization_surface(serialized):
         raise ValueError("smoke rejection evidence contains a forbidden authorization surface")
     if any(value and value in serialized for value in forbidden_values):
         raise ValueError("smoke rejection evidence contains a forbidden value")
@@ -1247,8 +1245,7 @@ def write_real_provider_smoke_verification_rejection_evidence(
         internal_request_id=evidence.usage_record.request_id,
     )
     serialized = stable_json(evidence)
-    lowered = serialized.casefold()
-    if "authorization" in lowered or "bearer " in lowered:
+    if _contains_forbidden_authorization_surface(serialized):
         raise ValueError("verification rejection contains a forbidden authorization surface")
     if any(value and value in serialized for value in forbidden_values):
         raise ValueError("verification rejection contains a forbidden value")
@@ -1258,6 +1255,13 @@ def write_real_provider_smoke_verification_rejection_evidence(
         value=evidence,
         max_bytes=96_000,
     )
+
+
+def _contains_forbidden_authorization_surface(serialized: str) -> bool:
+    """Reject credential-bearing authorization data without rejecting privacy evidence labels."""
+
+    lowered = serialized.casefold()
+    return '"authorization"' in lowered or "bearer " in lowered
 
 
 def _required_usage_routing_sha256(record: UsageRecord, key: str) -> str:

@@ -30,6 +30,10 @@ max_total_context_bytes = 2000000
 follow_symlinks = false
 
 [privacy]
+# STRICT_ZDR, FRONTIER_WITH_EXPLICIT_RETENTION_CONSENT, or SYNTHETIC_BENCHMARK.
+# Non-strict profiles additionally require an explicit operator-control consent
+# artifact supplied at run time; a target repository cannot grant its own consent.
+profile = "STRICT_ZDR"
 allow_code_egress = false
 require_zdr = true
 redact_secrets = true

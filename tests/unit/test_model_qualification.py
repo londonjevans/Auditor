@@ -81,6 +81,7 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.models.usage import candidate_falsifier_role
 from mmaudit.orchestration.manifest import canonical_sha256
+from mmaudit.privacy import EndpointPolicyClass, PrivacyProfile, PrivacySourceClassification
 from tests.identity_fixtures import (
     bind_synthetic_usage_identity,
     reattest_synthetic_real_usage,
@@ -199,7 +200,7 @@ def _discovery_run(
         "execution_evidence": "real",
         "authenticated_metadata": True,
         "source_api_identity": "https://openrouter.ai/api/v1",
-        "catalog_api_query": "/models?zdr=true&supported_parameters=response_format",
+        "catalog_api_query": "/models",
         "zdr_api_query": "/endpoints/zdr",
         "client_fingerprint_sha256": _sha(f"client-{index}"),
         "provider_fingerprint_sha256": _sha(f"provider-fingerprint-{index}"),
@@ -296,6 +297,18 @@ def _usage_record(
         "validation_status": "valid",
         "zdr_requested": True,
         "data_collection": "deny",
+        "privacy_profile": PrivacyProfile.STRICT_ZDR.value,
+        "privacy_authorization": "STRICT_ZDR_ENFORCED",
+        "effective_privacy_policy_sha256": _sha("effective-privacy-policy"),
+        "privacy_source_sha256": _sha("privacy-source"),
+        "privacy_source_provenance_sha256": _sha("privacy-source-provenance"),
+        "privacy_source_classification": (
+            PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE.value
+        ),
+        "privacy_consent_file_sha256": None,
+        "privacy_consent_sha256": None,
+        "privacy_consent_expires_at": None,
+        "privacy_endpoint_policy_class": EndpointPolicyClass.ZDR.value,
         "repair_used": False,
         "repair_request": False,
         "request_started_at": _NOW.isoformat(),
@@ -517,6 +530,9 @@ def _bundle(
             reasoning_supported=True,
             zdr_eligible=True,
             data_collection_deny_eligible=True,
+            data_collection_deny_request_policy_enforced=True,
+            data_collection_deny_evidence_source="ZDR_ENDPOINT_SNAPSHOT",
+            data_collection_deny_evidence_sha256="8" * 64,
             operational_status=CandidateOperationalStatus.AVAILABLE,
             benchmark_status=CandidateBenchmarkStatus.PASSED,
             benchmark_artifact_sha256=_sha(f"report-{model_id}"),
@@ -1693,6 +1709,14 @@ def test_candidate_registry_rejects_mixed_discovery_run_provenance() -> None:
         reasoning_supported=evidence.reasoning_supported,
         zdr_eligible=evidence.zdr_eligible,
         data_collection_deny_eligible=evidence.data_collection_deny_eligible,
+        data_collection_deny_request_policy_enforced=(
+            evidence.data_collection_deny_request_policy_enforced
+        ),
+        data_collection_deny_evidence_source=evidence.data_collection_deny_evidence_source,
+        data_collection_deny_evidence_sha256=evidence.data_collection_deny_evidence_sha256,
+        data_collection_deny_evidence_expires_at=(
+            evidence.data_collection_deny_evidence_expires_at
+        ),
         operational_status=CandidateOperationalStatus.AVAILABLE,
         benchmark_status=CandidateBenchmarkStatus.PENDING,
     )

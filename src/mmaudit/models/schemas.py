@@ -4692,6 +4692,24 @@ class AuditReport(StrictModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def privacy_runtime_evidence_is_typed(self) -> AuditReport:
+        """Reject malformed serialized privacy evidence embedded in a report."""
+
+        effective = self.privacy.get("effective_policy")
+        provenance = self.privacy.get("source_provenance")
+        if effective is not None:
+            from mmaudit.privacy import EffectivePrivacyPolicyEvidence
+
+            EffectivePrivacyPolicyEvidence.model_validate(effective)
+        if provenance is not None:
+            from mmaudit.repository.privacy_provenance import (
+                PrivacySourceProvenanceEvidence,
+            )
+
+            PrivacySourceProvenanceEvidence.model_validate(provenance)
+        return self
+
     def effective_solidity_coverage(self) -> SolidityCoverage | None:
         """Prefer typed coverage while retaining validated legacy-report compatibility."""
 

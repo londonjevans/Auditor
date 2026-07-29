@@ -62,6 +62,7 @@ from tests.real_provider_harness import (
     RealProviderTestConfigurationError,
     RealProviderTestSettings,
     SyntheticProviderSmokeResponse,
+    _contains_forbidden_authorization_surface,
     load_pinned_synthetic_smoke_fixture,
     load_real_provider_test_settings,
     preflight_real_provider_smoke_output,
@@ -77,6 +78,14 @@ from tests.real_provider_harness import (
     write_real_provider_smoke_rejection_evidence,
     write_real_provider_smoke_verification_rejection_evidence,
 )
+
+
+def test_authorization_scan_distinguishes_credentials_from_privacy_evidence() -> None:
+    assert _contains_forbidden_authorization_surface('{"Authorization":"synthetic"}')
+    assert _contains_forbidden_authorization_surface('{"value":"Bearer synthetic"}')
+    assert not _contains_forbidden_authorization_surface(
+        '{"privacy_authorization":"STRICT_ZDR_ENFORCED"}'
+    )
 
 
 def _valid_environment() -> dict[str, str]:

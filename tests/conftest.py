@@ -69,6 +69,7 @@ def base_config_data() -> dict[str, Any]:
             "follow_symlinks": False,
         },
         "privacy": {
+            "profile": "STRICT_ZDR",
             "allow_code_egress": True,
             "require_zdr": True,
             "redact_secrets": True,

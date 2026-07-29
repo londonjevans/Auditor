@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import Decimal
 
 from mmaudit.config import AuditConfig, ConfigError
 from mmaudit.constants import ALL_MODEL_ROLES
 from mmaudit.models.openrouter import OpenRouterProviderPolicy, OpenRouterReasoning
 from mmaudit.models.schemas import AuditProfile
+from mmaudit.privacy import (
+    EffectivePrivacyPolicyEvidence,
+    TrustedPrivacyAuthorization,
+    validate_trusted_privacy_authorization,
+)
 
 
 @dataclass(frozen=True)
@@ -33,6 +40,8 @@ def build_openrouter_runtime_controls(
     *,
     certification: bool,
     require_single_model_per_role: bool = False,
+    effective_privacy_policy: EffectivePrivacyPolicyEvidence | None = None,
+    privacy_authorization: TrustedPrivacyAuthorization | None = None,
 ) -> OpenRouterRuntimeControls:
     """Build fail-closed request controls without accessing operator secrets."""
 
@@ -45,7 +54,25 @@ def build_openrouter_runtime_controls(
         )
     if certification:
         if not config.privacy.require_zdr:
-            raise ConfigError("OpenRouter certification requires zero-data-retention routing")
+            if effective_privacy_policy is None or privacy_authorization is None:
+                raise ConfigError(
+                    "non-ZDR OpenRouter certification requires live operator privacy authorization"
+                )
+            try:
+                validate_trusted_privacy_authorization(
+                    privacy_authorization,
+                    evidence_sha256=effective_privacy_policy.evidence_sha256,
+                    source_sha256=effective_privacy_policy.source_sha256,
+                    source_classification=effective_privacy_policy.source_classification,
+                    configured_model_ids=effective_privacy_policy.permitted_model_ids,
+                    configured_provider_endpoints=effective_privacy_policy.permitted_provider_endpoints,
+                    requested_budget_usd=Decimal(str(config.execution.budget_usd)),
+                    now=datetime.now(UTC).replace(microsecond=0),
+                )
+            except ValueError as exc:
+                raise ConfigError(
+                    f"non-ZDR OpenRouter certification privacy authorization failed: {exc}"
+                ) from None
         if not (policy.only or policy.order):
             raise ConfigError(
                 "OpenRouter certification requires an explicit provider endpoint allowlist"

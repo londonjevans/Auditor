@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 
 from mmaudit.models.identity import (
@@ -22,6 +23,79 @@ from mmaudit.models.identity import (
 )
 from mmaudit.models.schemas import ModelIdentityStrength, UsageRecord
 from mmaudit.models.usage import _attest_owned_real_usage_record
+from mmaudit.privacy import EndpointPolicyClass, PrivacyProfile, PrivacySourceClassification
+
+_PRIVACY_ROUTING_FIELDS = frozenset(
+    {
+        "privacy_profile",
+        "privacy_authorization",
+        "effective_privacy_policy_sha256",
+        "privacy_source_sha256",
+        "privacy_source_provenance_sha256",
+        "privacy_source_classification",
+        "privacy_consent_file_sha256",
+        "privacy_consent_sha256",
+        "privacy_consent_expires_at",
+        "privacy_endpoint_policy_class",
+    }
+)
+
+
+def synthetic_strict_zdr_privacy_routing(
+    routing: Mapping[str, object],
+    *,
+    source_label: str,
+) -> dict[str, object]:
+    """Complete a legacy synthetic ZDR route without masking partial-evidence tests."""
+
+    completed = dict(routing)
+    if _PRIVACY_ROUTING_FIELDS.intersection(completed):
+        return completed
+    if completed.get("zdr_requested") is not True or completed.get("data_collection") != "deny":
+        return completed
+    source_sha256 = hashlib.sha256(source_label.encode()).hexdigest()
+    provenance_sha256 = hashlib.sha256(
+        json.dumps(
+            {
+                "source_sha256": source_sha256,
+                "source_classification": (
+                    PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE.value
+                ),
+                "synthetic_fixture": True,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    policy_sha256 = hashlib.sha256(
+        json.dumps(
+            {
+                "privacy_profile": PrivacyProfile.STRICT_ZDR.value,
+                "require_zdr": True,
+                "source_sha256": source_sha256,
+                "source_provenance_sha256": provenance_sha256,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    completed.update(
+        {
+            "privacy_profile": PrivacyProfile.STRICT_ZDR.value,
+            "privacy_authorization": "STRICT_ZDR_ENFORCED",
+            "effective_privacy_policy_sha256": policy_sha256,
+            "privacy_source_sha256": source_sha256,
+            "privacy_source_provenance_sha256": provenance_sha256,
+            "privacy_source_classification": (
+                PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE.value
+            ),
+            "privacy_consent_file_sha256": None,
+            "privacy_consent_sha256": None,
+            "privacy_consent_expires_at": None,
+            "privacy_endpoint_policy_class": EndpointPolicyClass.ZDR.value,
+        }
+    )
+    return completed
 
 
 def bind_synthetic_usage_identity(record: UsageRecord) -> UsageRecord:
@@ -39,7 +113,10 @@ def bind_synthetic_usage_identity(record: UsageRecord) -> UsageRecord:
         or record.ended_at is None
     ):
         raise ValueError("synthetic identity fixture requires complete usage evidence")
-    routing = dict(record.routing)
+    routing = synthetic_strict_zdr_privacy_routing(
+        record.routing,
+        source_label=f"{record.request_id}:{record.prompt_sha256}",
+    )
     provider_fallback_used = routing.get("provider_fallback_used")
     host_model_fallback_used = routing.get("host_model_fallback_used")
     if not isinstance(provider_fallback_used, bool):
@@ -130,6 +207,10 @@ def bind_synthetic_usage_identity(record: UsageRecord) -> UsageRecord:
         reasoning_supported=False,
         zdr_eligible=True,
         data_collection_deny_eligible=True,
+        data_collection_deny_request_policy_enforced=True,
+        data_collection_deny_evidence_source="ZDR_ENDPOINT_SNAPSHOT",
+        data_collection_deny_evidence_sha256="8" * 64,
+        data_collection_deny_evidence_expires_at=None,
     )
     snapshot = seal_openrouter_model_endpoint_identity_snapshot(
         requested_slug=record.requested_model,
