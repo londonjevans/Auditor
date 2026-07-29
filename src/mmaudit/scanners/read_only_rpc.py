@@ -16,7 +16,7 @@ import socket
 import threading
 import time
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from http.client import HTTPConnection, HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -151,6 +151,7 @@ class ReadOnlyRpcBridgeSnapshot:
     method_log_sha256: str
     stopped_cleanly: Literal[True]
     snapshot_sha256: str
+    selected_test_scope_snapshot_sha256s: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         violation_count = (
@@ -166,6 +167,12 @@ class ReadOnlyRpcBridgeSnapshot:
             or not _SHA256_PATTERN.fullmatch(self.postflight_origin_observation_sha256)
             or not _SHA256_PATTERN.fullmatch(self.method_log_sha256)
             or not _SHA256_PATTERN.fullmatch(self.snapshot_sha256)
+            or any(
+                not isinstance(scope_sha256, str) or _SHA256_PATTERN.fullmatch(scope_sha256) is None
+                for scope_sha256 in self.selected_test_scope_snapshot_sha256s
+            )
+            or len(self.selected_test_scope_snapshot_sha256s)
+            != len(set(self.selected_test_scope_snapshot_sha256s))
             or type(self.expected_chain_id) is not int
             or self.expected_chain_id < 1
             or self.expected_chain_id >= 2**64
@@ -240,6 +247,10 @@ class ReadOnlyRpcBridgeSnapshot:
             "method_log_sha256": self.method_log_sha256,
             "stopped_cleanly": self.stopped_cleanly,
         }
+        if self.selected_test_scope_snapshot_sha256s:
+            result["selected_test_scope_snapshot_sha256s"] = list(
+                self.selected_test_scope_snapshot_sha256s
+            )
         if include_snapshot_sha256:
             result["snapshot_sha256"] = self.snapshot_sha256
         return result
@@ -250,6 +261,179 @@ class ReadOnlyRpcBridgeSnapshot:
         return self.snapshot_sha256 == _canonical_sha256(
             self.to_dict(include_snapshot_sha256=False)
         )
+
+
+@dataclass(frozen=True)
+class ReadOnlyRpcTestScopeSnapshot:
+    """Endpoint-free immutable accounting for one selected test descriptor."""
+
+    schema_version: Literal["1.0"]
+    attempt_binding_sha256: str
+    selection_sha256: str
+    descriptor_sha256: str
+    sequence_index: int
+    policy_sha256: str
+    expected_chain_id: int
+    pinned_block_number: int
+    pinned_block_hash: str
+    status: Literal["validated", "not_observed", "violation"]
+    http_request_count: int
+    permitted_rpc_call_count: int
+    origin_attempted_rpc_call_count: int
+    origin_validated_rpc_call_count: int
+    synthetic_rpc_call_count: int
+    denied_request_count: int
+    malformed_request_count: int
+    limit_exceeded_request_count: int
+    upstream_error_request_count: int
+    allowed_method_counts: tuple[tuple[str, int], ...]
+    method_log_sha256: str
+    boundary_drained: Literal[True]
+    snapshot_sha256: str
+
+    def __post_init__(self) -> None:
+        violation_count = (
+            self.denied_request_count
+            + self.malformed_request_count
+            + self.limit_exceeded_request_count
+            + self.upstream_error_request_count
+        )
+        expected_status: Literal["validated", "not_observed", "violation"]
+        if violation_count or (
+            self.origin_validated_rpc_call_count != self.origin_attempted_rpc_call_count
+        ):
+            expected_status = "violation"
+        elif self.origin_attempted_rpc_call_count:
+            expected_status = "validated"
+        else:
+            expected_status = "not_observed"
+        if (
+            self.schema_version != "1.0"
+            or not _SHA256_PATTERN.fullmatch(self.attempt_binding_sha256)
+            or not _SHA256_PATTERN.fullmatch(self.selection_sha256)
+            or not _SHA256_PATTERN.fullmatch(self.descriptor_sha256)
+            or not _SHA256_PATTERN.fullmatch(self.policy_sha256)
+            or not _SHA256_PATTERN.fullmatch(self.method_log_sha256)
+            or not _SHA256_PATTERN.fullmatch(self.snapshot_sha256)
+            or type(self.sequence_index) is not int
+            or not 1 <= self.sequence_index <= 10_000
+            or type(self.expected_chain_id) is not int
+            or self.expected_chain_id < 1
+            or self.expected_chain_id >= 2**64
+            or type(self.pinned_block_number) is not int
+            or self.pinned_block_number < 0
+            or self.pinned_block_number >= 2**64
+            or not _BLOCK_HASH_PATTERN.fullmatch(self.pinned_block_hash)
+            or any(
+                type(count) is not int or count < 0
+                for count in (
+                    self.http_request_count,
+                    self.permitted_rpc_call_count,
+                    self.origin_attempted_rpc_call_count,
+                    self.origin_validated_rpc_call_count,
+                    self.synthetic_rpc_call_count,
+                    self.denied_request_count,
+                    self.malformed_request_count,
+                    self.limit_exceeded_request_count,
+                    self.upstream_error_request_count,
+                )
+            )
+            or self.origin_attempted_rpc_call_count + self.synthetic_rpc_call_count
+            != self.permitted_rpc_call_count
+            or self.origin_validated_rpc_call_count > self.origin_attempted_rpc_call_count
+            or self.allowed_method_counts
+            != tuple(sorted(self.allowed_method_counts, key=lambda item: item[0]))
+            or len({method for method, _count in self.allowed_method_counts})
+            != len(self.allowed_method_counts)
+            or any(
+                method not in _ALLOWED_METHODS or type(count) is not int or count < 1
+                for method, count in self.allowed_method_counts
+            )
+            or sum(count for _method, count in self.allowed_method_counts)
+            != self.permitted_rpc_call_count
+            or violation_count > self.http_request_count
+            or self.status != expected_status
+            or self.boundary_drained is not True
+        ):
+            raise ValueError("read-only RPC test scope snapshot is inconsistent")
+        if not self.verify():
+            raise ValueError("read-only RPC test scope snapshot hash is inconsistent")
+
+    def to_dict(self, *, include_snapshot_sha256: bool = True) -> dict[str, object]:
+        """Return the endpoint-free canonical primitive projection."""
+
+        result: dict[str, object] = {
+            "schema_version": self.schema_version,
+            "attempt_binding_sha256": self.attempt_binding_sha256,
+            "selection_sha256": self.selection_sha256,
+            "descriptor_sha256": self.descriptor_sha256,
+            "sequence_index": self.sequence_index,
+            "policy_sha256": self.policy_sha256,
+            "expected_chain_id": self.expected_chain_id,
+            "pinned_block_number": self.pinned_block_number,
+            "pinned_block_hash": self.pinned_block_hash,
+            "status": self.status,
+            "http_request_count": self.http_request_count,
+            "permitted_rpc_call_count": self.permitted_rpc_call_count,
+            "origin_attempted_rpc_call_count": self.origin_attempted_rpc_call_count,
+            "origin_validated_rpc_call_count": self.origin_validated_rpc_call_count,
+            "synthetic_rpc_call_count": self.synthetic_rpc_call_count,
+            "denied_request_count": self.denied_request_count,
+            "malformed_request_count": self.malformed_request_count,
+            "limit_exceeded_request_count": self.limit_exceeded_request_count,
+            "upstream_error_request_count": self.upstream_error_request_count,
+            "allowed_method_counts": [
+                {"method": method, "count": count} for method, count in self.allowed_method_counts
+            ],
+            "method_log_sha256": self.method_log_sha256,
+            "boundary_drained": self.boundary_drained,
+        }
+        if include_snapshot_sha256:
+            result["snapshot_sha256"] = self.snapshot_sha256
+        return result
+
+    def verify(self) -> bool:
+        """Verify the scope snapshot's self-hash without reading external state."""
+
+        return self.snapshot_sha256 == _canonical_sha256(
+            self.to_dict(include_snapshot_sha256=False)
+        )
+
+
+@dataclass
+class _ReadOnlyRpcTestScopeAccumulator:
+    attempt_binding_sha256: str
+    selection_sha256: str
+    descriptor_sha256: str
+    sequence_index: int
+    http_request_count: int = 0
+    permitted_rpc_call_count: int = 0
+    origin_attempted_rpc_call_count: int = 0
+    origin_validated_rpc_call_count: int = 0
+    synthetic_rpc_call_count: int = 0
+    denied_request_count: int = 0
+    malformed_request_count: int = 0
+    limit_exceeded_request_count: int = 0
+    upstream_error_request_count: int = 0
+    allowed_method_counts: dict[str, int] = field(default_factory=dict)
+    method_log: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _AcceptBoundaryCheckpoint:
+    """Internal loopback checkpoint that pauses the accept loop at one generation."""
+
+    source_port: int
+    accepted: threading.Event = field(default_factory=threading.Event)
+    release: threading.Event = field(default_factory=threading.Event)
+
+
+@dataclass(frozen=True)
+class _AcceptedRequestMetadata:
+    """Generation or internal checkpoint bound to one accepted listener socket."""
+
+    generation: int | None
+    checkpoint: _AcceptBoundaryCheckpoint | None
 
 
 @dataclass(frozen=True)
@@ -325,12 +509,35 @@ class _BridgeHttpServer(ThreadingHTTPServer):
         self._handlers_drained.set()
         self._admission_lock = threading.Lock()
         self._admission_thread: threading.Thread | None = None
+        self._accepted_metadata_lock = threading.Lock()
+        self._accepted_metadata: dict[socket.socket, _AcceptedRequestMetadata] = {}
+        self._checkpoint_lock = threading.Lock()
+        self._checkpoints_by_source_port: dict[int, _AcceptBoundaryCheckpoint] = {}
         super().__init__(("127.0.0.1", 0), _BridgeRequestHandler)
         self.bridge = bridge
 
     def get_request(self) -> tuple[socket.socket, object]:
+        accept_generation = self.bridge._current_accept_generation()
         request, client_address = super().get_request()
         request.settimeout(self.bridge._timeout_seconds)
+        checkpoint: _AcceptBoundaryCheckpoint | None = None
+        if (
+            isinstance(client_address, tuple)
+            and len(client_address) >= 2
+            and isinstance(client_address[1], int)
+        ):
+            with self._checkpoint_lock:
+                checkpoint = self._checkpoints_by_source_port.pop(client_address[1], None)
+        if checkpoint is None:
+            self.bridge._register_accepted_http_request(accept_generation)
+            metadata = _AcceptedRequestMetadata(
+                generation=accept_generation,
+                checkpoint=None,
+            )
+        else:
+            metadata = _AcceptedRequestMetadata(generation=None, checkpoint=checkpoint)
+        with self._accepted_metadata_lock:
+            self._accepted_metadata[request] = metadata
         return request, client_address
 
     def process_request(
@@ -340,15 +547,31 @@ class _BridgeHttpServer(ThreadingHTTPServer):
     ) -> None:
         if not isinstance(request, socket.socket):
             raise ReadOnlyRpcBridgeError("read-only RPC bridge accepted a non-stream socket")
-        admitted, saturated = self.bridge._admit_http_request()
+        with self._accepted_metadata_lock:
+            metadata = self._accepted_metadata.pop(request, None)
+        if metadata is None:
+            _close_connection(request)
+            raise ReadOnlyRpcBridgeError("read-only RPC accepted-request metadata is missing")
+        if metadata.checkpoint is not None:
+            _close_connection(request)
+            metadata.checkpoint.accepted.set()
+            metadata.checkpoint.release.wait(self.bridge._shutdown_timeout_seconds)
+            return
+        if metadata.generation is None:
+            _close_connection(request)
+            raise ReadOnlyRpcBridgeError("read-only RPC accept generation is missing")
+        admitted, saturated = self.bridge._admit_http_request(metadata.generation)
         if saturated:
             self.stop_admission()
         if not admitted:
             _close_connection(request)
             return
         if not self._handler_slots.acquire(blocking=False):
-            self.bridge._record_rejection(_RejectionKind.LIMIT)
-            _reject_capacity_connection(request)
+            try:
+                self.bridge._record_rejection(_RejectionKind.LIMIT)
+                _reject_capacity_connection(request)
+            finally:
+                self.bridge._finish_admitted_http_request()
             return
         with self._active_connections_lock:
             self._active_connections.add(request)
@@ -358,6 +581,56 @@ class _BridgeHttpServer(ThreadingHTTPServer):
         except BaseException:
             self._finish_handler(request)
             raise
+
+    def accept_boundary_checkpoint(self, timeout_seconds: float) -> _AcceptBoundaryCheckpoint:
+        """Pause the accept loop after every connection queued before this checkpoint."""
+
+        if timeout_seconds <= 0:
+            raise ReadOnlyRpcBridgeError(
+                "read-only RPC selected test scope accept checkpoint exceeded its bound"
+            )
+        deadline = time.monotonic() + timeout_seconds
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.settimeout(max(0.001, deadline - time.monotonic()))
+        checkpoint: _AcceptBoundaryCheckpoint | None = None
+        checkpoint_delivered = False
+        try:
+            probe.bind(("127.0.0.1", 0))
+            source_port = probe.getsockname()[1]
+            if not isinstance(source_port, int) or not 1 <= source_port <= 65_535:
+                raise ReadOnlyRpcBridgeError(
+                    "read-only RPC selected test scope accept checkpoint is invalid"
+                )
+            checkpoint = _AcceptBoundaryCheckpoint(source_port=source_port)
+            with self._checkpoint_lock:
+                if source_port in self._checkpoints_by_source_port:
+                    raise ReadOnlyRpcBridgeError(
+                        "read-only RPC selected test scope accept checkpoint collided"
+                    )
+                self._checkpoints_by_source_port[source_port] = checkpoint
+            host, port = cast(tuple[str, int], self.server_address)
+            if host != "127.0.0.1" or not isinstance(port, int):
+                raise ReadOnlyRpcBridgeError(
+                    "read-only RPC selected test scope listener identity is invalid"
+                )
+            probe.connect((host, port))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not checkpoint.accepted.wait(remaining):
+                raise ReadOnlyRpcBridgeError(
+                    "read-only RPC selected test scope accept checkpoint exceeded its bound"
+                )
+            checkpoint_delivered = True
+            return checkpoint
+        except (OSError, TimeoutError) as exc:
+            raise ReadOnlyRpcBridgeError(
+                "read-only RPC selected test scope accept checkpoint failed"
+            ) from exc
+        finally:
+            probe.close()
+            if checkpoint is not None and not checkpoint_delivered:
+                with self._checkpoint_lock:
+                    self._checkpoints_by_source_port.pop(checkpoint.source_port, None)
+                checkpoint.release.set()
 
     def process_request_thread(
         self,
@@ -415,12 +688,19 @@ class _BridgeHttpServer(ThreadingHTTPServer):
         with self._active_connections_lock:
             return not self._active_connections
 
+    def handlers_drained(self) -> bool:
+        """Return a non-blocking view of the tracked handler boundary."""
+
+        with self._active_connections_lock:
+            return self._handlers_drained.is_set() and not self._active_connections
+
     def _finish_handler(self, request: socket.socket) -> None:
         with self._active_connections_lock:
             self._active_connections.discard(request)
             if not self._active_connections:
                 self._handlers_drained.set()
         self._handler_slots.release()
+        self.bridge._finish_admitted_http_request()
 
 
 class _BridgeRequestHandler(BaseHTTPRequestHandler):
@@ -577,10 +857,19 @@ class ReadOnlyRpcBridge:
             }
         )
         self._state_lock = threading.Lock()
+        self._scope_drain_condition = threading.Condition(self._state_lock)
         self._lifecycle_lock = threading.Lock()
+        self._scope_transition_lock = threading.Lock()
+        self._scope_boundary_lock = threading.Lock()
         self._active_upstream_lock = threading.Lock()
         self._active_upstream_connections: dict[object, socket.socket | None] = {}
         self._upstream_shutdown_requested = False
+        self._accept_generation = 0
+        self._admission_closed = False
+        self._pending_accepted_http_request_count = 0
+        self._inflight_admitted_http_request_count = 0
+        self._active_test_scope: _ReadOnlyRpcTestScopeAccumulator | None = None
+        self._selected_test_scope_snapshot_sha256s: list[str] = []
         self._http_request_count = 0
         self._http_admission_saturated = False
         self._permitted_rpc_call_count = 0
@@ -632,6 +921,140 @@ class ReadOnlyRpcBridge:
                 raise ReadOnlyRpcBridgeError("read-only RPC bridge listener identity is invalid")
             return f"http://127.0.0.1:{port}"
 
+    def begin_selected_test_scope(
+        self,
+        *,
+        attempt_binding_sha256: str,
+        selection_sha256: str,
+        descriptor_sha256: str,
+        sequence_index: int,
+    ) -> None:
+        """Begin exact accounting for one selected descriptor at a drained boundary."""
+
+        _validate_test_scope_identity(
+            attempt_binding_sha256=attempt_binding_sha256,
+            selection_sha256=selection_sha256,
+            descriptor_sha256=descriptor_sha256,
+            sequence_index=sequence_index,
+        )
+        deadline = time.monotonic() + self._shutdown_timeout_seconds
+        if not self._scope_transition_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            raise ReadOnlyRpcBridgeError(
+                "read-only RPC selected test scope boundary exceeded its bound"
+            )
+        checkpoint: _AcceptBoundaryCheckpoint | None = None
+        try:
+            server = self._running_server_for_test_scope()
+            with self._scope_boundary_lock, self._state_lock:
+                if self._active_test_scope is not None:
+                    raise ReadOnlyRpcBridgeError(
+                        "read-only RPC selected test scopes cannot overlap"
+                    )
+            checkpoint = server.accept_boundary_checkpoint(max(0.0, deadline - time.monotonic()))
+            if not self._wait_for_test_scope_boundary_drained(server, deadline=deadline):
+                raise ReadOnlyRpcBridgeError(
+                    "read-only RPC selected test scope boundary exceeded its bound"
+                )
+            with self._scope_boundary_lock:
+                if not self._test_scope_boundary_drained(server):
+                    raise ReadOnlyRpcBridgeError(
+                        "read-only RPC selected test scope requires a drained boundary"
+                    )
+                with self._state_lock:
+                    if self._active_test_scope is not None:
+                        raise ReadOnlyRpcBridgeError(
+                            "read-only RPC selected test scopes cannot overlap"
+                        )
+                    self._accept_generation += 1
+                    self._active_test_scope = _ReadOnlyRpcTestScopeAccumulator(
+                        attempt_binding_sha256=attempt_binding_sha256,
+                        selection_sha256=selection_sha256,
+                        descriptor_sha256=descriptor_sha256,
+                        sequence_index=sequence_index,
+                    )
+        finally:
+            if checkpoint is not None:
+                checkpoint.release.set()
+            self._scope_transition_lock.release()
+
+    def end_selected_test_scope(
+        self,
+        *,
+        attempt_binding_sha256: str,
+        selection_sha256: str,
+        descriptor_sha256: str,
+        sequence_index: int,
+    ) -> ReadOnlyRpcTestScopeSnapshot:
+        """Seal exact accounting for one selected descriptor at a drained boundary."""
+
+        identity = _validate_test_scope_identity(
+            attempt_binding_sha256=attempt_binding_sha256,
+            selection_sha256=selection_sha256,
+            descriptor_sha256=descriptor_sha256,
+            sequence_index=sequence_index,
+        )
+        deadline = time.monotonic() + self._shutdown_timeout_seconds
+        if not self._scope_transition_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            raise ReadOnlyRpcBridgeError(
+                "read-only RPC selected test scope boundary exceeded its bound"
+            )
+        checkpoint: _AcceptBoundaryCheckpoint | None = None
+        try:
+            server = self._running_server_for_test_scope()
+            with self._scope_boundary_lock, self._state_lock:
+                active_scope = self._active_test_scope
+                if active_scope is None:
+                    raise ReadOnlyRpcBridgeError("read-only RPC selected test scope is not active")
+                active_identity = (
+                    active_scope.attempt_binding_sha256,
+                    active_scope.selection_sha256,
+                    active_scope.descriptor_sha256,
+                    active_scope.sequence_index,
+                )
+                if active_identity != identity:
+                    raise ReadOnlyRpcBridgeError(
+                        "read-only RPC selected test scope identity does not match"
+                    )
+            checkpoint = server.accept_boundary_checkpoint(max(0.0, deadline - time.monotonic()))
+            if not self._wait_for_test_scope_boundary_drained(server, deadline=deadline):
+                raise ReadOnlyRpcBridgeError(
+                    "read-only RPC selected test scope boundary exceeded its bound"
+                )
+            with self._scope_boundary_lock:
+                if not self._test_scope_boundary_drained(server):
+                    raise ReadOnlyRpcBridgeError(
+                        "read-only RPC selected test scope requires a drained boundary"
+                    )
+                with self._state_lock:
+                    active_scope = self._active_test_scope
+                    if active_scope is None:
+                        raise ReadOnlyRpcBridgeError(
+                            "read-only RPC selected test scope is not active"
+                        )
+                    active_identity = (
+                        active_scope.attempt_binding_sha256,
+                        active_scope.selection_sha256,
+                        active_scope.descriptor_sha256,
+                        active_scope.sequence_index,
+                    )
+                    if active_identity != identity:
+                        raise ReadOnlyRpcBridgeError(
+                            "read-only RPC selected test scope identity does not match"
+                        )
+                    snapshot = self._seal_test_scope_snapshot(active_scope)
+                    if snapshot.snapshot_sha256 in self._selected_test_scope_snapshot_sha256s:
+                        raise ReadOnlyRpcBridgeError(
+                            "read-only RPC selected test scope snapshot is duplicated"
+                        )
+                    self._selected_test_scope_snapshot_sha256s.append(snapshot.snapshot_sha256)
+                    self._active_test_scope = None
+                    self._accept_generation += 1
+                    return snapshot
+        finally:
+            if checkpoint is not None:
+                checkpoint.release.set()
+            self._scope_transition_lock.release()
+
     def start(self) -> None:
         """Attest the exact origin state, then bind and start the loopback listener."""
 
@@ -682,7 +1105,7 @@ class ReadOnlyRpcBridge:
     def stop(self) -> None:
         """Stop resources within one deadline, then re-attest the origin state."""
 
-        with self._lifecycle_lock:
+        with self._scope_transition_lock, self._scope_boundary_lock, self._lifecycle_lock:
             if not self._started:
                 raise ReadOnlyRpcBridgeError("read-only RPC bridge was not started")
             if self._stopped_cleanly:
@@ -694,6 +1117,11 @@ class ReadOnlyRpcBridge:
             preflight_observation = self._preflight_observation
             if server is None or thread is None or preflight_observation is None:
                 raise ReadOnlyRpcBridgeError("read-only RPC bridge lifecycle is inconsistent")
+            with self._state_lock:
+                abandoned_test_scope = self._active_test_scope is not None
+                self._active_test_scope = None
+                self._admission_closed = True
+                self._accept_generation += 1
             self._stop_attempted = True
 
         deadline = time.monotonic() + self._shutdown_timeout_seconds
@@ -765,6 +1193,10 @@ class ReadOnlyRpcBridge:
             raise ReadOnlyRpcBridgeError("read-only RPC origin identity postflight failed") from exc
         if postflight_observation != preflight_observation or time.monotonic() > deadline:
             raise ReadOnlyRpcBridgeError("read-only RPC origin identity postflight failed")
+        if abandoned_test_scope:
+            raise ReadOnlyRpcBridgeError(
+                "read-only RPC selected test scope was abandoned during bridge shutdown"
+            )
         with self._lifecycle_lock:
             self._postflight_observation = postflight_observation
             self._stopped_cleanly = True
@@ -790,6 +1222,7 @@ class ReadOnlyRpcBridge:
         with self._state_lock:
             allowed_method_counts = tuple(sorted(self._allowed_method_counts.items()))
             method_log_sha256 = _canonical_sha256(self._method_log)
+            selected_test_scope_snapshot_sha256s = tuple(self._selected_test_scope_snapshot_sha256s)
             violation_count = (
                 self._denied_request_count
                 + self._malformed_request_count
@@ -821,6 +1254,10 @@ class ReadOnlyRpcBridge:
                 "method_log_sha256": method_log_sha256,
                 "stopped_cleanly": True,
             }
+            if selected_test_scope_snapshot_sha256s:
+                payload["selected_test_scope_snapshot_sha256s"] = list(
+                    selected_test_scope_snapshot_sha256s
+                )
             snapshot_sha256 = _canonical_sha256(payload)
             return ReadOnlyRpcBridgeSnapshot(
                 schema_version="2.0",
@@ -845,7 +1282,145 @@ class ReadOnlyRpcBridge:
                 method_log_sha256=method_log_sha256,
                 stopped_cleanly=True,
                 snapshot_sha256=snapshot_sha256,
+                selected_test_scope_snapshot_sha256s=(selected_test_scope_snapshot_sha256s),
             )
+
+    def _running_server_for_test_scope(self) -> _BridgeHttpServer:
+        with self._lifecycle_lock:
+            if (
+                self._server is None
+                or not self._started
+                or self._stop_attempted
+                or self._stopped_cleanly
+            ):
+                raise ReadOnlyRpcBridgeError("read-only RPC bridge is not running")
+            return self._server
+
+    def _test_scope_boundary_drained(self, server: _BridgeHttpServer) -> bool:
+        with self._state_lock:
+            admitted_requests_drained = (
+                self._pending_accepted_http_request_count == 0
+                and self._inflight_admitted_http_request_count == 0
+            )
+        return (
+            admitted_requests_drained
+            and server.handlers_drained()
+            and self._upstream_resources_drained()
+        )
+
+    def _wait_for_test_scope_boundary_drained(
+        self,
+        server: _BridgeHttpServer,
+        *,
+        deadline: float,
+    ) -> bool:
+        """Wait for accepted and admitted pre-boundary work within one absolute bound."""
+
+        with self._scope_drain_condition:
+            while self._pending_accepted_http_request_count:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._scope_drain_condition.wait(remaining)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not server.wait_for_handlers(remaining):
+            return False
+        with self._scope_drain_condition:
+            while self._inflight_admitted_http_request_count:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._scope_drain_condition.wait(remaining)
+        return time.monotonic() <= deadline and self._upstream_resources_drained()
+
+    def _current_accept_generation(self) -> int:
+        """Capture the generation before the listener blocks in accept()."""
+
+        with self._scope_boundary_lock:
+            return self._accept_generation
+
+    def _register_accepted_http_request(self, generation: int) -> None:
+        """Track a listener socket before it can cross into request admission."""
+
+        with self._scope_boundary_lock, self._scope_drain_condition:
+            if type(generation) is not int or generation < 0:
+                raise ReadOnlyRpcBridgeError("read-only RPC accept generation is invalid")
+            self._pending_accepted_http_request_count += 1
+            self._scope_drain_condition.notify_all()
+
+    def _seal_test_scope_snapshot(
+        self,
+        scope: _ReadOnlyRpcTestScopeAccumulator,
+    ) -> ReadOnlyRpcTestScopeSnapshot:
+        violation_count = (
+            scope.denied_request_count
+            + scope.malformed_request_count
+            + scope.limit_exceeded_request_count
+            + scope.upstream_error_request_count
+        )
+        status: Literal["validated", "not_observed", "violation"]
+        if violation_count or (
+            scope.origin_validated_rpc_call_count != scope.origin_attempted_rpc_call_count
+        ):
+            status = "violation"
+        elif scope.origin_attempted_rpc_call_count:
+            status = "validated"
+        else:
+            status = "not_observed"
+        allowed_method_counts = tuple(sorted(scope.allowed_method_counts.items()))
+        method_log_sha256 = _canonical_sha256(scope.method_log)
+        payload: dict[str, object] = {
+            "schema_version": "1.0",
+            "attempt_binding_sha256": scope.attempt_binding_sha256,
+            "selection_sha256": scope.selection_sha256,
+            "descriptor_sha256": scope.descriptor_sha256,
+            "sequence_index": scope.sequence_index,
+            "policy_sha256": self._policy_sha256,
+            "expected_chain_id": self._expected_chain_id,
+            "pinned_block_number": self._pinned_block_number,
+            "pinned_block_hash": self._pinned_block_hash,
+            "status": status,
+            "http_request_count": scope.http_request_count,
+            "permitted_rpc_call_count": scope.permitted_rpc_call_count,
+            "origin_attempted_rpc_call_count": scope.origin_attempted_rpc_call_count,
+            "origin_validated_rpc_call_count": scope.origin_validated_rpc_call_count,
+            "synthetic_rpc_call_count": scope.synthetic_rpc_call_count,
+            "denied_request_count": scope.denied_request_count,
+            "malformed_request_count": scope.malformed_request_count,
+            "limit_exceeded_request_count": scope.limit_exceeded_request_count,
+            "upstream_error_request_count": scope.upstream_error_request_count,
+            "allowed_method_counts": [
+                {"method": method, "count": count} for method, count in allowed_method_counts
+            ],
+            "method_log_sha256": method_log_sha256,
+            "boundary_drained": True,
+        }
+        snapshot_sha256 = _canonical_sha256(payload)
+        return ReadOnlyRpcTestScopeSnapshot(
+            schema_version="1.0",
+            attempt_binding_sha256=scope.attempt_binding_sha256,
+            selection_sha256=scope.selection_sha256,
+            descriptor_sha256=scope.descriptor_sha256,
+            sequence_index=scope.sequence_index,
+            policy_sha256=self._policy_sha256,
+            expected_chain_id=self._expected_chain_id,
+            pinned_block_number=self._pinned_block_number,
+            pinned_block_hash=self._pinned_block_hash,
+            status=status,
+            http_request_count=scope.http_request_count,
+            permitted_rpc_call_count=scope.permitted_rpc_call_count,
+            origin_attempted_rpc_call_count=scope.origin_attempted_rpc_call_count,
+            origin_validated_rpc_call_count=scope.origin_validated_rpc_call_count,
+            synthetic_rpc_call_count=scope.synthetic_rpc_call_count,
+            denied_request_count=scope.denied_request_count,
+            malformed_request_count=scope.malformed_request_count,
+            limit_exceeded_request_count=scope.limit_exceeded_request_count,
+            upstream_error_request_count=scope.upstream_error_request_count,
+            allowed_method_counts=allowed_method_counts,
+            method_log_sha256=method_log_sha256,
+            boundary_drained=True,
+            snapshot_sha256=snapshot_sha256,
+        )
 
     def _observe_origin_identity(self, *, timeout_seconds: float) -> _OriginObservation:
         request_ids = (
@@ -1210,15 +1785,38 @@ class ReadOnlyRpcBridge:
             raise _BridgeRejection(_RejectionKind.LIMIT)
         return body
 
-    def _admit_http_request(self) -> tuple[bool, bool]:
+    def _admit_http_request(self, accept_generation: int) -> tuple[bool, bool]:
         """Hard-saturate the HTTP budget and signal permanent admission closure."""
 
-        with self._state_lock:
+        with self._scope_boundary_lock, self._scope_drain_condition:
+            if self._pending_accepted_http_request_count < 1:
+                raise ReadOnlyRpcBridgeError(
+                    "read-only RPC accepted request accounting is inconsistent"
+                )
+            self._pending_accepted_http_request_count -= 1
+            self._scope_drain_condition.notify_all()
+            if self._admission_closed or accept_generation != self._accept_generation:
+                self._http_request_count += 1
+                self._limit_exceeded_request_count += 1
+                return False, False
             if self._http_admission_saturated:
                 return False, True
             self._http_request_count += 1
+            self._inflight_admitted_http_request_count += 1
+            active_scope = self._active_test_scope
+            if active_scope is not None:
+                active_scope.http_request_count += 1
             self._http_admission_saturated = self._http_request_count == self._max_http_requests
             return True, self._http_admission_saturated
+
+    def _finish_admitted_http_request(self) -> None:
+        with self._scope_drain_condition:
+            if self._inflight_admitted_http_request_count < 1:
+                raise ReadOnlyRpcBridgeError(
+                    "read-only RPC admitted request accounting is inconsistent"
+                )
+            self._inflight_admitted_http_request_count -= 1
+            self._scope_drain_condition.notify_all()
 
     def _record_permitted(
         self,
@@ -1232,15 +1830,27 @@ class ReadOnlyRpcBridge:
             self._permitted_rpc_call_count += len(prepared)
             self._origin_attempted_rpc_call_count += origin_attempted_count
             self._synthetic_rpc_call_count += len(prepared) - origin_attempted_count
+            active_scope = self._active_test_scope
+            if active_scope is not None:
+                active_scope.permitted_rpc_call_count += len(prepared)
+                active_scope.origin_attempted_rpc_call_count += origin_attempted_count
+                active_scope.synthetic_rpc_call_count += len(prepared) - origin_attempted_count
             for call in prepared:
                 self._allowed_method_counts[call.method] = (
                     self._allowed_method_counts.get(call.method, 0) + 1
                 )
                 self._method_log.append(call.method)
+                if active_scope is not None:
+                    active_scope.allowed_method_counts[call.method] = (
+                        active_scope.allowed_method_counts.get(call.method, 0) + 1
+                    )
+                    active_scope.method_log.append(call.method)
 
     def _record_origin_validated(self, validated_count: int) -> None:
         with self._state_lock:
             self._origin_validated_rpc_call_count += validated_count
+            if self._active_test_scope is not None:
+                self._active_test_scope.origin_validated_rpc_call_count += validated_count
 
     def _forward(
         self,
@@ -1382,12 +1992,20 @@ class ReadOnlyRpcBridge:
         with self._state_lock:
             if kind is _RejectionKind.DENIED:
                 self._denied_request_count += 1
+                if self._active_test_scope is not None:
+                    self._active_test_scope.denied_request_count += 1
             elif kind is _RejectionKind.MALFORMED:
                 self._malformed_request_count += 1
+                if self._active_test_scope is not None:
+                    self._active_test_scope.malformed_request_count += 1
             elif kind is _RejectionKind.LIMIT:
                 self._limit_exceeded_request_count += 1
+                if self._active_test_scope is not None:
+                    self._active_test_scope.limit_exceeded_request_count += 1
             else:
                 self._upstream_error_request_count += 1
+                if self._active_test_scope is not None:
+                    self._active_test_scope.upstream_error_request_count += 1
 
     def _write_rejection(
         self,
@@ -1740,6 +2358,29 @@ def _encode_json(value: object) -> bytes:
 
 def _canonical_sha256(value: object) -> str:
     return hashlib.sha256(_encode_json(value)).hexdigest()
+
+
+def _validate_test_scope_identity(
+    *,
+    attempt_binding_sha256: str,
+    selection_sha256: str,
+    descriptor_sha256: str,
+    sequence_index: int,
+) -> tuple[str, str, str, int]:
+    if (
+        _SHA256_PATTERN.fullmatch(attempt_binding_sha256) is None
+        or _SHA256_PATTERN.fullmatch(selection_sha256) is None
+        or _SHA256_PATTERN.fullmatch(descriptor_sha256) is None
+        or type(sequence_index) is not int
+        or not 1 <= sequence_index <= 10_000
+    ):
+        raise ReadOnlyRpcBridgeError("read-only RPC selected test scope identity is invalid")
+    return (
+        attempt_binding_sha256,
+        selection_sha256,
+        descriptor_sha256,
+        sequence_index,
+    )
 
 
 def _require_bound(label: str, value: int, *, minimum: int, maximum: int) -> None:

@@ -61,7 +61,11 @@ from mmaudit.scanners.fork_rpc import (
     observe_pinned_fork_rpc,
 )
 from mmaudit.scanners.foundry import FoundryForkScanner
-from mmaudit.scanners.read_only_rpc import ReadOnlyRpcBridge, ReadOnlyRpcBridgeSnapshot
+from mmaudit.scanners.read_only_rpc import (
+    ReadOnlyRpcBridge,
+    ReadOnlyRpcBridgeSnapshot,
+    ReadOnlyRpcTestScopeSnapshot,
+)
 
 _OBSERVATION_TIMEOUT_SECONDS = 5.0
 _BRIDGE_SHUTDOWN_RESERVE_SECONDS = 1.0
@@ -285,6 +289,24 @@ class ForkMatrixBridge(Protocol):
 
     def snapshot(self) -> ReadOnlyRpcBridgeSnapshot: ...
 
+    def begin_selected_test_scope(
+        self,
+        *,
+        attempt_binding_sha256: str,
+        selection_sha256: str,
+        descriptor_sha256: str,
+        sequence_index: int,
+    ) -> None: ...
+
+    def end_selected_test_scope(
+        self,
+        *,
+        attempt_binding_sha256: str,
+        selection_sha256: str,
+        descriptor_sha256: str,
+        sequence_index: int,
+    ) -> ReadOnlyRpcTestScopeSnapshot: ...
+
 
 class CleanStateLease(Protocol):
     """Trusted internally launched clean-chain lease."""
@@ -345,6 +367,8 @@ class ForkScannerFactory(Protocol):
         expected_repository_sha256: str,
         repository_exclusion_root: Path,
         fork_rpc_url_override: str,
+        fork_rpc_scope_recorder: ForkMatrixBridge,
+        attempt_binding_sha256: str,
     ) -> ForkMatrixScanner: ...
 
 
@@ -378,6 +402,8 @@ def _default_scanner_factory(
     expected_repository_sha256: str,
     repository_exclusion_root: Path,
     fork_rpc_url_override: str,
+    fork_rpc_scope_recorder: ForkMatrixBridge,
+    attempt_binding_sha256: str,
 ) -> ForkMatrixScanner:
     return FoundryForkScanner(
         config,
@@ -387,6 +413,8 @@ def _default_scanner_factory(
         expected_repository_sha256=expected_repository_sha256,
         repository_exclusion_root=repository_exclusion_root,
         fork_rpc_url_override=fork_rpc_url_override,
+        fork_rpc_scope_recorder=fork_rpc_scope_recorder,
+        attempt_binding_sha256=attempt_binding_sha256,
     )
 
 
@@ -607,7 +635,7 @@ def _baseline_limitation(
         or not run.version
         or run.executable_sha256 is None
         or run.execution_observation_sha256 is None
-        or run.execution_observation_sha256 != run.expected_execution_observation_sha256()
+        or not run.execution_observation_sha256_is_valid()
         or selection is None
         or policy is None
         or not selection.tests
@@ -1271,6 +1299,8 @@ class RepositoryForkMatrixRunner:
                     expected_repository_sha256=repository_sha256,
                     repository_exclusion_root=repository_exclusion_root,
                     fork_rpc_url_override=bridge_endpoint,
+                    fork_rpc_scope_recorder=bridge,
+                    attempt_binding_sha256=identity_sha256,
                 )
                 remaining = state_execution_deadline - clock.read()
                 if remaining <= _ATTEMPT_CLEANUP_RESERVE_SECONDS:
@@ -1561,6 +1591,7 @@ def fork_rpc_egress_from_snapshot(
         pinned_block_hash=snapshot.pinned_block_hash,
         policy_sha256=snapshot.policy_sha256,
         method_log_sha256=snapshot.method_log_sha256,
+        selected_test_scope_snapshot_sha256s=(snapshot.selected_test_scope_snapshot_sha256s),
         preflight_origin_observation_sha256=(snapshot.preflight_origin_observation_sha256),
         postflight_origin_observation_sha256=(snapshot.postflight_origin_observation_sha256),
         origin_state_stable=snapshot.origin_state_stable,

@@ -125,6 +125,7 @@ from mmaudit.orchestration.assurance import (
     ProviderSessionProvenance,
     _issue_provider_session_provenance,
     is_qualifying_real_foundry_portfolio,
+    is_qualifying_real_scanner_run,
 )
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.orchestration.replay import (
@@ -3000,6 +3001,26 @@ def test_real_foundry_qualification_requires_stable_compiler_inventory(
 
     assert not is_qualifying_real_foundry_portfolio(
         changed,
+        config,
+        expected_repository_sha256="9" * 64,
+    )
+
+
+def test_real_foundry_qualification_accepts_exact_pre_scope_legacy_digest(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    current = _real_foundry_scanner(datetime.now(UTC), config)
+    payload = current.model_dump(mode="json")
+    payload.pop("repository_test_fork_rpc_scopes", None)
+    payload["execution_observation_sha256"] = current.expected_legacy_execution_observation_sha256()
+
+    legacy = ScannerRun.model_validate_json(json.dumps(payload, sort_keys=True))
+
+    assert legacy.execution_observation_sha256_is_valid()
+    assert is_qualifying_real_scanner_run(legacy)
+    assert is_qualifying_real_foundry_portfolio(
+        legacy,
         config,
         expected_repository_sha256="9" * 64,
     )

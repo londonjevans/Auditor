@@ -14,13 +14,13 @@ import subprocess
 import sys
 import time
 import tomllib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Protocol
 
 from mmaudit.config import ReproductionConfig, SmartContractsConfig
 from mmaudit.isolation.container import (
@@ -34,6 +34,7 @@ from mmaudit.isolation.provenance import (
 from mmaudit.models.schemas import (
     EvidenceStrength,
     ExecutionEvidenceKind,
+    ForkRpcMethodCount,
     FoundryTestExecutionSummary,
     RepositoryCodeExecutionState,
     RepositorySuiteExecutionPolicy,
@@ -43,6 +44,8 @@ from mmaudit.models.schemas import (
     RepositorySuiteTestDescriptor,
     RepositoryTestExecution,
     RepositoryTestExecutionStatus,
+    RepositoryTestForkRpcScopeEvidence,
+    RepositoryTestForkRpcScopeStatus,
     RepositoryTestKind,
     ScannerFinding,
     ScannerRun,
@@ -78,6 +81,7 @@ from mmaudit.scanners.foundry_inventory_runner import (
     FoundryInventoryUnavailableError,
     run_foundry_test_inventory,
 )
+from mmaudit.scanners.read_only_rpc import ReadOnlyRpcTestScopeSnapshot
 from mmaudit.scanners.repository_suite import (
     RepositorySuiteSelectionError,
     select_foundry_repository_suite,
@@ -159,6 +163,41 @@ class _PrivateArtifactUsage:
         return matches[0]
 
 
+class _FoundryForkRpcScopeRecorder(Protocol):
+    """Trusted bridge boundary used to account one selected test at a time."""
+
+    def begin_selected_test_scope(
+        self,
+        *,
+        attempt_binding_sha256: str,
+        selection_sha256: str,
+        descriptor_sha256: str,
+        sequence_index: int,
+    ) -> None: ...
+
+    def end_selected_test_scope(
+        self,
+        *,
+        attempt_binding_sha256: str,
+        selection_sha256: str,
+        descriptor_sha256: str,
+        sequence_index: int,
+    ) -> ReadOnlyRpcTestScopeSnapshot: ...
+
+
+class _FoundryScopeBoundaryError(RuntimeError):
+    """A trusted per-test RPC accounting boundary could not be sealed."""
+
+
+@dataclass(frozen=True)
+class _ScopedFoundryTestOutcome:
+    """Keep a test result, its drained RPC scope, and any execution error distinct."""
+
+    result: tuple[_FoundryTestObservation, _PrivateArtifactUsage] | None
+    scope: RepositoryTestForkRpcScopeEvidence | None
+    error: BaseException | None
+
+
 @dataclass
 class _SuiteArtifactBudget:
     """Charge every generated execution artifact against one suite-wide budget."""
@@ -203,6 +242,130 @@ class _PinnedCompilerUnavailableError(RuntimeError):
     """A required operator-pinned external Solidity compiler is absent."""
 
 
+def _repository_test_fork_rpc_scope(
+    snapshot: ReadOnlyRpcTestScopeSnapshot,
+) -> RepositoryTestForkRpcScopeEvidence:
+    """Convert one verified bridge snapshot into public endpoint-free evidence."""
+
+    if not isinstance(snapshot, ReadOnlyRpcTestScopeSnapshot) or not snapshot.verify():
+        raise ValueError("Foundry fork RPC scope snapshot is not verified bridge evidence")
+    return RepositoryTestForkRpcScopeEvidence.sealed(
+        schema_version=snapshot.schema_version,
+        attempt_binding_sha256=snapshot.attempt_binding_sha256,
+        selection_sha256=snapshot.selection_sha256,
+        descriptor_sha256=snapshot.descriptor_sha256,
+        sequence_index=snapshot.sequence_index,
+        bridge_policy_sha256=snapshot.policy_sha256,
+        expected_chain_id=snapshot.expected_chain_id,
+        pinned_block_number=snapshot.pinned_block_number,
+        pinned_block_hash=snapshot.pinned_block_hash,
+        status=RepositoryTestForkRpcScopeStatus(snapshot.status),
+        http_request_count=snapshot.http_request_count,
+        permitted_rpc_call_count=snapshot.permitted_rpc_call_count,
+        origin_attempted_rpc_call_count=snapshot.origin_attempted_rpc_call_count,
+        origin_validated_rpc_call_count=snapshot.origin_validated_rpc_call_count,
+        synthetic_rpc_call_count=snapshot.synthetic_rpc_call_count,
+        denied_request_count=snapshot.denied_request_count,
+        malformed_request_count=snapshot.malformed_request_count,
+        limit_exceeded_request_count=snapshot.limit_exceeded_request_count,
+        upstream_error_request_count=snapshot.upstream_error_request_count,
+        allowed_method_counts=tuple(
+            ForkRpcMethodCount(method=method, count=count)
+            for method, count in snapshot.allowed_method_counts
+        ),
+        method_log_sha256=snapshot.method_log_sha256,
+        boundary_drained=snapshot.boundary_drained,
+        transaction_capable_request_forwarded=False,
+        credentials_forwarded=False,
+        raw_payloads_retained=False,
+        rpc_endpoint_recorded=False,
+        bridge_scope_snapshot_sha256=snapshot.snapshot_sha256,
+    )
+
+
+def _execute_foundry_test_with_scope(
+    *,
+    recorder: _FoundryForkRpcScopeRecorder | None,
+    attempt_binding_sha256: str | None,
+    selection: RepositorySuiteSelection,
+    descriptor: RepositorySuiteTestDescriptor,
+    sequence_index: int,
+    execute: Callable[[], tuple[_FoundryTestObservation, _PrivateArtifactUsage]],
+) -> _ScopedFoundryTestOutcome:
+    """Execute exactly one descriptor inside an unconditional drained scope boundary."""
+
+    if (recorder is None) != (attempt_binding_sha256 is None):
+        return _ScopedFoundryTestOutcome(
+            result=None,
+            scope=None,
+            error=_FoundryScopeBoundaryError(
+                "Foundry fork RPC scope boundary context is incomplete"
+            ),
+        )
+    if recorder is None:
+        try:
+            return _ScopedFoundryTestOutcome(result=execute(), scope=None, error=None)
+        except BaseException as exc:
+            return _ScopedFoundryTestOutcome(result=None, scope=None, error=exc)
+
+    assert attempt_binding_sha256 is not None
+    try:
+        recorder.begin_selected_test_scope(
+            attempt_binding_sha256=attempt_binding_sha256,
+            selection_sha256=selection.selection_sha256,
+            descriptor_sha256=descriptor.descriptor_sha256,
+            sequence_index=sequence_index,
+        )
+    except Exception as exc:
+        return _ScopedFoundryTestOutcome(
+            result=None,
+            scope=None,
+            error=_FoundryScopeBoundaryError(
+                f"Foundry fork RPC scope boundary begin failed: {type(exc).__name__}"
+            ),
+        )
+
+    result: tuple[_FoundryTestObservation, _PrivateArtifactUsage] | None = None
+    execution_error: BaseException | None = None
+    snapshot: ReadOnlyRpcTestScopeSnapshot | None = None
+    boundary_error: Exception | None = None
+    try:
+        result = execute()
+    except BaseException as exc:
+        execution_error = exc
+    finally:
+        try:
+            snapshot = recorder.end_selected_test_scope(
+                attempt_binding_sha256=attempt_binding_sha256,
+                selection_sha256=selection.selection_sha256,
+                descriptor_sha256=descriptor.descriptor_sha256,
+                sequence_index=sequence_index,
+            )
+        except Exception as exc:
+            boundary_error = exc
+
+    if boundary_error is not None:
+        return _ScopedFoundryTestOutcome(
+            result=None,
+            scope=None,
+            error=_FoundryScopeBoundaryError(
+                f"Foundry fork RPC scope boundary end failed: {type(boundary_error).__name__}"
+            ),
+        )
+    assert snapshot is not None
+    try:
+        scope = _repository_test_fork_rpc_scope(snapshot)
+    except (TypeError, ValueError) as exc:
+        return _ScopedFoundryTestOutcome(
+            result=None,
+            scope=None,
+            error=_FoundryScopeBoundaryError(
+                f"Foundry fork RPC scope boundary evidence failed: {type(exc).__name__}"
+            ),
+        )
+    return _ScopedFoundryTestOutcome(result=result, scope=scope, error=execution_error)
+
+
 class FoundryForkScanner(ScannerAdapter):
     """Run existing Foundry audit tests against an explicitly configured fork RPC."""
 
@@ -222,7 +385,16 @@ class FoundryForkScanner(ScannerAdapter):
         expected_repository_sha256: str | None = None,
         repository_exclusion_root: Path | None = None,
         fork_rpc_url_override: str | None = None,
+        fork_rpc_scope_recorder: _FoundryForkRpcScopeRecorder | None = None,
+        attempt_binding_sha256: str | None = None,
     ) -> None:
+        if (fork_rpc_scope_recorder is None) != (attempt_binding_sha256 is None):
+            raise ValueError("Foundry fork RPC scope recorder and attempt binding are all-or-none")
+        if attempt_binding_sha256 is not None and (
+            re.fullmatch(r"[0-9a-f]{64}", attempt_binding_sha256) is None
+            or attempt_binding_sha256 == "0" * 64
+        ):
+            raise ValueError("Foundry fork RPC attempt binding must be a nonzero SHA-256")
         self.config = config
         self.reproduction = reproduction or ReproductionConfig()
         self.projects = tuple(projects)
@@ -230,6 +402,8 @@ class FoundryForkScanner(ScannerAdapter):
         self.expected_repository_sha256 = expected_repository_sha256
         self.repository_exclusion_root = repository_exclusion_root
         self.fork_rpc_url_override = fork_rpc_url_override
+        self.fork_rpc_scope_recorder = fork_rpc_scope_recorder
+        self.attempt_binding_sha256 = attempt_binding_sha256
 
     def with_runtime_context(
         self,
@@ -238,7 +412,12 @@ class FoundryForkScanner(ScannerAdapter):
         projects: Sequence[SolidityProjectMetadata],
         expected_repository_sha256: str | None = None,
         repository_exclusion_root: Path | None = None,
+        fork_rpc_scope_recorder: _FoundryForkRpcScopeRecorder | None = None,
+        attempt_binding_sha256: str | None = None,
     ) -> FoundryForkScanner:
+        if fork_rpc_scope_recorder is None and attempt_binding_sha256 is None:
+            fork_rpc_scope_recorder = self.fork_rpc_scope_recorder
+            attempt_binding_sha256 = self.attempt_binding_sha256
         return FoundryForkScanner(
             self.config,
             reproduction=self.reproduction,
@@ -247,6 +426,8 @@ class FoundryForkScanner(ScannerAdapter):
             expected_repository_sha256=expected_repository_sha256,
             repository_exclusion_root=repository_exclusion_root,
             fork_rpc_url_override=self.fork_rpc_url_override,
+            fork_rpc_scope_recorder=fork_rpc_scope_recorder,
+            attempt_binding_sha256=attempt_binding_sha256,
         )
 
     def build_command(self, root: Path, private_dir: Path) -> list[str]:
@@ -342,6 +523,7 @@ class FoundryForkScanner(ScannerAdapter):
         monotonic_start = time.monotonic()
         selection: RepositorySuiteSelection | None = None
         observations: list[_FoundryTestObservation] = []
+        test_fork_rpc_scopes: list[RepositoryTestForkRpcScopeEvidence] = []
         fork: PinnedForkObservation | None = None
         executable_sha256: str | None = None
         version: str | None = None
@@ -391,6 +573,7 @@ class FoundryForkScanner(ScannerAdapter):
                 inventory=inventory,
                 post_inventory=post_inventory,
                 fuzz_seed=self.config.repository_suite.fuzz_seed,
+                repository_test_fork_rpc_scopes=test_fork_rpc_scopes,
             )
 
         if not self.config.enabled:
@@ -767,8 +950,12 @@ class FoundryForkScanner(ScannerAdapter):
                     f"repository fork suite exceeded {total_timeout:.0f}s total timeout"
                 )
                 break
-            try:
-                observation, private_artifacts = _execute_foundry_test(
+
+            def execute_selected_test(
+                descriptor: RepositorySuiteTestDescriptor = descriptor,
+                index: int = index,
+            ) -> tuple[_FoundryTestObservation, _PrivateArtifactUsage]:
+                return _execute_foundry_test(
                     descriptor=descriptor,
                     selection=selection,
                     workspace=workspace,
@@ -788,14 +975,57 @@ class FoundryForkScanner(ScannerAdapter):
                     backend=backend,
                     base_environment=environment,
                 )
-            except FoundryInventoryUnavailableError as exc:
-                terminal_status = ScannerStatus.UNAVAILABLE
-                terminal_error = str(exc)
-                break
-            except (FoundryInventoryInvalidError, FoundryInventoryOverflowError) as exc:
+
+            outcome = _execute_foundry_test_with_scope(
+                recorder=self.fork_rpc_scope_recorder,
+                attempt_binding_sha256=self.attempt_binding_sha256,
+                selection=selection,
+                descriptor=descriptor,
+                sequence_index=index + 1,
+                execute=execute_selected_test,
+            )
+            if outcome.scope is not None:
+                test_fork_rpc_scopes.append(outcome.scope)
+            if isinstance(outcome.error, _FoundryScopeBoundaryError):
                 terminal_status = ScannerStatus.FAILED
-                terminal_error = str(exc)
+                terminal_error = str(outcome.error)
                 break
+            if isinstance(outcome.error, FoundryInventoryUnavailableError):
+                terminal_status = ScannerStatus.UNAVAILABLE
+                terminal_error = str(outcome.error)
+                break
+            if isinstance(
+                outcome.error,
+                (
+                    _FoundrySuiteDeadlineExpired,
+                    FoundryInventoryTimeoutError,
+                    subprocess.TimeoutExpired,
+                    TimeoutError,
+                ),
+            ):
+                terminal_status = ScannerStatus.TIMED_OUT
+                terminal_error = "Foundry repository test execution exceeded its deadline"
+                break
+            if isinstance(
+                outcome.error,
+                (FoundryInventoryInvalidError, FoundryInventoryOverflowError),
+            ):
+                terminal_status = ScannerStatus.FAILED
+                terminal_error = str(outcome.error)
+                break
+            if outcome.error is not None:
+                if not isinstance(outcome.error, Exception):
+                    raise outcome.error
+                terminal_status = ScannerStatus.FAILED
+                terminal_error = (
+                    f"Foundry repository test execution failed: {type(outcome.error).__name__}"
+                )
+                break
+            if outcome.result is None:
+                terminal_status = ScannerStatus.FAILED
+                terminal_error = "Foundry repository test returned no execution result"
+                break
+            observation, private_artifacts = outcome.result
             observations.append(observation)
             try:
                 artifact_budget.charge(
@@ -815,6 +1045,12 @@ class FoundryForkScanner(ScannerAdapter):
                 terminal_status = ScannerStatus.FAILED
                 terminal_error = "pinned Solidity compiler changed during repository execution"
                 break
+            if outcome.scope is not None and outcome.scope.status.value != "validated":
+                terminal_status = ScannerStatus.FAILED
+                terminal_error = (
+                    "Foundry repository test lacks validated pinned-origin RPC evidence"
+                )
+                break
             if observation.status is RepositoryTestExecutionStatus.TIMED_OUT:
                 terminal_status = ScannerStatus.TIMED_OUT
                 terminal_error = "one repository fork test exceeded its timeout"
@@ -831,6 +1067,15 @@ class FoundryForkScanner(ScannerAdapter):
         if len(observations) != len(selection.tests) and terminal_status is ScannerStatus.SUCCESS:
             terminal_status = ScannerStatus.FAILED
             terminal_error = "repository fork suite did not execute every selected test"
+        if (
+            self.fork_rpc_scope_recorder is not None
+            and terminal_status is ScannerStatus.SUCCESS
+            and len(test_fork_rpc_scopes) != len(selection.tests)
+        ):
+            terminal_status = ScannerStatus.FAILED
+            terminal_error = (
+                "repository fork suite lacks per-test RPC scope coverage for every selected test"
+            )
 
         remaining = deadline - time.monotonic()
         if terminal_status is not ScannerStatus.TIMED_OUT and remaining > 0:
@@ -2918,6 +3163,7 @@ def _write_repository_suite_manifest(
     post_inventory: RepositorySuiteInventoryEvidence | None,
     execution_policy: RepositorySuiteExecutionPolicy | None,
     executions: list[RepositoryTestExecution],
+    repository_test_fork_rpc_scopes: Sequence[RepositoryTestForkRpcScopeEvidence] = (),
     *,
     deadline: float,
 ) -> Path:
@@ -2939,7 +3185,11 @@ def _write_repository_suite_manifest(
     for execution in executions:
         execution_payloads.append(execution.model_dump(mode="json"))
         _remaining_deadline_seconds(deadline)
-    payload = {
+    scope_payloads: list[dict[str, Any]] = []
+    for scope in repository_test_fork_rpc_scopes:
+        scope_payloads.append(scope.model_dump(mode="json"))
+        _remaining_deadline_seconds(deadline)
+    payload: dict[str, Any] = {
         "schema_version": "1.0",
         "selection": selection_payload,
         "pre_execution_inventory": inventory_payload,
@@ -2948,6 +3198,8 @@ def _write_repository_suite_manifest(
         "executions": execution_payloads,
         "safety_claim": False,
     }
+    if scope_payloads:
+        payload["repository_test_fork_rpc_scopes"] = scope_payloads
     serialized = json.dumps(
         payload,
         sort_keys=True,
@@ -2986,6 +3238,7 @@ def _finalize_foundry_repository_suite(
     inventory: RepositorySuiteInventoryEvidence | None,
     post_inventory: RepositorySuiteInventoryEvidence | None,
     fuzz_seed: str,
+    repository_test_fork_rpc_scopes: Sequence[RepositoryTestForkRpcScopeEvidence] = (),
 ) -> ScannerRun:
     timeout_error = f"repository fork suite exceeded {total_timeout_seconds:.0f}s total timeout"
     cleanup_error = _cleanup_error(backend, private_dir)
@@ -3125,6 +3378,7 @@ def _finalize_foundry_repository_suite(
                     post_inventory,
                     execution_policy,
                     executions,
+                    repository_test_fork_rpc_scopes,
                     deadline=deadline,
                 )
                 check_final_deadline()
@@ -3233,6 +3487,7 @@ def _finalize_foundry_repository_suite(
             repository_suite_inventory=inventory,
             repository_suite_post_inventory=post_inventory,
             repository_suite_execution_policy=execution_policy,
+            repository_test_fork_rpc_scopes=list(repository_test_fork_rpc_scopes),
             repository_test_executions=executions,
             repository_code_execution=repository_code_execution,
         )

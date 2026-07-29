@@ -21,6 +21,7 @@ from mmaudit.config import (
 from mmaudit.models.schemas import (
     EvidenceStrength,
     ExecutionEvidenceKind,
+    ForkRpcMethodCount,
     ForkRpcReadOnlyEgressEvidence,
     FoundryTestExecutionSummary,
     Location,
@@ -34,6 +35,7 @@ from mmaudit.models.schemas import (
     RepositoryExecutionStateKind,
     RepositoryExecutionStateObservationStatus,
     RepositoryStateConsensusStatus,
+    RepositoryStateInconclusiveReason,
     RepositorySuiteDifferentialRun,
     RepositorySuiteExecutionPolicy,
     RepositorySuiteExecutionStateEvidence,
@@ -42,6 +44,8 @@ from mmaudit.models.schemas import (
     RepositorySuiteTestDescriptor,
     RepositoryTestExecution,
     RepositoryTestExecutionStatus,
+    RepositoryTestForkRpcScopeEvidence,
+    RepositoryTestForkRpcScopeStatus,
     RepositoryTestKind,
     ScannerFinding,
     ScannerRun,
@@ -55,10 +59,14 @@ from mmaudit.scanners.fork_matrix import (
     ForkMatrixDependencies,
     ForkMatrixScanner,
     RepositoryForkMatrixRunner,
+    _baseline_limitation,
     fork_rpc_egress_from_snapshot,
 )
 from mmaudit.scanners.fork_rpc import ForkRpcUnavailableError, PinnedForkObservation
-from mmaudit.scanners.read_only_rpc import ReadOnlyRpcBridgeSnapshot
+from mmaudit.scanners.read_only_rpc import (
+    ReadOnlyRpcBridgeSnapshot,
+    ReadOnlyRpcTestScopeSnapshot,
+)
 
 HASH_A = "a" * 64
 HASH_B = "b" * 64
@@ -108,7 +116,10 @@ def _state(
     )
 
 
-def _snapshot() -> ReadOnlyRpcBridgeSnapshot:
+def _snapshot(
+    *,
+    selected_test_scope_snapshot_sha256s: tuple[str, ...] = (),
+) -> ReadOnlyRpcBridgeSnapshot:
     observation_sha256 = ForkRpcReadOnlyEgressEvidence.calculate_origin_observation_sha256(
         expected_chain_id=31_337,
         pinned_block_number=42,
@@ -140,6 +151,8 @@ def _snapshot() -> ReadOnlyRpcBridgeSnapshot:
         "method_log_sha256": HASH_B,
         "stopped_cleanly": True,
     }
+    if selected_test_scope_snapshot_sha256s:
+        values["selected_test_scope_snapshot_sha256s"] = list(selected_test_scope_snapshot_sha256s)
     return ReadOnlyRpcBridgeSnapshot(
         schema_version="2.0",
         status="enforced",
@@ -163,6 +176,44 @@ def _snapshot() -> ReadOnlyRpcBridgeSnapshot:
         method_log_sha256=HASH_B,
         stopped_cleanly=True,
         snapshot_sha256=_canonical_sha256(values),
+        selected_test_scope_snapshot_sha256s=selected_test_scope_snapshot_sha256s,
+    )
+
+
+def _scope_evidence(
+    snapshot: ReadOnlyRpcTestScopeSnapshot,
+) -> RepositoryTestForkRpcScopeEvidence:
+    return RepositoryTestForkRpcScopeEvidence.sealed(
+        schema_version=snapshot.schema_version,
+        attempt_binding_sha256=snapshot.attempt_binding_sha256,
+        selection_sha256=snapshot.selection_sha256,
+        descriptor_sha256=snapshot.descriptor_sha256,
+        sequence_index=snapshot.sequence_index,
+        bridge_policy_sha256=snapshot.policy_sha256,
+        expected_chain_id=snapshot.expected_chain_id,
+        pinned_block_number=snapshot.pinned_block_number,
+        pinned_block_hash=snapshot.pinned_block_hash,
+        status=RepositoryTestForkRpcScopeStatus(snapshot.status),
+        http_request_count=snapshot.http_request_count,
+        permitted_rpc_call_count=snapshot.permitted_rpc_call_count,
+        origin_attempted_rpc_call_count=snapshot.origin_attempted_rpc_call_count,
+        origin_validated_rpc_call_count=snapshot.origin_validated_rpc_call_count,
+        synthetic_rpc_call_count=snapshot.synthetic_rpc_call_count,
+        denied_request_count=snapshot.denied_request_count,
+        malformed_request_count=snapshot.malformed_request_count,
+        limit_exceeded_request_count=snapshot.limit_exceeded_request_count,
+        upstream_error_request_count=snapshot.upstream_error_request_count,
+        allowed_method_counts=tuple(
+            ForkRpcMethodCount(method=method, count=count)
+            for method, count in snapshot.allowed_method_counts
+        ),
+        method_log_sha256=snapshot.method_log_sha256,
+        boundary_drained=snapshot.boundary_drained,
+        transaction_capable_request_forwarded=False,
+        credentials_forwarded=False,
+        raw_payloads_retained=False,
+        rpc_endpoint_recorded=False,
+        bridge_scope_snapshot_sha256=snapshot.snapshot_sha256,
     )
 
 
@@ -183,6 +234,20 @@ def test_bridge_snapshot_converts_to_exact_endpoint_free_egress_evidence() -> No
     serialized = evidence.model_dump_json()
     assert "http://" not in serialized
     assert "127.0.0.1" not in serialized
+
+
+def test_bridge_snapshot_conversion_preserves_ordered_scope_ledger_on_round_trip() -> None:
+    selected_scope_hashes = (HASH_D, HASH_C)
+    snapshot = _snapshot(
+        selected_test_scope_snapshot_sha256s=selected_scope_hashes,
+    )
+
+    evidence = fork_rpc_egress_from_snapshot(snapshot, _state())
+    restored = ForkRpcReadOnlyEgressEvidence.model_validate_json(evidence.model_dump_json())
+
+    assert evidence.selected_test_scope_snapshot_sha256s == selected_scope_hashes
+    assert restored.selected_test_scope_snapshot_sha256s == selected_scope_hashes
+    assert restored == evidence
 
 
 @pytest.mark.parametrize(
@@ -351,6 +416,9 @@ class _Bridge:
         self._started = False
         self._stopped = False
         self._bridge_index = len(harness.bridges) + 1
+        self._active_scope: tuple[str, str, str, int] | None = None
+        self._sealed_scope_status: RepositoryTestForkRpcScopeStatus | None = None
+        self._sealed_scope_snapshot_sha256s: list[str] = []
 
     @property
     def endpoint(self) -> str:
@@ -362,14 +430,130 @@ class _Bridge:
 
     def stop(self) -> None:
         assert self._started
+        assert self._active_scope is None
         self._stopped = True
 
     @property
     def stopped(self) -> bool:
         return self._stopped
 
+    def begin_selected_test_scope(
+        self,
+        *,
+        attempt_binding_sha256: str,
+        selection_sha256: str,
+        descriptor_sha256: str,
+        sequence_index: int,
+    ) -> None:
+        assert self._started and not self._stopped
+        assert self._active_scope is None
+        self._active_scope = (
+            attempt_binding_sha256,
+            selection_sha256,
+            descriptor_sha256,
+            sequence_index,
+        )
+
+    def end_selected_test_scope(
+        self,
+        *,
+        attempt_binding_sha256: str,
+        selection_sha256: str,
+        descriptor_sha256: str,
+        sequence_index: int,
+    ) -> ReadOnlyRpcTestScopeSnapshot:
+        assert self._started and not self._stopped
+        expected_identity = (
+            attempt_binding_sha256,
+            selection_sha256,
+            descriptor_sha256,
+            sequence_index,
+        )
+        assert self._active_scope == expected_identity
+        self._active_scope = None
+        scope_attempt_binding = (
+            self._harness.scope_attempt_binding_override or attempt_binding_sha256
+        )
+        status = self._harness.scope_status
+        origin_attempted = 1 if status is RepositoryTestForkRpcScopeStatus.VALIDATED else 0
+        origin_validated = origin_attempted
+        synthetic = 1 if status is RepositoryTestForkRpcScopeStatus.NOT_OBSERVED else 0
+        denied = 1 if status is RepositoryTestForkRpcScopeStatus.VIOLATION else 0
+        method_counts = (
+            (("eth_getCode", 1),)
+            if origin_attempted
+            else ((("eth_chainId", 1),) if synthetic else ())
+        )
+        self._sealed_scope_status = status
+        values = {
+            "schema_version": "1.0",
+            "attempt_binding_sha256": scope_attempt_binding,
+            "selection_sha256": selection_sha256,
+            "descriptor_sha256": descriptor_sha256,
+            "sequence_index": sequence_index,
+            "policy_sha256": self._harness.scope_bridge_policy_sha256,
+            "expected_chain_id": self._chain_id,
+            "pinned_block_number": self._block_number,
+            "pinned_block_hash": self._block_hash,
+            "status": status.value,
+            "http_request_count": origin_attempted + synthetic + denied,
+            "permitted_rpc_call_count": origin_attempted + synthetic,
+            "origin_attempted_rpc_call_count": origin_attempted,
+            "origin_validated_rpc_call_count": origin_validated,
+            "synthetic_rpc_call_count": synthetic,
+            "denied_request_count": denied,
+            "malformed_request_count": 0,
+            "limit_exceeded_request_count": 0,
+            "upstream_error_request_count": 0,
+            "allowed_method_counts": [
+                {"method": method, "count": count} for method, count in method_counts
+            ],
+            "method_log_sha256": HASH_F,
+            "boundary_drained": True,
+        }
+        snapshot_sha256 = _canonical_sha256(values)
+        self._sealed_scope_snapshot_sha256s.append(snapshot_sha256)
+        return ReadOnlyRpcTestScopeSnapshot(
+            schema_version="1.0",
+            attempt_binding_sha256=scope_attempt_binding,
+            selection_sha256=selection_sha256,
+            descriptor_sha256=descriptor_sha256,
+            sequence_index=sequence_index,
+            policy_sha256=self._harness.scope_bridge_policy_sha256,
+            expected_chain_id=self._chain_id,
+            pinned_block_number=self._block_number,
+            pinned_block_hash=self._block_hash,
+            status=status.value,
+            http_request_count=origin_attempted + synthetic + denied,
+            permitted_rpc_call_count=origin_attempted + synthetic,
+            origin_attempted_rpc_call_count=origin_attempted,
+            origin_validated_rpc_call_count=origin_validated,
+            synthetic_rpc_call_count=synthetic,
+            denied_request_count=denied,
+            malformed_request_count=0,
+            limit_exceeded_request_count=0,
+            upstream_error_request_count=0,
+            allowed_method_counts=method_counts,
+            method_log_sha256=HASH_F,
+            boundary_drained=True,
+            snapshot_sha256=snapshot_sha256,
+        )
+
     def snapshot(self) -> ReadOnlyRpcBridgeSnapshot:
         assert self._stopped
+        scope_status = self._sealed_scope_status
+        origin_attempted = (
+            1 if scope_status in {None, RepositoryTestForkRpcScopeStatus.VALIDATED} else 0
+        )
+        synthetic = 1 if scope_status is RepositoryTestForkRpcScopeStatus.NOT_OBSERVED else 0
+        denied = 1 if scope_status is RepositoryTestForkRpcScopeStatus.VIOLATION else 0
+        permitted = origin_attempted + synthetic
+        status = "violation" if denied else "enforced"
+        method_counts = (
+            (("eth_getCode", 1),)
+            if origin_attempted
+            else ((("eth_chainId", 1),) if synthetic else ())
+        )
         observation_sha256 = ForkRpcReadOnlyEgressEvidence.calculate_origin_observation_sha256(
             expected_chain_id=self._chain_id,
             pinned_block_number=self._block_number,
@@ -377,7 +561,7 @@ class _Bridge:
         )
         values = {
             "schema_version": "2.0",
-            "status": "enforced",
+            "status": status,
             "policy_sha256": HASH_E,
             "expected_chain_id": self._chain_id,
             "pinned_block_number": self._block_number,
@@ -385,22 +569,28 @@ class _Bridge:
             "preflight_origin_observation_sha256": observation_sha256,
             "postflight_origin_observation_sha256": observation_sha256,
             "origin_state_stable": True,
-            "http_request_count": 1,
-            "permitted_rpc_call_count": 1,
-            "origin_attempted_rpc_call_count": 1,
-            "origin_validated_rpc_call_count": 1,
-            "synthetic_rpc_call_count": 0,
-            "denied_request_count": 0,
+            "http_request_count": permitted + denied,
+            "permitted_rpc_call_count": permitted,
+            "origin_attempted_rpc_call_count": origin_attempted,
+            "origin_validated_rpc_call_count": origin_attempted,
+            "synthetic_rpc_call_count": synthetic,
+            "denied_request_count": denied,
             "malformed_request_count": 0,
             "limit_exceeded_request_count": 0,
             "upstream_error_request_count": 0,
-            "allowed_method_counts": [{"method": "eth_getCode", "count": 1}],
+            "allowed_method_counts": [
+                {"method": method, "count": count} for method, count in method_counts
+            ],
             "method_log_sha256": HASH_F,
             "stopped_cleanly": True,
         }
+        if self._sealed_scope_snapshot_sha256s:
+            values["selected_test_scope_snapshot_sha256s"] = list(
+                self._sealed_scope_snapshot_sha256s
+            )
         return ReadOnlyRpcBridgeSnapshot(
             schema_version="2.0",
-            status="enforced",
+            status=status,
             policy_sha256=HASH_E,
             expected_chain_id=self._chain_id,
             pinned_block_number=self._block_number,
@@ -408,19 +598,20 @@ class _Bridge:
             preflight_origin_observation_sha256=observation_sha256,
             postflight_origin_observation_sha256=observation_sha256,
             origin_state_stable=True,
-            http_request_count=1,
-            permitted_rpc_call_count=1,
-            origin_attempted_rpc_call_count=1,
-            origin_validated_rpc_call_count=1,
-            synthetic_rpc_call_count=0,
-            denied_request_count=0,
+            http_request_count=permitted + denied,
+            permitted_rpc_call_count=permitted,
+            origin_attempted_rpc_call_count=origin_attempted,
+            origin_validated_rpc_call_count=origin_attempted,
+            synthetic_rpc_call_count=synthetic,
+            denied_request_count=denied,
             malformed_request_count=0,
             limit_exceeded_request_count=0,
             upstream_error_request_count=0,
-            allowed_method_counts=(("eth_getCode", 1),),
+            allowed_method_counts=method_counts,
             method_log_sha256=HASH_F,
             stopped_cleanly=True,
             snapshot_sha256=_canonical_sha256(values),
+            selected_test_scope_snapshot_sha256s=tuple(self._sealed_scope_snapshot_sha256s),
         )
 
 
@@ -432,11 +623,15 @@ class _Scanner:
         chain_id: int,
         block_number: int,
         endpoint: str,
+        scope_recorder: _Bridge,
+        attempt_binding_sha256: str,
     ) -> None:
         self._harness = harness
         self._chain_id = chain_id
         self._block_number = block_number
         self._endpoint = endpoint
+        self._scope_recorder = scope_recorder
+        self._attempt_binding_sha256 = attempt_binding_sha256
 
     def run(
         self,
@@ -469,12 +664,30 @@ class _Scanner:
                 error="Synthetic matrix attempt unavailable.",
             )
         block_hash = BLOCK_HASH if self._chain_id == 31_337 else PINNED_BLOCK_HASH
+        if self._harness.omit_scope:
+            scope = None
+        else:
+            self._scope_recorder.begin_selected_test_scope(
+                attempt_binding_sha256=self._attempt_binding_sha256,
+                selection_sha256=self._harness.selection.selection_sha256,
+                descriptor_sha256=self._harness.descriptor.descriptor_sha256,
+                sequence_index=1,
+            )
+            scope = _scope_evidence(
+                self._scope_recorder.end_selected_test_scope(
+                    attempt_binding_sha256=self._attempt_binding_sha256,
+                    selection_sha256=self._harness.selection.selection_sha256,
+                    descriptor_sha256=self._harness.descriptor.descriptor_sha256,
+                    sequence_index=1,
+                )
+            )
         run = self._harness.execution_run(
             chain_id=self._chain_id,
             block_number=self._block_number,
             block_hash=block_hash,
             test_status=test_status,
             machine_result_sha256=result_hash,
+            scope=scope,
         )
         if self._harness.child_tool_mismatch:
             run = run.model_copy(
@@ -583,6 +796,10 @@ class _Harness:
         self.advance_clock_after_first_scan = False
         self.retain_endpoint_in_run = False
         self.retained_diagnostic: Callable[[Path], str] | None = None
+        self.omit_scope = False
+        self.scope_status = RepositoryTestForkRpcScopeStatus.VALIDATED
+        self.scope_attempt_binding_override: str | None = None
+        self.scope_bridge_policy_sha256 = HASH_E
         self.outcomes: dict[
             int,
             list[
@@ -656,6 +873,7 @@ class _Harness:
         block_hash: str,
         test_status: RepositoryTestExecutionStatus,
         machine_result_sha256: str,
+        scope: RepositoryTestForkRpcScopeEvidence | None = None,
     ) -> ScannerRun:
         policy = self.policy(
             chain_id=chain_id,
@@ -751,6 +969,7 @@ class _Harness:
             repository_suite_selection=self.selection,
             repository_suite_execution_policy=policy,
             repository_test_executions=[execution],
+            repository_test_fork_rpc_scopes=[] if scope is None else [scope],
             repository_code_execution=RepositoryCodeExecutionState.ISOLATED,
         )
         return ScannerRun.model_validate(
@@ -820,6 +1039,8 @@ class _Harness:
         expected_repository_sha256: str,
         repository_exclusion_root: Path,
         fork_rpc_url_override: str,
+        fork_rpc_scope_recorder: _Bridge,
+        attempt_binding_sha256: str,
     ) -> ForkMatrixScanner:
         del config, projects, repository_exclusion_root
         assert allow_fork_probing is True
@@ -831,6 +1052,8 @@ class _Harness:
             chain_id=reproduction.expected_chain_id,
             block_number=reproduction.pinned_block_number,
             endpoint=fork_rpc_url_override,
+            scope_recorder=fork_rpc_scope_recorder,
+            attempt_binding_sha256=attempt_binding_sha256,
         )
 
     def dependencies(self, *, clean: bool = True) -> ForkMatrixDependencies:
@@ -916,6 +1139,73 @@ def test_runner_consistent_control_is_not_reported_as_divergent(tmp_path: Path) 
     assert (
         result.matrix.comparisons[0].classification
         is RepositoryDifferentialClassification.CONSISTENT_PASS
+    )
+
+
+def test_matrix_baseline_accepts_exact_pre_scope_legacy_digest() -> None:
+    harness = _Harness()
+    payload = harness.baseline.model_dump(mode="json")
+    payload.pop("repository_test_fork_rpc_scopes", None)
+    payload["execution_observation_sha256"] = (
+        harness.baseline.expected_legacy_execution_observation_sha256()
+    )
+    harness.baseline = ScannerRun.model_validate_json(json.dumps(payload, sort_keys=True))
+
+    assert harness.baseline.execution_observation_sha256_is_valid()
+    assert (
+        _baseline_limitation(
+            harness.baseline,
+            repository_sha256=HASH_B,
+            smart_contracts=harness.smart_contracts,
+            backend=_Backend(),
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "configure",
+    [
+        lambda harness: setattr(harness, "omit_scope", True),
+        lambda harness: setattr(
+            harness,
+            "scope_status",
+            RepositoryTestForkRpcScopeStatus.NOT_OBSERVED,
+        ),
+        lambda harness: setattr(
+            harness,
+            "scope_status",
+            RepositoryTestForkRpcScopeStatus.VIOLATION,
+        ),
+        lambda harness: setattr(harness, "scope_attempt_binding_override", HASH_A),
+        lambda harness: setattr(harness, "scope_bridge_policy_sha256", HASH_A),
+    ],
+    ids=[
+        "missing",
+        "synthetic-only",
+        "violation",
+        "cross-attempt",
+        "bridge-policy-mismatch",
+    ],
+)
+def test_runner_does_not_credit_unproven_per_test_state_reads(
+    tmp_path: Path,
+    configure: Callable[[_Harness], None],
+) -> None:
+    harness = _Harness()
+    configure(harness)
+
+    result = harness.run(tmp_path)
+
+    assert result.status is RepositoryDifferentialRunStatus.INCONCLUSIVE
+    assert result.matrix is not None
+    assert all(
+        RepositoryStateInconclusiveReason.STATE_READ_UNPROVEN in consensus.inconclusive_reasons
+        for consensus in result.matrix.state_consensuses
+    )
+    assert all(
+        comparison.classification is RepositoryDifferentialClassification.INCONCLUSIVE
+        for comparison in result.matrix.comparisons
     )
 
 

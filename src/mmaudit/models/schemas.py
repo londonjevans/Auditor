@@ -505,6 +505,14 @@ class RepositoryForkEgressStatus(StrEnum):
     UNVERIFIED = "unverified"
 
 
+class RepositoryTestForkRpcScopeStatus(StrEnum):
+    """Per-test disposition from one drained read-only RPC bridge scope."""
+
+    VALIDATED = "validated"
+    NOT_OBSERVED = "not_observed"
+    VIOLATION = "violation"
+
+
 class RepositoryStateConsensusStatus(StrEnum):
     """Repeated-execution consensus for one test in one state."""
 
@@ -547,6 +555,7 @@ class RepositoryStateInconclusiveReason(StrEnum):
     NON_REAL_EVIDENCE = "non_real_evidence"
     UNISOLATED_EXECUTION = "unisolated_execution"
     EGRESS_UNENFORCED = "egress_unenforced"
+    STATE_READ_UNPROVEN = "state_read_unproven"
     ATTEMPT_DISAGREEMENT = "attempt_disagreement"
     IDENTITY_MISMATCH = "identity_mismatch"
     INVALID_MACHINE_OUTPUT = "invalid_machine_output"
@@ -3719,6 +3728,216 @@ class ForkRpcMethodCount(StrictModel):
         return value
 
 
+class RepositoryTestForkRpcScopeEvidence(StrictModel):
+    """Self-hashed per-test accounting from one drained read-only RPC scope."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    attempt_binding_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    selection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    descriptor_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    sequence_index: int = Field(ge=1, le=10_000)
+    bridge_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expected_chain_id: int = Field(ge=1, lt=2**64)
+    pinned_block_number: int = Field(ge=0, lt=2**64)
+    pinned_block_hash: str = Field(pattern=r"^0x[0-9a-f]{64}$")
+    status: RepositoryTestForkRpcScopeStatus
+    http_request_count: int = Field(ge=0, le=1_000_000)
+    permitted_rpc_call_count: int = Field(ge=0, le=1_000_000)
+    origin_attempted_rpc_call_count: int = Field(ge=0, le=1_000_000)
+    origin_validated_rpc_call_count: int = Field(ge=0, le=1_000_000)
+    synthetic_rpc_call_count: int = Field(ge=0, le=1_000_000)
+    denied_request_count: int = Field(ge=0, le=1_000_000)
+    malformed_request_count: int = Field(ge=0, le=1_000_000)
+    limit_exceeded_request_count: int = Field(ge=0, le=1_000_000)
+    upstream_error_request_count: int = Field(ge=0, le=1_000_000)
+    allowed_method_counts: tuple[ForkRpcMethodCount, ...] = Field(max_length=512)
+    method_log_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    boundary_drained: Literal[True]
+    transaction_capable_request_forwarded: Literal[False]
+    credentials_forwarded: Literal[False]
+    raw_payloads_retained: Literal[False]
+    rpc_endpoint_recorded: Literal[False]
+    bridge_scope_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> RepositoryTestForkRpcScopeEvidence:
+        """Validate and self-hash one bridge-emitted per-test scope."""
+
+        if "evidence_sha256" in values:
+            raise ValueError("evidence_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, evidence_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"evidence_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "evidence_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator("allowed_method_counts")
+    @classmethod
+    def method_counts_are_canonical(
+        cls,
+        value: tuple[ForkRpcMethodCount, ...],
+    ) -> tuple[ForkRpcMethodCount, ...]:
+        methods = tuple(item.method for item in value)
+        if methods != tuple(sorted(set(methods))):
+            raise ValueError(
+                "per-test fork RPC method counts must be unique and canonically sorted"
+            )
+        if any(method not in _TRUSTED_READ_ONLY_FORK_RPC_METHODS for method in methods):
+            raise ValueError("per-test fork RPC method is outside the trusted read-only vocabulary")
+        return value
+
+    @field_validator(
+        "sequence_index",
+        "expected_chain_id",
+        "pinned_block_number",
+        "http_request_count",
+        "permitted_rpc_call_count",
+        "origin_attempted_rpc_call_count",
+        "origin_validated_rpc_call_count",
+        "synthetic_rpc_call_count",
+        "denied_request_count",
+        "malformed_request_count",
+        "limit_exceeded_request_count",
+        "upstream_error_request_count",
+        mode="before",
+    )
+    @classmethod
+    def integer_evidence_is_exact(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("per-test fork RPC counters and identities require exact integers")
+        return value
+
+    @field_validator(
+        "boundary_drained",
+        "transaction_capable_request_forwarded",
+        "credentials_forwarded",
+        "raw_payloads_retained",
+        "rpc_endpoint_recorded",
+        mode="before",
+    )
+    @classmethod
+    def boundary_facts_are_exact_booleans(cls, value: object) -> object:
+        if not isinstance(value, bool):
+            raise ValueError("per-test fork RPC boundary facts require exact booleans")
+        return value
+
+    @model_validator(mode="after")
+    def accounting_status_and_hash_are_consistent(
+        self,
+    ) -> RepositoryTestForkRpcScopeEvidence:
+        if (
+            self.origin_attempted_rpc_call_count + self.synthetic_rpc_call_count
+            != self.permitted_rpc_call_count
+            or self.origin_validated_rpc_call_count > self.origin_attempted_rpc_call_count
+            or (self.origin_validated_rpc_call_count == self.origin_attempted_rpc_call_count)
+            != (self.upstream_error_request_count == 0)
+            or sum(item.count for item in self.allowed_method_counts)
+            != self.permitted_rpc_call_count
+        ):
+            raise ValueError(
+                "per-test fork RPC permitted-call accounting does not match scope counters"
+            )
+        rejection_or_error_count = (
+            self.denied_request_count
+            + self.malformed_request_count
+            + self.limit_exceeded_request_count
+            + self.upstream_error_request_count
+        )
+        if rejection_or_error_count > self.http_request_count:
+            raise ValueError("per-test fork RPC rejection/error count exceeds HTTP request count")
+        if rejection_or_error_count:
+            if self.status is not RepositoryTestForkRpcScopeStatus.VIOLATION:
+                raise ValueError(
+                    "per-test fork RPC rejection or upstream error requires violation status"
+                )
+        elif self.status is RepositoryTestForkRpcScopeStatus.VIOLATION:
+            raise ValueError("per-test fork RPC violation requires a rejection or upstream error")
+        if (
+            self.origin_attempted_rpc_call_count == 0
+            and rejection_or_error_count == 0
+            and self.status is not RepositoryTestForkRpcScopeStatus.NOT_OBSERVED
+        ):
+            raise ValueError("per-test fork RPC zero origin requires not-observed status")
+        if self.status is RepositoryTestForkRpcScopeStatus.VALIDATED and (
+            self.origin_validated_rpc_call_count == 0
+            or self.origin_attempted_rpc_call_count != self.origin_validated_rpc_call_count
+            or rejection_or_error_count
+        ):
+            raise ValueError(
+                "validated per-test fork RPC evidence requires nonempty fully validated origin reads"
+            )
+        if self.status is RepositoryTestForkRpcScopeStatus.NOT_OBSERVED and (
+            self.origin_attempted_rpc_call_count != 0
+            or self.origin_validated_rpc_call_count != 0
+            or rejection_or_error_count
+        ):
+            raise ValueError(
+                "not-observed per-test fork RPC evidence requires zero origin and no errors"
+            )
+        if self.bridge_scope_snapshot_sha256 != self.expected_bridge_scope_snapshot_sha256():
+            raise ValueError(
+                "per-test fork RPC bridge scope snapshot hash does not match its fields"
+            )
+        if self.evidence_sha256 != self.expected_evidence_sha256():
+            raise ValueError("per-test fork RPC evidence hash does not match its fields")
+        return self
+
+    @staticmethod
+    def calculate_bridge_scope_snapshot_sha256(values: dict[str, Any]) -> str:
+        """Hash the exact canonical primitive projection emitted by one bridge scope."""
+
+        raw_method_counts = values["allowed_method_counts"]
+        method_counts = [
+            (
+                item.model_dump(mode="json")
+                if isinstance(item, ForkRpcMethodCount)
+                else {"method": item["method"], "count": item["count"]}
+            )
+            for item in raw_method_counts
+        ]
+        status = values["status"]
+        if isinstance(status, RepositoryTestForkRpcScopeStatus):
+            status = status.value
+        payload = {
+            "schema_version": values["schema_version"],
+            "attempt_binding_sha256": values["attempt_binding_sha256"],
+            "selection_sha256": values["selection_sha256"],
+            "descriptor_sha256": values["descriptor_sha256"],
+            "sequence_index": values["sequence_index"],
+            "policy_sha256": values["bridge_policy_sha256"],
+            "expected_chain_id": values["expected_chain_id"],
+            "pinned_block_number": values["pinned_block_number"],
+            "pinned_block_hash": values["pinned_block_hash"],
+            "status": status,
+            "http_request_count": values["http_request_count"],
+            "permitted_rpc_call_count": values["permitted_rpc_call_count"],
+            "origin_attempted_rpc_call_count": values["origin_attempted_rpc_call_count"],
+            "origin_validated_rpc_call_count": values["origin_validated_rpc_call_count"],
+            "synthetic_rpc_call_count": values["synthetic_rpc_call_count"],
+            "denied_request_count": values["denied_request_count"],
+            "malformed_request_count": values["malformed_request_count"],
+            "limit_exceeded_request_count": values["limit_exceeded_request_count"],
+            "upstream_error_request_count": values["upstream_error_request_count"],
+            "allowed_method_counts": method_counts,
+            "method_log_sha256": values["method_log_sha256"],
+            "boundary_drained": values["boundary_drained"],
+        }
+        return _canonical_model_sha256(payload)
+
+    def expected_bridge_scope_snapshot_sha256(self) -> str:
+        """Recompute the trusted per-test bridge-scope snapshot binding."""
+
+        return self.calculate_bridge_scope_snapshot_sha256(self.model_dump(mode="python"))
+
+    def expected_evidence_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"evidence_sha256"})
+        return _canonical_model_sha256(payload)
+
+
 class ForkRpcReadOnlyEgressEvidence(StrictModel):
     """Self-hashed, endpoint-free evidence from the trusted read-only RPC boundary."""
 
@@ -3735,6 +3954,11 @@ class ForkRpcReadOnlyEgressEvidence(StrictModel):
     network_scope: Literal["single_loopback_origin"] = "single_loopback_origin"
     policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     method_log_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    selected_test_scope_snapshot_sha256s: tuple[str, ...] = Field(
+        default=(),
+        max_length=10_000,
+        exclude_if=lambda value: not value,
+    )
     preflight_origin_observation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     postflight_origin_observation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     origin_state_stable: Literal[True] = True
@@ -3764,6 +3988,8 @@ class ForkRpcReadOnlyEgressEvidence(StrictModel):
             raise ValueError("evidence_sha256 is derived and cannot be supplied to sealed()")
         provisional = cls.model_construct(**values, evidence_sha256="0" * 64)
         payload = provisional.model_dump(mode="json", exclude={"evidence_sha256"})
+        if not payload.get("selected_test_scope_snapshot_sha256s"):
+            payload.pop("selected_test_scope_snapshot_sha256s", None)
         return cls.model_validate(
             {
                 **payload,
@@ -3782,6 +4008,18 @@ class ForkRpcReadOnlyEgressEvidence(StrictModel):
             raise ValueError("fork RPC method counts must be unique and canonically sorted")
         if any(method not in _TRUSTED_READ_ONLY_FORK_RPC_METHODS for method in methods):
             raise ValueError("fork RPC method is outside the trusted read-only bridge vocabulary")
+        return value
+
+    @field_validator("selected_test_scope_snapshot_sha256s")
+    @classmethod
+    def selected_test_scope_hashes_are_canonical(
+        cls,
+        value: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if any(re.fullmatch(r"[0-9a-f]{64}", item) is None for item in value):
+            raise ValueError("selected-test scope ledger requires SHA-256 values")
+        if len(value) != len(set(value)):
+            raise ValueError("selected-test scope ledger hashes must be unique")
         return value
 
     @field_validator(
@@ -3932,6 +4170,9 @@ class ForkRpcReadOnlyEgressEvidence(StrictModel):
             "method_log_sha256": values["method_log_sha256"],
             "stopped_cleanly": values["stopped_cleanly"],
         }
+        scope_hashes = tuple(values.get("selected_test_scope_snapshot_sha256s", ()))
+        if scope_hashes:
+            payload["selected_test_scope_snapshot_sha256s"] = list(scope_hashes)
         return _canonical_model_sha256(payload)
 
     def expected_bridge_snapshot_sha256(self) -> str:
@@ -3941,6 +4182,8 @@ class ForkRpcReadOnlyEgressEvidence(StrictModel):
 
     def expected_evidence_sha256(self) -> str:
         payload = self.model_dump(mode="json", exclude={"evidence_sha256"})
+        if not self.selected_test_scope_snapshot_sha256s:
+            payload.pop("selected_test_scope_snapshot_sha256s", None)
         return _canonical_model_sha256(payload)
 
 
@@ -4272,6 +4515,11 @@ class ScannerRun(StrictModel):
     repository_suite_post_inventory: RepositorySuiteInventoryEvidence | None = None
     repository_suite_execution_policy: RepositorySuiteExecutionPolicy | None = None
     fork_rpc_egress: ForkRpcReadOnlyEgressEvidence | None = None
+    repository_test_fork_rpc_scopes: list[RepositoryTestForkRpcScopeEvidence] = Field(
+        default_factory=list,
+        max_length=10_000,
+        exclude_if=lambda value: not value,
+    )
     repository_test_executions: list[RepositoryTestExecution] = Field(
         default_factory=list,
         max_length=10_000,
@@ -4301,6 +4549,41 @@ class ScannerRun(StrictModel):
             ).encode()
         ).hexdigest()
 
+    def expected_legacy_execution_observation_sha256(self) -> str:
+        """Recompute the pre-scope digest for an empty-scope historical run."""
+
+        if self.repository_test_fork_rpc_scopes:
+            raise ValueError("scoped scanner runs do not have a legacy observation digest")
+        payload = self.model_dump(
+            mode="json",
+            exclude={
+                "execution_observation_sha256",
+                "repository_test_fork_rpc_scopes",
+            },
+        )
+        return hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+
+    def execution_observation_sha256_is_valid(self) -> bool:
+        """Accept current evidence, or the exact empty-scope historical projection."""
+
+        if self.execution_observation_sha256 is None:
+            return False
+        if self.execution_observation_sha256 == self.expected_execution_observation_sha256():
+            return True
+        return (
+            not self.repository_test_fork_rpc_scopes
+            and self.execution_observation_sha256
+            == self.expected_legacy_execution_observation_sha256()
+        )
+
     @model_validator(mode="after")
     def repository_code_isolation_evidence_is_consistent(self) -> ScannerRun:
         if (
@@ -4327,6 +4610,66 @@ class ScannerRun(StrictModel):
             and self.repository_suite_selection is None
         ):
             raise ValueError("repository execution policy requires its suite selection")
+        if self.repository_test_fork_rpc_scopes:
+            selection = self.repository_suite_selection
+            execution_policy = self.repository_suite_execution_policy
+            if selection is None or execution_policy is None:
+                raise ValueError(
+                    "per-test fork RPC scopes require repository selection and execution policy"
+                )
+            if self.scanner != "foundry_fork":
+                raise ValueError("per-test fork RPC scopes require the Foundry fork scanner")
+            scopes = self.repository_test_fork_rpc_scopes
+            scope_evidence_hashes = tuple(scope.evidence_sha256 for scope in scopes)
+            scope_snapshot_hashes = tuple(scope.bridge_scope_snapshot_sha256 for scope in scopes)
+            if len(scope_evidence_hashes) != len(set(scope_evidence_hashes)) or len(
+                scope_snapshot_hashes
+            ) != len(set(scope_snapshot_hashes)):
+                raise ValueError("per-test fork RPC scopes contain duplicate hashes")
+            attempt_bindings = {scope.attempt_binding_sha256 for scope in scopes}
+            if len(attempt_bindings) != 1 or "0" * 64 in attempt_bindings:
+                raise ValueError(
+                    "per-test fork RPC scopes require one common nonzero attempt binding"
+                )
+            if len({scope.bridge_policy_sha256 for scope in scopes}) != 1:
+                raise ValueError("per-test fork RPC scopes require one common bridge policy")
+            expected_prefix = tuple(
+                (index, descriptor.descriptor_sha256)
+                for index, descriptor in enumerate(
+                    selection.tests[: len(scopes)],
+                    start=1,
+                )
+            )
+            observed_sequence = tuple(
+                (scope.sequence_index, scope.descriptor_sha256) for scope in scopes
+            )
+            if observed_sequence != expected_prefix:
+                raise ValueError(
+                    "per-test fork RPC scopes must be a canonical 1-based prefix of selected "
+                    "descriptor order"
+                )
+            if self.status is ScannerStatus.SUCCESS and len(scopes) != len(selection.tests):
+                raise ValueError(
+                    "successful repository suite requires full per-test fork RPC scope coverage"
+                )
+            if self.status not in {
+                ScannerStatus.SUCCESS,
+                ScannerStatus.FAILED,
+                ScannerStatus.TIMED_OUT,
+                ScannerStatus.UNAVAILABLE,
+            }:
+                raise ValueError(
+                    "per-test fork RPC scopes require a successful or interrupted scanner status"
+                )
+            if any(scope.selection_sha256 != selection.selection_sha256 for scope in scopes):
+                raise ValueError("per-test fork RPC scope selection identity differs")
+            if any(
+                scope.expected_chain_id != execution_policy.chain_id
+                or scope.pinned_block_number != execution_policy.block_number
+                or scope.pinned_block_hash != execution_policy.block_hash
+                for scope in scopes
+            ):
+                raise ValueError("per-test fork RPC scope execution state identity differs")
         if self.fork_rpc_egress is not None:
             if self.scanner != "foundry_fork":
                 raise ValueError("fork RPC egress evidence requires the Foundry fork scanner")
@@ -4776,7 +5119,7 @@ class ScannerRun(StrictModel):
                     raise ValueError("Foundry summary does not match repository test executions")
         if (
             self.execution_observation_sha256 is not None
-            and self.execution_observation_sha256 != self.expected_execution_observation_sha256()
+            and not self.execution_observation_sha256_is_valid()
         ):
             raise ValueError("scanner execution observation hash does not match its fields")
         return self
@@ -4828,6 +5171,42 @@ class RepositorySuiteStateAttempt(StrictModel):
             raise ValueError("state attempt egress reference must be all-or-none")
         if egress is not None and self.fork_rpc_egress_sha256 != egress.evidence_sha256:
             raise ValueError("state attempt egress hash differs from its scanner run")
+        scopes = tuple(self.scanner_run.repository_test_fork_rpc_scopes)
+        if egress is not None and scopes:
+            counter_fields = (
+                "http_request_count",
+                "permitted_rpc_call_count",
+                "origin_attempted_rpc_call_count",
+                "origin_validated_rpc_call_count",
+                "synthetic_rpc_call_count",
+                "denied_request_count",
+                "malformed_request_count",
+                "limit_exceeded_request_count",
+                "upstream_error_request_count",
+            )
+            if any(
+                sum(getattr(scope, field) for scope in scopes) > getattr(egress, field)
+                for field in counter_fields
+            ):
+                raise ValueError(
+                    "state attempt per-test fork RPC counters exceed aggregate bridge evidence"
+                )
+            aggregate_method_counts = {
+                item.method: item.count for item in egress.allowed_method_counts
+            }
+            scoped_method_counts: dict[str, int] = {}
+            for scope in scopes:
+                for item in scope.allowed_method_counts:
+                    scoped_method_counts[item.method] = (
+                        scoped_method_counts.get(item.method, 0) + item.count
+                    )
+            if any(
+                count > aggregate_method_counts.get(method, 0)
+                for method, count in scoped_method_counts.items()
+            ):
+                raise ValueError(
+                    "state attempt per-test fork RPC methods exceed aggregate bridge evidence"
+                )
         endpoint_markers = ("http://", "https://", "ws://", "wss://", "localhost", "127.0.0.1")
         if any(
             any(marker in token.casefold() for marker in endpoint_markers)
@@ -5220,6 +5599,62 @@ class RepositorySuiteDifferentialMatrix(StrictModel):
                 or attempt.fork_rpc_egress_sha256 != egress.evidence_sha256
             ):
                 reasons.add(RepositoryStateInconclusiveReason.EGRESS_UNENFORCED)
+            scopes = tuple(run.repository_test_fork_rpc_scopes)
+            matching_scopes = tuple(
+                scope for scope in scopes if scope.descriptor_sha256 == descriptor_sha256
+            )
+            scope_ledger_valid = egress is not None
+            if egress is not None:
+                scope_ledger_valid = (
+                    tuple(
+                        scope.bridge_scope_snapshot_sha256
+                        for scope in run.repository_test_fork_rpc_scopes
+                    )
+                    == egress.selected_test_scope_snapshot_sha256s
+                )
+                counter_fields = (
+                    "http_request_count",
+                    "permitted_rpc_call_count",
+                    "origin_attempted_rpc_call_count",
+                    "origin_validated_rpc_call_count",
+                    "synthetic_rpc_call_count",
+                    "denied_request_count",
+                    "malformed_request_count",
+                    "limit_exceeded_request_count",
+                    "upstream_error_request_count",
+                )
+                scope_ledger_valid = scope_ledger_valid and all(
+                    sum(getattr(scope, field) for scope in scopes) <= getattr(egress, field)
+                    for field in counter_fields
+                )
+                aggregate_method_counts = {
+                    item.method: item.count for item in egress.allowed_method_counts
+                }
+                scoped_method_counts: dict[str, int] = {}
+                for scope in scopes:
+                    for item in scope.allowed_method_counts:
+                        scoped_method_counts[item.method] = (
+                            scoped_method_counts.get(item.method, 0) + item.count
+                        )
+                scope_ledger_valid = scope_ledger_valid and all(
+                    count <= aggregate_method_counts.get(method, 0)
+                    for method, count in scoped_method_counts.items()
+                )
+                scope_ledger_valid = scope_ledger_valid and all(
+                    scope.attempt_binding_sha256 == attempt.workspace_identity_sha256
+                    and scope.bridge_policy_sha256 == egress.policy_sha256
+                    and scope.expected_chain_id == egress.expected_chain_id
+                    and scope.pinned_block_number == egress.pinned_block_number
+                    and scope.pinned_block_hash == egress.pinned_block_hash
+                    for scope in scopes
+                )
+            if (
+                not scope_ledger_valid
+                or len(matching_scopes) != 1
+                or matching_scopes[0].status is not RepositoryTestForkRpcScopeStatus.VALIDATED
+                or matching_scopes[0].origin_validated_rpc_call_count == 0
+            ):
+                reasons.add(RepositoryStateInconclusiveReason.STATE_READ_UNPROVEN)
             if run.status is not ScannerStatus.SUCCESS:
                 reasons.add(RepositoryStateInconclusiveReason.ATTEMPT_UNAVAILABLE)
                 continue

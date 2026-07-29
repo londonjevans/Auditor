@@ -1645,8 +1645,7 @@ def _is_real_scanner_run(run: ScannerRun) -> bool:
 
 def _scanner_execution_observation_matches(run: ScannerRun) -> bool:
     return (
-        _is_sha256(run.execution_observation_sha256)
-        and run.execution_observation_sha256 == run.expected_execution_observation_sha256()
+        _is_sha256(run.execution_observation_sha256) and run.execution_observation_sha256_is_valid()
     )
 
 

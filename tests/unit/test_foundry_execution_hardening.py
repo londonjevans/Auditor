@@ -16,6 +16,7 @@ import mmaudit.scanners.foundry as foundry_module
 from mmaudit.config import SmartContractsConfig
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
+    RepositorySuiteExecutionPolicy,
     RepositorySuiteFramework,
     RepositorySuiteSelection,
     RepositorySuiteTestDescriptor,
@@ -25,12 +26,15 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.scanners.fork_rpc import PinnedForkObservation
 from mmaudit.scanners.foundry import (
+    FoundryForkScanner,
     _bounded_stream_artifact_usage,
     _display_foundry_test_command,
     _execute_foundry_test,
+    _execute_foundry_test_with_scope,
     _finalize_foundry_repository_suite,
     _foundry_inventory_limits,
     _FoundrySuiteDeadlineExpired,
+    _FoundryTestObservation,
     _parse_exact_foundry_test_with_deadline,
     _private_artifact_usage,
     _PrivateArtifactUsage,
@@ -44,8 +48,11 @@ from mmaudit.scanners.foundry_inventory_runner import (
     FoundryInventoryOverflowError,
     FoundryInventoryUnavailableError,
 )
+from mmaudit.scanners.read_only_rpc import ReadOnlyRpcTestScopeSnapshot
 
 HASH_A = "a" * 64
+HASH_B = "b" * 64
+HASH_C = "c" * 64
 SEED = "0x" + ("0" * 63) + "1"
 
 
@@ -60,6 +67,333 @@ def _descriptor() -> RepositorySuiteTestDescriptor:
         start_line=1,
         end_line=3,
     )
+
+
+def _selection(
+    descriptors: tuple[RepositorySuiteTestDescriptor, ...] | None = None,
+) -> RepositorySuiteSelection:
+    selected = descriptors or (_descriptor(),)
+    return RepositorySuiteSelection.sealed(
+        profile="explicit",
+        repository_sha256=HASH_B,
+        repository_exclusion_path=".mmaudit",
+        configuration_sha256=HASH_C,
+        candidate_file_count=len({descriptor.path for descriptor in selected}),
+        candidate_test_count=len(selected),
+        selected_file_count=len({descriptor.path for descriptor in selected}),
+        selected_test_count=len(selected),
+        omitted_file_count=0,
+        omitted_test_count=0,
+        limit_reached=False,
+        tests=selected,
+    )
+
+
+class _ScopeRecorder:
+    def __init__(
+        self,
+        *,
+        fail_begin: bool = False,
+        fail_end: bool = False,
+        policy_sha256: str = HASH_B,
+    ) -> None:
+        self.fail_begin = fail_begin
+        self.fail_end = fail_end
+        self.policy_sha256 = policy_sha256
+        self.events: list[tuple[str, str, int]] = []
+
+    def begin_selected_test_scope(
+        self,
+        *,
+        attempt_binding_sha256: str,
+        selection_sha256: str,
+        descriptor_sha256: str,
+        sequence_index: int,
+    ) -> None:
+        assert attempt_binding_sha256 == HASH_A
+        assert selection_sha256
+        self.events.append(("begin", descriptor_sha256, sequence_index))
+        if self.fail_begin:
+            raise RuntimeError("synthetic begin failure")
+
+    def end_selected_test_scope(
+        self,
+        *,
+        attempt_binding_sha256: str,
+        selection_sha256: str,
+        descriptor_sha256: str,
+        sequence_index: int,
+    ) -> ReadOnlyRpcTestScopeSnapshot:
+        assert attempt_binding_sha256 == HASH_A
+        assert selection_sha256
+        self.events.append(("end", descriptor_sha256, sequence_index))
+        if self.fail_end:
+            raise RuntimeError("synthetic end failure")
+        payload: dict[str, object] = {
+            "schema_version": "1.0",
+            "attempt_binding_sha256": attempt_binding_sha256,
+            "selection_sha256": selection_sha256,
+            "descriptor_sha256": descriptor_sha256,
+            "sequence_index": sequence_index,
+            "policy_sha256": self.policy_sha256,
+            "expected_chain_id": 31_337,
+            "pinned_block_number": 0,
+            "pinned_block_hash": "0x" + HASH_C,
+            "status": "validated",
+            "http_request_count": 1,
+            "permitted_rpc_call_count": 1,
+            "origin_attempted_rpc_call_count": 1,
+            "origin_validated_rpc_call_count": 1,
+            "synthetic_rpc_call_count": 0,
+            "denied_request_count": 0,
+            "malformed_request_count": 0,
+            "limit_exceeded_request_count": 0,
+            "upstream_error_request_count": 0,
+            "allowed_method_counts": [{"method": "eth_getCode", "count": 1}],
+            "method_log_sha256": HASH_C,
+            "boundary_drained": True,
+        }
+        snapshot_sha256 = hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+        return ReadOnlyRpcTestScopeSnapshot(
+            schema_version="1.0",
+            attempt_binding_sha256=attempt_binding_sha256,
+            selection_sha256=selection_sha256,
+            descriptor_sha256=descriptor_sha256,
+            sequence_index=sequence_index,
+            policy_sha256=self.policy_sha256,
+            expected_chain_id=31_337,
+            pinned_block_number=0,
+            pinned_block_hash="0x" + HASH_C,
+            status="validated",
+            http_request_count=1,
+            permitted_rpc_call_count=1,
+            origin_attempted_rpc_call_count=1,
+            origin_validated_rpc_call_count=1,
+            synthetic_rpc_call_count=0,
+            denied_request_count=0,
+            malformed_request_count=0,
+            limit_exceeded_request_count=0,
+            upstream_error_request_count=0,
+            allowed_method_counts=(("eth_getCode", 1),),
+            method_log_sha256=HASH_C,
+            boundary_drained=True,
+            snapshot_sha256=snapshot_sha256,
+        )
+
+
+def _test_observation(
+    descriptor: RepositorySuiteTestDescriptor,
+    *,
+    status: RepositoryTestExecutionStatus = RepositoryTestExecutionStatus.PASSED,
+) -> _FoundryTestObservation:
+    return _FoundryTestObservation(
+        descriptor=descriptor,
+        status=status,
+        terminal_detail=None,
+        duration_seconds=0.1,
+        command_sha256=HASH_A,
+        output_sha256=HASH_B,
+        output_bytes=1,
+        process_exit_code=0,
+        machine_output_validated=True,
+        machine_result_sha256=HASH_C,
+    )
+
+
+def _test_usage() -> _PrivateArtifactUsage:
+    return _PrivateArtifactUsage(entries=0, bytes=0, artifact_sha256=HASH_A)
+
+
+def test_foundry_scope_context_is_all_or_none_and_runtime_context_preserves_it() -> None:
+    recorder = _ScopeRecorder()
+
+    with pytest.raises(ValueError, match="all-or-none"):
+        FoundryForkScanner(
+            SmartContractsConfig(),
+            fork_rpc_scope_recorder=recorder,
+        )
+    with pytest.raises(ValueError, match="all-or-none"):
+        FoundryForkScanner(
+            SmartContractsConfig(),
+            attempt_binding_sha256=HASH_A,
+        )
+
+    scanner = FoundryForkScanner(
+        SmartContractsConfig(),
+        fork_rpc_scope_recorder=recorder,
+        attempt_binding_sha256=HASH_A,
+    )
+    runtime = scanner.with_runtime_context(allow_fork_probing=True, projects=())
+
+    assert runtime.fork_rpc_scope_recorder is recorder
+    assert runtime.attempt_binding_sha256 == HASH_A
+    with pytest.raises(ValueError, match="all-or-none"):
+        scanner.with_runtime_context(
+            allow_fork_probing=True,
+            projects=(),
+            fork_rpc_scope_recorder=recorder,
+        )
+    with pytest.raises(ValueError, match="all-or-none"):
+        scanner.with_runtime_context(
+            allow_fork_probing=True,
+            projects=(),
+            attempt_binding_sha256=HASH_B,
+        )
+
+
+def test_foundry_scope_wrapper_preserves_descriptor_order_and_exact_binding() -> None:
+    first = _descriptor()
+    second = RepositorySuiteTestDescriptor.sealed(
+        framework=RepositorySuiteFramework.FOUNDRY,
+        project_root=".",
+        path="test/audit/ExactSuite.t.sol",
+        suite_name="ExactSuiteTest",
+        test_name="testSecond",
+        source_sha256=HASH_A,
+        start_line=4,
+        end_line=6,
+    )
+    selection = _selection((first, second))
+    recorder = _ScopeRecorder()
+    outcomes = []
+
+    for index, descriptor in enumerate(selection.tests, start=1):
+        outcomes.append(
+            _execute_foundry_test_with_scope(
+                recorder=recorder,
+                attempt_binding_sha256=HASH_A,
+                selection=selection,
+                descriptor=descriptor,
+                sequence_index=index,
+                execute=lambda descriptor=descriptor, index=index: (
+                    recorder.events.append(("execute", descriptor.descriptor_sha256, index))
+                    or (_test_observation(descriptor), _test_usage())
+                ),
+            )
+        )
+
+    assert [event[0] for event in recorder.events] == [
+        "begin",
+        "execute",
+        "end",
+        "begin",
+        "execute",
+        "end",
+    ]
+    assert all(outcome.error is None for outcome in outcomes)
+    assert [outcome.scope.descriptor_sha256 for outcome in outcomes if outcome.scope] == [
+        first.descriptor_sha256,
+        second.descriptor_sha256,
+    ]
+    assert [outcome.scope.sequence_index for outcome in outcomes if outcome.scope] == [1, 2]
+
+
+def test_foundry_scope_wrapper_without_recorder_is_compatible() -> None:
+    descriptor = _descriptor()
+    called = False
+
+    def execute() -> tuple[_FoundryTestObservation, _PrivateArtifactUsage]:
+        nonlocal called
+        called = True
+        return _test_observation(descriptor), _test_usage()
+
+    outcome = _execute_foundry_test_with_scope(
+        recorder=None,
+        attempt_binding_sha256=None,
+        selection=_selection(),
+        descriptor=descriptor,
+        sequence_index=1,
+        execute=execute,
+    )
+
+    assert called
+    assert outcome.error is None
+    assert outcome.scope is None
+    assert outcome.result is not None
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_events"),
+    [("begin", ["begin"]), ("end", ["begin", "end"])],
+)
+def test_foundry_scope_boundary_failure_is_explicit(
+    failure: str,
+    expected_events: list[str],
+) -> None:
+    recorder = _ScopeRecorder(fail_begin=failure == "begin", fail_end=failure == "end")
+    executed = False
+
+    def execute() -> tuple[_FoundryTestObservation, _PrivateArtifactUsage]:
+        nonlocal executed
+        executed = True
+        return _test_observation(_descriptor()), _test_usage()
+
+    outcome = _execute_foundry_test_with_scope(
+        recorder=recorder,
+        attempt_binding_sha256=HASH_A,
+        selection=_selection(),
+        descriptor=_descriptor(),
+        sequence_index=1,
+        execute=execute,
+    )
+
+    assert [event[0] for event in recorder.events] == expected_events
+    assert executed is (failure == "end")
+    assert outcome.error is not None
+    assert "scope boundary" in str(outcome.error)
+    assert outcome.scope is None
+
+
+def test_foundry_scope_end_runs_after_execution_exception_and_timeout() -> None:
+    descriptor = _descriptor()
+    selection = _selection()
+    exception_recorder = _ScopeRecorder()
+    execution_error = RuntimeError("synthetic execution failure")
+
+    def fail_execution() -> tuple[_FoundryTestObservation, _PrivateArtifactUsage]:
+        exception_recorder.events.append(("execute", descriptor.descriptor_sha256, 1))
+        raise execution_error
+
+    failed = _execute_foundry_test_with_scope(
+        recorder=exception_recorder,
+        attempt_binding_sha256=HASH_A,
+        selection=selection,
+        descriptor=descriptor,
+        sequence_index=1,
+        execute=fail_execution,
+    )
+
+    timeout_recorder = _ScopeRecorder()
+    timed_out = _execute_foundry_test_with_scope(
+        recorder=timeout_recorder,
+        attempt_binding_sha256=HASH_A,
+        selection=selection,
+        descriptor=descriptor,
+        sequence_index=1,
+        execute=lambda: (
+            _test_observation(
+                descriptor,
+                status=RepositoryTestExecutionStatus.TIMED_OUT,
+            ),
+            _test_usage(),
+        ),
+    )
+
+    assert [event[0] for event in exception_recorder.events] == ["begin", "execute", "end"]
+    assert failed.error is execution_error
+    assert failed.scope is not None
+    assert timed_out.error is None
+    assert timed_out.result is not None
+    assert timed_out.result[0].status is RepositoryTestExecutionStatus.TIMED_OUT
+    assert [event[0] for event in timeout_recorder.events] == ["begin", "end"]
 
 
 def test_inventory_limits_bind_all_output_to_remaining_suite_budget() -> None:
@@ -919,6 +1253,145 @@ def test_manifest_write_cannot_outlive_total_deadline(
             [],
             deadline=11.0,
         )
+
+
+def test_manifest_serializes_bound_per_test_rpc_scope(tmp_path: Path) -> None:
+    selection = _selection()
+    baseline_dir = tmp_path / "baseline"
+    baseline_dir.mkdir()
+    baseline_path = _write_repository_suite_manifest(
+        baseline_dir,
+        selection,
+        None,
+        None,
+        None,
+        [],
+        deadline=time.monotonic() + 10.0,
+    )
+    baseline_payload = json.loads(baseline_path.read_text(encoding="utf-8"))
+    assert "repository_test_fork_rpc_scopes" not in baseline_payload
+
+    recorder = _ScopeRecorder()
+    outcome = _execute_foundry_test_with_scope(
+        recorder=recorder,
+        attempt_binding_sha256=HASH_A,
+        selection=selection,
+        descriptor=selection.tests[0],
+        sequence_index=1,
+        execute=lambda: (_test_observation(selection.tests[0]), _test_usage()),
+    )
+    assert outcome.scope is not None
+
+    path = _write_repository_suite_manifest(
+        tmp_path,
+        selection,
+        None,
+        None,
+        None,
+        [],
+        [outcome.scope],
+        deadline=time.monotonic() + 10.0,
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    scopes = payload["repository_test_fork_rpc_scopes"]
+    assert len(scopes) == 1
+    assert scopes[0]["attempt_binding_sha256"] == HASH_A
+    assert scopes[0]["selection_sha256"] == selection.selection_sha256
+    assert scopes[0]["descriptor_sha256"] == selection.tests[0].descriptor_sha256
+    assert scopes[0]["sequence_index"] == 1
+    serialized_scopes = json.dumps(scopes, sort_keys=True)
+    assert "http://" not in serialized_scopes
+    assert "https://" not in serialized_scopes
+
+
+@pytest.mark.parametrize(
+    "status",
+    [ScannerStatus.FAILED, ScannerStatus.TIMED_OUT, ScannerStatus.UNAVAILABLE],
+)
+def test_finalizer_retains_scope_in_unverified_interrupted_run_and_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: ScannerStatus,
+) -> None:
+    selection = _selection()
+    policy = RepositorySuiteExecutionPolicy.sealed(
+        selection_sha256=selection.selection_sha256,
+        selection_configuration_sha256=selection.configuration_sha256,
+        chain_id=31_337,
+        block_number=0,
+        block_hash="0x" + HASH_C,
+        tool_version="forge 1.3.2",
+        tool_sha256=HASH_A,
+        compiler_version="solc 0.8.30",
+        compiler_sha256=HASH_B,
+        isolation_backend="synthetic-isolation",
+        isolation_attestation_sha256=HASH_C,
+        fuzz_seed=SEED,
+        fuzz_runs=256,
+        invariant_runs=64,
+        per_test_timeout_seconds=10.0,
+        total_timeout_seconds=60.0,
+        max_output_bytes_per_test=1_024,
+        max_total_output_bytes=10_240,
+    )
+    recorder = _ScopeRecorder(policy_sha256=HASH_B)
+    assert recorder.policy_sha256 != policy.policy_sha256
+    scoped = _execute_foundry_test_with_scope(
+        recorder=recorder,
+        attempt_binding_sha256=HASH_A,
+        selection=selection,
+        descriptor=selection.tests[0],
+        sequence_index=1,
+        execute=lambda: (_test_observation(selection.tests[0]), _test_usage()),
+    )
+    assert scoped.scope is not None
+    private_dir = tmp_path / "private"
+    private_dir.mkdir()
+    backend = SimpleNamespace(name="synthetic-isolation")
+    monkeypatch.setattr(foundry_module, "_cleanup_error", lambda *_args: None)
+    monkeypatch.setattr(
+        foundry_module,
+        "isolation_attestation_sha256",
+        lambda _backend: HASH_C,
+    )
+
+    run = _finalize_foundry_repository_suite(
+        root=tmp_path,
+        private_dir=private_dir,
+        backend=backend,
+        start=datetime.now(UTC),
+        monotonic_start=time.monotonic(),
+        deadline=time.monotonic() + 10.0,
+        total_timeout_seconds=10.0,
+        status=status,
+        error="synthetic scope-interrupted execution",
+        selection=selection,
+        observations=[],
+        fork=PinnedForkObservation(
+            chain_id=31_337,
+            block_number=0,
+            block_hash="0x" + HASH_C,
+        ),
+        executable_sha256=HASH_A,
+        version="forge 1.3.2",
+        compiler_version="solc 0.8.30",
+        compiler_sha256=HASH_B,
+        execution_policy=policy,
+        inventory=None,
+        post_inventory=None,
+        fuzz_seed=SEED,
+        repository_test_fork_rpc_scopes=[scoped.scope],
+    )
+
+    assert run.status is status
+    assert run.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
+    assert run.repository_test_fork_rpc_scopes == [scoped.scope]
+    assert run.raw_output_path is not None
+    manifest = json.loads(
+        (private_dir / "repository-suite-execution.json").read_text(encoding="utf-8")
+    )
+    assert manifest["repository_test_fork_rpc_scopes"] == [scoped.scope.model_dump(mode="json")]
 
 
 def test_finalizer_downgrades_when_cleanup_crosses_total_deadline(

@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_BY_OPERATOR
+AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Differential and multi-state fork matrix
 CURRENT_TICKET: V3-FORKDIFF-001
 LAST_COMPLETED_TICKET: V3-FLOOR-001
-NEXT_ACTION: On explicit resume, continue V3-FORKDIFF-001 with typed per-test state-read provenance and actual disposable-workspace lifecycle evidence; then add default replay and a real local differential integration without crediting aggregate egress or claimed workspace disposal.
-LAST_COMMAND: .venv/bin/ruff format src/mmaudit/scanners/fork_matrix.py tests/unit/test_fork_matrix.py && .venv/bin/ruff check src/mmaudit/scanners/fork_matrix.py tests/unit/test_fork_matrix.py && .venv/bin/mypy src/mmaudit/scanners/fork_matrix.py && .venv/bin/pytest -q tests/unit/test_fork_matrix.py tests/unit/test_repository_fork_differential_schema.py && git diff --check
-LAST_RESULT: PASS — both files were already formatted, Ruff passed, strict mypy passed for the affected source module, the focused matrix/schema suite passed 98 tests in 0.62 seconds, and git diff --check passed. Pytest emitted only pre-existing sandbox cleanup warnings for protected synthetic toolchain directories.
+NEXT_ACTION: Continue V3-FORKDIFF-001 with typed evidence of actual exclusive source-copy creation, stable pre/post source and workspace identities, bounded removal, and endpoint/path non-retention; then add default replay and a real local differential integration.
+LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_repository_fork_differential_schema.py tests/unit/test_fork_matrix.py tests/unit/test_foundry_execution_hardening.py tests/unit/test_assurance.py; capability-granted .venv/bin/pytest -q tests/unit/test_read_only_rpc_bridge.py; .venv/bin/ruff format --check and .venv/bin/ruff check on the ten affected source/test files; .venv/bin/mypy src/mmaudit/models/schemas.py src/mmaudit/orchestration/assurance.py src/mmaudit/scanners/read_only_rpc.py src/mmaudit/scanners/foundry.py src/mmaudit/scanners/fork_matrix.py; git diff --check
+LAST_RESULT: PASS — the final non-socket provenance gate passed 358 tests in 23.91 seconds; the capability-granted local-loopback bridge gate passed 70 tests in 37.23 seconds; all ten affected files were formatted and passed Ruff; strict mypy passed all five affected source modules; git diff --check passed. Pytest emitted only pre-existing managed-sandbox cleanup warnings for protected synthetic toolchain directories.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -375,6 +375,69 @@ LAST_CHECKPOINT_COMMIT: ca9b65245d1e34388965797d2ce059cad5f7f6d9
   request, public RPC, secret access, wallet, signing, transaction, budget
   reservation, or paid operation remains active. OpenRouter spend remains
   `0.0033415625 USD`.
+- **Goal continuation:** At `2026-07-29T19:52:41Z`, autorun resumed from clean,
+  SSH-synchronized commit `5a7f30e41b7c2b0b8acaccf382796f5a1fc790ce`.
+  The complete 1,417-line product objective was reread and hash-verified at
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`;
+  repository instructions, current queues, worklog, runtime state, and Git state
+  were reloaded. Work continues only on the open `V3-FORKDIFF-001` evidence
+  gaps. No provider, public RPC, secret, wallet, signing, transaction, or paid
+  path is involved.
+- **Per-test state-read expected-red join:** The first combined gate exposed the
+  intended semantic join defects: bridge-policy evidence was initially compared
+  with the unrelated repository execution-policy hash, matrix fixtures lacked
+  descriptor-scoped reads, and aggregate-only evidence remained sufficient for
+  consensus. Those defects were corrected without weakening the aggregate
+  bridge or the legacy non-matrix Foundry path.
+- **Descriptor-scoped bridge evidence:** The read-only bridge now opens exactly
+  one 1-based selected-descriptor scope at a quiescent boundary, attributes
+  admitted requests and validated origin reads to that scope, seals an
+  endpoint-free self-hashed snapshot, rejects overlap/wrong identity/reuse, and
+  always closes listener, handler, and upstream resources even when shutdown
+  discovers an abandoned scope.
+- **Foundry and matrix binding:** Foundry begins and unconditionally ends each
+  scope around the exact selected test, preserves a validated prefix on
+  interruption, and requires complete validated scope coverage for a successful
+  scoped run. Matrix evidence binds each scope to its workspace-attempt identity,
+  selection, descriptor, bridge policy, and observed state. Missing,
+  not-observed, violating, cross-attempt, or wrong-policy evidence produces typed
+  `state_read_unproven` consensus and cannot support a comparison.
+- **Double-credit prevention:** A state attempt rejects rehashed evidence when
+  per-test counter or method totals exceed the aggregate stopped-bridge ledger.
+  A negative regression proves that one aggregate origin read cannot be credited
+  to two selected tests. Unscoped pre/post identity reads remain permitted only
+  as an aggregate residual and cannot satisfy a descriptor scope.
+- **Independent race and join review:** Read-only review reproduced two
+  boundary races in the first draft: listener-queued requests were not captured
+  at scope transitions, and a completed client response could precede handler
+  drain. The hardened bridge now pauses its accept loop behind a trusted
+  loopback checkpoint, binds accepted/admitted work to an exact generation,
+  drains within one absolute bound, serializes shutdown, and appends each
+  successfully sealed scope hash to an ordered aggregate ledger. Failed or
+  timed-out checkpoints always release the accept loop.
+- **Ordered-ledger and compatibility assays:** Matrix consensus requires the
+  aggregate stopped-bridge ledger to equal the exact ordered per-test scope
+  ledger. Positive two-descriptor round trips, reversed and missing ledgers,
+  rehashed persisted-artifact tampering, aggregate residual masking,
+  interrupted prefix retention for `FAILED`, `TIMED_OUT`, and `UNAVAILABLE`,
+  and the exact pre-ledger/pre-scope historical projections are covered.
+- **Final focused validation:** `.venv/bin/pytest -q
+  tests/unit/test_repository_fork_differential_schema.py
+  tests/unit/test_fork_matrix.py tests/unit/test_foundry_execution_hardening.py
+  tests/unit/test_assurance.py` passed `358` tests in `23.91s`. The exact
+  capability-granted local-loopback command `.venv/bin/pytest -q
+  tests/unit/test_read_only_rpc_bridge.py` passed `70` tests in `37.23s`.
+  Ruff formatting/checks passed all ten affected source/test files, strict mypy
+  passed all five affected source modules, and `git diff --check` passed.
+  Independent production review found no remaining fail-open blocker in this
+  slice. Pytest emitted only pre-existing managed-sandbox cleanup warnings for
+  protected synthetic toolchain directories.
+- **Remaining ticket scope:** Actual typed source-copy/workspace creation and
+  bounded removal evidence, default replay, and one real local
+  clean-versus-pinned Anvil/Foundry matrix remain. No workspace policy hash or
+  aggregate RPC counter is credited as proof of those missing requirements. No
+  provider, public RPC, secret, wallet, signing, transaction, budget
+  reservation, or paid operation occurred.
 
 ## 2026-07-29 — V3-FORKSUITE-001
 

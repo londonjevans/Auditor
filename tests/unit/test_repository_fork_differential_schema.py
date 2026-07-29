@@ -43,6 +43,8 @@ from mmaudit.models.schemas import (
     RepositorySuiteTestStateConsensus,
     RepositoryTestExecution,
     RepositoryTestExecutionStatus,
+    RepositoryTestForkRpcScopeEvidence,
+    RepositoryTestForkRpcScopeStatus,
     RepositoryTestKind,
     ScannerFinding,
     ScannerRun,
@@ -50,7 +52,11 @@ from mmaudit.models.schemas import (
     Severity,
 )
 from mmaudit.reporting.markdown import render_markdown
-from mmaudit.scanners.read_only_rpc import _ALLOWED_METHODS, ReadOnlyRpcBridgeSnapshot
+from mmaudit.scanners.read_only_rpc import (
+    _ALLOWED_METHODS,
+    ReadOnlyRpcBridgeSnapshot,
+    ReadOnlyRpcTestScopeSnapshot,
+)
 
 HASH_A = "a" * 64
 HASH_B = "b" * 64
@@ -72,6 +78,15 @@ def _canonical_sha256(value: object) -> str:
             allow_nan=False,
         ).encode("utf-8")
     ).hexdigest()
+
+
+def _legacy_scanner_payload(run: ScannerRun) -> dict[str, object]:
+    """Serialize the exact ScannerRun projection emitted before scoped RPC evidence."""
+
+    payload = run.model_dump(mode="json")
+    payload.pop("repository_test_fork_rpc_scopes", None)
+    payload["execution_observation_sha256"] = run.expected_legacy_execution_observation_sha256()
+    return payload
 
 
 def _descriptor() -> RepositorySuiteTestDescriptor:
@@ -208,6 +223,7 @@ def _egress(
     state: RepositorySuiteExecutionStateEvidence,
     *,
     status: RepositoryForkEgressStatus = RepositoryForkEgressStatus.ENFORCED,
+    selected_test_scope_snapshot_sha256s: tuple[str, ...] = (),
 ) -> ForkRpcReadOnlyEgressEvidence:
     assert state.observed_block_hash is not None
     violation = 1 if status is RepositoryForkEgressStatus.VIOLATION else 0
@@ -241,6 +257,7 @@ def _egress(
         "upstream_error_request_count": 0,
         "allowed_method_counts": [item.model_dump(mode="json") for item in method_counts],
         "method_log_sha256": HASH_F,
+        "selected_test_scope_snapshot_sha256s": (selected_test_scope_snapshot_sha256s),
         "stopped_cleanly": True,
     }
     bridge_snapshot_sha256 = ForkRpcReadOnlyEgressEvidence.calculate_bridge_snapshot_sha256(
@@ -257,6 +274,7 @@ def _egress(
         network_scope="single_loopback_origin",
         policy_sha256=HASH_E,
         method_log_sha256=HASH_F,
+        selected_test_scope_snapshot_sha256s=(selected_test_scope_snapshot_sha256s),
         preflight_origin_observation_sha256=observation_sha256,
         postflight_origin_observation_sha256=observation_sha256,
         origin_state_stable=True,
@@ -312,6 +330,7 @@ def _run(
     state: RepositorySuiteExecutionStateEvidence,
     *,
     attempt_index: int,
+    attempt_binding_sha256: str,
     status: RepositoryTestExecutionStatus,
     machine_result_sha256: str,
     evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.REAL,
@@ -369,7 +388,19 @@ def _run(
                 fingerprint=HASH_F,
             )
         ]
-    egress = _egress(state, status=egress_status)
+    test_rpc_scope = _test_rpc_scope(
+        selection,
+        policy,
+        descriptor,
+        sequence_index=1,
+        attempt_binding_sha256=attempt_binding_sha256,
+        bridge_policy_sha256=HASH_E,
+    )
+    egress = _egress(
+        state,
+        status=egress_status,
+        selected_test_scope_snapshot_sha256s=(test_rpc_scope.bridge_scope_snapshot_sha256,),
+    )
     observed_at = BASE_TIME + timedelta(seconds=attempt_index)
     run = ScannerRun(
         scanner="foundry_fork",
@@ -405,6 +436,7 @@ def _run(
         repository_suite_selection=selection,
         repository_suite_execution_policy=policy,
         repository_test_executions=[execution],
+        repository_test_fork_rpc_scopes=[test_rpc_scope],
         repository_code_execution=RepositoryCodeExecutionState.ISOLATED,
         fork_rpc_egress=egress,
     )
@@ -427,25 +459,27 @@ def _attempt(
     evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.REAL,
     egress_status: RepositoryForkEgressStatus = RepositoryForkEgressStatus.ENFORCED,
 ) -> RepositorySuiteStateAttempt:
+    workspace_digit = attempt_index + (
+        0 if state.kind is RepositoryExecutionStateKind.CLEAN_LOCAL else 2
+    )
+    workspace_identity_sha256 = f"{workspace_digit:x}" * 64
     run = _run(
         selection,
         descriptor,
         state,
         attempt_index=attempt_index,
+        attempt_binding_sha256=workspace_identity_sha256,
         status=status,
         machine_result_sha256=machine_result_sha256,
         evidence=evidence,
         egress_status=egress_status,
-    )
-    workspace_digit = attempt_index + (
-        0 if state.kind is RepositoryExecutionStateKind.CLEAN_LOCAL else 2
     )
     return RepositorySuiteStateAttempt.sealed(
         state_id=state.state_id,
         state_sha256=state.state_sha256,
         attempt_index=attempt_index,
         workspace_kind="fresh_disposable_copy",
-        workspace_identity_sha256=(f"{workspace_digit:x}" * 64),
+        workspace_identity_sha256=workspace_identity_sha256,
         workspace_freshness_attestation_sha256=(f"{workspace_digit + 4:x}" * 64),
         workspace_disposal_policy_sha256=(f"{workspace_digit + 8:x}" * 64),
         fork_rpc_egress_sha256=(
@@ -667,6 +701,7 @@ def test_single_qualifying_observation_cannot_claim_conclusive_state() -> None:
             "repository_suite_selection": None,
             "repository_suite_execution_policy": None,
             "repository_test_executions": [],
+            "repository_test_fork_rpc_scopes": [],
             "foundry_summary": None,
             "machine_output_validated": False,
             "fork_rpc_egress": None,
@@ -1248,4 +1283,1433 @@ def test_scanner_egress_identity_must_match_its_execution_policy() -> None:
                 "fork_rpc_egress": mismatched.model_dump(mode="json"),
                 "execution_observation_sha256": None,
             }
+        )
+
+
+def _scope_descriptors() -> tuple[RepositorySuiteTestDescriptor, ...]:
+    descriptors = (
+        RepositorySuiteTestDescriptor.sealed(
+            framework=RepositorySuiteFramework.FOUNDRY,
+            project_root="contracts",
+            path="contracts/test/Vault.t.sol",
+            suite_name="VaultTest",
+            test_name="testAccountingA",
+            source_sha256=HASH_A,
+            start_line=20,
+            end_line=22,
+        ),
+        RepositorySuiteTestDescriptor.sealed(
+            framework=RepositorySuiteFramework.FOUNDRY,
+            project_root="contracts",
+            path="contracts/test/Vault.t.sol",
+            suite_name="VaultTest",
+            test_name="testAccountingB",
+            source_sha256=HASH_A,
+            start_line=24,
+            end_line=26,
+        ),
+    )
+    return tuple(sorted(descriptors, key=lambda item: item.canonical_key))
+
+
+def _scope_selection(
+    descriptors: tuple[RepositorySuiteTestDescriptor, ...],
+) -> RepositorySuiteSelection:
+    return RepositorySuiteSelection.sealed(
+        profile="explicit",
+        repository_sha256=HASH_B,
+        repository_exclusion_path=".mmaudit",
+        configuration_sha256=HASH_C,
+        candidate_file_count=1,
+        candidate_test_count=len(descriptors),
+        selected_file_count=1,
+        selected_test_count=len(descriptors),
+        omitted_file_count=0,
+        omitted_test_count=0,
+        limit_reached=False,
+        tests=descriptors,
+    )
+
+
+def _scope_policy(selection: RepositorySuiteSelection) -> RepositorySuiteExecutionPolicy:
+    return RepositorySuiteExecutionPolicy.sealed(
+        selection_sha256=selection.selection_sha256,
+        selection_configuration_sha256=selection.configuration_sha256,
+        chain_id=31_338,
+        block_number=77,
+        block_hash="0x" + HASH_D,
+        tool_version="forge 1.3.2",
+        tool_sha256=HASH_A,
+        compiler_version="solc 0.8.30",
+        compiler_sha256=HASH_D,
+        isolation_backend="synthetic-hardened-isolation",
+        isolation_attestation_sha256=HASH_C,
+        fuzz_seed=SEED,
+        fuzz_runs=256,
+        invariant_runs=64,
+        per_test_timeout_seconds=120,
+        total_timeout_seconds=900,
+        max_output_bytes_per_test=1_000_000,
+        max_total_output_bytes=10_000_000,
+    )
+
+
+def _test_rpc_scope(
+    selection: RepositorySuiteSelection,
+    policy: RepositorySuiteExecutionPolicy,
+    descriptor: RepositorySuiteTestDescriptor,
+    *,
+    sequence_index: int,
+    status: RepositoryTestForkRpcScopeStatus = RepositoryTestForkRpcScopeStatus.VALIDATED,
+    attempt_binding_sha256: str = HASH_F,
+    selection_sha256: str | None = None,
+    bridge_policy_sha256: str = HASH_A,
+    expected_chain_id: int | None = None,
+    pinned_block_number: int | None = None,
+    pinned_block_hash: str | None = None,
+    origin_attempted_rpc_call_count: int = 1,
+    origin_validated_rpc_call_count: int = 1,
+    synthetic_rpc_call_count: int = 0,
+    denied_request_count: int = 0,
+    malformed_request_count: int = 0,
+    limit_exceeded_request_count: int = 0,
+    upstream_error_request_count: int = 0,
+) -> RepositoryTestForkRpcScopeEvidence:
+    permitted_rpc_call_count = origin_attempted_rpc_call_count + synthetic_rpc_call_count
+    rejection_or_error_count = (
+        denied_request_count
+        + malformed_request_count
+        + limit_exceeded_request_count
+        + upstream_error_request_count
+    )
+    method_counts = (
+        (ForkRpcMethodCount(method="eth_getCode", count=permitted_rpc_call_count),)
+        if permitted_rpc_call_count
+        else ()
+    )
+    values = {
+        "schema_version": "1.0",
+        "attempt_binding_sha256": attempt_binding_sha256,
+        "selection_sha256": selection_sha256 or selection.selection_sha256,
+        "descriptor_sha256": descriptor.descriptor_sha256,
+        "sequence_index": sequence_index,
+        "bridge_policy_sha256": bridge_policy_sha256,
+        "expected_chain_id": (policy.chain_id if expected_chain_id is None else expected_chain_id),
+        "pinned_block_number": (
+            policy.block_number if pinned_block_number is None else pinned_block_number
+        ),
+        "pinned_block_hash": policy.block_hash if pinned_block_hash is None else pinned_block_hash,
+        "status": status,
+        "http_request_count": permitted_rpc_call_count + rejection_or_error_count,
+        "permitted_rpc_call_count": permitted_rpc_call_count,
+        "origin_attempted_rpc_call_count": origin_attempted_rpc_call_count,
+        "origin_validated_rpc_call_count": origin_validated_rpc_call_count,
+        "synthetic_rpc_call_count": synthetic_rpc_call_count,
+        "denied_request_count": denied_request_count,
+        "malformed_request_count": malformed_request_count,
+        "limit_exceeded_request_count": limit_exceeded_request_count,
+        "upstream_error_request_count": upstream_error_request_count,
+        "allowed_method_counts": method_counts,
+        "method_log_sha256": HASH_E,
+        "boundary_drained": True,
+        "transaction_capable_request_forwarded": False,
+        "credentials_forwarded": False,
+        "raw_payloads_retained": False,
+        "rpc_endpoint_recorded": False,
+    }
+    bridge_scope_snapshot_sha256 = (
+        RepositoryTestForkRpcScopeEvidence.calculate_bridge_scope_snapshot_sha256(values)
+    )
+    return RepositoryTestForkRpcScopeEvidence.sealed(
+        **values,
+        bridge_scope_snapshot_sha256=bridge_scope_snapshot_sha256,
+    )
+
+
+def _scanner_run_with_test_rpc_scopes(
+    selection: RepositorySuiteSelection,
+    policy: RepositorySuiteExecutionPolicy,
+    scopes: tuple[RepositoryTestForkRpcScopeEvidence, ...],
+    *,
+    status: ScannerStatus = ScannerStatus.SUCCESS,
+) -> ScannerRun:
+    executions = [
+        RepositoryTestExecution.sealed(
+            selection_sha256=selection.selection_sha256,
+            descriptor_sha256=descriptor.descriptor_sha256,
+            framework=descriptor.framework,
+            project_root=descriptor.project_root,
+            path=descriptor.path,
+            suite_name=descriptor.suite_name,
+            test_name=descriptor.test_name,
+            chain_id=policy.chain_id,
+            block_number=policy.block_number,
+            block_hash=policy.block_hash,
+            fuzz_seed=policy.fuzz_seed,
+            test_kind=RepositoryTestKind.UNIT,
+            status=RepositoryTestExecutionStatus.PASSED,
+            duration_seconds=0.1,
+            command_sha256=HASH_B,
+            output_sha256=HASH_C,
+            output_bytes=10,
+            machine_result_sha256=descriptor.descriptor_sha256,
+            process_exit_code=0,
+            machine_output_validated=True,
+            execution_evidence=ExecutionEvidenceKind.REAL,
+            repository_code_execution=RepositoryCodeExecutionState.ISOLATED,
+            isolation_backend=policy.isolation_backend,
+            isolation_attestation_sha256=policy.isolation_attestation_sha256,
+            compiler_version=policy.compiler_version,
+            compiler_sha256=policy.compiler_sha256,
+            execution_policy_sha256=policy.policy_sha256,
+        )
+        for descriptor in selection.tests
+    ]
+    run = ScannerRun(
+        scanner="foundry_fork",
+        status=status,
+        execution_evidence=ExecutionEvidenceKind.REAL,
+        version=policy.tool_version,
+        executable_sha256=policy.tool_sha256,
+        command=["forge", "test", "[BOUNDED_PER_TEST_REPOSITORY_SUITE]"],
+        started_at=BASE_TIME,
+        finished_at=BASE_TIME + timedelta(seconds=1),
+        duration_seconds=1,
+        process_exit_code=0,
+        isolation_backend=policy.isolation_backend,
+        isolation_attestation_sha256=policy.isolation_attestation_sha256,
+        machine_output_validated=True,
+        foundry_summary=FoundryTestExecutionSummary(
+            unit_tests=len(executions),
+            fuzz_tests=0,
+            invariant_tests=0,
+            passed_tests=len(executions),
+            failed_tests=0,
+            skipped_tests=0,
+            fuzz_cases=0,
+            invariant_runs=0,
+            invariant_calls=0,
+        ),
+        repository_suite_selection=selection,
+        repository_suite_execution_policy=policy,
+        repository_test_executions=executions,
+        repository_test_fork_rpc_scopes=list(scopes),
+        repository_code_execution=RepositoryCodeExecutionState.ISOLATED,
+    )
+    return ScannerRun.model_validate(
+        {
+            **run.model_dump(mode="json"),
+            "execution_observation_sha256": run.expected_execution_observation_sha256(),
+        }
+    )
+
+
+def _egress_for_test_rpc_scopes(
+    state: RepositorySuiteExecutionStateEvidence,
+    scopes: tuple[RepositoryTestForkRpcScopeEvidence, ...],
+    *,
+    selected_scope_hashes: tuple[str, ...] | None = None,
+) -> ForkRpcReadOnlyEgressEvidence:
+    assert state.observed_block_hash is not None
+    method_totals: dict[str, int] = {}
+    for scope in scopes:
+        for item in scope.allowed_method_counts:
+            method_totals[item.method] = method_totals.get(item.method, 0) + item.count
+    method_counts = tuple(
+        ForkRpcMethodCount(method=method, count=count)
+        for method, count in sorted(method_totals.items())
+    )
+    ledger = (
+        tuple(scope.bridge_scope_snapshot_sha256 for scope in scopes)
+        if selected_scope_hashes is None
+        else selected_scope_hashes
+    )
+    observation_sha256 = ForkRpcReadOnlyEgressEvidence.calculate_origin_observation_sha256(
+        expected_chain_id=state.expected_chain_id,
+        pinned_block_number=state.pinned_block_number,
+        pinned_block_hash=state.observed_block_hash,
+    )
+    counters = {
+        field: sum(getattr(scope, field) for scope in scopes)
+        for field in (
+            "http_request_count",
+            "permitted_rpc_call_count",
+            "origin_attempted_rpc_call_count",
+            "origin_validated_rpc_call_count",
+            "synthetic_rpc_call_count",
+            "denied_request_count",
+            "malformed_request_count",
+            "limit_exceeded_request_count",
+            "upstream_error_request_count",
+        )
+    }
+    snapshot_values = {
+        "schema_version": "2.0",
+        "status": RepositoryForkEgressStatus.ENFORCED,
+        "policy_sha256": HASH_E,
+        "expected_chain_id": state.expected_chain_id,
+        "pinned_block_number": state.pinned_block_number,
+        "pinned_block_hash": state.observed_block_hash,
+        "preflight_origin_observation_sha256": observation_sha256,
+        "postflight_origin_observation_sha256": observation_sha256,
+        "origin_state_stable": True,
+        **counters,
+        "allowed_method_counts": method_counts,
+        "method_log_sha256": HASH_F,
+        "selected_test_scope_snapshot_sha256s": ledger,
+        "stopped_cleanly": True,
+    }
+    return ForkRpcReadOnlyEgressEvidence.sealed(
+        status=RepositoryForkEgressStatus.ENFORCED,
+        state_id=state.state_id,
+        state_source_sha256=state.state_source_sha256,
+        expected_chain_id=state.expected_chain_id,
+        pinned_block_number=state.pinned_block_number,
+        pinned_block_hash=state.observed_block_hash,
+        policy_sha256=HASH_E,
+        method_log_sha256=HASH_F,
+        selected_test_scope_snapshot_sha256s=ledger,
+        preflight_origin_observation_sha256=observation_sha256,
+        postflight_origin_observation_sha256=observation_sha256,
+        origin_state_stable=True,
+        allowed_method_counts=method_counts,
+        stopped_cleanly=True,
+        transaction_capable_request_forwarded=False,
+        credentials_forwarded=False,
+        raw_payloads_retained=False,
+        rpc_endpoint_recorded=False,
+        bridge_snapshot_sha256=(
+            ForkRpcReadOnlyEgressEvidence.calculate_bridge_snapshot_sha256(snapshot_values)
+        ),
+        **counters,
+    )
+
+
+def _two_descriptor_attempt_fixture(
+    *,
+    reverse_ledger: bool = False,
+    interrupted_status: ScannerStatus | None = None,
+) -> tuple[
+    tuple[RepositorySuiteTestDescriptor, ...],
+    RepositorySuiteSelection,
+    tuple[RepositorySuiteExecutionStateEvidence, ...],
+    tuple[RepositorySuiteStateAttempt, ...],
+]:
+    descriptors = _scope_descriptors()
+    selection = _scope_selection(descriptors)
+    states = _states()
+    attempts: list[RepositorySuiteStateAttempt] = []
+    for state_offset, state in enumerate(states):
+        policy = _policy(selection, state)
+        for attempt_index in (1, 2):
+            identity_digit = state_offset * 2 + attempt_index
+            workspace_identity = f"{identity_digit:x}" * 64
+            all_scopes = tuple(
+                _test_rpc_scope(
+                    selection,
+                    policy,
+                    descriptor,
+                    sequence_index=index,
+                    attempt_binding_sha256=workspace_identity,
+                    bridge_policy_sha256=HASH_E,
+                )
+                for index, descriptor in enumerate(descriptors, start=1)
+            )
+            interrupted = (
+                interrupted_status is not None and state_offset == 0 and attempt_index == 1
+            )
+            scopes = all_scopes[:1] if interrupted else all_scopes
+            selected_scope_hashes = tuple(scope.bridge_scope_snapshot_sha256 for scope in scopes)
+            if reverse_ledger:
+                selected_scope_hashes = tuple(reversed(selected_scope_hashes))
+            egress = _egress_for_test_rpc_scopes(
+                state,
+                scopes,
+                selected_scope_hashes=selected_scope_hashes,
+            )
+            run_payload = _scanner_run_with_test_rpc_scopes(
+                selection,
+                policy,
+                scopes,
+                status=interrupted_status if interrupted else ScannerStatus.SUCCESS,
+            ).model_dump(mode="json")
+            run_payload["fork_rpc_egress"] = egress.model_dump(mode="json")
+            run_payload["execution_observation_sha256"] = None
+            provisional_run = ScannerRun.model_validate(run_payload)
+            run = ScannerRun.model_validate(
+                {
+                    **run_payload,
+                    "execution_observation_sha256": (
+                        provisional_run.expected_execution_observation_sha256()
+                    ),
+                }
+            )
+            attempts.append(
+                RepositorySuiteStateAttempt.sealed(
+                    state_id=state.state_id,
+                    state_sha256=state.state_sha256,
+                    attempt_index=attempt_index,
+                    workspace_kind="fresh_disposable_copy",
+                    workspace_identity_sha256=workspace_identity,
+                    workspace_freshness_attestation_sha256=(f"{identity_digit + 4:x}" * 64),
+                    workspace_disposal_policy_sha256=f"{identity_digit + 8:x}" * 64,
+                    fork_rpc_egress_sha256=egress.evidence_sha256,
+                    scanner_run=run,
+                )
+            )
+    return (
+        descriptors,
+        selection,
+        tuple(sorted(states, key=lambda state: state.state_id)),
+        tuple(sorted(attempts, key=lambda item: (item.state_id, item.attempt_index))),
+    )
+
+
+def _two_descriptor_matrix(
+    *,
+    reverse_ledger: bool = False,
+    interrupted_status: ScannerStatus | None = None,
+    derive_inconclusive_consensus: bool = False,
+) -> RepositorySuiteDifferentialMatrix:
+    descriptors, selection, states, attempts = _two_descriptor_attempt_fixture(
+        reverse_ledger=reverse_ledger,
+        interrupted_status=interrupted_status,
+    )
+    execution_configuration_sha256 = (
+        RepositorySuiteDifferentialMatrix.execution_configuration_sha256_for_policy(
+            _policy(selection, states[0])
+        )
+    )
+    probe = RepositorySuiteDifferentialMatrix.model_construct(
+        repository_sha256=selection.repository_sha256,
+        selection_sha256=selection.selection_sha256,
+        selection_configuration_sha256=selection.configuration_sha256,
+        descriptor_sha256s=tuple(
+            sorted(descriptor.descriptor_sha256 for descriptor in descriptors)
+        ),
+        required_repetitions=2,
+        fuzz_seed=SEED,
+        execution_configuration_sha256=execution_configuration_sha256,
+        fork_rpc_policy_sha256=HASH_E,
+        states=states,
+        attempts=attempts,
+        state_consensuses=(),
+        comparisons=(),
+        matrix_sha256=HASH_A,
+    )
+    consensuses: list[RepositorySuiteTestStateConsensus] = []
+    for state in states:
+        state_attempts = tuple(item for item in attempts if item.state_id == state.state_id)
+        for descriptor in descriptors:
+            if derive_inconclusive_consensus:
+                status, observed_status, machine_result_sha256, reasons = probe._expected_consensus(
+                    state,
+                    state_attempts,
+                    descriptor.descriptor_sha256,
+                )
+            else:
+                status = RepositoryStateConsensusStatus.CONSISTENT_PASS
+                observed_status = RepositoryTestExecutionStatus.PASSED
+                machine_result_sha256 = descriptor.descriptor_sha256
+                reasons = ()
+            consensuses.append(
+                _consensus(
+                    state,
+                    descriptor,
+                    state_attempts,
+                    status=status,
+                    observed_status=observed_status,
+                    machine_result_sha256=machine_result_sha256,
+                    reasons=reasons,
+                )
+            )
+    sorted_consensuses = tuple(
+        sorted(consensuses, key=lambda item: (item.state_id, item.descriptor_sha256))
+    )
+    consensuses_by_key = {
+        (item.state_id, item.descriptor_sha256): item for item in sorted_consensuses
+    }
+    clean, pinned = states
+    comparisons = []
+    for descriptor in descriptors:
+        clean_consensus = consensuses_by_key[(clean.state_id, descriptor.descriptor_sha256)]
+        pinned_consensus = consensuses_by_key[(pinned.state_id, descriptor.descriptor_sha256)]
+        classification, direction = probe._expected_comparison(
+            clean_consensus,
+            pinned_consensus,
+        )
+        comparisons.append(
+            _comparison(
+                clean,
+                pinned,
+                descriptor,
+                clean_consensus,
+                pinned_consensus,
+                classification=classification,
+                direction=direction,
+            )
+        )
+    return RepositorySuiteDifferentialMatrix.sealed(
+        repository_sha256=selection.repository_sha256,
+        selection_sha256=selection.selection_sha256,
+        selection_configuration_sha256=selection.configuration_sha256,
+        descriptor_sha256s=tuple(
+            sorted(descriptor.descriptor_sha256 for descriptor in descriptors)
+        ),
+        required_repetitions=2,
+        fuzz_seed=SEED,
+        execution_configuration_sha256=execution_configuration_sha256,
+        fork_rpc_policy_sha256=HASH_E,
+        states=states,
+        attempts=attempts,
+        state_consensuses=sorted_consensuses,
+        comparisons=tuple(comparisons),
+    )
+
+
+def test_per_test_fork_rpc_scope_round_trips_and_binds_scanner_run() -> None:
+    descriptors = _scope_descriptors()
+    selection = _scope_selection(descriptors)
+    policy = _scope_policy(selection)
+    scopes = tuple(
+        _test_rpc_scope(
+            selection,
+            policy,
+            descriptor,
+            sequence_index=index,
+        )
+        for index, descriptor in enumerate(descriptors, start=1)
+    )
+
+    run = _scanner_run_with_test_rpc_scopes(selection, policy, scopes)
+
+    assert tuple(run.repository_test_fork_rpc_scopes) == scopes
+    assert len({scope.evidence_sha256 for scope in scopes}) == len(scopes)
+    assert ScannerRun.model_validate_json(run.model_dump_json()) == run
+
+
+def test_matrix_preserves_exact_ordered_multi_descriptor_scope_ledger() -> None:
+    matrix = _two_descriptor_matrix()
+    restored = RepositorySuiteDifferentialMatrix.model_validate_json(matrix.model_dump_json())
+
+    for attempt in restored.attempts:
+        egress = attempt.scanner_run.fork_rpc_egress
+        assert egress is not None
+        expected_ledger = tuple(
+            scope.bridge_scope_snapshot_sha256
+            for scope in attempt.scanner_run.repository_test_fork_rpc_scopes
+        )
+        assert len(expected_ledger) == 2
+        assert egress.selected_test_scope_snapshot_sha256s == expected_ledger
+        serialized_egress = ForkRpcReadOnlyEgressEvidence.model_validate_json(
+            egress.model_dump_json()
+        )
+        assert serialized_egress.selected_test_scope_snapshot_sha256s == expected_ledger
+    assert restored == matrix
+
+
+def test_matrix_rejects_reversed_multi_descriptor_scope_ledger() -> None:
+    with pytest.raises(ValidationError, match="state_read_unproven"):
+        _two_descriptor_matrix(reverse_ledger=True)
+
+
+@pytest.mark.parametrize(
+    "status",
+    [ScannerStatus.FAILED, ScannerStatus.TIMED_OUT, ScannerStatus.UNAVAILABLE],
+)
+def test_matrix_marks_interrupted_scope_prefix_inconclusive_per_descriptor(
+    status: ScannerStatus,
+) -> None:
+    matrix = _two_descriptor_matrix(
+        interrupted_status=status,
+        derive_inconclusive_consensus=True,
+    )
+    descriptors = _scope_descriptors()
+    clean_state = next(
+        state for state in matrix.states if state.kind is RepositoryExecutionStateKind.CLEAN_LOCAL
+    )
+    consensus_by_descriptor = {
+        consensus.descriptor_sha256: consensus
+        for consensus in matrix.state_consensuses
+        if consensus.state_id == clean_state.state_id
+    }
+
+    assert consensus_by_descriptor[descriptors[0].descriptor_sha256].inconclusive_reasons == (
+        RepositoryStateInconclusiveReason.ATTEMPT_UNAVAILABLE,
+        RepositoryStateInconclusiveReason.SINGLE_OBSERVATION,
+    )
+    assert consensus_by_descriptor[descriptors[1].descriptor_sha256].inconclusive_reasons == (
+        RepositoryStateInconclusiveReason.ATTEMPT_UNAVAILABLE,
+        RepositoryStateInconclusiveReason.SINGLE_OBSERVATION,
+        RepositoryStateInconclusiveReason.STATE_READ_UNPROVEN,
+    )
+    assert all(
+        comparison.classification is RepositoryDifferentialClassification.INCONCLUSIVE
+        for comparison in matrix.comparisons
+    )
+    assert RepositorySuiteDifferentialMatrix.model_validate_json(matrix.model_dump_json()) == matrix
+
+
+def test_per_test_fork_rpc_scope_bridge_snapshot_hash_matches_raw_bridge_projection() -> None:
+    descriptor = _scope_descriptors()[0]
+    selection = _scope_selection((descriptor,))
+    policy = _scope_policy(selection)
+    scope = _test_rpc_scope(selection, policy, descriptor, sequence_index=1)
+    raw_allowed_method_counts = tuple(
+        (item.method, item.count) for item in scope.allowed_method_counts
+    )
+    raw_values = {
+        "schema_version": scope.schema_version,
+        "attempt_binding_sha256": scope.attempt_binding_sha256,
+        "selection_sha256": scope.selection_sha256,
+        "descriptor_sha256": scope.descriptor_sha256,
+        "sequence_index": scope.sequence_index,
+        "policy_sha256": scope.bridge_policy_sha256,
+        "expected_chain_id": scope.expected_chain_id,
+        "pinned_block_number": scope.pinned_block_number,
+        "pinned_block_hash": scope.pinned_block_hash,
+        "status": scope.status.value,
+        "http_request_count": scope.http_request_count,
+        "permitted_rpc_call_count": scope.permitted_rpc_call_count,
+        "origin_attempted_rpc_call_count": scope.origin_attempted_rpc_call_count,
+        "origin_validated_rpc_call_count": scope.origin_validated_rpc_call_count,
+        "synthetic_rpc_call_count": scope.synthetic_rpc_call_count,
+        "denied_request_count": scope.denied_request_count,
+        "malformed_request_count": scope.malformed_request_count,
+        "limit_exceeded_request_count": scope.limit_exceeded_request_count,
+        "upstream_error_request_count": scope.upstream_error_request_count,
+        "allowed_method_counts": [
+            {"method": method, "count": count} for method, count in raw_allowed_method_counts
+        ],
+        "method_log_sha256": scope.method_log_sha256,
+        "boundary_drained": scope.boundary_drained,
+    }
+    bridge_scope = ReadOnlyRpcTestScopeSnapshot(
+        schema_version="1.0",
+        attempt_binding_sha256=scope.attempt_binding_sha256,
+        selection_sha256=scope.selection_sha256,
+        descriptor_sha256=scope.descriptor_sha256,
+        sequence_index=scope.sequence_index,
+        policy_sha256=scope.bridge_policy_sha256,
+        expected_chain_id=scope.expected_chain_id,
+        pinned_block_number=scope.pinned_block_number,
+        pinned_block_hash=scope.pinned_block_hash,
+        status="validated",
+        http_request_count=scope.http_request_count,
+        permitted_rpc_call_count=scope.permitted_rpc_call_count,
+        origin_attempted_rpc_call_count=scope.origin_attempted_rpc_call_count,
+        origin_validated_rpc_call_count=scope.origin_validated_rpc_call_count,
+        synthetic_rpc_call_count=scope.synthetic_rpc_call_count,
+        denied_request_count=scope.denied_request_count,
+        malformed_request_count=scope.malformed_request_count,
+        limit_exceeded_request_count=scope.limit_exceeded_request_count,
+        upstream_error_request_count=scope.upstream_error_request_count,
+        allowed_method_counts=raw_allowed_method_counts,
+        method_log_sha256=scope.method_log_sha256,
+        boundary_drained=True,
+        snapshot_sha256=_canonical_sha256(raw_values),
+    )
+
+    assert bridge_scope.verify()
+    assert scope.bridge_scope_snapshot_sha256 == bridge_scope.snapshot_sha256
+    evidence_values = scope.model_dump(mode="python")
+    evidence_values["credentials_forwarded"] = True
+    assert (
+        RepositoryTestForkRpcScopeEvidence.calculate_bridge_scope_snapshot_sha256(evidence_values)
+        == bridge_scope.snapshot_sha256
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("method_log_sha256", HASH_A),
+        ("bridge_policy_sha256", HASH_B),
+        ("bridge_scope_snapshot_sha256", HASH_A),
+        ("evidence_sha256", HASH_A),
+    ],
+)
+def test_per_test_fork_rpc_scope_rejects_tampered_hash_bindings(
+    field: str,
+    value: str,
+) -> None:
+    descriptors = _scope_descriptors()
+    selection = _scope_selection(descriptors)
+    policy = _scope_policy(selection)
+    scope = _test_rpc_scope(selection, policy, descriptors[0], sequence_index=1)
+    payload = scope.model_dump(mode="json")
+    payload[field] = value
+
+    with pytest.raises(ValidationError, match="hash"):
+        RepositoryTestForkRpcScopeEvidence.model_validate(payload)
+
+
+def test_per_test_fork_rpc_scope_status_and_zero_origin_rules() -> None:
+    descriptor = _scope_descriptors()[0]
+    selection = _scope_selection((descriptor,))
+    policy = _scope_policy(selection)
+
+    not_observed = _test_rpc_scope(
+        selection,
+        policy,
+        descriptor,
+        sequence_index=1,
+        status=RepositoryTestForkRpcScopeStatus.NOT_OBSERVED,
+        origin_attempted_rpc_call_count=0,
+        origin_validated_rpc_call_count=0,
+    )
+    violation = _test_rpc_scope(
+        selection,
+        policy,
+        descriptor,
+        sequence_index=1,
+        status=RepositoryTestForkRpcScopeStatus.VIOLATION,
+        origin_attempted_rpc_call_count=0,
+        origin_validated_rpc_call_count=0,
+        denied_request_count=1,
+    )
+
+    assert not_observed.status is RepositoryTestForkRpcScopeStatus.NOT_OBSERVED
+    assert violation.status is RepositoryTestForkRpcScopeStatus.VIOLATION
+    with pytest.raises(ValidationError, match="zero origin"):
+        _test_rpc_scope(
+            selection,
+            policy,
+            descriptor,
+            sequence_index=1,
+            status=RepositoryTestForkRpcScopeStatus.VALIDATED,
+            origin_attempted_rpc_call_count=0,
+            origin_validated_rpc_call_count=0,
+        )
+    with pytest.raises(ValidationError, match="violation"):
+        _test_rpc_scope(
+            selection,
+            policy,
+            descriptor,
+            sequence_index=1,
+            status=RepositoryTestForkRpcScopeStatus.NOT_OBSERVED,
+            origin_attempted_rpc_call_count=0,
+            origin_validated_rpc_call_count=0,
+            denied_request_count=1,
+        )
+    with pytest.raises(ValidationError, match="rejection or upstream error"):
+        _test_rpc_scope(
+            selection,
+            policy,
+            descriptor,
+            sequence_index=1,
+            status=RepositoryTestForkRpcScopeStatus.VIOLATION,
+            origin_attempted_rpc_call_count=0,
+            origin_validated_rpc_call_count=0,
+        )
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "sequence_index",
+        "expected_chain_id",
+        "pinned_block_number",
+        "http_request_count",
+        "permitted_rpc_call_count",
+        "origin_attempted_rpc_call_count",
+        "origin_validated_rpc_call_count",
+        "synthetic_rpc_call_count",
+        "denied_request_count",
+        "malformed_request_count",
+        "limit_exceeded_request_count",
+        "upstream_error_request_count",
+    ],
+)
+def test_per_test_fork_rpc_scope_requires_exact_integer_counters(field: str) -> None:
+    descriptor = _scope_descriptors()[0]
+    selection = _scope_selection((descriptor,))
+    policy = _scope_policy(selection)
+    scope = _test_rpc_scope(selection, policy, descriptor, sequence_index=1)
+    payload = scope.model_dump(mode="json")
+    payload[field] = True
+
+    with pytest.raises(ValidationError, match="exact integers"):
+        RepositoryTestForkRpcScopeEvidence.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "boundary_drained",
+        "transaction_capable_request_forwarded",
+        "credentials_forwarded",
+        "raw_payloads_retained",
+        "rpc_endpoint_recorded",
+    ],
+)
+def test_per_test_fork_rpc_scope_requires_exact_boolean_boundary_facts(
+    field: str,
+) -> None:
+    descriptor = _scope_descriptors()[0]
+    selection = _scope_selection((descriptor,))
+    policy = _scope_policy(selection)
+    scope = _test_rpc_scope(selection, policy, descriptor, sequence_index=1)
+    payload = scope.model_dump(mode="json")
+    payload[field] = 1
+
+    with pytest.raises(ValidationError, match="exact booleans"):
+        RepositoryTestForkRpcScopeEvidence.model_validate(payload)
+
+
+def test_per_test_fork_rpc_scope_rejects_rehashed_accounting_mismatches() -> None:
+    descriptor = _scope_descriptors()[0]
+    selection = _scope_selection((descriptor,))
+    policy = _scope_policy(selection)
+    scope = _test_rpc_scope(selection, policy, descriptor, sequence_index=1)
+    values = scope.model_dump(
+        mode="python",
+        exclude={"bridge_scope_snapshot_sha256", "evidence_sha256"},
+    )
+    values["allowed_method_counts"] = tuple(
+        ForkRpcMethodCount.model_validate(item) for item in values["allowed_method_counts"]
+    )
+    values["permitted_rpc_call_count"] = 2
+    values["bridge_scope_snapshot_sha256"] = (
+        RepositoryTestForkRpcScopeEvidence.calculate_bridge_scope_snapshot_sha256(values)
+    )
+
+    with pytest.raises(ValidationError, match="accounting"):
+        RepositoryTestForkRpcScopeEvidence.sealed(**values)
+
+    violation = _test_rpc_scope(
+        selection,
+        policy,
+        descriptor,
+        sequence_index=1,
+        status=RepositoryTestForkRpcScopeStatus.VIOLATION,
+        origin_attempted_rpc_call_count=0,
+        origin_validated_rpc_call_count=0,
+        denied_request_count=1,
+    )
+    violation_values = violation.model_dump(
+        mode="python",
+        exclude={"bridge_scope_snapshot_sha256", "evidence_sha256"},
+    )
+    violation_values["allowed_method_counts"] = tuple(
+        ForkRpcMethodCount.model_validate(item)
+        for item in violation_values["allowed_method_counts"]
+    )
+    violation_values["http_request_count"] = 0
+    violation_values["bridge_scope_snapshot_sha256"] = (
+        RepositoryTestForkRpcScopeEvidence.calculate_bridge_scope_snapshot_sha256(violation_values)
+    )
+    with pytest.raises(ValidationError, match="exceeds HTTP"):
+        RepositoryTestForkRpcScopeEvidence.sealed(**violation_values)
+
+
+def test_scanner_test_rpc_scopes_require_selection_and_policy() -> None:
+    descriptor = _scope_descriptors()[0]
+    selection = _scope_selection((descriptor,))
+    policy = _scope_policy(selection)
+    scope = _test_rpc_scope(selection, policy, descriptor, sequence_index=1)
+
+    with pytest.raises(ValidationError, match="require repository selection and execution policy"):
+        ScannerRun(
+            scanner="foundry_fork",
+            status=ScannerStatus.FAILED,
+            started_at=BASE_TIME,
+            finished_at=BASE_TIME,
+            duration_seconds=0,
+            repository_test_fork_rpc_scopes=[scope],
+        )
+
+
+@pytest.mark.parametrize(
+    ("expected_chain_id", "pinned_block_number", "pinned_block_hash"),
+    [
+        (31_339, 77, "0x" + HASH_D),
+        (31_338, 78, "0x" + HASH_D),
+        (31_338, 77, "0x" + HASH_E),
+    ],
+)
+def test_scanner_test_rpc_scopes_reject_cross_selection_and_execution_state_identity(
+    expected_chain_id: int,
+    pinned_block_number: int,
+    pinned_block_hash: str,
+) -> None:
+    descriptor = _scope_descriptors()[0]
+    selection = _scope_selection((descriptor,))
+    policy = _scope_policy(selection)
+
+    with pytest.raises(ValidationError, match="selection"):
+        _scanner_run_with_test_rpc_scopes(
+            selection,
+            policy,
+            (
+                _test_rpc_scope(
+                    selection,
+                    policy,
+                    descriptor,
+                    sequence_index=1,
+                    selection_sha256=HASH_A,
+                ),
+            ),
+        )
+    with pytest.raises(ValidationError, match="execution state identity"):
+        _scanner_run_with_test_rpc_scopes(
+            selection,
+            policy,
+            (
+                _test_rpc_scope(
+                    selection,
+                    policy,
+                    descriptor,
+                    sequence_index=1,
+                    expected_chain_id=expected_chain_id,
+                    pinned_block_number=pinned_block_number,
+                    pinned_block_hash=pinned_block_hash,
+                ),
+            ),
+        )
+
+
+def test_scanner_test_rpc_scope_bridge_policy_is_not_execution_policy_hash() -> None:
+    descriptor = _scope_descriptors()[0]
+    selection = _scope_selection((descriptor,))
+    policy = _scope_policy(selection)
+    scope = _test_rpc_scope(
+        selection,
+        policy,
+        descriptor,
+        sequence_index=1,
+        bridge_policy_sha256=HASH_E,
+    )
+    run = _scanner_run_with_test_rpc_scopes(selection, policy, (scope,))
+
+    assert scope.bridge_policy_sha256 != policy.policy_sha256
+    assert run.repository_test_fork_rpc_scopes == [scope]
+
+
+def test_scanner_test_rpc_scopes_reject_mixed_bridge_policies() -> None:
+    descriptors = _scope_descriptors()
+    selection = _scope_selection(descriptors)
+    policy = _scope_policy(selection)
+    scopes = (
+        _test_rpc_scope(
+            selection,
+            policy,
+            descriptors[0],
+            sequence_index=1,
+            bridge_policy_sha256=HASH_A,
+        ),
+        _test_rpc_scope(
+            selection,
+            policy,
+            descriptors[1],
+            sequence_index=2,
+            bridge_policy_sha256=HASH_B,
+        ),
+    )
+
+    with pytest.raises(ValidationError, match="one common bridge policy"):
+        _scanner_run_with_test_rpc_scopes(selection, policy, scopes)
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        ScannerStatus.FAILED,
+        ScannerStatus.TIMED_OUT,
+        ScannerStatus.UNAVAILABLE,
+    ],
+)
+def test_scanner_test_rpc_scopes_accept_interrupted_prefix_and_reject_successful_prefix(
+    status: ScannerStatus,
+) -> None:
+    descriptors = _scope_descriptors()
+    selection = _scope_selection(descriptors)
+    policy = _scope_policy(selection)
+    first = _test_rpc_scope(selection, policy, descriptors[0], sequence_index=1)
+
+    interrupted = _scanner_run_with_test_rpc_scopes(
+        selection,
+        policy,
+        (first,),
+        status=status,
+    )
+
+    assert interrupted.repository_test_fork_rpc_scopes == [first]
+    with pytest.raises(ValidationError, match="full per-test fork RPC scope coverage"):
+        _scanner_run_with_test_rpc_scopes(selection, policy, (first,))
+    with pytest.raises(ValidationError, match="successful or interrupted scanner status"):
+        _scanner_run_with_test_rpc_scopes(
+            selection,
+            policy,
+            (first,),
+            status=ScannerStatus.SKIPPED,
+        )
+
+
+def test_scanner_test_rpc_scopes_reject_duplicate_hashes_gaps_and_wrong_order() -> None:
+    descriptors = _scope_descriptors()
+    selection = _scope_selection(descriptors)
+    policy = _scope_policy(selection)
+    first = _test_rpc_scope(
+        selection,
+        policy,
+        descriptors[0],
+        sequence_index=1,
+    )
+    second = _test_rpc_scope(
+        selection,
+        policy,
+        descriptors[1],
+        sequence_index=2,
+    )
+
+    with pytest.raises(ValidationError, match="duplicate"):
+        _scanner_run_with_test_rpc_scopes(
+            _scope_selection((descriptors[0],)),
+            _scope_policy(_scope_selection((descriptors[0],))),
+            (first, first),
+            status=ScannerStatus.FAILED,
+        )
+    with pytest.raises(ValidationError, match="canonical 1-based prefix"):
+        _scanner_run_with_test_rpc_scopes(selection, policy, (second, first))
+    gap = _test_rpc_scope(
+        selection,
+        policy,
+        descriptors[1],
+        sequence_index=1,
+    )
+    with pytest.raises(ValidationError, match="canonical 1-based prefix"):
+        _scanner_run_with_test_rpc_scopes(
+            selection,
+            policy,
+            (gap,),
+            status=ScannerStatus.FAILED,
+        )
+
+
+def test_scanner_test_rpc_scopes_require_one_nonzero_attempt_binding() -> None:
+    descriptors = _scope_descriptors()
+    selection = _scope_selection(descriptors)
+    policy = _scope_policy(selection)
+    scopes = (
+        _test_rpc_scope(
+            selection,
+            policy,
+            descriptors[0],
+            sequence_index=1,
+            attempt_binding_sha256=HASH_E,
+        ),
+        _test_rpc_scope(
+            selection,
+            policy,
+            descriptors[1],
+            sequence_index=2,
+            attempt_binding_sha256=HASH_F,
+        ),
+    )
+
+    with pytest.raises(ValidationError, match="one common nonzero attempt binding"):
+        _scanner_run_with_test_rpc_scopes(selection, policy, scopes)
+
+    zero_scope = _test_rpc_scope(
+        _scope_selection((descriptors[0],)),
+        _scope_policy(_scope_selection((descriptors[0],))),
+        descriptors[0],
+        sequence_index=1,
+        attempt_binding_sha256="0" * 64,
+    )
+    zero_selection = _scope_selection((descriptors[0],))
+    with pytest.raises(ValidationError, match="one common nonzero attempt binding"):
+        _scanner_run_with_test_rpc_scopes(
+            zero_selection,
+            _scope_policy(zero_selection),
+            (zero_scope,),
+        )
+
+
+def test_state_attempt_rejects_one_aggregate_read_credited_to_two_tests() -> None:
+    descriptors = _scope_descriptors()
+    selection = _scope_selection(descriptors)
+    policy = _scope_policy(selection)
+    scopes = tuple(
+        _test_rpc_scope(
+            selection,
+            policy,
+            descriptor,
+            sequence_index=index,
+            attempt_binding_sha256=HASH_F,
+            bridge_policy_sha256=HASH_E,
+        )
+        for index, descriptor in enumerate(descriptors, start=1)
+    )
+    run = _scanner_run_with_test_rpc_scopes(selection, policy, scopes)
+    _, pinned = _states()
+    egress = _egress(pinned)
+    payload = run.model_dump(mode="json")
+    payload["fork_rpc_egress"] = egress.model_dump(mode="json")
+    payload["execution_observation_sha256"] = None
+    provisional = ScannerRun.model_validate(payload)
+    run_with_egress = ScannerRun.model_validate(
+        {
+            **payload,
+            "execution_observation_sha256": provisional.expected_execution_observation_sha256(),
+        }
+    )
+
+    with pytest.raises(ValidationError, match="counters exceed aggregate"):
+        RepositorySuiteStateAttempt.sealed(
+            state_id=pinned.state_id,
+            state_sha256=pinned.state_sha256,
+            attempt_index=1,
+            workspace_kind="fresh_disposable_copy",
+            workspace_identity_sha256=HASH_F,
+            workspace_freshness_attestation_sha256=HASH_A,
+            workspace_disposal_policy_sha256=HASH_B,
+            fork_rpc_egress_sha256=egress.evidence_sha256,
+            scanner_run=run_with_egress,
+        )
+
+
+def test_pre_scope_scanner_run_accepts_exact_omitted_field_legacy_digest() -> None:
+    run = ScannerRun(
+        scanner="synthetic-static",
+        status=ScannerStatus.SUCCESS,
+        started_at=BASE_TIME,
+        finished_at=BASE_TIME,
+        duration_seconds=0,
+    )
+    payload = _legacy_scanner_payload(run)
+
+    assert "repository_test_fork_rpc_scopes" not in payload
+    restored = ScannerRun.model_validate_json(json.dumps(payload, sort_keys=True))
+
+    assert restored.repository_test_fork_rpc_scopes == []
+    assert restored.execution_observation_sha256_is_valid()
+    assert restored.execution_observation_sha256 == (
+        restored.expected_legacy_execution_observation_sha256()
+    )
+    assert restored.execution_observation_sha256 == (
+        restored.expected_execution_observation_sha256()
+    )
+
+
+def test_scoped_scanner_run_cannot_use_legacy_observation_digest() -> None:
+    descriptor = _scope_descriptors()[0]
+    selection = _scope_selection((descriptor,))
+    policy = _scope_policy(selection)
+    scope = _test_rpc_scope(selection, policy, descriptor, sequence_index=1)
+    run = _scanner_run_with_test_rpc_scopes(selection, policy, (scope,))
+
+    with pytest.raises(ValueError, match="scoped scanner runs"):
+        run.expected_legacy_execution_observation_sha256()
+
+    payload = run.model_dump(mode="json")
+    legacy_projection = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"execution_observation_sha256", "repository_test_fork_rpc_scopes"}
+    }
+    payload["execution_observation_sha256"] = _canonical_sha256(legacy_projection)
+    with pytest.raises(ValidationError, match="execution observation hash"):
+        ScannerRun.model_validate(payload)
+
+
+def test_tampered_pre_scope_scanner_run_rejects_legacy_digest() -> None:
+    run = ScannerRun(
+        scanner="synthetic-static",
+        status=ScannerStatus.SUCCESS,
+        started_at=BASE_TIME,
+        finished_at=BASE_TIME,
+        duration_seconds=0,
+    )
+    payload = _legacy_scanner_payload(run)
+    payload["duration_seconds"] = 1
+
+    with pytest.raises(ValidationError, match="execution observation hash"):
+        ScannerRun.model_validate(payload)
+
+
+def test_pre_scope_egress_accepts_exact_omitted_ledger_legacy_digest() -> None:
+    clean, _ = _states()
+    evidence = _egress(clean)
+    payload = evidence.model_dump(mode="json")
+    payload.pop("selected_test_scope_snapshot_sha256s", None)
+
+    restored = ForkRpcReadOnlyEgressEvidence.model_validate_json(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    )
+
+    assert restored.selected_test_scope_snapshot_sha256s == ()
+    assert restored.evidence_sha256 == evidence.evidence_sha256
+    assert restored == evidence
+
+
+def test_pre_scope_egress_legacy_digest_cannot_credit_a_new_scope_ledger() -> None:
+    clean, _ = _states()
+    evidence = _egress(clean)
+    payload = evidence.model_dump(mode="json")
+    payload["selected_test_scope_snapshot_sha256s"] = [HASH_D]
+
+    with pytest.raises(ValidationError, match=r"bridge snapshot hash|egress evidence hash"):
+        ForkRpcReadOnlyEgressEvidence.model_validate(payload)
+
+
+def test_matrix_rejects_unscoped_residual_read_masking_duplicate_scope_credit() -> None:
+    descriptors = _scope_descriptors()
+    selection = _scope_selection(descriptors)
+    clean, pinned = _states()
+    attempts: list[RepositorySuiteStateAttempt] = []
+
+    def aggregate_with_unscoped_residual(
+        state: RepositorySuiteExecutionStateEvidence,
+        *,
+        credited_scope_sha256: str,
+    ) -> ForkRpcReadOnlyEgressEvidence:
+        assert state.observed_block_hash is not None
+        method_counts = (ForkRpcMethodCount(method="eth_getCode", count=2),)
+        observation_sha256 = ForkRpcReadOnlyEgressEvidence.calculate_origin_observation_sha256(
+            expected_chain_id=state.expected_chain_id,
+            pinned_block_number=state.pinned_block_number,
+            pinned_block_hash=state.observed_block_hash,
+        )
+        values = {
+            "schema_version": "2.0",
+            "status": RepositoryForkEgressStatus.ENFORCED,
+            "policy_sha256": HASH_E,
+            "expected_chain_id": state.expected_chain_id,
+            "pinned_block_number": state.pinned_block_number,
+            "pinned_block_hash": state.observed_block_hash,
+            "preflight_origin_observation_sha256": observation_sha256,
+            "postflight_origin_observation_sha256": observation_sha256,
+            "origin_state_stable": True,
+            "http_request_count": 2,
+            "permitted_rpc_call_count": 2,
+            "origin_attempted_rpc_call_count": 2,
+            "origin_validated_rpc_call_count": 2,
+            "synthetic_rpc_call_count": 0,
+            "denied_request_count": 0,
+            "malformed_request_count": 0,
+            "limit_exceeded_request_count": 0,
+            "upstream_error_request_count": 0,
+            "allowed_method_counts": method_counts,
+            "method_log_sha256": HASH_F,
+            "selected_test_scope_snapshot_sha256s": (credited_scope_sha256,),
+            "stopped_cleanly": True,
+        }
+        bridge_snapshot_sha256 = ForkRpcReadOnlyEgressEvidence.calculate_bridge_snapshot_sha256(
+            values
+        )
+        return ForkRpcReadOnlyEgressEvidence.sealed(
+            status=RepositoryForkEgressStatus.ENFORCED,
+            state_id=state.state_id,
+            state_source_sha256=state.state_source_sha256,
+            expected_chain_id=state.expected_chain_id,
+            pinned_block_number=state.pinned_block_number,
+            pinned_block_hash=state.observed_block_hash,
+            boundary_kind="trusted_read_only_loopback_bridge",
+            network_scope="single_loopback_origin",
+            policy_sha256=HASH_E,
+            method_log_sha256=HASH_F,
+            selected_test_scope_snapshot_sha256s=(credited_scope_sha256,),
+            preflight_origin_observation_sha256=observation_sha256,
+            postflight_origin_observation_sha256=observation_sha256,
+            origin_state_stable=True,
+            allowed_method_counts=method_counts,
+            http_request_count=2,
+            permitted_rpc_call_count=2,
+            origin_attempted_rpc_call_count=2,
+            origin_validated_rpc_call_count=2,
+            synthetic_rpc_call_count=0,
+            denied_request_count=0,
+            malformed_request_count=0,
+            limit_exceeded_request_count=0,
+            upstream_error_request_count=0,
+            stopped_cleanly=True,
+            transaction_capable_request_forwarded=False,
+            credentials_forwarded=False,
+            raw_payloads_retained=False,
+            rpc_endpoint_recorded=False,
+            bridge_snapshot_sha256=bridge_snapshot_sha256,
+        )
+
+    for state_offset, state in enumerate((clean, pinned)):
+        policy = _policy(selection, state)
+        for attempt_index in (1, 2):
+            identity_digit = state_offset * 2 + attempt_index
+            workspace_identity = f"{identity_digit:x}" * 64
+            scopes = tuple(
+                _test_rpc_scope(
+                    selection,
+                    policy,
+                    descriptor,
+                    sequence_index=index,
+                    attempt_binding_sha256=workspace_identity,
+                    bridge_policy_sha256=HASH_E,
+                )
+                for index, descriptor in enumerate(descriptors, start=1)
+            )
+            egress = aggregate_with_unscoped_residual(
+                state,
+                credited_scope_sha256=scopes[0].bridge_scope_snapshot_sha256,
+            )
+            run_payload = _scanner_run_with_test_rpc_scopes(
+                selection,
+                policy,
+                scopes,
+            ).model_dump(mode="json")
+            run_payload["fork_rpc_egress"] = egress.model_dump(mode="json")
+            run_payload["execution_observation_sha256"] = None
+            provisional_run = ScannerRun.model_validate(run_payload)
+            run = ScannerRun.model_validate(
+                {
+                    **run_payload,
+                    "execution_observation_sha256": (
+                        provisional_run.expected_execution_observation_sha256()
+                    ),
+                }
+            )
+            attempts.append(
+                RepositorySuiteStateAttempt.sealed(
+                    state_id=state.state_id,
+                    state_sha256=state.state_sha256,
+                    attempt_index=attempt_index,
+                    workspace_kind="fresh_disposable_copy",
+                    workspace_identity_sha256=workspace_identity,
+                    workspace_freshness_attestation_sha256=(f"{identity_digit + 4:x}" * 64),
+                    workspace_disposal_policy_sha256=f"{identity_digit + 8:x}" * 64,
+                    fork_rpc_egress_sha256=egress.evidence_sha256,
+                    scanner_run=run,
+                )
+            )
+
+    sorted_attempts = tuple(sorted(attempts, key=lambda item: (item.state_id, item.attempt_index)))
+    consensuses = tuple(
+        sorted(
+            (
+                _consensus(
+                    state,
+                    descriptor,
+                    tuple(item for item in sorted_attempts if item.state_id == state.state_id),
+                    status=RepositoryStateConsensusStatus.CONSISTENT_PASS,
+                    observed_status=RepositoryTestExecutionStatus.PASSED,
+                    machine_result_sha256=descriptor.descriptor_sha256,
+                )
+                for state in (clean, pinned)
+                for descriptor in descriptors
+            ),
+            key=lambda item: (item.state_id, item.descriptor_sha256),
+        )
+    )
+    consensuses_by_key = {(item.state_id, item.descriptor_sha256): item for item in consensuses}
+    comparisons = tuple(
+        _comparison(
+            clean,
+            pinned,
+            descriptor,
+            consensuses_by_key[(clean.state_id, descriptor.descriptor_sha256)],
+            consensuses_by_key[(pinned.state_id, descriptor.descriptor_sha256)],
+            classification=RepositoryDifferentialClassification.CONSISTENT_PASS,
+            direction=None,
+        )
+        for descriptor in descriptors
+    )
+
+    with pytest.raises(ValidationError, match="state_read_unproven"):
+        RepositorySuiteDifferentialMatrix.sealed(
+            repository_sha256=selection.repository_sha256,
+            selection_sha256=selection.selection_sha256,
+            selection_configuration_sha256=selection.configuration_sha256,
+            descriptor_sha256s=tuple(
+                sorted(descriptor.descriptor_sha256 for descriptor in descriptors)
+            ),
+            required_repetitions=2,
+            fuzz_seed=SEED,
+            execution_configuration_sha256=(
+                RepositorySuiteDifferentialMatrix.execution_configuration_sha256_for_policy(
+                    _policy(selection, clean)
+                )
+            ),
+            fork_rpc_policy_sha256=HASH_E,
+            states=tuple(sorted((clean, pinned), key=lambda state: state.state_id)),
+            attempts=sorted_attempts,
+            state_consensuses=consensuses,
+            comparisons=comparisons,
+        )
+
+
+def test_rehashed_persisted_matrix_cannot_keep_conclusive_credit_after_scope_removal() -> None:
+    matrix = _matrix()
+    target = next(
+        attempt
+        for attempt in matrix.attempts
+        if attempt.state_id == "pinned-state" and attempt.attempt_index == 1
+    )
+    run_payload = target.scanner_run.model_dump(mode="json")
+    run_payload["repository_test_fork_rpc_scopes"] = []
+    run_payload["execution_observation_sha256"] = None
+    provisional_run = ScannerRun.model_validate(run_payload)
+    replacement_run = ScannerRun.model_validate(
+        {
+            **run_payload,
+            "execution_observation_sha256": provisional_run.expected_execution_observation_sha256(),
+        }
+    )
+    replacement_attempt = RepositorySuiteStateAttempt.sealed(
+        **target.model_dump(
+            mode="python",
+            exclude={"attempt_sha256", "scanner_run"},
+        ),
+        scanner_run=replacement_run,
+    )
+    attempts = tuple(
+        replacement_attempt if item.attempt_sha256 == target.attempt_sha256 else item
+        for item in matrix.attempts
+    )
+    consensuses = tuple(
+        RepositorySuiteTestStateConsensus.sealed(
+            state_id=consensus.state_id,
+            state_sha256=consensus.state_sha256,
+            descriptor_sha256=consensus.descriptor_sha256,
+            status=consensus.status,
+            attempt_sha256s=tuple(
+                sorted(
+                    attempt.attempt_sha256
+                    for attempt in attempts
+                    if attempt.state_id == consensus.state_id
+                )
+            ),
+            observed_status=consensus.observed_status,
+            machine_result_sha256=consensus.machine_result_sha256,
+            inconclusive_reasons=consensus.inconclusive_reasons,
+        )
+        for consensus in matrix.state_consensuses
+    )
+    consensuses_by_key = {(item.state_id, item.descriptor_sha256): item for item in consensuses}
+    comparisons = tuple(
+        RepositorySuiteTestComparison.sealed(
+            clean_state_id=comparison.clean_state_id,
+            clean_state_sha256=comparison.clean_state_sha256,
+            pinned_state_id=comparison.pinned_state_id,
+            pinned_state_sha256=comparison.pinned_state_sha256,
+            descriptor_sha256=comparison.descriptor_sha256,
+            clean_consensus_sha256=consensuses_by_key[
+                (comparison.clean_state_id, comparison.descriptor_sha256)
+            ].consensus_sha256,
+            pinned_consensus_sha256=consensuses_by_key[
+                (comparison.pinned_state_id, comparison.descriptor_sha256)
+            ].consensus_sha256,
+            classification=comparison.classification,
+            direction=comparison.direction,
+        )
+        for comparison in matrix.comparisons
+    )
+    payload = matrix.model_dump(mode="json")
+    payload["attempts"] = [item.model_dump(mode="json") for item in attempts]
+    payload["state_consensuses"] = [item.model_dump(mode="json") for item in consensuses]
+    payload["comparisons"] = [item.model_dump(mode="json") for item in comparisons]
+    payload["matrix_sha256"] = RepositorySuiteDifferentialMatrix.calculate_matrix_sha256(payload)
+
+    with pytest.raises(ValidationError, match="state_read_unproven"):
+        RepositorySuiteDifferentialMatrix.model_validate_json(
+            json.dumps(payload, sort_keys=True, separators=(",", ":"))
         )

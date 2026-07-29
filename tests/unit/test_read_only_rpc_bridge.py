@@ -6,7 +6,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 from urllib.parse import urlparse
@@ -14,10 +14,18 @@ from urllib.parse import urlparse
 import httpx
 import pytest
 
-from mmaudit.scanners.read_only_rpc import ReadOnlyRpcBridge, ReadOnlyRpcBridgeError
+from mmaudit.scanners import read_only_rpc as read_only_rpc_module
+from mmaudit.scanners.read_only_rpc import (
+    ReadOnlyRpcBridge,
+    ReadOnlyRpcBridgeError,
+    ReadOnlyRpcTestScopeSnapshot,
+)
 
 _PINNED_HASH = "0x" + ("ab" * 32)
 _ACCOUNT = "0x" + ("11" * 20)
+_ATTEMPT_BINDING_SHA256 = "a" * 64
+_SELECTION_SHA256 = "b" * 64
+_DESCRIPTOR_SHA256 = "c" * 64
 
 
 @dataclass
@@ -199,6 +207,22 @@ def _post(endpoint: str, content: bytes) -> httpx.Response:
     )
 
 
+def _queue_raw_post(endpoint: str, content: bytes) -> socket.socket:
+    parsed = urlparse(endpoint)
+    assert parsed.hostname == "127.0.0.1"
+    assert parsed.port is not None
+    client = socket.create_connection((parsed.hostname, parsed.port), timeout=1)
+    client.sendall(
+        b"POST / HTTP/1.1\r\n"
+        b"Host: 127.0.0.1\r\n"
+        b"Content-Type: application/json\r\n"
+        + f"Content-Length: {len(content)}\r\n".encode("ascii")
+        + b"Connection: close\r\n\r\n"
+        + content
+    )
+    return client
+
+
 def _request(method: str, params: list[object], *, request_id: int = 1) -> bytes:
     return json.dumps(
         {
@@ -209,6 +233,52 @@ def _request(method: str, params: list[object], *, request_id: int = 1) -> bytes
         },
         separators=(",", ":"),
     ).encode()
+
+
+def _begin_test_scope(
+    bridge: ReadOnlyRpcBridge,
+    *,
+    descriptor_sha256: str = _DESCRIPTOR_SHA256,
+    sequence_index: int = 1,
+) -> None:
+    bridge.begin_selected_test_scope(
+        attempt_binding_sha256=_ATTEMPT_BINDING_SHA256,
+        selection_sha256=_SELECTION_SHA256,
+        descriptor_sha256=descriptor_sha256,
+        sequence_index=sequence_index,
+    )
+
+
+def _end_test_scope(
+    bridge: ReadOnlyRpcBridge,
+    *,
+    descriptor_sha256: str = _DESCRIPTOR_SHA256,
+    sequence_index: int = 1,
+) -> ReadOnlyRpcTestScopeSnapshot:
+    return bridge.end_selected_test_scope(
+        attempt_binding_sha256=_ATTEMPT_BINDING_SHA256,
+        selection_sha256=_SELECTION_SHA256,
+        descriptor_sha256=descriptor_sha256,
+        sequence_index=sequence_index,
+    )
+
+
+def _wait_for_bridge_handlers(bridge: ReadOnlyRpcBridge) -> None:
+    server = bridge._server
+    assert server is not None
+    assert server.wait_for_handlers(1)
+
+
+def _wait_for_accept_checkpoint(bridge: ReadOnlyRpcBridge) -> None:
+    server = bridge._server
+    assert server is not None
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        with server._checkpoint_lock:
+            if server._checkpoints_by_source_port:
+                return
+        time.sleep(0.001)
+    raise AssertionError("bridge did not register its accept checkpoint")
 
 
 def test_bridge_forwards_only_pinned_reads_and_emits_private_self_hashed_snapshot(
@@ -855,6 +925,8 @@ def test_empty_bridge_snapshot_binds_stable_pre_and_post_origin_identity(
         snapshot.postflight_origin_observation_sha256
     )
     assert len(snapshot.preflight_origin_observation_sha256) == 64
+    assert snapshot.selected_test_scope_snapshot_sha256s == ()
+    assert "selected_test_scope_snapshot_sha256s" not in snapshot.to_dict()
     assert snapshot.verify()
 
 
@@ -1166,3 +1238,494 @@ def test_bridge_cancels_indefinitely_slow_origin_stream_without_thread_or_listen
     assert snapshot.origin_attempted_rpc_call_count == 1
     assert snapshot.origin_validated_rpc_call_count == 0
     assert snapshot.upstream_error_request_count == 1
+
+
+def test_selected_test_scope_seals_exact_endpoint_free_accounting(
+    local_origin: tuple[str, _OriginState],
+) -> None:
+    origin, _state = local_origin
+    bridge = _bridge(origin)
+    bridge.start()
+    endpoint = bridge.endpoint
+    _begin_test_scope(bridge)
+
+    origin_response = _post(
+        endpoint,
+        _request("eth_getBalance", [_ACCOUNT, "latest"], request_id=1),
+    )
+    synthetic_response = _post(
+        endpoint,
+        _request("eth_chainId", [], request_id=2),
+    )
+    _wait_for_bridge_handlers(bridge)
+    scope = _end_test_scope(bridge)
+    bridge.stop()
+
+    assert origin_response.status_code == 200
+    assert synthetic_response.status_code == 200
+    assert scope.schema_version == "1.0"
+    assert scope.status == "validated"
+    assert scope.attempt_binding_sha256 == _ATTEMPT_BINDING_SHA256
+    assert scope.selection_sha256 == _SELECTION_SHA256
+    assert scope.descriptor_sha256 == _DESCRIPTOR_SHA256
+    assert scope.sequence_index == 1
+    assert scope.expected_chain_id == 31_337
+    assert scope.pinned_block_number == 42
+    assert scope.pinned_block_hash == _PINNED_HASH
+    assert scope.http_request_count == 2
+    assert scope.permitted_rpc_call_count == 2
+    assert scope.origin_attempted_rpc_call_count == 1
+    assert scope.origin_validated_rpc_call_count == 1
+    assert scope.synthetic_rpc_call_count == 1
+    assert scope.denied_request_count == 0
+    assert scope.malformed_request_count == 0
+    assert scope.limit_exceeded_request_count == 0
+    assert scope.upstream_error_request_count == 0
+    assert scope.allowed_method_counts == (
+        ("eth_chainId", 1),
+        ("eth_getBalance", 1),
+    )
+    assert scope.boundary_drained is True
+    assert scope.verify()
+    serialized = json.dumps(scope.to_dict(), sort_keys=True)
+    assert origin not in serialized
+    assert endpoint not in serialized
+    assert _ACCOUNT not in serialized
+    aggregate = bridge.snapshot()
+    assert aggregate.http_request_count == scope.http_request_count
+    assert aggregate.permitted_rpc_call_count == scope.permitted_rpc_call_count
+    assert aggregate.selected_test_scope_snapshot_sha256s == (scope.snapshot_sha256,)
+
+
+def test_selected_test_scope_marks_synthetic_only_observation_not_observed(
+    local_origin: tuple[str, _OriginState],
+) -> None:
+    origin, _state = local_origin
+    bridge = _bridge(origin)
+    bridge.start()
+    _begin_test_scope(bridge)
+
+    response = _post(bridge.endpoint, _request("eth_chainId", []))
+    _wait_for_bridge_handlers(bridge)
+    scope = _end_test_scope(bridge)
+    bridge.stop()
+
+    assert response.status_code == 200
+    assert scope.status == "not_observed"
+    assert scope.http_request_count == 1
+    assert scope.permitted_rpc_call_count == 1
+    assert scope.origin_attempted_rpc_call_count == 0
+    assert scope.origin_validated_rpc_call_count == 0
+    assert scope.synthetic_rpc_call_count == 1
+
+
+def test_selected_test_scope_marks_any_request_error_as_violation(
+    local_origin: tuple[str, _OriginState],
+) -> None:
+    origin, state = local_origin
+    bridge = _bridge(origin)
+    bridge.start()
+    _begin_test_scope(bridge)
+
+    denied = _post(
+        bridge.endpoint,
+        _request("eth_sendRawTransaction", ["0x00"], request_id=1),
+    )
+    malformed = _post(bridge.endpoint, b"{}")
+    _wait_for_bridge_handlers(bridge)
+    scope = _end_test_scope(bridge)
+    bridge.stop()
+
+    assert denied.status_code == 403
+    assert malformed.status_code == 400
+    assert _ordinary_origin_requests(state) == []
+    assert scope.status == "violation"
+    assert scope.http_request_count == 2
+    assert scope.permitted_rpc_call_count == 0
+    assert scope.denied_request_count == 1
+    assert scope.malformed_request_count == 1
+    assert scope.limit_exceeded_request_count == 0
+    assert scope.upstream_error_request_count == 0
+
+
+def test_selected_test_scope_rejects_overlap_wrong_identity_and_invalid_lifecycle(
+    local_origin: tuple[str, _OriginState],
+) -> None:
+    origin, _state = local_origin
+    bridge = _bridge(origin)
+    with pytest.raises(ReadOnlyRpcBridgeError, match="not running"):
+        _begin_test_scope(bridge)
+
+    bridge.start()
+    _begin_test_scope(bridge)
+    with pytest.raises(ReadOnlyRpcBridgeError, match="cannot overlap"):
+        _begin_test_scope(
+            bridge,
+            descriptor_sha256="d" * 64,
+            sequence_index=2,
+        )
+    with pytest.raises(ReadOnlyRpcBridgeError, match="identity does not match"):
+        _end_test_scope(
+            bridge,
+            descriptor_sha256="d" * 64,
+            sequence_index=2,
+        )
+
+    scope = _end_test_scope(bridge)
+    assert scope.status == "not_observed"
+    with pytest.raises(ReadOnlyRpcBridgeError, match="not active"):
+        _end_test_scope(bridge)
+    with pytest.raises(TypeError):
+        bridge.begin_selected_test_scope(  # type: ignore[call-arg]
+            attempt_binding_sha256=_ATTEMPT_BINDING_SHA256,
+            selection_sha256=_SELECTION_SHA256,
+            descriptor_sha256=_DESCRIPTOR_SHA256,
+        )
+    bridge.stop()
+    with pytest.raises(ReadOnlyRpcBridgeError, match="not running"):
+        _begin_test_scope(bridge, descriptor_sha256="d" * 64, sequence_index=2)
+    with pytest.raises(ReadOnlyRpcBridgeError, match="not running"):
+        _end_test_scope(bridge, descriptor_sha256="d" * 64, sequence_index=2)
+
+
+@pytest.mark.parametrize("sequence_index", [0, 10_001, True])
+def test_selected_test_scope_requires_one_based_bounded_sequence_identity(
+    local_origin: tuple[str, _OriginState],
+    sequence_index: int,
+) -> None:
+    origin, _state = local_origin
+    bridge = _bridge(origin)
+    bridge.start()
+    try:
+        with pytest.raises(ReadOnlyRpcBridgeError, match="identity is invalid"):
+            _begin_test_scope(bridge, sequence_index=sequence_index)
+    finally:
+        bridge.stop()
+
+
+def test_selected_test_scope_boundaries_wait_for_active_handlers_within_bound(
+    local_origin: tuple[str, _OriginState],
+) -> None:
+    origin, state = local_origin
+    state.response_delay_seconds = 0.15
+    bridge = _bridge(origin, timeout_seconds=0.5)
+    bridge.start()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        unscoped_future = executor.submit(
+            _post,
+            bridge.endpoint,
+            _request("eth_getBalance", [_ACCOUNT, "latest"], request_id=1),
+        )
+        assert state.request_received.wait(timeout=1)
+        started = time.monotonic()
+        _begin_test_scope(bridge)
+        begin_elapsed = time.monotonic() - started
+        assert unscoped_future.result(timeout=1).status_code == 200
+
+        state.request_received.clear()
+        scoped_future = executor.submit(
+            _post,
+            bridge.endpoint,
+            _request("eth_getBalance", [_ACCOUNT, "latest"], request_id=2),
+        )
+        assert state.request_received.wait(timeout=1)
+        started = time.monotonic()
+        scope = _end_test_scope(bridge)
+        end_elapsed = time.monotonic() - started
+        assert scoped_future.result(timeout=1).status_code == 200
+
+    bridge.stop()
+    assert begin_elapsed >= 0.05
+    assert end_elapsed >= 0.05
+    assert scope.status == "validated"
+    assert scope.http_request_count == 1
+    assert scope.origin_attempted_rpc_call_count == 1
+    assert scope.origin_validated_rpc_call_count == 1
+
+
+def test_selected_test_scope_begin_drains_connection_queued_before_checkpoint(
+    local_origin: tuple[str, _OriginState],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    origin, _state = local_origin
+    accept_waiting = threading.Event()
+    release_accept = threading.Event()
+    original_get_request = read_only_rpc_module._BridgeHttpServer.get_request
+
+    def held_get_request(
+        server: read_only_rpc_module._BridgeHttpServer,
+    ) -> tuple[socket.socket, object]:
+        accept_waiting.set()
+        if not release_accept.wait(timeout=1):
+            raise RuntimeError("synthetic accept gate timed out")
+        return original_get_request(server)
+
+    monkeypatch.setattr(
+        read_only_rpc_module._BridgeHttpServer,
+        "get_request",
+        held_get_request,
+    )
+    bridge = _bridge(origin)
+    bridge.start()
+    client = _queue_raw_post(
+        bridge.endpoint,
+        _request("eth_getBalance", [_ACCOUNT, "latest"]),
+    )
+    try:
+        assert accept_waiting.wait(timeout=1)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            begin_future = executor.submit(_begin_test_scope, bridge)
+            _wait_for_accept_checkpoint(bridge)
+            assert not begin_future.done()
+            release_accept.set()
+            begin_future.result(timeout=1)
+        scope = _end_test_scope(bridge)
+        bridge.stop()
+    finally:
+        client.close()
+
+    assert scope.status == "not_observed"
+    assert scope.http_request_count == 0
+    aggregate = bridge.snapshot()
+    assert aggregate.http_request_count == 1
+    assert aggregate.origin_validated_rpc_call_count == 1
+
+
+def test_selected_test_scope_end_includes_connection_queued_before_checkpoint(
+    local_origin: tuple[str, _OriginState],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    origin, _state = local_origin
+    second_accept_waiting = threading.Event()
+    release_second_accept = threading.Event()
+    call_count = 0
+    call_count_lock = threading.Lock()
+    original_get_request = read_only_rpc_module._BridgeHttpServer.get_request
+
+    def gate_second_get_request(
+        server: read_only_rpc_module._BridgeHttpServer,
+    ) -> tuple[socket.socket, object]:
+        nonlocal call_count
+        with call_count_lock:
+            call_count += 1
+            current_call = call_count
+        if current_call == 2:
+            second_accept_waiting.set()
+            if not release_second_accept.wait(timeout=1):
+                raise RuntimeError("synthetic accept gate timed out")
+        return original_get_request(server)
+
+    monkeypatch.setattr(
+        read_only_rpc_module._BridgeHttpServer,
+        "get_request",
+        gate_second_get_request,
+    )
+    bridge = _bridge(origin)
+    bridge.start()
+    _begin_test_scope(bridge)
+    client = _queue_raw_post(
+        bridge.endpoint,
+        _request("eth_getBalance", [_ACCOUNT, "latest"]),
+    )
+    try:
+        assert second_accept_waiting.wait(timeout=1)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            end_future = executor.submit(_end_test_scope, bridge)
+            _wait_for_accept_checkpoint(bridge)
+            assert not end_future.done()
+            release_second_accept.set()
+            scope = end_future.result(timeout=1)
+        bridge.stop()
+    finally:
+        client.close()
+
+    assert scope.status == "validated"
+    assert scope.http_request_count == 1
+    assert scope.origin_attempted_rpc_call_count == 1
+    assert scope.origin_validated_rpc_call_count == 1
+
+
+def test_selected_test_scope_end_waits_after_response_until_handler_finishes(
+    local_origin: tuple[str, _OriginState],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    origin, _state = local_origin
+    finish_entered = threading.Event()
+    release_finish = threading.Event()
+    original_finish_handler = read_only_rpc_module._BridgeHttpServer._finish_handler
+
+    def held_finish_handler(
+        server: read_only_rpc_module._BridgeHttpServer,
+        request: socket.socket,
+    ) -> None:
+        finish_entered.set()
+        if not release_finish.wait(timeout=1):
+            raise RuntimeError("synthetic handler-finalization gate timed out")
+        original_finish_handler(server, request)
+
+    monkeypatch.setattr(
+        read_only_rpc_module._BridgeHttpServer,
+        "_finish_handler",
+        held_finish_handler,
+    )
+    bridge = _bridge(origin)
+    bridge.start()
+    _begin_test_scope(bridge)
+    server = bridge._server
+    assert server is not None
+    checkpoint_accepted = threading.Event()
+    original_accept_checkpoint = server.accept_boundary_checkpoint
+
+    def observed_accept_checkpoint(
+        timeout_seconds: float,
+    ) -> read_only_rpc_module._AcceptBoundaryCheckpoint:
+        checkpoint = original_accept_checkpoint(timeout_seconds)
+        checkpoint_accepted.set()
+        return checkpoint
+
+    monkeypatch.setattr(server, "accept_boundary_checkpoint", observed_accept_checkpoint)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        request_future = executor.submit(
+            _post,
+            bridge.endpoint,
+            _request("eth_getBalance", [_ACCOUNT, "latest"]),
+        )
+        assert finish_entered.wait(timeout=1)
+        assert request_future.result(timeout=1).status_code == 200
+        end_future = executor.submit(_end_test_scope, bridge)
+        assert checkpoint_accepted.wait(timeout=1)
+        assert not end_future.done()
+        release_finish.set()
+        scope = end_future.result(timeout=1)
+
+    bridge.stop()
+    assert scope.status == "validated"
+    assert scope.boundary_drained is True
+    assert scope.origin_validated_rpc_call_count == 1
+
+
+def test_abandoned_selected_test_scope_shutdown_cleans_resources_and_fails_closed(
+    local_origin: tuple[str, _OriginState],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    origin, _state = local_origin
+    finish_entered = threading.Event()
+    release_finish = threading.Event()
+    original_finish_handler = read_only_rpc_module._BridgeHttpServer._finish_handler
+
+    def held_finish_handler(
+        server: read_only_rpc_module._BridgeHttpServer,
+        request: socket.socket,
+    ) -> None:
+        finish_entered.set()
+        release_finish.wait(timeout=1)
+        original_finish_handler(server, request)
+
+    monkeypatch.setattr(
+        read_only_rpc_module._BridgeHttpServer,
+        "_finish_handler",
+        held_finish_handler,
+    )
+    bridge = _bridge(
+        origin,
+        timeout_seconds=0.5,
+        shutdown_timeout_seconds=0.2,
+    )
+    bridge.start()
+    endpoint = bridge.endpoint
+    _begin_test_scope(bridge)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        request_future = executor.submit(
+            _post,
+            endpoint,
+            _request("eth_getBalance", [_ACCOUNT, "latest"]),
+        )
+        assert finish_entered.wait(timeout=1)
+        with pytest.raises(ReadOnlyRpcBridgeError, match="boundary exceeded"):
+            _end_test_scope(bridge)
+        release_finish.set()
+        assert request_future.result(timeout=1).status_code == 200
+        _wait_for_bridge_handlers(bridge)
+        with pytest.raises(ReadOnlyRpcBridgeError, match="scope was abandoned"):
+            bridge.stop()
+
+    server = bridge._server
+    assert server is not None
+    assert server.handlers_drained()
+    assert bridge._upstream_resources_drained()
+    assert bridge._active_test_scope is None
+    with pytest.raises(httpx.ConnectError):
+        _post(endpoint, _request("eth_chainId", []))
+    with pytest.raises(ReadOnlyRpcBridgeError, match="clean stopped bridge"):
+        bridge.snapshot()
+    with pytest.raises(ReadOnlyRpcBridgeError, match="already attempted"):
+        bridge.stop()
+    with pytest.raises(ReadOnlyRpcBridgeError, match="not running"):
+        _end_test_scope(bridge)
+
+
+def test_selected_test_scope_rejects_hash_and_count_tampering(
+    local_origin: tuple[str, _OriginState],
+) -> None:
+    origin, _state = local_origin
+    bridge = _bridge(origin)
+    bridge.start()
+    _begin_test_scope(bridge)
+    response = _post(bridge.endpoint, _request("eth_chainId", []))
+    _wait_for_bridge_handlers(bridge)
+    scope = _end_test_scope(bridge)
+    bridge.stop()
+
+    assert response.status_code == 200
+    with pytest.raises(ValueError, match="hash is inconsistent"):
+        replace(scope, snapshot_sha256="f" * 64)
+    with pytest.raises(ValueError, match="inconsistent"):
+        replace(scope, permitted_rpc_call_count=2)
+
+
+def test_bridge_snapshot_binds_ordered_unique_sealed_scope_ledger(
+    local_origin: tuple[str, _OriginState],
+) -> None:
+    origin, _state = local_origin
+    bridge = _bridge(origin)
+    bridge.start()
+
+    _begin_test_scope(bridge)
+    first = _end_test_scope(bridge)
+    _begin_test_scope(
+        bridge,
+        descriptor_sha256="d" * 64,
+        sequence_index=2,
+    )
+    second = _end_test_scope(
+        bridge,
+        descriptor_sha256="d" * 64,
+        sequence_index=2,
+    )
+    bridge.stop()
+
+    snapshot = bridge.snapshot()
+    assert snapshot.selected_test_scope_snapshot_sha256s == (
+        first.snapshot_sha256,
+        second.snapshot_sha256,
+    )
+    assert snapshot.verify()
+    with pytest.raises(ValueError, match="hash is inconsistent"):
+        replace(
+            snapshot,
+            selected_test_scope_snapshot_sha256s=(
+                second.snapshot_sha256,
+                first.snapshot_sha256,
+            ),
+        )
+    with pytest.raises(ValueError, match="inconsistent"):
+        replace(
+            snapshot,
+            selected_test_scope_snapshot_sha256s=(
+                first.snapshot_sha256,
+                first.snapshot_sha256,
+            ),
+        )
