@@ -533,6 +533,23 @@ def test_foundry_repository_suite_missing_rpc_is_unavailable_before_execution(
     assert "MMAUDIT_FORK_RPC_URL" in (result.error or "")
 
 
+def test_foundry_scanner_uses_explicit_in_memory_rpc_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MMAUDIT_FORK_RPC_URL", "http://127.0.0.1:8545")
+    scanner = FoundryForkScanner(
+        SmartContractsConfig(),
+        fork_rpc_url_override="http://127.0.0.1:9545",
+    )
+
+    command = scanner.build_command(tmp_path, tmp_path / "private")
+
+    assert command[command.index("--fork-url") + 1] == "http://127.0.0.1:9545"
+    assert "http://127.0.0.1:8545" not in command
+    assert all("9545" not in token for token in scanner.display_command())
+
+
 def test_foundry_repository_suite_rejects_source_changed_after_pipeline_freeze(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

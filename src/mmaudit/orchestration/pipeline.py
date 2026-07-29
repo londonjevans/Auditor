@@ -134,7 +134,10 @@ from mmaudit.models.schemas import (
     PropertyCorpus,
     QualityGateResult,
     ReportQualityReview,
+    RepositoryDifferentialRunStatus,
+    RepositoryForkRpcPrivacyEvidence,
     RepositoryMap,
+    RepositorySuiteDifferentialRun,
     ReproductionIntegrityStatus,
     ReproductionResolutionKind,
     ReproductionResult,
@@ -247,6 +250,11 @@ from mmaudit.repository.privacy_provenance import (
 )
 from mmaudit.repository.redaction import SecretSafetyError
 from mmaudit.scanners.base import scanner_workspace_sha256
+from mmaudit.scanners.clean_chain import TrustedCleanAnvilLauncher
+from mmaudit.scanners.fork_matrix import (
+    ForkMatrixDependencies,
+    RepositoryForkMatrixRunner,
+)
 from mmaudit.scanners.runner import ScannerRunner
 from mmaudit.solidity.compile import compile_solidity_projects
 from mmaudit.solidity.coverage import (
@@ -335,6 +343,7 @@ class AuditPipeline:
         privacy_source_classification: PrivacySourceClassification = (
             PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE
         ),
+        repository_fork_matrix_runner: RepositoryForkMatrixRunner | None = None,
     ) -> None:
         self.config = config.effective()
         self.file_config = file_config or self.config
@@ -387,6 +396,17 @@ class AuditPipeline:
             self.formal_runner = configured_formal_runner
         else:
             self.formal_runner = formal_runner
+        self.repository_fork_matrix_runner = (
+            RepositoryForkMatrixRunner(
+                self.config.smart_contracts,
+                self.config.reproduction,
+                dependencies=ForkMatrixDependencies(
+                    clean_state_provider=TrustedCleanAnvilLauncher(),
+                ),
+            )
+            if repository_fork_matrix_runner is None
+            else repository_fork_matrix_runner
+        )
         self._owns_client = False
 
     def clear_credentials(self) -> None:
@@ -591,6 +611,7 @@ class AuditPipeline:
         economic_simulations: list[EconomicSimulationPlan] = []
         formal_runs: list[FormalToolRun] = []
         solidity_coverage: SolidityCoverage | None = None
+        repository_suite_differential: RepositorySuiteDifferentialRun | None = None
         model_review_coverage: ModelReviewCoverage | None = None
         provider_session: ProviderSessionProvenance | None = None
         model_surface_review_artifacts: list[ModelSurfaceReviewArtifact] = []
@@ -1076,6 +1097,25 @@ class AuditPipeline:
                 repository_exclusion_root=repository_execution_exclusion_root,
             )
         )
+        if self.config.smart_contracts.repository_suite.fork_matrix_states:
+            repository_suite_differential = await self._execute_repository_fork_matrix(
+                repository_root=discovery.root,
+                private_root=run_dir / "private" / "repository-fork-matrix",
+                projects=solidity_projects,
+                repository_sha256=repository_execution_sha256,
+                repository_exclusion_root=repository_execution_exclusion_root,
+                scanner_runs=scanner_runs,
+            )
+            if repository_suite_differential.status is not RepositoryDifferentialRunStatus.COMPLETE:
+                detail = (
+                    "configured repository suite differential did not complete: "
+                    f"{repository_suite_differential.status.value}"
+                )
+                if repository_suite_differential.limitations:
+                    detail += f": {repository_suite_differential.limitations[0]}"
+                incomplete.append(detail)
+                if terminal_code is ExitCode.SUCCESS:
+                    terminal_code = ExitCode.INCOMPLETE
         if repository_execution_sha256 is not None:
             try:
                 post_scanner_repository_sha256 = scanner_workspace_sha256(
@@ -1092,7 +1132,8 @@ class AuditPipeline:
             else:
                 if post_scanner_repository_sha256 != repository_execution_sha256:
                     incomplete.append(
-                        "repository execution source changed during scanner execution"
+                        "repository execution source changed during scanner execution or "
+                        "repository differential execution"
                     )
                     if terminal_code is ExitCode.SUCCESS:
                         terminal_code = ExitCode.INCOMPLETE
@@ -2759,6 +2800,7 @@ class AuditPipeline:
             run_options=run_options,
             repository_map=repository_map,
             scanner_runs=scanner_runs,
+            repository_suite_differential=repository_suite_differential,
             usage=usage,
             findings=final_findings,
             rejected=rejected_findings,
@@ -3137,6 +3179,71 @@ class AuditPipeline:
         (run_dir / "private").mkdir(mode=0o700)
         return run_id, run_dir
 
+    async def _execute_repository_fork_matrix(
+        self,
+        *,
+        repository_root: Path,
+        private_root: Path,
+        projects: list[SolidityProjectMetadata],
+        repository_sha256: str | None,
+        repository_exclusion_root: Path | None,
+        scanner_runs: list[ScannerRun],
+    ) -> RepositorySuiteDifferentialRun:
+        """Run a configured matrix separately from the qualifying scanner portfolio."""
+
+        suite = self.config.smart_contracts.repository_suite
+
+        def failed(detail: str) -> RepositorySuiteDifferentialRun:
+            return RepositorySuiteDifferentialRun.sealed(
+                status=RepositoryDifferentialRunStatus.FAILED,
+                configuration_sha256=suite.stable_hash(),
+                requested_state_ids=tuple(state.state_id for state in suite.fork_matrix_states),
+                required_repetitions=suite.fork_matrix_repetitions,
+                matrix=None,
+                limitations=(detail,),
+            )
+
+        if repository_sha256 is None or repository_exclusion_root is None:
+            return failed("The repository execution identity was unavailable.")
+        baseline_runs = [run for run in scanner_runs if run.scanner == "foundry_fork"]
+        if len(baseline_runs) != 1:
+            return failed("Exactly one qualifying baseline Foundry run was not available.")
+        backend = getattr(self.scanner_runner, "backend", None)
+        if backend is None:
+            backend = getattr(self.reproduction_runner, "backend", None)
+        if backend is None:
+            return failed("The configured hardened isolation backend was unavailable.")
+        absolute_deadline = time.monotonic() + suite.total_timeout_seconds
+        try:
+            observed = await asyncio.to_thread(
+                self.repository_fork_matrix_runner.run,
+                repository_root,
+                private_root,
+                projects=projects,
+                repository_sha256=repository_sha256,
+                repository_exclusion_root=repository_exclusion_root,
+                backend=backend,
+                baseline_run=baseline_runs[0],
+                absolute_deadline=absolute_deadline,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            return failed(
+                f"The configured repository suite differential failed safely: {type(exc).__name__}."
+            )
+        if observed is None:
+            return failed("The configured repository suite differential emitted no result.")
+        if (
+            observed.configuration_sha256 != suite.stable_hash()
+            or observed.requested_state_ids
+            != tuple(state.state_id for state in suite.fork_matrix_states)
+            or observed.required_repetitions != suite.fork_matrix_repetitions
+        ):
+            return failed(
+                "The repository suite differential result differed from its effective "
+                "configuration."
+            )
+        return observed
+
     def _build_report(
         self,
         *,
@@ -3150,6 +3257,7 @@ class AuditPipeline:
         run_options: AuditRunOptions,
         repository_map: Any,
         scanner_runs: list[ScannerRun],
+        repository_suite_differential: RepositorySuiteDifferentialRun | None,
         usage: UsageLedger,
         findings: list[Finding],
         rejected: list[Finding],
@@ -3191,6 +3299,11 @@ class AuditPipeline:
         fork_probing_enabled = self.config.smart_contracts.enabled and (
             self.config.smart_contracts.allow_fork_probing or allow_fork_probing
         )
+        fork_rpc_privacy = (
+            RepositoryForkRpcPrivacyEvidence.from_differential(repository_suite_differential)
+            if repository_suite_differential is not None
+            else None
+        )
         return AuditReport(
             schema_version=AUDIT_REPORT_SCHEMA_VERSION,
             run_id=run_id,
@@ -3213,8 +3326,14 @@ class AuditPipeline:
                     if self.privacy_source_provenance is not None
                     else None
                 ),
+                **(
+                    {"fork_rpc_egress": fork_rpc_privacy.model_dump(mode="json")}
+                    if fork_rpc_privacy is not None
+                    else {}
+                ),
             },
             scanner_runs=scanner_runs,
+            repository_suite_differential=repository_suite_differential,
             usage=usage.records,
             budget_usd=self.config.execution.budget_usd,
             accounted_cost_usd=usage.accounted_cost_usd,
@@ -3473,9 +3592,23 @@ class AuditPipeline:
                 "configuration_hash": report.configuration_hash,
                 "model_configuration_hash": report.model_configuration_hash,
                 "privacy": report.privacy,
+                "repository_suite_differential": (
+                    report.repository_suite_differential.model_dump(mode="json")
+                    if report.repository_suite_differential is not None
+                    else None
+                ),
                 "metadata": report.metadata,
             },
         )
+        if report.repository_suite_differential is not None:
+            write_json(
+                run_dir / "repository-suite-differential.json",
+                report.repository_suite_differential,
+            )
+            write_json(
+                run_dir / "privacy-fork-rpc-egress.json",
+                report.privacy["fork_rpc_egress"],
+            )
         write_json(
             run_dir / "candidate-findings.json",
             {
@@ -3639,7 +3772,9 @@ class AuditPipeline:
             "repository-map.json",
             "privacy-source-provenance.json",
             "privacy-policy.json",
+            "privacy-fork-rpc-egress.json",
             "scanner-results.json",
+            "repository-suite-differential.json",
             "candidate-findings.json",
             "verification-results.json",
             "final-findings.json",

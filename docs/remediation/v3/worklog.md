@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Differential and multi-state fork matrix
 CURRENT_TICKET: V3-FORKDIFF-001
 LAST_COMPLETED_TICKET: V3-FLOOR-001
-NEXT_ACTION: Resume V3-FORKDIFF-001 by implementing and expected-red testing a trusted bounded read-only loopback JSON-RPC bridge; preserve the qualifying single-state Foundry run while building a separate typed repeated-state matrix artifact.
-LAST_COMMAND: git commit -m "Define repository fork matrix configuration"
-LAST_RESULT: PASS — validated in-progress V3-FORKDIFF configuration slice committed as d643b14218977ec79f5050e4f02d30b0765a40ca.
+NEXT_ACTION: Resume V3-FORKDIFF-001 by remediating the recorded matrix-runner fail-closed gaps (per-test state-read provenance, real workspace binding, finite monotonic deadline/lifecycle cleanup, canonical private-root custody, limitation preservation, and child tool pinning), then add the conditional real local Anvil/Foundry integration and default replay wiring.
+LAST_COMMAND: .venv/bin/ruff format src/mmaudit/config.py tests/integration/test_pipeline.py tests/unit/test_fork_matrix.py && .venv/bin/ruff check src/mmaudit/config.py src/mmaudit/models/schemas.py src/mmaudit/orchestration/manifest.py src/mmaudit/orchestration/pipeline.py src/mmaudit/orchestration/replay.py src/mmaudit/reporting/markdown.py src/mmaudit/scanners/foundry.py src/mmaudit/scanners/clean_chain.py src/mmaudit/scanners/fork_matrix.py src/mmaudit/scanners/read_only_rpc.py tests/integration/test_pipeline.py tests/unit/test_manifest.py tests/unit/test_replay.py tests/unit/test_repository_suite_config.py tests/unit/test_scanners_reporting.py tests/unit/test_clean_chain.py tests/unit/test_fork_matrix.py tests/unit/test_read_only_rpc_bridge.py tests/unit/test_repository_fork_differential_schema.py && .venv/bin/mypy src/mmaudit/config.py src/mmaudit/models/schemas.py src/mmaudit/orchestration/manifest.py src/mmaudit/orchestration/pipeline.py src/mmaudit/orchestration/replay.py src/mmaudit/reporting/markdown.py src/mmaudit/scanners/foundry.py src/mmaudit/scanners/clean_chain.py src/mmaudit/scanners/fork_matrix.py src/mmaudit/scanners/read_only_rpc.py && .venv/bin/python scripts/generate_release_schemas.py
+LAST_RESULT: PASS — Ruff formatted 3 files, affected Ruff passed, strict mypy passed 10 source files, and committed-schema synchronization passed. Immediately before this, the non-socket focused gate passed 329 tests in 81.24s. The local-socket bridge suite was not rerun because the managed sandbox denied loopback bind; its last accepted capability-granted result remains 66 passing tests.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: d643b14218977ec79f5050e4f02d30b0765a40ca
+LAST_CHECKPOINT_COMMIT: 625c718761212ddd127bc1e43fa6fb6957eeab94
 
 ## 2026-07-29 — V3-FORKDIFF-001
 
@@ -62,6 +62,234 @@ LAST_CHECKPOINT_COMMIT: d643b14218977ec79f5050e4f02d30b0765a40ca
 - **Pause checkpoint:** The validated bounded configuration slice was committed
   as `d643b14218977ec79f5050e4f02d30b0765a40ca` (`Define repository fork matrix
   configuration`). It is an in-progress checkpoint, not ticket completion.
+- **Resume checkpoint:** Autorun resumed from synchronized commit `625c718`.
+  The complete objective was reread and hash-verified, repository instructions
+  and current queue state were reloaded, and the worktree was clean. The next
+  implementation slice remains local-only and introduces no provider, secret,
+  public-RPC, signing, wallet, or paid operation.
+- **Manifest expected-red proof:** Two focused regressions first failed: the
+  seed extractor omitted `fuzz_seed`, and a tampered `scanner-results.json`
+  differing from the final report was accepted. The exact focused command
+  reported both failures before implementation.
+- **Manifest remediation slice:** Run-manifest construction now requires
+  `scanner-results.json` to match the report exactly, includes its nested
+  repository-suite fuzz seeds in the seed bindings, and therefore binds
+  differential execution seeds rather than relying only on unrelated campaign
+  artifacts. The two expected-red regressions passed, followed by all `16`
+  manifest tests in `0.87s`.
+- **Independent clean-chain review:** The first launcher draft is not accepted.
+  Read-only adversarial review reproduced four high-severity trust gaps: an
+  unrelated loopback listener can be mistaken for the spawned child; current
+  head/state changes are not detected by the genesis-only shutdown check;
+  descendants of the version probe can survive; and replacement of the copied
+  executable at the spawn boundary is not bound to the sealed hash. It also
+  identified exception-unsafe lifecycle cleanup, pathname races, stuck
+  collectors, ambiguous workspace retention, missing real-node integration,
+  and untested ancestor-configuration isolation. These are unresolved defects,
+  not credited evidence.
+- **Operator pause:** At `2026-07-29T18:32:37Z`, both active implementation
+  sub-agents were interrupted at the operator's request. `V3-FORKDIFF-001`
+  remains `IN_PROGRESS`; uncommitted launcher and matrix-runner files are
+  explicitly unvalidated work in progress. The last accepted focused result
+  remains the 36-test schema/privacy/report/manifest gate above. No provider
+  request or cost reservation was started, and cumulative OpenRouter spend
+  remains `0.0033415625 USD`.
+- **Goal continuation after pause:** At `2026-07-29T18:34:42Z`, the persisted
+  product-completion goal resumed autorun. The complete 1,417-line objective was
+  reread and hash-verified, repository instructions and current diff were
+  reloaded, and the same bounded ticket remains active. The launcher worker is
+  addressing the reproduced trust/lifecycle defects while the matrix worker
+  finishes the bridge-v2-bound runner. No provider, public RPC, secret, wallet,
+  signing, or paid operation is involved.
+- **Read-only bridge expected-red proof:** The new bridge suite first failed
+  collection because no bridge module existed. The completed implementation
+  exposes only an ephemeral numeric-loopback endpoint, canonicalizes a
+  credential-free loopback origin, permits a fixed read vocabulary, pins state
+  reads, rejects an entire mixed batch before forwarding, and retains only
+  endpoint-free counters and self-hashed policy/method evidence.
+- **Read-only bridge validation:** The exact focused bridge/fork command passed
+  `28` tests in `6.76s` when granted only the local socket-bind capability that
+  the managed sandbox denies. Ruff and strict mypy passed the new module and
+  tests. No public RPC, source egress, secret, wallet, signing, transaction,
+  provider call, or paid operation occurred.
+- **Bounded integration seam:** Foundry now accepts a validated in-memory RPC
+  override without mutating global environment state; its redacted display
+  command never includes the bridge port. Matrix configuration rejects more
+  than `100000` possible state/repetition/test execution slots. These changes
+  are scaffolding only and do not yet claim a completed matrix.
+- **Operator pause at partial-ticket boundary:** Autorun stopped before the
+  matrix runner or report integration began. The manifest, bridge, Foundry
+  override, and aggregate-bound slices are preserved; the differential schema
+  slice is explicitly incomplete with `4` focused tests passing and `5`
+  failing, and has not received Ruff or mypy validation. Before integration,
+  its egress counters must be aligned exactly with the bridge snapshot. The
+  bridge review also identified two fail-closed regressions to add first:
+  bounded shutdown under a slow handler and validation that upstream block
+  results match the pinned number/hash. No child task, target process, listener,
+  provider call, secret access, public RPC, budget reservation, or paid
+  operation remains active. The intentional uncommitted worktree is preserved;
+  this is not a ticket-completion or release checkpoint.
+- **Resume after operator pause:** The complete objective was reread and its
+  SHA-256 reverified; repository instructions, queue priority, worklog, status,
+  and intentional diff were reloaded. Autorun resumed the same bounded ticket.
+  The bridge shutdown/pinning and endpoint-free schema corrections are being
+  completed before any matrix runner, report, or replay integration. No
+  provider, public RPC, secret, wallet, signing, or paid path is involved.
+- **Checkpoint identity correction:** The synchronized pause checkpoint is
+  `625c718761212ddd127bc1e43fa6fb6957eeab94`; its configuration parent is
+  `d643b147a8e71d899dc155d8195244eaf3c7acb7`. A previously recorded
+  `d643b142...` expansion was not a Git object and is superseded by these
+  repository-resolved identities.
+- **Bridge hardening expected-red proof:** Six local-loopback regressions first
+  failed: exact pinned block number/hash mismatches and a well-formed upstream
+  JSON-RPC error were relayed, while a slow request exceeded the intended
+  shutdown bound. No external endpoint was used.
+- **Bridge hardening result:** The bridge now uses tracked daemon handlers and
+  nonjoining close semantics, interrupts accepted sockets, enforces one
+  absolute shutdown deadline, withholds snapshots after incomplete cleanup,
+  validates exact block lookup results, and classifies every upstream RPC error
+  as a failed read. Truthful request/call partitions are retained. The bridge
+  and fork-identity suite passed `37` tests in `11.26s` with only ephemeral
+  local-bind capability; affected Ruff and strict mypy also passed.
+- **Typed matrix boundary:** Fifteen schema regressions first failed. The
+  self-hashed matrix now distinguishes divergence from outright failure,
+  requires two agreeing REAL isolated fresh-workspace observations, requires
+  enforced endpoint-free bridge evidence for observed clean and pinned states,
+  and permits unavailable states only as `INCONCLUSIVE`. Its bridge counters
+  and snapshot digest mirror the runtime bridge exactly. The focused schema
+  suite passed `15` tests, followed by affected Ruff and strict mypy.
+- **Runtime/schema join:** A dedicated conversion rejects unobserved or
+  mismatched state identities and converts a stopped bridge snapshot into
+  endpoint-free typed egress evidence without inventing successful-forward or
+  denied-method semantics. Its expected-red import failure was followed by `3`
+  passing focused tests, Ruff, and strict mypy.
+- **Operator pause at expected-red boundary:** Autorun is
+  `PAUSED_BY_OPERATOR`. The independent second-cycle bridge review has been
+  converted into `21` failing local-loopback regressions covering origin
+  attestation, exact hash-bound reads, result provenance, admission saturation,
+  exact integer validation, and bounded cleanup; the source remediation has not
+  begun. The clean-chain worker stopped after its expected-red import proof, and
+  the matrix worker was interrupted without any process left under agent
+  control. No provider call, public RPC, secret access, wallet, signing, budget
+  reservation, paid operation, commit, or push occurred. The intentional dirty
+  worktree is preserved and `V3-FORKDIFF-001` remains `IN_PROGRESS`.
+- **Goal continuation:** Autorun resumed from the preserved expected-red
+  boundary. The complete 1,417-line objective was reread and hash-verified,
+  repository instructions and queues were reloaded, and the intentional diff
+  was reviewed before source remediation. The active slice remains local-only:
+  bridge origin/state binding, bounded cleanup, clean-chain leasing, and typed
+  repeated-state comparison. No provider, public RPC, secret, wallet, signing,
+  or paid path is involved.
+- **Second-cycle bridge closure:** The preserved `21` expected-red regressions
+  are now green. Runtime snapshot schema `2.0` directly attests matching
+  preflight/postflight origin identity, hash-binds every forwarded state read,
+  distinguishes attempted from provenance-validated origin calls, rejects
+  methods whose state cannot be proven, saturates admission at the configured
+  request ceiling, validates exact integers, and drains tracked request
+  resources within one shutdown deadline. The bridge and fork-observation
+  suites passed `66` tests in `29.08s`; focused identity/deadline coverage
+  passed `6`; affected Ruff and strict mypy passed.
+- **Privacy/report/manifest expected-red proof:** A missing typed fork-RPC
+  privacy projection first failed import; absent client-report disclosure then
+  failed one focused assertion; and a tampered
+  `privacy-fork-rpc-egress.json` was initially accepted by manifest
+  construction. These failures were recorded before each remediation.
+- **Privacy/report/manifest remediation slice:** Endpoint-free aggregate privacy
+  evidence is now self-hashed and result-bound; the report explicitly names the
+  trusted read-only loopback boundary, validated/attempted reads, repeated
+  states, classifications, and divergence directions without retaining an
+  endpoint. Differential and privacy artifacts must match the final report,
+  metadata, and effective matrix state/repetition configuration before manifest
+  sealing or verification. The combined schema/manifest suite passed `36`
+  tests, followed by affected Ruff and strict mypy.
+- **Pipeline expected-red proof:** A configured matrix regression first failed
+  because `AuditPipeline` had no differential-runner seam. This established
+  that typed matrix/report artifacts could not be produced by a real product
+  run even though their schemas existed.
+- **Pipeline integration slice:** A configured matrix now runs after the
+  qualifying top-level scanner portfolio under one absolute deadline and before
+  post-execution source revalidation. Its child executions remain outside
+  `scanner_runs`; missing identity/backend/baseline/result and typed adapter
+  failures become a sealed failed differential, prominently make the product
+  run incomplete, and emit endpoint-free privacy and manifest-bound artifacts.
+  The focused integration passed in `0.90s`. Default launcher/runner execution,
+  real local replay, and affected static gates remain pending.
+- **Matrix runner first pass:** The dependency-injected runner now produces
+  repeated clean/pinned observations, fresh attempt evidence, typed consensus
+  and divergence, and endpoint-free bridge-v2 evidence. Its expected-red
+  boundary was `5 failed, 7 passed`; the initial implementation plus schema and
+  pipeline join passed `35` focused tests, Ruff, and strict mypy.
+- **Independent matrix review remains open:** Adversarial probes have already
+  reproduced non-finite/backward-clock false `COMPLETE`, exception paths that
+  can orphan a clean lease, unsafe/overlapping/linkable private roots,
+  silent deletion of material limitations, and incomplete private-path leak
+  rejection. The first-pass runner is therefore not accepted yet; these are
+  active defects, not limitations to waive.
+- **Offline replay first pass:** The differential is now a separate replay
+  component with endpoint/workspace/timing-free semantic projection and
+  fail-closed missing-prerequisite behavior. Its replay/schema/manifest suite
+  passed `66` tests with one explicit hardened-isolation skip; Ruff and strict
+  mypy passed. Default real-runner/backend wiring and schema regeneration remain
+  to close after runner hardening.
+- **Clean-chain implementation under review:** The first launcher pass produced
+  `13` green unit regressions plus affected Ruff and strict mypy, but independent
+  review found residual ownership, process-group, exception-cleanup, TOCTOU,
+  retained-copy, and collector-lifecycle gaps. Those gaps are being remediated;
+  the launcher is not yet credited or integrated.
+- **Clean-chain v2 pause slice:** The launcher now emits the mandatory v2
+  process attestation with a PID-bound kernel listener proof, runtime executable
+  identity and execution-path binding, pristine genesis-head/state-root checks,
+  process-group and collector cleanup, ancestor-configuration rejection, and
+  private-workspace removal. Its focused suite passed `20` tests; affected Ruff
+  and strict mypy passed. A conditional real local Anvil integration and
+  independent second review remain required before this is credited as
+  complete runtime evidence.
+- **Schema hardening pause slice:** Fifty-five expected-red schema regressions
+  preceded the v2 clean-chain attestation, canonical pinned-origin observation
+  digest, nonzero validated-origin-read requirement, and top-level
+  differential-configuration cross-binding. The final schema suite passed `57`
+  tests; affected Ruff, strict mypy, and diff checks passed.
+- **Independent matrix review:** A read-only adversarial review passed the
+  existing `34` focused tests but reproduced unresolved false-completion and
+  evidence-custody gaps: synthetic-only or non-per-test origin reads, asserted
+  rather than observed fresh workspaces, non-finite/regressing deadlines and
+  exception-unsafe lease cleanup, unsafe or linkable private roots, erased
+  material limitations, omitted child Forge trust pins, incomplete private-path
+  rejection, incomplete pinned-state source identity, and incomplete baseline
+  policy equivalence. It also confirmed that no real default-path matrix
+  integration exists yet. These are active defects; the first-pass runner is
+  not accepted and `V3-FORKDIFF-001` remains `IN_PROGRESS`.
+- **Operator pause requested:** At `2026-07-29T19:04:47Z`, all delegated tasks
+  reached safe checkpoints and stopped with no child process or provider
+  request active. One combined focused gate is running before the dirty,
+  explicitly incomplete worktree is recorded for pause. No new ticket will be
+  started.
+- **Pause-boundary regression correction:** The first combined command reported
+  `7` stale synthetic-fixture failures plus `51` setup errors caused solely by
+  the managed sandbox denying numeric-loopback socket binds. The stale replay,
+  bridge-observation, and clean-attestation fixtures were migrated to the
+  stricter schema without weakening it; their exact focused rerun passed `7`
+  tests.
+- **Pause-boundary validation:** Excluding only the socket-binding suite, the
+  repository-suite configuration, manifest, replay, report, differential
+  schema, clean launcher, matrix runner, and pipeline tests passed `329` tests
+  in `81.24s` using `.venv/bin/pytest -q
+  tests/unit/test_repository_suite_config.py tests/unit/test_manifest.py
+  tests/unit/test_replay.py tests/unit/test_scanners_reporting.py
+  tests/unit/test_repository_fork_differential_schema.py
+  tests/unit/test_clean_chain.py tests/unit/test_fork_matrix.py
+  tests/integration/test_pipeline.py`. Ruff formatted `3` affected files, affected Ruff passed, strict
+  mypy passed `10` source files, release-schema synchronization passed, and
+  `git diff --check` passed. Pytest emitted warnings about immutable stale
+  temporary directories from an earlier clean-launcher regression; no runtime
+  process remains, and those external temporary paths are not credited as
+  successful cleanup evidence.
+- **Paused incomplete checkpoint:** Autorun is `PAUSED_BY_OPERATOR`.
+  `V3-FORKDIFF-001` remains `IN_PROGRESS`; the independent matrix defects and
+  real local default-path integration are unresolved. No provider call, public
+  RPC, credential access, wallet, signing, transaction, budget reservation, or
+  paid action occurred, and cumulative OpenRouter spend remains
+  `0.0033415625 USD`.
 
 ## 2026-07-29 — V3-FORKSUITE-001
 

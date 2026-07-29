@@ -22,8 +22,13 @@ from mmaudit.constants import ExitCode
 from mmaudit.models.registry import ModelRegistry
 from mmaudit.models.schemas import (
     AuditReport,
+    RepositoryDifferentialRunStatus,
     RepositoryFile,
+    RepositoryForkRpcPrivacyEvidence,
     RepositoryMap,
+    RepositorySuiteDifferentialRun,
+    ScannerRun,
+    ScannerStatus,
 )
 from mmaudit.orchestration.manifest import (
     ManifestBindingSet,
@@ -31,6 +36,7 @@ from mmaudit.orchestration.manifest import (
     ManifestHashBinding,
     RunConfigurationBinding,
     RunEvidenceManifest,
+    _seed_bindings,
     build_run_evidence_manifest,
     canonical_sha256,
     collect_run_artifacts,
@@ -142,11 +148,24 @@ def _write_required_artifacts(run_dir: Path, report: AuditReport) -> None:
         "solidity-coverage.json": {"schema_version": "1.0", "coverage": None},
         "model-review-coverage.json": {"schema_version": "1.0", "coverage": None},
         "scope-assessment.json": {"schema_version": "1.0", "assessment": None},
+        "scanner-results.json": {
+            "schema_version": "1.0",
+            "runs": [run.model_dump(mode="json") for run in report.scanner_runs],
+        },
     }
     run_dir.mkdir()
     for name, payload in payloads.items():
         (run_dir / name).write_text(
             json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    if report.repository_suite_differential is not None:
+        (run_dir / "repository-suite-differential.json").write_text(
+            report.repository_suite_differential.model_dump_json(),
+            encoding="utf-8",
+        )
+        (run_dir / "privacy-fork-rpc-egress.json").write_text(
+            json.dumps(report.privacy["fork_rpc_egress"], indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
     (run_dir / "metadata.json").write_text(
@@ -160,6 +179,11 @@ def _write_required_artifacts(run_dir: Path, report: AuditReport) -> None:
                 "configuration_hash": report.configuration_hash,
                 "model_configuration_hash": report.model_configuration_hash,
                 "privacy": report.privacy,
+                "repository_suite_differential": (
+                    report.repository_suite_differential.model_dump(mode="json")
+                    if report.repository_suite_differential is not None
+                    else None
+                ),
                 "metadata": report.metadata,
             },
             indent=2,
@@ -281,6 +305,143 @@ def test_manifest_serialization_and_all_required_bindings_are_stable(
     assert {binding.path for binding in first.artifacts} == {
         path.name for path in first_run.iterdir()
     }
+
+
+def test_manifest_seed_bindings_include_repository_suite_fuzz_seed() -> None:
+    fuzz_seed = "0x" + "ab" * 32
+
+    bindings = _seed_bindings(
+        {
+            "runs": [
+                {
+                    "repository_suite_execution_policy": {
+                        "fuzz_seed": fuzz_seed,
+                    }
+                }
+            ]
+        }
+    )
+
+    assert any(
+        binding.details.get("value") == fuzz_seed
+        and binding.details.get("field", "").endswith("/fuzz_seed")
+        for binding in bindings
+    )
+
+
+def test_manifest_rejects_scanner_results_that_differ_from_report(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    run_dir = tmp_path / "run"
+    report = _report(config)
+    now = datetime(2026, 1, 2, tzinfo=UTC)
+    scanner_run = ScannerRun(
+        scanner="synthetic",
+        status=ScannerStatus.SKIPPED,
+        started_at=now,
+        finished_at=now,
+        duration_seconds=0,
+        error="disabled in synthetic manifest test",
+    )
+    report = AuditReport.model_validate(
+        {
+            **report.model_dump(mode="json"),
+            "scanner_runs": [scanner_run.model_dump(mode="json")],
+        }
+    )
+    _write_required_artifacts(run_dir, report)
+    (run_dir / "scanner-results.json").write_text(
+        json.dumps({"schema_version": "1.0", "runs": []}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"scanner-results\.json"):
+        build_run_evidence_manifest(
+            run_dir=run_dir,
+            report=report,
+            config=config,
+        )
+
+
+def test_manifest_binds_differential_and_fork_rpc_privacy_artifacts(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory(
+        smart_contracts={
+            "repository_suite": {
+                "fork_matrix_states": [
+                    {
+                        "state_id": "clean-local",
+                        "kind": "clean_local",
+                        "expected_chain_id": 31_337,
+                        "anvil_executable_env": "MMAUDIT_ANVIL_EXECUTABLE",
+                        "anvil_version": "anvil Version: 1.3.2-stable",
+                        "anvil_sha256": "a" * 64,
+                        "hardfork": "cancun",
+                        "genesis_timestamp": 1,
+                        "startup_timeout_seconds": 5,
+                        "shutdown_timeout_seconds": 5,
+                    },
+                    {
+                        "state_id": "pinned-state",
+                        "kind": "pinned_fork",
+                        "rpc_url_env": "MMAUDIT_PINNED_FORK_RPC_URL",
+                        "expected_chain_id": 1,
+                        "pinned_block_number": 20_000_000,
+                        "state_source_sha256": "b" * 64,
+                    },
+                ],
+                "fork_matrix_repetitions": 2,
+            }
+        }
+    )
+    differential = RepositorySuiteDifferentialRun.sealed(
+        status=RepositoryDifferentialRunStatus.FAILED,
+        configuration_sha256=config.smart_contracts.repository_suite.stable_hash(),
+        requested_state_ids=("clean-local", "pinned-state"),
+        required_repetitions=2,
+        matrix=None,
+        limitations=("The configured local execution state was unavailable.",),
+    )
+    privacy = RepositoryForkRpcPrivacyEvidence.from_differential(differential)
+    report_payload = _report(config).model_dump(mode="python")
+    report_payload["repository_suite_differential"] = differential
+    report_payload["privacy"] = {
+        **report_payload["privacy"],
+        "fork_rpc_egress": privacy.model_dump(mode="json"),
+    }
+    report = AuditReport.model_validate(report_payload)
+    run_dir = tmp_path / "run"
+    _write_required_artifacts(run_dir, report)
+
+    manifest = build_run_evidence_manifest(
+        run_dir=run_dir,
+        report=report,
+        config=config,
+    )
+
+    artifact_names = {artifact.path for artifact in manifest.artifacts}
+    assert "repository-suite-differential.json" in artifact_names
+    assert "privacy-fork-rpc-egress.json" in artifact_names
+
+    (run_dir / "privacy-fork-rpc-egress.json").write_text(
+        json.dumps(
+            {
+                **privacy.model_dump(mode="json"),
+                "differential_result_sha256": "f" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="privacy-fork-rpc-egress"):
+        build_run_evidence_manifest(
+            run_dir=run_dir,
+            report=report,
+            config=config,
+        )
 
 
 def test_manifest_self_hash_and_artifact_hashes_reject_tampering(

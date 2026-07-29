@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import tempfile
+import time
 from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -21,6 +22,9 @@ from mmaudit.models.schemas import (
     InvariantExecutionResult,
     InvariantExecutionStatus,
     InvariantSuite,
+    RepositoryDifferentialRunStatus,
+    RepositoryForkEgressStatus,
+    RepositorySuiteDifferentialRun,
     RepositorySuiteInventoryEvidence,
     ReproductionResult,
     ReproductionState,
@@ -55,6 +59,7 @@ class ReplayComponentKind(StrEnum):
     SCANNER = "scanner"
     SAVED_TEST = "saved_test"
     COUNTEREXAMPLE = "counterexample"
+    REPOSITORY_SUITE_DIFFERENTIAL = "repository_suite_differential"
 
 
 class ReplayComponentStatus(StrEnum):
@@ -143,8 +148,8 @@ class OfflineReplayPayload(StrictModel):
     remote_network_policy: Literal["denied"] = "denied"
     loopback_policy: Literal["local_only"] = "local_only"
     components: list[OfflineReplayComponent] = Field(max_length=200_000)
-    applicable_kinds: list[ReplayComponentKind] = Field(min_length=1, max_length=3)
-    missing_kinds: list[ReplayComponentKind] = Field(max_length=3)
+    applicable_kinds: list[ReplayComponentKind] = Field(min_length=1, max_length=4)
+    missing_kinds: list[ReplayComponentKind] = Field(max_length=4)
 
     @model_validator(mode="after")
     def status_and_components_are_consistent(self) -> OfflineReplayPayload:
@@ -230,6 +235,22 @@ class ReproductionReplayRunner(Protocol):
         specification: GeneratedFoundryTestSpec,
         private_dir: Path,
     ) -> ReproductionResult: ...
+
+
+class RepositoryDifferentialReplayRunner(Protocol):
+    """Trusted local adapter that re-executes one sealed repository-state matrix."""
+
+    def run(
+        self,
+        repository_root: Path,
+        private_dir: Path,
+        *,
+        projects: Sequence[SolidityProjectMetadata],
+        repository_sha256: str,
+        repository_exclusion_root: Path,
+        baseline_run: ScannerRun,
+        absolute_deadline: float,
+    ) -> RepositorySuiteDifferentialRun | None: ...
 
 
 def _repository_suite_replay_identity(
@@ -355,15 +376,18 @@ class OfflineReplayOrchestrator:
         scanner_runner: ScannerReplayRunner | None = None,
         invariant_runner: InvariantReplayRunner | None = None,
         reproduction_runner: ReproductionReplayRunner | None = None,
+        differential_runner: RepositoryDifferentialReplayRunner | None = None,
     ) -> None:
         self.config = config
         self.file_config = file_config
         self._injected_scanner_runner = scanner_runner
         self._injected_invariant_runner = invariant_runner
         self._injected_reproduction_runner = reproduction_runner
+        self._injected_differential_runner = differential_runner
         self.scanner_runner: ScannerReplayRunner | None = scanner_runner
         self.invariant_runner: InvariantReplayRunner | None = invariant_runner
         self.reproduction_runner: ReproductionReplayRunner | None = reproduction_runner
+        self.differential_runner: RepositoryDifferentialReplayRunner | None = differential_runner
 
     async def replay(
         self,
@@ -399,9 +423,10 @@ class OfflineReplayOrchestrator:
         root = _safe_directory(run_dir, "run")
         repository = _safe_directory(repository_root, "repository")
         work_parent = _safe_work_directory(work_dir)
-        artifacts = _load_replay_artifacts(root)
+        artifacts = _load_replay_artifacts(root, config=effective_config)
 
         components: list[OfflineReplayComponent] = []
+        observed_scanner_runs: list[ScannerRun] = []
         with tempfile.TemporaryDirectory(prefix="mmaudit-replay-", dir=work_parent) as temporary:
             private = Path(temporary)
             components.extend(
@@ -410,6 +435,19 @@ class OfflineReplayOrchestrator:
                     private_dir=private / "scanners",
                     projects=artifacts.projects.projects,
                     expected=artifacts.scanners.runs,
+                    observed_runs=observed_scanner_runs,
+                )
+            )
+            components.extend(
+                await self._replay_repository_differential(
+                    repository=repository,
+                    private_dir=private / "repository-suite-differential",
+                    projects=artifacts.projects.projects,
+                    expected=artifacts.differential,
+                    artifact_required=artifacts.differential_required,
+                    artifact_limitation=artifacts.differential_limitation,
+                    expected_scanner_runs=artifacts.scanners.runs,
+                    observed_scanner_runs=observed_scanner_runs,
                 )
             )
             components.extend(
@@ -506,6 +544,7 @@ class OfflineReplayOrchestrator:
         private_dir: Path,
         projects: list[SolidityProjectMetadata],
         expected: list[ScannerRun],
+        observed_runs: list[ScannerRun] | None = None,
     ) -> list[OfflineReplayComponent]:
         assert self.scanner_runner is not None
         expected_by_name = {item.scanner: item for item in expected}
@@ -529,6 +568,8 @@ class OfflineReplayOrchestrator:
                 expected_repository_sha256=expected_repository_sha256,
                 repository_exclusion_root=repository_exclusion_root,
             )
+            if observed_runs is not None:
+                observed_runs.extend(observed)
             if (
                 expected_repository_sha256 is not None
                 and repository_exclusion_root is not None
@@ -596,6 +637,193 @@ class OfflineReplayOrchestrator:
                     )
                 )
         return components
+
+    async def _replay_repository_differential(
+        self,
+        *,
+        repository: Path,
+        private_dir: Path,
+        projects: list[SolidityProjectMetadata],
+        expected: RepositorySuiteDifferentialRun | None,
+        artifact_required: bool,
+        artifact_limitation: str | None,
+        expected_scanner_runs: list[ScannerRun],
+        observed_scanner_runs: list[ScannerRun],
+    ) -> list[OfflineReplayComponent]:
+        """Replay a state matrix separately from the qualifying scanner portfolio."""
+
+        if not artifact_required:
+            return []
+        identifier = "repository-suite-differential"
+        config = self.config
+        expected_projection: object = (
+            _repository_differential_projection(expected)
+            if expected is not None
+            else _configured_differential_projection(config)
+        )
+        expected_state = expected.status.value if expected is not None else "configured_missing"
+        if artifact_limitation is not None or expected is None:
+            return [
+                _blocked_component(
+                    kind=ReplayComponentKind.REPOSITORY_SUITE_DIFFERENTIAL,
+                    identifier=identifier,
+                    expected_state=expected_state,
+                    expected_projection=expected_projection,
+                    limitation=artifact_limitation
+                    or "configured repository differential artifact is missing",
+                )
+            ]
+        if config is None:
+            return [
+                _blocked_component(
+                    kind=ReplayComponentKind.REPOSITORY_SUITE_DIFFERENTIAL,
+                    identifier=identifier,
+                    expected_state=expected_state,
+                    expected_projection=expected_projection,
+                    limitation="repository differential replay lacks effective configuration",
+                )
+            ]
+        suite = config.smart_contracts.repository_suite
+        configured_state_ids = tuple(state.state_id for state in suite.fork_matrix_states)
+        if (
+            not configured_state_ids
+            or expected.configuration_sha256 != suite.stable_hash()
+            or expected.requested_state_ids != configured_state_ids
+            or expected.required_repetitions != suite.fork_matrix_repetitions
+        ):
+            return [
+                _blocked_component(
+                    kind=ReplayComponentKind.REPOSITORY_SUITE_DIFFERENTIAL,
+                    identifier=identifier,
+                    expected_state=expected_state,
+                    expected_projection=expected_projection,
+                    limitation=(
+                        "repository differential artifact differs from effective configuration"
+                    ),
+                )
+            ]
+        if self.differential_runner is None:
+            return [
+                _blocked_component(
+                    kind=ReplayComponentKind.REPOSITORY_SUITE_DIFFERENTIAL,
+                    identifier=identifier,
+                    expected_state=expected_state,
+                    expected_projection=expected_projection,
+                    limitation="trusted local repository differential runner is unavailable",
+                )
+            ]
+        try:
+            expected_repository_sha256, repository_exclusion_root = (
+                _repository_suite_replay_identity(repository, expected_scanner_runs)
+            )
+        except (OSError, RuntimeError, ValueError):
+            expected_repository_sha256 = None
+            repository_exclusion_root = None
+        expected_baselines = [
+            run
+            for run in expected_scanner_runs
+            if run.scanner == "foundry_fork" and run.repository_suite_selection is not None
+        ]
+        observed_baselines = [
+            run
+            for run in observed_scanner_runs
+            if run.scanner == "foundry_fork" and run.repository_suite_selection is not None
+        ]
+        baseline_valid = (
+            expected_repository_sha256 is not None
+            and repository_exclusion_root is not None
+            and len(expected_baselines) == 1
+            and len(observed_baselines) == 1
+            and observed_baselines[0].status is ScannerStatus.SUCCESS
+            and observed_baselines[0].execution_evidence is ExecutionEvidenceKind.REAL
+            and canonical_sha256(_scanner_projection(expected_baselines[0]))
+            == canonical_sha256(_scanner_projection(observed_baselines[0]))
+            and (
+                expected.matrix is None
+                or expected.matrix.repository_sha256 == expected_repository_sha256
+            )
+        )
+        if not baseline_valid:
+            return [
+                _blocked_component(
+                    kind=ReplayComponentKind.REPOSITORY_SUITE_DIFFERENTIAL,
+                    identifier=identifier,
+                    expected_state=expected_state,
+                    expected_projection=expected_projection,
+                    limitation=("repository differential replay lacks a matching real baseline"),
+                )
+            ]
+        assert expected_repository_sha256 is not None
+        assert repository_exclusion_root is not None
+        baseline_run = observed_baselines[0]
+        timeout_seconds = suite.total_timeout_seconds
+        absolute_deadline = time.monotonic() + timeout_seconds
+        try:
+            current_value = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.differential_runner.run,
+                    repository,
+                    private_dir,
+                    projects=projects,
+                    repository_sha256=expected_repository_sha256,
+                    repository_exclusion_root=repository_exclusion_root,
+                    baseline_run=baseline_run,
+                    absolute_deadline=absolute_deadline,
+                ),
+                timeout=timeout_seconds,
+            )
+            if current_value is None:
+                raise RuntimeError("repository differential runner returned no result")
+            current = RepositorySuiteDifferentialRun.model_validate(
+                current_value.model_dump(mode="json")
+            )
+            if (
+                scanner_workspace_sha256(repository, repository_exclusion_root)
+                != expected_repository_sha256
+            ):
+                raise ValueError("repository changed during differential replay")
+        except (OSError, RuntimeError, TypeError, ValueError, TimeoutError) as exc:
+            return [
+                _blocked_component(
+                    kind=ReplayComponentKind.REPOSITORY_SUITE_DIFFERENTIAL,
+                    identifier=identifier,
+                    expected_state=expected_state,
+                    expected_projection=expected_projection,
+                    limitation=(
+                        f"repository differential replay failed safely: {type(exc).__name__}"
+                    ),
+                )
+            ]
+        executed = _repository_differential_is_qualifying(
+            current,
+            config=config,
+            repository_sha256=expected_repository_sha256,
+        )
+        evidence, isolation_backend, isolation_attestation_sha256 = (
+            _repository_differential_execution_identity(current)
+        )
+        return [
+            _compared_component(
+                kind=ReplayComponentKind.REPOSITORY_SUITE_DIFFERENTIAL,
+                identifier=identifier,
+                expected_state=expected_state,
+                observed_state=current.status.value,
+                expected_projection=expected_projection,
+                observed_projection=_repository_differential_projection(current),
+                executed=executed,
+                execution_evidence=evidence,
+                isolation_backend=isolation_backend,
+                isolation_attestation_sha256=isolation_attestation_sha256,
+                blocked_limitation=(
+                    None
+                    if executed
+                    else (
+                        "repository differential replay did not produce complete real "
+                        "isolated read-only evidence"
+                    )
+                ),
+            )
+        ]
 
     async def _replay_invariants(
         self,
@@ -807,6 +1035,9 @@ class _ReplayArtifacts(StrictModel):
     invariant_results: _InvariantExecutionArtifact
     candidates: _CandidateArtifact
     reproductions: _ReproductionArtifact
+    differential: RepositorySuiteDifferentialRun | None = None
+    differential_required: bool = False
+    differential_limitation: str | None = None
 
     @model_validator(mode="after")
     def duplicated_replay_inputs_are_consistent(self) -> _ReplayArtifacts:
@@ -836,6 +1067,13 @@ class _ReplayArtifacts(StrictModel):
         candidate_ids = {item.candidate_id for item in self.candidates.findings}
         if not {candidate_id for candidate_id, _name in specification_keys} <= candidate_ids:
             raise ValueError("saved test specifications reference missing candidates")
+        if self.differential is not None and not self.differential_required:
+            raise ValueError("loaded differential evidence must create a replay obligation")
+        if self.differential is None and self.differential_required:
+            if self.differential_limitation is None:
+                raise ValueError("missing differential evidence requires a replay limitation")
+        elif self.differential_limitation is not None:
+            raise ValueError("valid differential evidence cannot carry a load limitation")
         return self
 
 
@@ -870,7 +1108,35 @@ def load_offline_replay(path: Path) -> OfflineReplay:
     return OfflineReplay.model_validate_json(path.read_text(encoding="utf-8"))
 
 
-def _load_replay_artifacts(run_dir: Path) -> _ReplayArtifacts:
+def _load_replay_artifacts(
+    run_dir: Path,
+    *,
+    config: AuditConfig | None = None,
+) -> _ReplayArtifacts:
+    differential_path = run_dir / "repository-suite-differential.json"
+    configured = bool(
+        config is not None and config.smart_contracts.repository_suite.fork_matrix_states
+    )
+    artifact_exists = (
+        differential_path.exists()
+        or differential_path.is_symlink()
+        or differential_path.is_junction()
+    )
+    differential: RepositorySuiteDifferentialRun | None = None
+    differential_limitation: str | None = None
+    if artifact_exists:
+        try:
+            differential = _load_artifact(
+                run_dir,
+                "repository-suite-differential.json",
+                RepositorySuiteDifferentialRun,
+            )
+        except (OSError, ValueError):
+            differential_limitation = (
+                "repository differential artifact failed bounded typed validation"
+            )
+    elif configured:
+        differential_limitation = "configured repository differential artifact is missing"
     return _ReplayArtifacts(
         scanners=_load_artifact(run_dir, "scanner-results.json", _ScannerArtifact),
         projects=_load_artifact(run_dir, "solidity-projects.json", _SolidityProjectsArtifact),
@@ -891,6 +1157,9 @@ def _load_replay_artifacts(run_dir: Path) -> _ReplayArtifacts:
             "reproduction-results.json",
             _ReproductionArtifact,
         ),
+        differential=differential,
+        differential_required=configured or artifact_exists,
+        differential_limitation=differential_limitation,
     )
 
 
@@ -1097,6 +1366,13 @@ def _applicable_replay_components(
         )
         for specification in artifacts.reproductions.test_specifications
     )
+    if artifacts.differential_required:
+        applicable.add(
+            (
+                ReplayComponentKind.REPOSITORY_SUITE_DIFFERENTIAL,
+                "repository-suite-differential",
+            )
+        )
     if not applicable:
         raise ValueError("offline replay has no sealed deterministic component to execute")
     return applicable
@@ -1116,6 +1392,278 @@ def expected_replay_components_for_run(
 
     root = _safe_directory(run_dir, "run")
     return _applicable_replay_components(_load_replay_artifacts(root))
+
+
+def _configured_differential_projection(
+    config: AuditConfig | None,
+) -> dict[str, object]:
+    """Project the operator-authored replay obligation without secret variable names."""
+
+    if config is None:
+        return {"configured": False}
+    suite = config.smart_contracts.repository_suite
+    states: list[dict[str, object]] = []
+    for state in suite.fork_matrix_states:
+        projected: dict[str, object] = {
+            "state_id": state.state_id,
+            "kind": state.kind,
+            "expected_chain_id": state.expected_chain_id,
+        }
+        if state.kind == "clean_local":
+            projected.update(
+                {
+                    "anvil_version": state.anvil_version,
+                    "anvil_sha256": state.anvil_sha256,
+                    "hardfork": state.hardfork,
+                    "genesis_timestamp": state.genesis_timestamp,
+                }
+            )
+        else:
+            projected.update(
+                {
+                    "pinned_block_number": state.pinned_block_number,
+                    "state_source_sha256": state.state_source_sha256,
+                }
+            )
+        states.append(projected)
+    return {
+        "configured": bool(states),
+        "configuration_sha256": suite.stable_hash(),
+        "requested_state_ids": [item["state_id"] for item in states],
+        "required_repetitions": suite.fork_matrix_repetitions,
+        "fuzz_seed": suite.fuzz_seed,
+        "states": states,
+    }
+
+
+def _repository_differential_projection(
+    result: RepositorySuiteDifferentialRun,
+) -> dict[str, object]:
+    """Project matrix evidence onto deterministic endpoint- and workspace-free semantics."""
+
+    matrix = result.matrix
+    if matrix is None:
+        return {
+            "schema_version": result.schema_version,
+            "status": result.status.value,
+            "configuration_sha256": result.configuration_sha256,
+            "requested_state_ids": list(result.requested_state_ids),
+            "required_repetitions": result.required_repetitions,
+            "matrix": None,
+            "limitation_count": len(result.limitations),
+        }
+    states: list[dict[str, object]] = []
+    for state in matrix.states:
+        clean_attestation = state.clean_state_attestation
+        states.append(
+            {
+                "state_id": state.state_id,
+                "kind": state.kind.value,
+                "state_source_sha256": state.state_source_sha256,
+                "expected_chain_id": state.expected_chain_id,
+                "pinned_block_number": state.pinned_block_number,
+                "observation_status": state.observation_status.value,
+                "observed_chain_id": state.observed_chain_id,
+                "observed_block_number": state.observed_block_number,
+                "observed_block_hash": state.observed_block_hash,
+                "clean_state_attestation": (
+                    clean_attestation.model_dump(
+                        mode="json",
+                        exclude={
+                            "attestation_sha256",
+                            "process_attestation_sha256",
+                            "startup_duration_seconds",
+                            "termination_duration_seconds",
+                        },
+                    )
+                    if clean_attestation is not None
+                    else None
+                ),
+            }
+        )
+    attempts: list[dict[str, object]] = []
+    for attempt in matrix.attempts:
+        run = attempt.scanner_run
+        policy = run.repository_suite_execution_policy
+        egress = run.fork_rpc_egress
+        executions = [
+            execution.model_dump(
+                mode="json",
+                exclude={
+                    "duration_seconds",
+                    "execution_sha256",
+                    "output_bytes",
+                    "output_sha256",
+                    "terminal_detail",
+                },
+            )
+            for execution in run.repository_test_executions
+        ]
+        attempts.append(
+            {
+                "state_id": attempt.state_id,
+                "attempt_index": attempt.attempt_index,
+                "workspace_kind": attempt.workspace_kind,
+                "workspace_disposal_policy_sha256": (attempt.workspace_disposal_policy_sha256),
+                "scanner": run.scanner,
+                "scanner_status": run.status.value,
+                "execution_evidence": run.execution_evidence.value,
+                "tool_version": run.version,
+                "tool_sha256": run.executable_sha256,
+                "process_exit_code": run.process_exit_code,
+                "isolation_backend": run.isolation_backend,
+                "isolation_attestation_sha256": run.isolation_attestation_sha256,
+                "machine_output_validated": run.machine_output_validated,
+                "repository_code_execution": run.repository_code_execution.value,
+                "foundry_summary": (
+                    run.foundry_summary.model_dump(mode="json")
+                    if run.foundry_summary is not None
+                    else None
+                ),
+                "selection": (
+                    {
+                        "repository_sha256": run.repository_suite_selection.repository_sha256,
+                        "selection_sha256": run.repository_suite_selection.selection_sha256,
+                        "configuration_sha256": (
+                            run.repository_suite_selection.configuration_sha256
+                        ),
+                        "descriptor_sha256s": [
+                            descriptor.descriptor_sha256
+                            for descriptor in run.repository_suite_selection.tests
+                        ],
+                    }
+                    if run.repository_suite_selection is not None
+                    else None
+                ),
+                "execution_policy": (
+                    policy.model_dump(mode="json") if policy is not None else None
+                ),
+                "fork_rpc_egress": (
+                    egress.model_dump(
+                        mode="json",
+                        exclude={"bridge_snapshot_sha256", "evidence_sha256"},
+                    )
+                    if egress is not None
+                    else None
+                ),
+                "test_executions": executions,
+            }
+        )
+    consensuses = [
+        {
+            "state_id": consensus.state_id,
+            "descriptor_sha256": consensus.descriptor_sha256,
+            "status": consensus.status.value,
+            "observed_status": (
+                consensus.observed_status.value if consensus.observed_status is not None else None
+            ),
+            "machine_result_sha256": consensus.machine_result_sha256,
+            "inconclusive_reasons": [reason.value for reason in consensus.inconclusive_reasons],
+        }
+        for consensus in matrix.state_consensuses
+    ]
+    comparisons = [
+        {
+            "clean_state_id": comparison.clean_state_id,
+            "pinned_state_id": comparison.pinned_state_id,
+            "descriptor_sha256": comparison.descriptor_sha256,
+            "classification": comparison.classification.value,
+            "direction": (comparison.direction.value if comparison.direction is not None else None),
+        }
+        for comparison in matrix.comparisons
+    ]
+    return {
+        "schema_version": result.schema_version,
+        "status": result.status.value,
+        "configuration_sha256": result.configuration_sha256,
+        "requested_state_ids": list(result.requested_state_ids),
+        "required_repetitions": result.required_repetitions,
+        "limitation_count": len(result.limitations),
+        "matrix": {
+            "repository_sha256": matrix.repository_sha256,
+            "selection_sha256": matrix.selection_sha256,
+            "selection_configuration_sha256": (matrix.selection_configuration_sha256),
+            "descriptor_sha256s": list(matrix.descriptor_sha256s),
+            "required_repetitions": matrix.required_repetitions,
+            "fuzz_seed": matrix.fuzz_seed,
+            "execution_configuration_sha256": (matrix.execution_configuration_sha256),
+            "fork_rpc_policy_sha256": matrix.fork_rpc_policy_sha256,
+            "states": states,
+            "attempts": attempts,
+            "state_consensuses": consensuses,
+            "comparisons": comparisons,
+            "safety_claim": matrix.safety_claim,
+        },
+    }
+
+
+def _repository_differential_is_qualifying(
+    result: RepositorySuiteDifferentialRun,
+    *,
+    config: AuditConfig,
+    repository_sha256: str,
+) -> bool:
+    """Require complete real isolated execution behind one local read-only boundary."""
+
+    matrix = result.matrix
+    suite = config.smart_contracts.repository_suite
+    if (
+        result.status is not RepositoryDifferentialRunStatus.COMPLETE
+        or matrix is None
+        or result.configuration_sha256 != suite.stable_hash()
+        or result.requested_state_ids != tuple(state.state_id for state in suite.fork_matrix_states)
+        or result.required_repetitions != suite.fork_matrix_repetitions
+        or matrix.repository_sha256 != repository_sha256
+        or any(state.observation_status.value != "observed" for state in matrix.states)
+    ):
+        return False
+    for attempt in matrix.attempts:
+        run = attempt.scanner_run
+        egress = run.fork_rpc_egress
+        if (
+            run.status is not ScannerStatus.SUCCESS
+            or run.execution_evidence is not ExecutionEvidenceKind.REAL
+            or run.repository_code_execution.value != "isolated"
+            or run.isolation_backend is None
+            or run.isolation_attestation_sha256 is None
+            or not run.machine_output_validated
+            or egress is None
+            or egress.status is not RepositoryForkEgressStatus.ENFORCED
+            or egress.boundary_kind != "trusted_read_only_loopback_bridge"
+            or egress.network_scope != "single_loopback_origin"
+            or egress.policy_sha256 != matrix.fork_rpc_policy_sha256
+            or egress.transaction_capable_request_forwarded
+            or egress.credentials_forwarded
+            or egress.raw_payloads_retained
+            or egress.rpc_endpoint_recorded
+        ):
+            return False
+    return True
+
+
+def _repository_differential_execution_identity(
+    result: RepositorySuiteDifferentialRun,
+) -> tuple[ExecutionEvidenceKind, str | None, str | None]:
+    matrix = result.matrix
+    if matrix is None or not matrix.attempts:
+        return ExecutionEvidenceKind.UNVERIFIED, None, None
+    runs = [attempt.scanner_run for attempt in matrix.attempts]
+    evidence = (
+        ExecutionEvidenceKind.REAL
+        if all(run.execution_evidence is ExecutionEvidenceKind.REAL for run in runs)
+        else (
+            ExecutionEvidenceKind.MOCK
+            if any(run.execution_evidence is ExecutionEvidenceKind.MOCK for run in runs)
+            else ExecutionEvidenceKind.UNVERIFIED
+        )
+    )
+    backends = {run.isolation_backend for run in runs}
+    attestations = {run.isolation_attestation_sha256 for run in runs}
+    return (
+        evidence,
+        next(iter(backends)) if len(backends) == 1 else None,
+        next(iter(attestations)) if len(attestations) == 1 else None,
+    )
 
 
 def _invariant_projection(result: InvariantExecutionResult) -> dict[str, object]:

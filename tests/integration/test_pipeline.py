@@ -57,6 +57,8 @@ from mmaudit.models.schemas import (
     PriorAuditDiscoveryStatus,
     PriorAuditRemediationStatus,
     PropertyCorpus,
+    RepositoryDifferentialRunStatus,
+    RepositorySuiteDifferentialRun,
     ReproductionAttemptEvidence,
     ReproductionMinimizationEvidence,
     ReproductionResult,
@@ -191,6 +193,85 @@ class StaticScannerRunner:
         if self.required and runs[0].status is not ScannerStatus.SUCCESS:
             return [f"semgrep: {runs[0].status.value}"]
         return []
+
+
+class StaticRepositoryForkMatrixRunner:
+    """Capture the pipeline seam without executing a chain or repository code."""
+
+    def __init__(
+        self,
+        *,
+        configuration_sha256: str,
+        before_return: Callable[[], None] | None = None,
+    ) -> None:
+        self.configuration_sha256 = configuration_sha256
+        self.before_return = before_return
+        self.calls: list[dict[str, Any]] = []
+
+    def run(
+        self,
+        root: Path,
+        private_root: Path,
+        *,
+        projects: Sequence[SolidityProjectMetadata],
+        repository_sha256: str,
+        repository_exclusion_root: Path,
+        backend: Any,
+        baseline_run: ScannerRun,
+        absolute_deadline: float,
+    ) -> RepositorySuiteDifferentialRun:
+        self.calls.append(
+            {
+                "root": root,
+                "private_root": private_root,
+                "projects": tuple(projects),
+                "repository_sha256": repository_sha256,
+                "repository_exclusion_root": repository_exclusion_root,
+                "backend": backend,
+                "baseline_run": baseline_run,
+                "absolute_deadline": absolute_deadline,
+            }
+        )
+        if self.before_return is not None:
+            self.before_return()
+        return RepositorySuiteDifferentialRun.sealed(
+            status=RepositoryDifferentialRunStatus.FAILED,
+            configuration_sha256=self.configuration_sha256,
+            requested_state_ids=("clean-local", "pinned-local"),
+            required_repetitions=2,
+            matrix=None,
+            limitations=("Synthetic differential dependency remained unavailable.",),
+        )
+
+
+def _repository_fork_matrix_config_override() -> dict[str, Any]:
+    return {
+        "repository_suite": {
+            "fork_matrix_states": [
+                {
+                    "state_id": "clean-local",
+                    "kind": "clean_local",
+                    "expected_chain_id": 31_337,
+                    "anvil_executable_env": "MMAUDIT_ANVIL_EXECUTABLE",
+                    "anvil_version": "anvil Version: 1.3.2-stable",
+                    "anvil_sha256": "a" * 64,
+                    "hardfork": "cancun",
+                    "genesis_timestamp": 1,
+                    "startup_timeout_seconds": 5,
+                    "shutdown_timeout_seconds": 5,
+                },
+                {
+                    "state_id": "pinned-local",
+                    "kind": "pinned_fork",
+                    "rpc_url_env": "MMAUDIT_PINNED_FORK_RPC_URL",
+                    "expected_chain_id": 1,
+                    "pinned_block_number": 20_000_000,
+                    "state_source_sha256": "b" * 64,
+                },
+            ],
+            "fork_matrix_repetitions": 2,
+        }
+    }
 
 
 class EvidenceMismatchingUsageLedger(UsageLedger):
@@ -4282,6 +4363,107 @@ async def test_pipeline_revalidates_frozen_source_after_scanner_execution(
     assert any(
         "repository execution source changed during scanner execution" in limitation
         for limitation in result.report.incomplete_reasons
+    )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_persists_configured_repository_fork_matrix_failure(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = config_factory(
+        scanners={"foundry_fork": {"enabled": True, "required": False}},
+        smart_contracts=_repository_fork_matrix_config_override(),
+    )
+    matrix_runner = StaticRepositoryForkMatrixRunner(
+        configuration_sha256=config.smart_contracts.repository_suite.stable_hash()
+    )
+    scanner_runner = StaticScannerRunner(scanner_name="foundry_fork")
+    scanner_runner.backend = object()  # type: ignore[attr-defined]
+    pipeline = AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=tmp_path / "matrix-output",
+        scanner_runner=scanner_runner,  # type: ignore[arg-type]
+        repository_fork_matrix_runner=matrix_runner,  # type: ignore[arg-type]
+    )
+
+    result = await pipeline.run(scanner_only=True)
+
+    assert result.exit_code is ExitCode.INCOMPLETE
+    assert len(matrix_runner.calls) == 1
+    call = matrix_runner.calls[0]
+    assert call["root"] == vulnerable_repo.resolve(strict=True)
+    assert call["baseline_run"].scanner == "foundry_fork"
+    assert call["repository_sha256"] == scanner_runner.expected_repository_sha256
+    assert call["repository_exclusion_root"] == scanner_runner.repository_exclusion_root
+    assert call["absolute_deadline"] > 0
+    differential = result.report.repository_suite_differential
+    assert differential is not None
+    assert differential.status is RepositoryDifferentialRunStatus.FAILED
+    assert result.report.privacy["fork_rpc_egress"]["status"] == "unverified"
+    assert json.loads(
+        (result.run_dir / "repository-suite-differential.json").read_text(encoding="utf-8")
+    ) == differential.model_dump(mode="json")
+    fork_privacy = (result.run_dir / "privacy-fork-rpc-egress.json").read_text(encoding="utf-8")
+    assert "http://" not in fork_privacy
+    assert "127.0.0.1" not in fork_privacy
+    scanner_artifact = json.loads(
+        (result.run_dir / "scanner-results.json").read_text(encoding="utf-8")
+    )
+    assert [run["scanner"] for run in scanner_artifact["runs"]] == ["foundry_fork"]
+    manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    validate_manifest_artifacts(manifest, result.run_dir)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_revalidates_frozen_source_after_repository_fork_matrix(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = config_factory(
+        scanners={"foundry_fork": {"enabled": True, "required": False}},
+        smart_contracts=_repository_fork_matrix_config_override(),
+    )
+
+    def mutate_repository() -> None:
+        (vulnerable_repo / "matrix-added.sol").write_text(
+            "contract MatrixAdded {}\n",
+            encoding="utf-8",
+        )
+
+    matrix_runner = StaticRepositoryForkMatrixRunner(
+        configuration_sha256=config.smart_contracts.repository_suite.stable_hash(),
+        before_return=mutate_repository,
+    )
+    scanner_runner = StaticScannerRunner(scanner_name="foundry_fork")
+    scanner_runner.backend = object()  # type: ignore[attr-defined]
+    pipeline = AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=tmp_path / "matrix-mutation-output",
+        scanner_runner=scanner_runner,  # type: ignore[arg-type]
+        repository_fork_matrix_runner=matrix_runner,  # type: ignore[arg-type]
+    )
+
+    result = await pipeline.run(scanner_only=True)
+
+    assert len(matrix_runner.calls) == 1
+    assert result.exit_code is ExitCode.INCOMPLETE
+    assert any(
+        "repository execution source changed during scanner execution" in reason
+        for reason in result.report.incomplete_reasons
+    )
+    assert (
+        scanner_workspace_sha256(
+            vulnerable_repo,
+            scanner_runner.repository_exclusion_root,
+        )
+        != matrix_runner.calls[0]["repository_sha256"]
     )
 
 

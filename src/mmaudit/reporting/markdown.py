@@ -1050,6 +1050,73 @@ def render_markdown(report: AuditReport) -> str:
             f"- {_text(run.scanner)}: {_text(run.error or run.status.value)}"
             for run in scanner_failures
         )
+    differential = report.repository_suite_differential
+    if differential is not None:
+        raw_fork_rpc_privacy = report.privacy.get("fork_rpc_egress")
+        fork_rpc_privacy = raw_fork_rpc_privacy if isinstance(raw_fork_rpc_privacy, dict) else {}
+        lines.extend(
+            [
+                "",
+                "## Repository suite differential execution",
+                "",
+                f"- Matrix status: **{_text(differential.status.value)}**",
+                "- Execution states: "
+                + ", ".join(_inline(state_id) for state_id in differential.requested_state_ids),
+                f"- Fresh-workspace repetitions per state: **{differential.required_repetitions}**",
+                "- Fork RPC boundary: **trusted read-only loopback bridge**",
+                "- Fork RPC network scope: **single configured loopback origin**",
+                "- Transaction-capable requests forwarded: "
+                f"**{bool(fork_rpc_privacy.get('transaction_capable_request_forwarded'))}**",
+                "- Credentials forwarded: "
+                f"**{bool(fork_rpc_privacy.get('credentials_forwarded'))}**",
+                f"- Permitted read calls: **{int(fork_rpc_privacy.get('permitted_rpc_call_count', 0))}**",
+                "- Origin reads validated: "
+                f"**{int(fork_rpc_privacy.get('origin_validated_rpc_call_count', 0))}** / "
+                f"**{int(fork_rpc_privacy.get('origin_attempted_rpc_call_count', 0))}**",
+                f"- Differential result SHA-256: {_inline(differential.result_sha256)}",
+            ]
+        )
+        if differential.matrix is not None:
+            classifications = Counter(
+                comparison.classification.value for comparison in differential.matrix.comparisons
+            )
+            lines.extend(
+                [
+                    "- Per-test classifications: "
+                    + ", ".join(
+                        f"{_text(classification)}={count}"
+                        for classification, count in sorted(classifications.items())
+                    ),
+                ]
+            )
+            directions = Counter(
+                comparison.direction.value
+                for comparison in differential.matrix.comparisons
+                if comparison.direction is not None
+            )
+            if directions:
+                direction_labels = {
+                    "clean_pass_pinned_failure": "clean-pass / pinned-failure",
+                    "clean_failure_pinned_pass": "clean-failure / pinned-pass",
+                    "semantic_result_changed": "semantic result changed",
+                }
+                lines.append(
+                    "- Divergence directions: "
+                    + ", ".join(
+                        f"{_text(direction_labels.get(direction, direction))}={count}"
+                        for direction, count in sorted(directions.items())
+                    )
+                )
+        lines.extend(
+            f"- Differential limitation: {_text(item)}" for item in differential.limitations
+        )
+        lines.extend(
+            [
+                "",
+                "Differential execution is bounded validation evidence, not proof that either "
+                "execution state or the audited repository is safe.",
+            ]
+        )
     lines.extend(["", "## Model roles and reproducibility", ""])
     displayed_roles = [
         *ALL_MODEL_ROLES,

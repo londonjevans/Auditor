@@ -461,6 +461,97 @@ class RepositoryTestExecutionStatus(StrEnum):
     INVALID_OUTPUT = "invalid_output"
 
 
+class RepositoryExecutionStateKind(StrEnum):
+    """Configured execution state in a repository-suite differential matrix."""
+
+    CLEAN_LOCAL = "clean_local"
+    PINNED_FORK = "pinned_fork"
+
+
+class RepositoryExecutionStateObservationStatus(StrEnum):
+    """Whether one configured state acquired a complete runtime identity."""
+
+    OBSERVED = "observed"
+    UNAVAILABLE = "unavailable"
+    FAILED = "failed"
+
+
+class RepositoryCleanListenerOwnershipKind(StrEnum):
+    """Platform-specific proof that the clean-chain process owns its listener."""
+
+    LINUX_PROC_SOCKET_INODE = "linux_proc_socket_inode"
+    DARWIN_ROOT_OWNED_LSOF = "darwin_root_owned_lsof"
+
+
+class RepositoryCleanRuntimeExecutableIdentityKind(StrEnum):
+    """Platform-specific runtime executable identity proof."""
+
+    LINUX_PROC_PID_EXE = "linux_proc_pid_exe"
+    DARWIN_PROC_PIDPATH = "darwin_proc_pidpath"
+
+
+class RepositoryCleanExecPathBindingKind(StrEnum):
+    """Platform-specific binding between the trusted copy and executed image."""
+
+    LINUX_INHERITED_FD = "linux_inherited_fd"
+    DARWIN_PRIVATE_PATH_POST_SPAWN_HASH = "darwin_private_path_post_spawn_hash"
+
+
+class RepositoryForkEgressStatus(StrEnum):
+    """Fail-closed status of the trusted read-only fork RPC boundary."""
+
+    ENFORCED = "enforced"
+    VIOLATION = "violation"
+    UNVERIFIED = "unverified"
+
+
+class RepositoryStateConsensusStatus(StrEnum):
+    """Repeated-execution consensus for one test in one state."""
+
+    CONSISTENT_PASS = "consistent_pass"
+    CONSISTENT_FAILURE = "consistent_failure"
+    INCONCLUSIVE = "inconclusive"
+
+
+class RepositoryDifferentialClassification(StrEnum):
+    """Typed clean-versus-pinned result for one selected repository test."""
+
+    CONSISTENT_PASS = "consistent_pass"
+    CONSISTENT_FAILURE = "consistent_failure"
+    DIVERGED = "diverged"
+    INCONCLUSIVE = "inconclusive"
+
+
+class RepositoryDifferentialRunStatus(StrEnum):
+    """Overall execution disposition for a configured differential matrix."""
+
+    COMPLETE = "complete"
+    INCONCLUSIVE = "inconclusive"
+    FAILED = "failed"
+
+
+class RepositoryDivergenceDirection(StrEnum):
+    """Observed direction of a repeated semantic result divergence."""
+
+    CLEAN_PASS_PINNED_FAILURE = "clean_pass_pinned_failure"
+    CLEAN_FAILURE_PINNED_PASS = "clean_failure_pinned_pass"
+    SEMANTIC_RESULT_CHANGED = "semantic_result_changed"
+
+
+class RepositoryStateInconclusiveReason(StrEnum):
+    """Typed reason repeated state execution cannot support a conclusion."""
+
+    STATE_UNOBSERVED = "state_unobserved"
+    SINGLE_OBSERVATION = "single_observation"
+    ATTEMPT_UNAVAILABLE = "attempt_unavailable"
+    NON_REAL_EVIDENCE = "non_real_evidence"
+    UNISOLATED_EXECUTION = "unisolated_execution"
+    EGRESS_UNENFORCED = "egress_unenforced"
+    ATTEMPT_DISAGREEMENT = "attempt_disagreement"
+    IDENTITY_MISMATCH = "identity_mismatch"
+    INVALID_MACHINE_OUTPUT = "invalid_machine_output"
+
+
 class ExecutionEvidenceKind(StrEnum):
     """Whether a runtime record came from a real process or a test double."""
 
@@ -3588,6 +3679,549 @@ class RepositoryTestExecution(StrictModel):
         return _canonical_model_sha256(payload)
 
 
+_TRUSTED_READ_ONLY_FORK_RPC_METHODS = frozenset(
+    {
+        "eth_blockNumber",
+        "eth_call",
+        "eth_chainId",
+        "eth_getBalance",
+        "eth_getBlockByHash",
+        "eth_getBlockByNumber",
+        "eth_getBlockReceipts",
+        "eth_getBlockTransactionCountByHash",
+        "eth_getBlockTransactionCountByNumber",
+        "eth_getCode",
+        "eth_getLogs",
+        "eth_getStorageAt",
+        "eth_getTransactionByBlockHashAndIndex",
+        "eth_getTransactionByBlockNumberAndIndex",
+        "eth_getTransactionCount",
+        "eth_getUncleByBlockHashAndIndex",
+        "eth_getUncleByBlockNumberAndIndex",
+        "eth_getUncleCountByBlockHash",
+        "eth_getUncleCountByBlockNumber",
+        "net_version",
+    }
+)
+
+
+class ForkRpcMethodCount(StrictModel):
+    """Permitted-method accounting from a trusted local RPC bridge snapshot."""
+
+    method: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_]{0,127}$")
+    count: int = Field(ge=1, le=1_000_000)
+
+    @field_validator("count", mode="before")
+    @classmethod
+    def count_is_an_exact_integer(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("fork RPC method count requires an exact integer")
+        return value
+
+
+class ForkRpcReadOnlyEgressEvidence(StrictModel):
+    """Self-hashed, endpoint-free evidence from the trusted read-only RPC boundary."""
+
+    schema_version: Literal["2.0"] = "2.0"
+    status: RepositoryForkEgressStatus
+    state_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
+    state_source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expected_chain_id: int = Field(ge=1, lt=2**64)
+    pinned_block_number: int = Field(ge=0, lt=2**64)
+    pinned_block_hash: str = Field(pattern=r"^0x[0-9a-f]{64}$")
+    boundary_kind: Literal["trusted_read_only_loopback_bridge"] = (
+        "trusted_read_only_loopback_bridge"
+    )
+    network_scope: Literal["single_loopback_origin"] = "single_loopback_origin"
+    policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    method_log_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    preflight_origin_observation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    postflight_origin_observation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    origin_state_stable: Literal[True] = True
+    http_request_count: int = Field(ge=0, le=1_000_000)
+    permitted_rpc_call_count: int = Field(ge=0, le=1_000_000)
+    origin_attempted_rpc_call_count: int = Field(ge=0, le=1_000_000)
+    origin_validated_rpc_call_count: int = Field(ge=0, le=1_000_000)
+    synthetic_rpc_call_count: int = Field(ge=0, le=1_000_000)
+    denied_request_count: int = Field(ge=0, le=1_000_000)
+    malformed_request_count: int = Field(ge=0, le=1_000_000)
+    limit_exceeded_request_count: int = Field(ge=0, le=1_000_000)
+    upstream_error_request_count: int = Field(ge=0, le=1_000_000)
+    allowed_method_counts: tuple[ForkRpcMethodCount, ...] = Field(max_length=512)
+    stopped_cleanly: Literal[True] = True
+    transaction_capable_request_forwarded: Literal[False] = False
+    credentials_forwarded: Literal[False] = False
+    raw_payloads_retained: Literal[False] = False
+    rpc_endpoint_recorded: Literal[False] = False
+    bridge_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> ForkRpcReadOnlyEgressEvidence:
+        """Validate and self-hash one endpoint-free bridge snapshot."""
+
+        if "evidence_sha256" in values:
+            raise ValueError("evidence_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, evidence_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"evidence_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "evidence_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator("allowed_method_counts")
+    @classmethod
+    def method_counts_are_canonical(
+        cls,
+        value: tuple[ForkRpcMethodCount, ...],
+    ) -> tuple[ForkRpcMethodCount, ...]:
+        methods = tuple(item.method for item in value)
+        if methods != tuple(sorted(set(methods))):
+            raise ValueError("fork RPC method counts must be unique and canonically sorted")
+        if any(method not in _TRUSTED_READ_ONLY_FORK_RPC_METHODS for method in methods):
+            raise ValueError("fork RPC method is outside the trusted read-only bridge vocabulary")
+        return value
+
+    @field_validator(
+        "expected_chain_id",
+        "pinned_block_number",
+        "http_request_count",
+        "permitted_rpc_call_count",
+        "origin_attempted_rpc_call_count",
+        "origin_validated_rpc_call_count",
+        "synthetic_rpc_call_count",
+        "denied_request_count",
+        "malformed_request_count",
+        "limit_exceeded_request_count",
+        "upstream_error_request_count",
+        mode="before",
+    )
+    @classmethod
+    def integer_evidence_is_exact(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("fork RPC counters and state identity require exact integers")
+        return value
+
+    @staticmethod
+    def calculate_origin_observation_sha256(
+        *,
+        expected_chain_id: int,
+        pinned_block_number: int,
+        pinned_block_hash: str,
+    ) -> str:
+        """Hash the exact canonical identity emitted by a pinned-origin observation."""
+
+        if (
+            isinstance(expected_chain_id, bool)
+            or not isinstance(expected_chain_id, int)
+            or not 1 <= expected_chain_id < 2**64
+            or isinstance(pinned_block_number, bool)
+            or not isinstance(pinned_block_number, int)
+            or not 0 <= pinned_block_number < 2**64
+            or re.fullmatch(r"0x[0-9a-f]{64}", pinned_block_hash) is None
+        ):
+            raise ValueError("canonical pinned observation identity is invalid")
+        return _canonical_model_sha256(
+            {
+                "schema_version": "1.0",
+                "chain_id": expected_chain_id,
+                "block_number": pinned_block_number,
+                "block_hash": pinned_block_hash,
+            }
+        )
+
+    @model_validator(mode="after")
+    def accounting_status_and_hash_are_consistent(self) -> ForkRpcReadOnlyEgressEvidence:
+        if (
+            self.origin_attempted_rpc_call_count + self.synthetic_rpc_call_count
+            != self.permitted_rpc_call_count
+            or self.origin_validated_rpc_call_count > self.origin_attempted_rpc_call_count
+            or sum(item.count for item in self.allowed_method_counts)
+            != self.permitted_rpc_call_count
+        ):
+            raise ValueError("fork RPC permitted-call accounting does not match bridge counters")
+        rejection_or_error_count = (
+            self.denied_request_count
+            + self.malformed_request_count
+            + self.limit_exceeded_request_count
+            + self.upstream_error_request_count
+        )
+        if rejection_or_error_count > self.http_request_count:
+            raise ValueError("fork RPC rejection/error count exceeds HTTP request count")
+        if self.status is RepositoryForkEgressStatus.ENFORCED and (
+            rejection_or_error_count
+            or self.permitted_rpc_call_count == 0
+            or self.origin_validated_rpc_call_count == 0
+            or self.origin_validated_rpc_call_count != self.origin_attempted_rpc_call_count
+        ):
+            raise ValueError(
+                "enforced fork RPC evidence requires nonempty fully validated read accounting"
+            )
+        if self.status is RepositoryForkEgressStatus.VIOLATION and rejection_or_error_count == 0:
+            raise ValueError("fork RPC violation requires a rejection or upstream error")
+        if self.status is RepositoryForkEgressStatus.UNVERIFIED:
+            raise ValueError("serialized fork RPC evidence must bind a stopped bridge snapshot")
+        expected_observation_sha256 = self.calculate_origin_observation_sha256(
+            expected_chain_id=self.expected_chain_id,
+            pinned_block_number=self.pinned_block_number,
+            pinned_block_hash=self.pinned_block_hash,
+        )
+        if (
+            self.preflight_origin_observation_sha256 != expected_observation_sha256
+            or self.postflight_origin_observation_sha256 != expected_observation_sha256
+        ):
+            raise ValueError("fork RPC observations must bind the canonical pinned observation")
+        if self.bridge_snapshot_sha256 != self.expected_bridge_snapshot_sha256():
+            raise ValueError("fork RPC bridge snapshot hash does not match its fields")
+        if self.evidence_sha256 != self.expected_evidence_sha256():
+            raise ValueError("fork RPC egress evidence hash does not match its fields")
+        return self
+
+    @staticmethod
+    def calculate_bridge_snapshot_sha256(values: dict[str, Any]) -> str:
+        """Hash exactly the canonical primitive projection emitted by the bridge."""
+
+        expected_observation_sha256 = (
+            ForkRpcReadOnlyEgressEvidence.calculate_origin_observation_sha256(
+                expected_chain_id=values["expected_chain_id"],
+                pinned_block_number=values["pinned_block_number"],
+                pinned_block_hash=values["pinned_block_hash"],
+            )
+        )
+        if (
+            values["preflight_origin_observation_sha256"] != expected_observation_sha256
+            or values["postflight_origin_observation_sha256"] != expected_observation_sha256
+        ):
+            raise ValueError(
+                "bridge snapshot observations differ from the canonical pinned observation"
+            )
+        raw_method_counts = values["allowed_method_counts"]
+        method_counts = [
+            (
+                item.model_dump(mode="json")
+                if isinstance(item, ForkRpcMethodCount)
+                else {"method": item["method"], "count": item["count"]}
+            )
+            for item in raw_method_counts
+        ]
+        status = values["status"]
+        if isinstance(status, RepositoryForkEgressStatus):
+            status = status.value
+        payload = {
+            "schema_version": values["schema_version"],
+            "status": status,
+            "policy_sha256": values["policy_sha256"],
+            "expected_chain_id": values["expected_chain_id"],
+            "pinned_block_number": values["pinned_block_number"],
+            "pinned_block_hash": values["pinned_block_hash"],
+            "preflight_origin_observation_sha256": values["preflight_origin_observation_sha256"],
+            "postflight_origin_observation_sha256": values["postflight_origin_observation_sha256"],
+            "origin_state_stable": values["origin_state_stable"],
+            "http_request_count": values["http_request_count"],
+            "permitted_rpc_call_count": values["permitted_rpc_call_count"],
+            "origin_attempted_rpc_call_count": values["origin_attempted_rpc_call_count"],
+            "origin_validated_rpc_call_count": values["origin_validated_rpc_call_count"],
+            "synthetic_rpc_call_count": values["synthetic_rpc_call_count"],
+            "denied_request_count": values["denied_request_count"],
+            "malformed_request_count": values["malformed_request_count"],
+            "limit_exceeded_request_count": values["limit_exceeded_request_count"],
+            "upstream_error_request_count": values["upstream_error_request_count"],
+            "allowed_method_counts": method_counts,
+            "method_log_sha256": values["method_log_sha256"],
+            "stopped_cleanly": values["stopped_cleanly"],
+        }
+        return _canonical_model_sha256(payload)
+
+    def expected_bridge_snapshot_sha256(self) -> str:
+        """Recompute the trusted bridge snapshot binding."""
+
+        return self.calculate_bridge_snapshot_sha256(self.model_dump(mode="python"))
+
+    def expected_evidence_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"evidence_sha256"})
+        return _canonical_model_sha256(payload)
+
+
+class RepositoryCleanStateAttestationEvidence(StrictModel):
+    """Inspectable process evidence for one internally launched clean chain."""
+
+    schema_version: Literal["2.0"] = "2.0"
+    launcher_kind: Literal["trusted_internal_anvil"] = "trusted_internal_anvil"
+    launcher_policy_version: Literal["2.0"] = "2.0"
+    execution_evidence: Literal[ExecutionEvidenceKind.REAL] = ExecutionEvidenceKind.REAL
+    configured_tool_version: str = Field(min_length=1, max_length=160)
+    observed_tool_version: str = Field(min_length=1, max_length=160)
+    configured_tool_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    observed_tool_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    trust_pin_validated: Literal[True] = True
+    launch_configuration_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    environment_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    process_attestation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    target_arguments_inherited: Literal[False] = False
+    target_environment_inherited: Literal[False] = False
+    fork_or_state_arguments_present: Literal[False] = False
+    target_state_input_present: Literal[False] = False
+    listener_scope: Literal["numeric_loopback"] = "numeric_loopback"
+    listener_ownership_kind: RepositoryCleanListenerOwnershipKind
+    listener_owner_pid_bound: Literal[True]
+    runtime_executable_identity_kind: RepositoryCleanRuntimeExecutableIdentityKind
+    runtime_executable_matches_pinned_copy: Literal[True]
+    exec_path_binding_kind: RepositoryCleanExecPathBindingKind
+    version_probe_process_group_absent: Literal[True]
+    outbound_network_isolation: Literal["not_attested"] = "not_attested"
+    expected_chain_id: int = Field(ge=1)
+    observed_chain_id: int = Field(ge=1)
+    genesis_block_number: Literal[0]
+    genesis_block_hash: str = Field(pattern=r"^0x[0-9a-f]{64}$")
+    initial_head_block_number: Literal[0]
+    initial_head_block_hash: str = Field(pattern=r"^0x[0-9a-f]{64}$")
+    initial_head_state_root: str | None = Field(pattern=r"^0x[0-9a-f]{64}$")
+    final_head_block_number: Literal[0]
+    final_head_block_hash: str = Field(pattern=r"^0x[0-9a-f]{64}$")
+    final_head_state_root: str | None = Field(pattern=r"^0x[0-9a-f]{64}$")
+    pristine_head_pre_post_match: Literal[True]
+    startup_completed: Literal[True] = True
+    startup_duration_seconds: float = Field(ge=0, le=15)
+    termination_method: Literal["term", "kill"]
+    termination_duration_seconds: float = Field(ge=0, le=10)
+    process_group_absent: Literal[True] = True
+    collector_threads_closed: Literal[True]
+    executable_descriptor_closed: Literal[True]
+    private_workspace_removed: Literal[True]
+    ancestor_config_absent: Literal[True]
+    no_upstream_fork_configuration: Literal[True] = True
+    endpoint_retained: Literal[False] = False
+    executable_path_retained: Literal[False] = False
+    port_retained: Literal[False] = False
+    process_id_retained: Literal[False] = False
+    raw_output_retained: Literal[False] = False
+    attestation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> RepositoryCleanStateAttestationEvidence:
+        """Validate and self-hash trusted clean-chain process evidence."""
+
+        if "attestation_sha256" in values:
+            raise ValueError("attestation_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, attestation_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"attestation_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "attestation_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator("configured_tool_version", "observed_tool_version")
+    @classmethod
+    def tool_version_is_bounded_printable_text(cls, value: str) -> str:
+        if not _repository_suite_text_is_safe(value):
+            raise ValueError("clean-state tool version must be bounded printable text")
+        return value
+
+    @field_validator(
+        "expected_chain_id",
+        "observed_chain_id",
+        "genesis_block_number",
+        "initial_head_block_number",
+        "final_head_block_number",
+        mode="before",
+    )
+    @classmethod
+    def integer_identity_is_exact(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("clean-state chain identity requires exact integers")
+        return value
+
+    @model_validator(mode="after")
+    def trust_identity_and_hash_are_consistent(
+        self,
+    ) -> RepositoryCleanStateAttestationEvidence:
+        if (
+            self.configured_tool_version != self.observed_tool_version
+            or self.configured_tool_sha256 != self.observed_tool_sha256
+        ):
+            raise ValueError("clean-state observed tool does not match its configured trust pin")
+        if self.expected_chain_id != self.observed_chain_id:
+            raise ValueError("clean-state observed chain differs from its configured identity")
+        platform_bundle = (
+            self.listener_ownership_kind,
+            self.runtime_executable_identity_kind,
+            self.exec_path_binding_kind,
+        )
+        valid_platform_bundles = {
+            (
+                RepositoryCleanListenerOwnershipKind.LINUX_PROC_SOCKET_INODE,
+                RepositoryCleanRuntimeExecutableIdentityKind.LINUX_PROC_PID_EXE,
+                RepositoryCleanExecPathBindingKind.LINUX_INHERITED_FD,
+            ),
+            (
+                RepositoryCleanListenerOwnershipKind.DARWIN_ROOT_OWNED_LSOF,
+                RepositoryCleanRuntimeExecutableIdentityKind.DARWIN_PROC_PIDPATH,
+                RepositoryCleanExecPathBindingKind.DARWIN_PRIVATE_PATH_POST_SPAWN_HASH,
+            ),
+        }
+        if platform_bundle not in valid_platform_bundles:
+            raise ValueError("clean-state process identity proofs must use one platform bundle")
+        if (
+            self.genesis_block_number != 0
+            or self.initial_head_block_number != 0
+            or self.final_head_block_number != 0
+            or self.initial_head_block_hash != self.genesis_block_hash
+            or self.final_head_block_hash != self.genesis_block_hash
+        ):
+            raise ValueError("clean-state initial and final head must remain at genesis")
+        if (self.initial_head_state_root is None) != (self.final_head_state_root is None):
+            raise ValueError("clean-state head state roots must be supplied together")
+        if (
+            self.initial_head_state_root is not None
+            and self.initial_head_state_root != self.final_head_state_root
+        ):
+            raise ValueError("clean-state initial and final head state roots must match")
+        if self.attestation_sha256 != self.expected_attestation_sha256():
+            raise ValueError("clean-state attestation hash does not match its fields")
+        return self
+
+    def expected_attestation_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"attestation_sha256"})
+        return _canonical_model_sha256(payload)
+
+    def expected_state_source_sha256(self) -> str:
+        """Derive the reusable clean-state identity from inspectable trusted facts."""
+
+        return _canonical_model_sha256(
+            {
+                "domain": "mmaudit.repository-clean-state-source.v2",
+                "attestation": self.model_dump(
+                    mode="json",
+                    exclude={"attestation_sha256"},
+                ),
+            }
+        )
+
+
+class RepositorySuiteExecutionStateEvidence(StrictModel):
+    """Configured and optionally observed identity for one differential execution state."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    state_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
+    kind: RepositoryExecutionStateKind
+    rpc_url_env: str | None = Field(default=None, pattern=r"^[A-Z_][A-Z0-9_]{0,127}$")
+    state_source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expected_chain_id: int = Field(ge=1)
+    pinned_block_number: int = Field(ge=0)
+    observation_status: RepositoryExecutionStateObservationStatus
+    observed_chain_id: int | None = Field(default=None, ge=1)
+    observed_block_number: int | None = Field(default=None, ge=0)
+    observed_block_hash: str | None = Field(default=None, pattern=r"^0x[0-9a-f]{64}$")
+    clean_state_attestation: RepositoryCleanStateAttestationEvidence | None = None
+    observation_detail: str | None = Field(default=None, max_length=2_000)
+    state_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> RepositorySuiteExecutionStateEvidence:
+        """Validate and self-hash a configured state and its runtime observation."""
+
+        if "state_sha256" in values:
+            raise ValueError("state_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, state_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"state_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "state_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator("observation_detail")
+    @classmethod
+    def observation_detail_is_bounded_printable(
+        cls,
+        value: str | None,
+    ) -> str | None:
+        if value is not None and not _repository_suite_text_is_safe(value):
+            raise ValueError("state observation detail must be bounded printable text")
+        return value
+
+    @field_validator(
+        "expected_chain_id",
+        "pinned_block_number",
+        "observed_chain_id",
+        "observed_block_number",
+        mode="before",
+    )
+    @classmethod
+    def integer_identity_is_exact(cls, value: object) -> object:
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+            raise ValueError("repository execution state identity requires exact integers")
+        return value
+
+    @model_validator(mode="after")
+    def identity_observation_and_hash_are_consistent(
+        self,
+    ) -> RepositorySuiteExecutionStateEvidence:
+        observed_fields = (
+            self.observed_chain_id,
+            self.observed_block_number,
+            self.observed_block_hash,
+        )
+        if self.observation_status is RepositoryExecutionStateObservationStatus.OBSERVED:
+            if not all(value is not None for value in observed_fields):
+                raise ValueError(
+                    "observed execution state requires complete chain and block identity"
+                )
+            if (
+                self.observed_chain_id != self.expected_chain_id
+                or self.observed_block_number != self.pinned_block_number
+            ):
+                raise ValueError("observed execution state differs from its configured pin")
+            if self.observation_detail is not None:
+                raise ValueError("observed execution state cannot carry an unavailable detail")
+        else:
+            if any(value is not None for value in observed_fields):
+                raise ValueError("unobserved execution state cannot claim runtime chain identity")
+            if self.observation_detail is None:
+                raise ValueError("unobserved execution state requires a bounded detail")
+        if self.kind is RepositoryExecutionStateKind.CLEAN_LOCAL:
+            if self.rpc_url_env is not None:
+                raise ValueError("clean execution state cannot serialize an external RPC variable")
+            if self.pinned_block_number != 0:
+                raise ValueError("clean execution state must pin its genesis block")
+            if self.observation_status is RepositoryExecutionStateObservationStatus.OBSERVED:
+                if self.clean_state_attestation is None:
+                    raise ValueError(
+                        "observed clean state requires trusted no-fork attestation evidence"
+                    )
+                if (
+                    self.clean_state_attestation.expected_chain_id != self.expected_chain_id
+                    or self.clean_state_attestation.observed_chain_id != self.observed_chain_id
+                    or self.clean_state_attestation.genesis_block_number
+                    != self.observed_block_number
+                    or self.clean_state_attestation.genesis_block_hash != self.observed_block_hash
+                    or self.state_source_sha256
+                    != self.clean_state_attestation.expected_state_source_sha256()
+                ):
+                    raise ValueError(
+                        "clean execution state source identity differs from its process attestation"
+                    )
+            elif self.clean_state_attestation is not None:
+                raise ValueError("unobserved clean state cannot claim a no-fork attestation")
+        else:
+            if self.rpc_url_env is None:
+                raise ValueError("pinned fork state requires its configured RPC variable name")
+            if self.clean_state_attestation is not None:
+                raise ValueError("pinned fork state cannot carry clean-state attestation evidence")
+        if self.state_sha256 != self.expected_state_sha256():
+            raise ValueError("repository execution state hash does not match its fields")
+        return self
+
+    def expected_state_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"state_sha256"})
+        return _canonical_model_sha256(payload)
+
+
 class FoundryTestExecutionSummary(StrictModel):
     """Observed unit, fuzz/property, and invariant coverage from one Forge suite."""
 
@@ -3637,6 +4271,7 @@ class ScannerRun(StrictModel):
     repository_suite_inventory: RepositorySuiteInventoryEvidence | None = None
     repository_suite_post_inventory: RepositorySuiteInventoryEvidence | None = None
     repository_suite_execution_policy: RepositorySuiteExecutionPolicy | None = None
+    fork_rpc_egress: ForkRpcReadOnlyEgressEvidence | None = None
     repository_test_executions: list[RepositoryTestExecution] = Field(
         default_factory=list,
         max_length=10_000,
@@ -3692,6 +4327,18 @@ class ScannerRun(StrictModel):
             and self.repository_suite_selection is None
         ):
             raise ValueError("repository execution policy requires its suite selection")
+        if self.fork_rpc_egress is not None:
+            if self.scanner != "foundry_fork":
+                raise ValueError("fork RPC egress evidence requires the Foundry fork scanner")
+            execution_policy = self.repository_suite_execution_policy
+            if execution_policy is None:
+                raise ValueError("fork RPC egress evidence requires an execution policy")
+            if (
+                self.fork_rpc_egress.expected_chain_id != execution_policy.chain_id
+                or self.fork_rpc_egress.pinned_block_number != execution_policy.block_number
+                or self.fork_rpc_egress.pinned_block_hash != execution_policy.block_hash
+            ):
+                raise ValueError("fork RPC egress identity differs from its execution policy")
         if self.repository_suite_selection is not None:
             selection = self.repository_suite_selection
             if not selection.tests and self.status is ScannerStatus.SUCCESS:
@@ -4133,6 +4780,861 @@ class ScannerRun(StrictModel):
         ):
             raise ValueError("scanner execution observation hash does not match its fields")
         return self
+
+
+class RepositorySuiteStateAttempt(StrictModel):
+    """One fresh-workspace execution attempt bound to a configured state."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    state_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
+    state_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    attempt_index: int = Field(ge=1, le=10)
+    workspace_kind: Literal["fresh_disposable_copy"] = "fresh_disposable_copy"
+    workspace_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    workspace_freshness_attestation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    workspace_disposal_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    fork_rpc_egress_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    scanner_run: ScannerRun
+    attempt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> RepositorySuiteStateAttempt:
+        """Validate and self-hash one differential execution attempt."""
+
+        if "attempt_sha256" in values:
+            raise ValueError("attempt_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, attempt_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"attempt_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "attempt_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator("attempt_index", mode="before")
+    @classmethod
+    def attempt_index_is_exact(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("repository state attempt index requires an exact integer")
+        return value
+
+    @model_validator(mode="after")
+    def nested_egress_command_and_hash_are_consistent(
+        self,
+    ) -> RepositorySuiteStateAttempt:
+        egress = self.scanner_run.fork_rpc_egress
+        if (egress is None) != (self.fork_rpc_egress_sha256 is None):
+            raise ValueError("state attempt egress reference must be all-or-none")
+        if egress is not None and self.fork_rpc_egress_sha256 != egress.evidence_sha256:
+            raise ValueError("state attempt egress hash differs from its scanner run")
+        endpoint_markers = ("http://", "https://", "ws://", "wss://", "localhost", "127.0.0.1")
+        if any(
+            any(marker in token.casefold() for marker in endpoint_markers)
+            for token in self.scanner_run.command
+        ):
+            raise ValueError("state attempt command cannot serialize an RPC endpoint")
+        if self.attempt_sha256 != self.expected_attempt_sha256():
+            raise ValueError("repository state attempt hash does not match its fields")
+        return self
+
+    def expected_attempt_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"attempt_sha256"})
+        return _canonical_model_sha256(payload)
+
+
+class RepositorySuiteTestStateConsensus(StrictModel):
+    """Declared repeated-execution consensus for one test in one state."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    state_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
+    state_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    descriptor_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    status: RepositoryStateConsensusStatus
+    attempt_sha256s: tuple[str, ...] = Field(min_length=1, max_length=10)
+    observed_status: RepositoryTestExecutionStatus | None = None
+    machine_result_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    inconclusive_reasons: tuple[RepositoryStateInconclusiveReason, ...] = Field(max_length=16)
+    consensus_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> RepositorySuiteTestStateConsensus:
+        """Validate and self-hash one declared state consensus."""
+
+        if "consensus_sha256" in values:
+            raise ValueError("consensus_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, consensus_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"consensus_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "consensus_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @model_validator(mode="after")
+    def declaration_and_hash_are_consistent(self) -> RepositorySuiteTestStateConsensus:
+        if self.attempt_sha256s != tuple(sorted(set(self.attempt_sha256s))):
+            raise ValueError("state consensus attempt hashes must be unique and sorted")
+        reason_values = tuple(reason.value for reason in self.inconclusive_reasons)
+        if reason_values != tuple(sorted(set(reason_values))):
+            raise ValueError("state inconclusive reasons must be unique and sorted")
+        failure_statuses = {
+            RepositoryTestExecutionStatus.FAILED,
+            RepositoryTestExecutionStatus.REVERTED,
+            RepositoryTestExecutionStatus.ASSERTION_FAILED,
+        }
+        if self.status is RepositoryStateConsensusStatus.INCONCLUSIVE:
+            if (
+                self.observed_status is not None
+                or self.machine_result_sha256 is not None
+                or not self.inconclusive_reasons
+            ):
+                raise ValueError(
+                    "inconclusive state consensus requires reasons and no credited outcome"
+                )
+        else:
+            if (
+                len(self.attempt_sha256s) < 2
+                or self.machine_result_sha256 is None
+                or self.inconclusive_reasons
+            ):
+                raise ValueError(
+                    "conclusive state consensus requires two agreeing attempts and a result"
+                )
+            if (
+                self.status is RepositoryStateConsensusStatus.CONSISTENT_PASS
+                and self.observed_status is not RepositoryTestExecutionStatus.PASSED
+            ):
+                raise ValueError("consistent-pass consensus requires a passing observation")
+            if (
+                self.status is RepositoryStateConsensusStatus.CONSISTENT_FAILURE
+                and self.observed_status not in failure_statuses
+            ):
+                raise ValueError("consistent-failure consensus requires a failing observation")
+        if self.consensus_sha256 != self.expected_consensus_sha256():
+            raise ValueError("repository state consensus hash does not match its fields")
+        return self
+
+    def expected_consensus_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"consensus_sha256"})
+        return _canonical_model_sha256(payload)
+
+
+class RepositorySuiteTestComparison(StrictModel):
+    """Self-hashed comparison of clean and pinned consensus for one test."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    clean_state_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
+    clean_state_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    pinned_state_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
+    pinned_state_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    descriptor_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    clean_consensus_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    pinned_consensus_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    classification: RepositoryDifferentialClassification
+    direction: RepositoryDivergenceDirection | None = None
+    comparison_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> RepositorySuiteTestComparison:
+        """Validate and self-hash one clean-versus-pinned comparison."""
+
+        if "comparison_sha256" in values:
+            raise ValueError("comparison_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, comparison_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"comparison_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "comparison_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @model_validator(mode="after")
+    def direction_and_hash_are_consistent(self) -> RepositorySuiteTestComparison:
+        if (
+            self.clean_state_id == self.pinned_state_id
+            or self.clean_state_sha256 == self.pinned_state_sha256
+        ):
+            raise ValueError("differential comparison requires distinct clean and pinned states")
+        if self.classification is RepositoryDifferentialClassification.DIVERGED:
+            if self.direction is None:
+                raise ValueError("diverged comparison requires a typed direction")
+        elif self.direction is not None:
+            raise ValueError("non-diverged comparison cannot carry a divergence direction")
+        if self.comparison_sha256 != self.expected_comparison_sha256():
+            raise ValueError("repository suite comparison hash does not match its fields")
+        return self
+
+    def expected_comparison_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"comparison_sha256"})
+        return _canonical_model_sha256(payload)
+
+
+class RepositorySuiteDifferentialMatrix(StrictModel):
+    """Canonical repeated-state matrix kept separate from qualifying scanner runs."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    repository_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    selection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    selection_configuration_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    descriptor_sha256s: tuple[str, ...] = Field(min_length=1, max_length=10_000)
+    required_repetitions: int = Field(ge=2, le=10)
+    fuzz_seed: str = Field(pattern=r"^0x[0-9a-f]{64}$")
+    execution_configuration_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    fork_rpc_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    states: tuple[RepositorySuiteExecutionStateEvidence, ...] = Field(
+        min_length=2,
+        max_length=8,
+    )
+    attempts: tuple[RepositorySuiteStateAttempt, ...] = Field(
+        min_length=4,
+        max_length=80,
+    )
+    state_consensuses: tuple[RepositorySuiteTestStateConsensus, ...] = Field(
+        min_length=2,
+        max_length=80_000,
+    )
+    comparisons: tuple[RepositorySuiteTestComparison, ...] = Field(
+        min_length=1,
+        max_length=70_000,
+    )
+    safety_claim: Literal[False] = False
+    matrix_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> RepositorySuiteDifferentialMatrix:
+        """Validate and self-hash a complete repeated-state matrix."""
+
+        if "matrix_sha256" in values:
+            raise ValueError("matrix_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, matrix_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"matrix_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "matrix_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator("required_repetitions", mode="before")
+    @classmethod
+    def required_repetitions_are_exact(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("repository differential repetitions require an exact integer")
+        return value
+
+    @staticmethod
+    def calculate_matrix_sha256(payload: dict[str, Any]) -> str:
+        """Calculate the canonical digest of a serialized matrix payload."""
+
+        canonical = {key: value for key, value in payload.items() if key != "matrix_sha256"}
+        return _canonical_model_sha256(canonical)
+
+    @staticmethod
+    def execution_configuration_sha256_for_policy(
+        policy: RepositorySuiteExecutionPolicy,
+    ) -> str:
+        """Hash execution controls while excluding the deliberately varying state pin."""
+
+        payload = policy.model_dump(
+            mode="json",
+            exclude={"chain_id", "block_number", "block_hash", "policy_sha256"},
+        )
+        return _canonical_model_sha256(payload)
+
+    @model_validator(mode="after")
+    def cartesian_evidence_and_classifications_are_consistent(
+        self,
+    ) -> RepositorySuiteDifferentialMatrix:
+        self._validate_canonical_sets()
+        states_by_id = {state.state_id: state for state in self.states}
+        attempts_by_state = {
+            state_id: tuple(attempt for attempt in self.attempts if attempt.state_id == state_id)
+            for state_id in states_by_id
+        }
+        consensuses_by_key = {
+            (consensus.state_id, consensus.descriptor_sha256): consensus
+            for consensus in self.state_consensuses
+        }
+        for key, consensus in consensuses_by_key.items():
+            state = states_by_id[key[0]]
+            attempts = attempts_by_state[key[0]]
+            expected = self._expected_consensus(state, attempts, key[1])
+            actual = (
+                consensus.status,
+                consensus.observed_status,
+                consensus.machine_result_sha256,
+                consensus.inconclusive_reasons,
+            )
+            if actual != expected:
+                expected_status = expected[0].value
+                reason_suffix = (
+                    ": " + ", ".join(reason.value for reason in expected[3]) if expected[3] else ""
+                )
+                raise ValueError(
+                    "state consensus must be "
+                    f"{expected_status} for its runtime evidence{reason_suffix}"
+                )
+            expected_attempt_hashes = tuple(sorted(attempt.attempt_sha256 for attempt in attempts))
+            if consensus.attempt_sha256s != expected_attempt_hashes:
+                raise ValueError("state consensus does not bind every configured attempt")
+            if consensus.state_sha256 != state.state_sha256:
+                raise ValueError("state consensus identity differs from its state evidence")
+
+        clean = next(
+            state for state in self.states if state.kind is RepositoryExecutionStateKind.CLEAN_LOCAL
+        )
+        for comparison in self.comparisons:
+            pinned = states_by_id[comparison.pinned_state_id]
+            clean_consensus = consensuses_by_key[(clean.state_id, comparison.descriptor_sha256)]
+            pinned_consensus = consensuses_by_key[(pinned.state_id, comparison.descriptor_sha256)]
+            expected_classification, expected_direction = self._expected_comparison(
+                clean_consensus,
+                pinned_consensus,
+            )
+            if (
+                comparison.classification is not expected_classification
+                or comparison.direction is not expected_direction
+            ):
+                raise ValueError("differential comparison classification is inconsistent")
+            if (
+                comparison.clean_state_id != clean.state_id
+                or comparison.clean_state_sha256 != clean.state_sha256
+                or comparison.pinned_state_sha256 != pinned.state_sha256
+                or comparison.clean_consensus_sha256 != clean_consensus.consensus_sha256
+                or comparison.pinned_consensus_sha256 != pinned_consensus.consensus_sha256
+            ):
+                raise ValueError("differential comparison does not bind its state consensuses")
+        if self.matrix_sha256 != self.expected_matrix_sha256():
+            raise ValueError("repository differential matrix hash does not match its fields")
+        return self
+
+    def _validate_canonical_sets(self) -> None:
+        state_ids = tuple(state.state_id for state in self.states)
+        if state_ids != tuple(sorted(set(state_ids))):
+            raise ValueError("matrix states must have unique canonically sorted IDs")
+        if len({state.state_sha256 for state in self.states}) != len(self.states):
+            raise ValueError("matrix state hashes must be unique")
+        clean_states = [
+            state for state in self.states if state.kind is RepositoryExecutionStateKind.CLEAN_LOCAL
+        ]
+        pinned_states = [
+            state for state in self.states if state.kind is RepositoryExecutionStateKind.PINNED_FORK
+        ]
+        if len(clean_states) != 1 or not pinned_states:
+            raise ValueError(
+                "matrix requires exactly one clean state and at least one pinned state"
+            )
+        if self.descriptor_sha256s != tuple(sorted(set(self.descriptor_sha256s))):
+            raise ValueError("matrix descriptor hashes must be unique and sorted")
+        attempt_keys = tuple((attempt.state_id, attempt.attempt_index) for attempt in self.attempts)
+        expected_attempt_keys = tuple(
+            (state.state_id, index)
+            for state in self.states
+            for index in range(1, self.required_repetitions + 1)
+        )
+        if attempt_keys != expected_attempt_keys:
+            raise ValueError("matrix attempts must exactly cover every state and repetition")
+        if len({attempt.attempt_sha256 for attempt in self.attempts}) != len(self.attempts):
+            raise ValueError("matrix attempt hashes must be unique")
+        if len({attempt.workspace_identity_sha256 for attempt in self.attempts}) != len(
+            self.attempts
+        ):
+            raise ValueError("matrix attempts require distinct fresh workspace identities")
+        states_by_id = {state.state_id: state for state in self.states}
+        if any(
+            attempt.state_sha256 != states_by_id[attempt.state_id].state_sha256
+            for attempt in self.attempts
+            if attempt.state_id in states_by_id
+        ) or any(attempt.state_id not in states_by_id for attempt in self.attempts):
+            raise ValueError("matrix attempt state identity is unknown or inconsistent")
+        consensus_keys = tuple(
+            (consensus.state_id, consensus.descriptor_sha256)
+            for consensus in self.state_consensuses
+        )
+        expected_consensus_keys = tuple(
+            (state.state_id, descriptor_sha256)
+            for state in self.states
+            for descriptor_sha256 in self.descriptor_sha256s
+        )
+        if consensus_keys != expected_consensus_keys:
+            raise ValueError("matrix consensus must exactly cover every state and descriptor")
+        if len({item.consensus_sha256 for item in self.state_consensuses}) != len(
+            self.state_consensuses
+        ):
+            raise ValueError("matrix consensus hashes must be unique")
+        clean = clean_states[0]
+        comparison_keys = tuple(
+            (comparison.pinned_state_id, comparison.descriptor_sha256)
+            for comparison in self.comparisons
+        )
+        expected_comparison_keys = tuple(
+            (state.state_id, descriptor_sha256)
+            for state in pinned_states
+            for descriptor_sha256 in self.descriptor_sha256s
+        )
+        if comparison_keys != expected_comparison_keys:
+            raise ValueError(
+                "matrix comparison must exactly cover the clean-pinned descriptor Cartesian set"
+            )
+        if any(
+            comparison.clean_state_id != clean.state_id
+            or comparison.pinned_state_id not in states_by_id
+            for comparison in self.comparisons
+        ):
+            raise ValueError("matrix comparison references an unknown execution state")
+        if len({item.comparison_sha256 for item in self.comparisons}) != len(self.comparisons):
+            raise ValueError("matrix comparison hashes must be unique")
+
+    def _expected_consensus(
+        self,
+        state: RepositorySuiteExecutionStateEvidence,
+        attempts: tuple[RepositorySuiteStateAttempt, ...],
+        descriptor_sha256: str,
+    ) -> tuple[
+        RepositoryStateConsensusStatus,
+        RepositoryTestExecutionStatus | None,
+        str | None,
+        tuple[RepositoryStateInconclusiveReason, ...],
+    ]:
+        if state.observation_status is not RepositoryExecutionStateObservationStatus.OBSERVED:
+            return (
+                RepositoryStateConsensusStatus.INCONCLUSIVE,
+                None,
+                None,
+                (RepositoryStateInconclusiveReason.STATE_UNOBSERVED,),
+            )
+        reasons: set[RepositoryStateInconclusiveReason] = set()
+        observations: list[RepositoryTestExecution] = []
+        for attempt in attempts:
+            run = attempt.scanner_run
+            egress = run.fork_rpc_egress
+            if (
+                egress is None
+                or egress.status is not RepositoryForkEgressStatus.ENFORCED
+                or egress.policy_sha256 != self.fork_rpc_policy_sha256
+                or egress.state_id != state.state_id
+                or egress.state_source_sha256 != state.state_source_sha256
+                or attempt.fork_rpc_egress_sha256 != egress.evidence_sha256
+            ):
+                reasons.add(RepositoryStateInconclusiveReason.EGRESS_UNENFORCED)
+            if run.status is not ScannerStatus.SUCCESS:
+                reasons.add(RepositoryStateInconclusiveReason.ATTEMPT_UNAVAILABLE)
+                continue
+            if run.execution_evidence is not ExecutionEvidenceKind.REAL:
+                reasons.add(RepositoryStateInconclusiveReason.NON_REAL_EVIDENCE)
+            if (
+                run.repository_code_execution is not RepositoryCodeExecutionState.ISOLATED
+                or run.isolation_backend is None
+                or run.isolation_attestation_sha256 is None
+            ):
+                reasons.add(RepositoryStateInconclusiveReason.UNISOLATED_EXECUTION)
+            selection = run.repository_suite_selection
+            policy = run.repository_suite_execution_policy
+            if (
+                selection is None
+                or policy is None
+                or selection.repository_sha256 != self.repository_sha256
+                or selection.selection_sha256 != self.selection_sha256
+                or selection.configuration_sha256 != self.selection_configuration_sha256
+                or run.version != policy.tool_version
+                or run.executable_sha256 != policy.tool_sha256
+                or run.isolation_backend != policy.isolation_backend
+                or run.isolation_attestation_sha256 != policy.isolation_attestation_sha256
+                or policy.chain_id != state.expected_chain_id
+                or policy.block_number != state.pinned_block_number
+                or policy.block_hash != state.observed_block_hash
+                or policy.fuzz_seed != self.fuzz_seed
+                or self.execution_configuration_sha256_for_policy(policy)
+                != self.execution_configuration_sha256
+            ):
+                reasons.add(RepositoryStateInconclusiveReason.IDENTITY_MISMATCH)
+            if not run.machine_output_validated or run.execution_observation_sha256 is None:
+                reasons.add(RepositoryStateInconclusiveReason.INVALID_MACHINE_OUTPUT)
+            matches = [
+                execution
+                for execution in run.repository_test_executions
+                if execution.descriptor_sha256 == descriptor_sha256
+            ]
+            if len(matches) != 1:
+                reasons.add(RepositoryStateInconclusiveReason.INVALID_MACHINE_OUTPUT)
+            else:
+                observations.append(matches[0])
+        if len(observations) < 2:
+            reasons.add(RepositoryStateInconclusiveReason.SINGLE_OBSERVATION)
+        statuses = {observation.status for observation in observations}
+        result_hashes = {observation.machine_result_sha256 for observation in observations}
+        if len(statuses) != 1 or len(result_hashes) != 1 or None in result_hashes:
+            reasons.add(RepositoryStateInconclusiveReason.ATTEMPT_DISAGREEMENT)
+        if reasons:
+            return (
+                RepositoryStateConsensusStatus.INCONCLUSIVE,
+                None,
+                None,
+                tuple(sorted(reasons, key=lambda reason: reason.value)),
+            )
+        observed_status = observations[0].status
+        machine_result_sha256 = observations[0].machine_result_sha256
+        assert machine_result_sha256 is not None
+        if observed_status is RepositoryTestExecutionStatus.PASSED:
+            consensus_status = RepositoryStateConsensusStatus.CONSISTENT_PASS
+        elif observed_status in {
+            RepositoryTestExecutionStatus.FAILED,
+            RepositoryTestExecutionStatus.REVERTED,
+            RepositoryTestExecutionStatus.ASSERTION_FAILED,
+        }:
+            consensus_status = RepositoryStateConsensusStatus.CONSISTENT_FAILURE
+        else:
+            return (
+                RepositoryStateConsensusStatus.INCONCLUSIVE,
+                None,
+                None,
+                (RepositoryStateInconclusiveReason.INVALID_MACHINE_OUTPUT,),
+            )
+        return consensus_status, observed_status, machine_result_sha256, ()
+
+    @staticmethod
+    def _expected_comparison(
+        clean: RepositorySuiteTestStateConsensus,
+        pinned: RepositorySuiteTestStateConsensus,
+    ) -> tuple[
+        RepositoryDifferentialClassification,
+        RepositoryDivergenceDirection | None,
+    ]:
+        if (
+            clean.status is RepositoryStateConsensusStatus.INCONCLUSIVE
+            or pinned.status is RepositoryStateConsensusStatus.INCONCLUSIVE
+        ):
+            return RepositoryDifferentialClassification.INCONCLUSIVE, None
+        if (
+            clean.status is RepositoryStateConsensusStatus.CONSISTENT_PASS
+            and pinned.status is RepositoryStateConsensusStatus.CONSISTENT_FAILURE
+        ):
+            return (
+                RepositoryDifferentialClassification.DIVERGED,
+                RepositoryDivergenceDirection.CLEAN_PASS_PINNED_FAILURE,
+            )
+        if (
+            clean.status is RepositoryStateConsensusStatus.CONSISTENT_FAILURE
+            and pinned.status is RepositoryStateConsensusStatus.CONSISTENT_PASS
+        ):
+            return (
+                RepositoryDifferentialClassification.DIVERGED,
+                RepositoryDivergenceDirection.CLEAN_FAILURE_PINNED_PASS,
+            )
+        if (
+            clean.observed_status == pinned.observed_status
+            and clean.machine_result_sha256 == pinned.machine_result_sha256
+        ):
+            classification = (
+                RepositoryDifferentialClassification.CONSISTENT_PASS
+                if clean.status is RepositoryStateConsensusStatus.CONSISTENT_PASS
+                else RepositoryDifferentialClassification.CONSISTENT_FAILURE
+            )
+            return classification, None
+        return (
+            RepositoryDifferentialClassification.DIVERGED,
+            RepositoryDivergenceDirection.SEMANTIC_RESULT_CHANGED,
+        )
+
+    def expected_matrix_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"matrix_sha256"})
+        return _canonical_model_sha256(payload)
+
+
+class RepositorySuiteDifferentialRun(StrictModel):
+    """Self-hashed configured matrix result, including fail-closed non-results."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    status: RepositoryDifferentialRunStatus
+    configuration_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    requested_state_ids: tuple[str, ...] = Field(min_length=2, max_length=8)
+    required_repetitions: int = Field(ge=2, le=10)
+    matrix: RepositorySuiteDifferentialMatrix | None = None
+    limitations: tuple[str, ...] = Field(max_length=32)
+    result_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> RepositorySuiteDifferentialRun:
+        """Validate and self-hash a configured differential result."""
+
+        if "result_sha256" in values:
+            raise ValueError("result_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, result_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"result_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "result_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator("requested_state_ids")
+    @classmethod
+    def state_ids_are_canonical(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if value != tuple(sorted(set(value))) or any(
+            re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", item) is None for item in value
+        ):
+            raise ValueError("differential requested state IDs must be unique and sorted")
+        return value
+
+    @field_validator("required_repetitions", mode="before")
+    @classmethod
+    def required_repetitions_are_exact(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("repository differential repetitions require an exact integer")
+        return value
+
+    @field_validator("limitations")
+    @classmethod
+    def limitations_are_bounded(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if value != tuple(dict.fromkeys(value)) or any(
+            not item or len(item) > 2_000 or not _repository_suite_text_is_safe(item)
+            for item in value
+        ):
+            raise ValueError("differential limitations must be unique bounded printable text")
+        return value
+
+    @model_validator(mode="after")
+    def status_matrix_and_hash_are_consistent(self) -> RepositorySuiteDifferentialRun:
+        if self.matrix is not None:
+            if (
+                self.requested_state_ids != tuple(state.state_id for state in self.matrix.states)
+                or self.required_repetitions != self.matrix.required_repetitions
+            ):
+                raise ValueError("differential result configuration differs from its matrix")
+            has_inconclusive = any(
+                comparison.classification is RepositoryDifferentialClassification.INCONCLUSIVE
+                for comparison in self.matrix.comparisons
+            )
+        else:
+            has_inconclusive = True
+        if self.status is RepositoryDifferentialRunStatus.COMPLETE:
+            if (
+                self.matrix is None
+                or has_inconclusive
+                or self.limitations
+                or self.configuration_sha256 != self.matrix.selection_configuration_sha256
+            ):
+                raise ValueError(
+                    "complete differential result requires a conclusive matrix, "
+                    "configuration binding, and no limitations"
+                )
+        elif not self.limitations:
+            raise ValueError("non-complete differential result requires a prominent limitation")
+        if self.status is RepositoryDifferentialRunStatus.INCONCLUSIVE and not has_inconclusive:
+            raise ValueError("inconclusive differential result requires incomplete matrix evidence")
+        if self.status is RepositoryDifferentialRunStatus.FAILED and self.matrix is not None:
+            raise ValueError("failed differential result cannot claim a completed matrix")
+        if self.result_sha256 != self.expected_result_sha256():
+            raise ValueError("repository differential result hash does not match its fields")
+        return self
+
+    def expected_result_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"result_sha256"})
+        return _canonical_model_sha256(payload)
+
+
+class RepositoryForkRpcPrivacyEvidence(StrictModel):
+    """Endpoint-free privacy projection of one configured fork-matrix run."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    status: RepositoryForkEgressStatus
+    differential_result_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    boundary_kind: Literal["trusted_read_only_loopback_bridge"] = (
+        "trusted_read_only_loopback_bridge"
+    )
+    network_scope: Literal["single_loopback_origin"] = "single_loopback_origin"
+    state_ids: tuple[str, ...] = Field(min_length=2, max_length=8)
+    configured_policy_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    observed_policy_sha256s: tuple[str, ...] = Field(max_length=8)
+    attempt_count: int = Field(ge=0, le=80)
+    egress_evidence_count: int = Field(ge=0, le=80)
+    egress_evidence_sha256s: tuple[str, ...] = Field(max_length=80)
+    http_request_count: int = Field(ge=0, le=80_000_000)
+    permitted_rpc_call_count: int = Field(ge=0, le=80_000_000)
+    origin_attempted_rpc_call_count: int = Field(ge=0, le=80_000_000)
+    origin_validated_rpc_call_count: int = Field(ge=0, le=80_000_000)
+    synthetic_rpc_call_count: int = Field(ge=0, le=80_000_000)
+    denied_request_count: int = Field(ge=0, le=80_000_000)
+    malformed_request_count: int = Field(ge=0, le=80_000_000)
+    limit_exceeded_request_count: int = Field(ge=0, le=80_000_000)
+    upstream_error_request_count: int = Field(ge=0, le=80_000_000)
+    transaction_capable_request_forwarded: Literal[False] = False
+    credentials_forwarded: Literal[False] = False
+    raw_payloads_retained: Literal[False] = False
+    rpc_endpoint_recorded: Literal[False] = False
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def from_differential(
+        cls,
+        result: RepositorySuiteDifferentialRun,
+    ) -> RepositoryForkRpcPrivacyEvidence:
+        """Project only endpoint-free bridge accounting from a typed matrix result."""
+
+        matrix = result.matrix
+        if matrix is None:
+            egress: tuple[ForkRpcReadOnlyEgressEvidence, ...] = ()
+            configured_policy_sha256 = None
+        else:
+            egress = tuple(
+                item
+                for attempt in matrix.attempts
+                if (item := attempt.scanner_run.fork_rpc_egress) is not None
+            )
+            configured_policy_sha256 = matrix.fork_rpc_policy_sha256
+        violation = any(item.status is RepositoryForkEgressStatus.VIOLATION for item in egress)
+        fully_enforced = (
+            matrix is not None
+            and len(egress) == len(matrix.attempts)
+            and bool(egress)
+            and all(
+                item.status is RepositoryForkEgressStatus.ENFORCED
+                and item.policy_sha256 == matrix.fork_rpc_policy_sha256
+                for item in egress
+            )
+        )
+        status = (
+            RepositoryForkEgressStatus.VIOLATION
+            if violation
+            else (
+                RepositoryForkEgressStatus.ENFORCED
+                if fully_enforced
+                else RepositoryForkEgressStatus.UNVERIFIED
+            )
+        )
+        values: dict[str, Any] = {
+            "status": status,
+            "differential_result_sha256": result.result_sha256,
+            "state_ids": result.requested_state_ids,
+            "configured_policy_sha256": configured_policy_sha256,
+            "observed_policy_sha256s": tuple(sorted({item.policy_sha256 for item in egress})),
+            "attempt_count": len(matrix.attempts) if matrix is not None else 0,
+            "egress_evidence_count": len(egress),
+            "egress_evidence_sha256s": tuple(item.evidence_sha256 for item in egress),
+        }
+        for field in (
+            "http_request_count",
+            "permitted_rpc_call_count",
+            "origin_attempted_rpc_call_count",
+            "origin_validated_rpc_call_count",
+            "synthetic_rpc_call_count",
+            "denied_request_count",
+            "malformed_request_count",
+            "limit_exceeded_request_count",
+            "upstream_error_request_count",
+        ):
+            values[field] = sum(getattr(item, field) for item in egress)
+        provisional = cls.model_construct(**values, evidence_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"evidence_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "evidence_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator(
+        "attempt_count",
+        "egress_evidence_count",
+        "http_request_count",
+        "permitted_rpc_call_count",
+        "origin_attempted_rpc_call_count",
+        "origin_validated_rpc_call_count",
+        "synthetic_rpc_call_count",
+        "denied_request_count",
+        "malformed_request_count",
+        "limit_exceeded_request_count",
+        "upstream_error_request_count",
+        mode="before",
+    )
+    @classmethod
+    def integer_evidence_is_exact(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("fork RPC privacy accounting requires exact integers")
+        return value
+
+    @field_validator("state_ids")
+    @classmethod
+    def state_ids_are_canonical(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if value != tuple(sorted(set(value))) or any(
+            re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", item) is None for item in value
+        ):
+            raise ValueError("fork RPC privacy state IDs must be unique and sorted")
+        return value
+
+    @field_validator("observed_policy_sha256s")
+    @classmethod
+    def policy_hashes_are_canonical(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if value != tuple(sorted(set(value))) or any(
+            re.fullmatch(r"[0-9a-f]{64}", item) is None for item in value
+        ):
+            raise ValueError("fork RPC privacy policy hashes must be unique and sorted")
+        return value
+
+    @field_validator("egress_evidence_sha256s")
+    @classmethod
+    def egress_hashes_are_valid(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if any(re.fullmatch(r"[0-9a-f]{64}", item) is None for item in value):
+            raise ValueError("fork RPC privacy egress references must be SHA-256 values")
+        return value
+
+    @model_validator(mode="after")
+    def accounting_status_and_hash_are_consistent(
+        self,
+    ) -> RepositoryForkRpcPrivacyEvidence:
+        if self.egress_evidence_count != len(self.egress_evidence_sha256s):
+            raise ValueError("fork RPC privacy evidence count differs from its hashes")
+        if self.egress_evidence_count > self.attempt_count:
+            raise ValueError("fork RPC privacy evidence count exceeds matrix attempts")
+        if (
+            self.origin_attempted_rpc_call_count + self.synthetic_rpc_call_count
+            != self.permitted_rpc_call_count
+            or self.origin_validated_rpc_call_count > self.origin_attempted_rpc_call_count
+        ):
+            raise ValueError("fork RPC privacy call accounting is inconsistent")
+        rejection_or_error_count = (
+            self.denied_request_count
+            + self.malformed_request_count
+            + self.limit_exceeded_request_count
+            + self.upstream_error_request_count
+        )
+        if self.status is RepositoryForkEgressStatus.ENFORCED:
+            if (
+                self.attempt_count == 0
+                or self.egress_evidence_count != self.attempt_count
+                or self.permitted_rpc_call_count == 0
+                or self.origin_validated_rpc_call_count != self.origin_attempted_rpc_call_count
+                or rejection_or_error_count
+                or self.configured_policy_sha256 is None
+                or self.observed_policy_sha256s != (self.configured_policy_sha256,)
+            ):
+                raise ValueError(
+                    "enforced fork RPC privacy evidence requires complete validated accounting"
+                )
+        elif self.status is RepositoryForkEgressStatus.VIOLATION:
+            if rejection_or_error_count == 0:
+                raise ValueError("fork RPC privacy violation requires rejection/error evidence")
+        elif (
+            self.attempt_count
+            and self.egress_evidence_count == self.attempt_count
+            and rejection_or_error_count == 0
+            and self.configured_policy_sha256 is not None
+            and self.observed_policy_sha256s == (self.configured_policy_sha256,)
+            and self.permitted_rpc_call_count > 0
+            and self.origin_validated_rpc_call_count == self.origin_attempted_rpc_call_count
+        ):
+            raise ValueError("fully enforced fork RPC privacy evidence cannot be unverified")
+        if self.evidence_sha256 != self.expected_evidence_sha256():
+            raise ValueError("fork RPC privacy evidence hash does not match its fields")
+        return self
+
+    def expected_evidence_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"evidence_sha256"})
+        return _canonical_model_sha256(payload)
 
 
 class DependencyPackageEvidence(StrictModel):
@@ -6639,6 +8141,7 @@ class AuditReport(StrictModel):
     model_configuration_hash: str
     privacy: dict[str, Any]
     scanner_runs: list[ScannerRun]
+    repository_suite_differential: RepositorySuiteDifferentialRun | None = None
     usage: list[UsageRecord]
     budget_usd: float
     accounted_cost_usd: float
@@ -6847,6 +8350,25 @@ class AuditReport(StrictModel):
             )
 
             PrivacySourceProvenanceEvidence.model_validate(provenance)
+        fork_rpc = self.privacy.get("fork_rpc_egress")
+        if self.repository_suite_differential is None:
+            if fork_rpc is not None:
+                raise ValueError(
+                    "fork RPC privacy evidence requires a typed repository differential result"
+                )
+        else:
+            if fork_rpc is None:
+                raise ValueError(
+                    "repository differential result requires explicit fork RPC privacy evidence"
+                )
+            observed = RepositoryForkRpcPrivacyEvidence.model_validate(fork_rpc)
+            expected = RepositoryForkRpcPrivacyEvidence.from_differential(
+                self.repository_suite_differential
+            )
+            if observed != expected:
+                raise ValueError(
+                    "fork RPC privacy evidence differs from the repository differential result"
+                )
         return self
 
     def effective_solidity_coverage(self) -> SolidityCoverage | None:

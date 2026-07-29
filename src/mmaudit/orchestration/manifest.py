@@ -318,6 +318,7 @@ def build_run_evidence_manifest(
         expected_source_classification=run_configuration.run_options.privacy_source_classification,
     )
     _validate_report_artifact_consistency(root, report)
+    _validate_repository_differential_configuration(report, effective_config)
     for artifact_name, report_key in (
         ("privacy-policy.json", "effective_policy"),
         ("privacy-source-provenance.json", "source_provenance"),
@@ -334,6 +335,7 @@ def build_run_evidence_manifest(
     invariant_results = _read_json_artifact(root, "invariant-execution-results.json")
     formal_results = _read_json_artifact(root, "formal-results.json")
     reproduction_results = _read_json_artifact(root, "reproduction-results.json")
+    scanner_results = _read_json_artifact(root, "scanner-results.json")
     solidity_coverage = _read_json_artifact(root, "solidity-coverage.json")
     model_coverage = _read_json_artifact(root, "model-review-coverage.json")
     scope_assessment = _read_json_artifact(root, "scope-assessment.json")
@@ -365,6 +367,7 @@ def build_run_evidence_manifest(
             invariant_results,
             formal_results,
             reproduction_results,
+            scanner_results,
         ),
         corpora=_corpus_bindings(property_corpus),
         harnesses=_harness_bindings(harness_plan, invariant_results, reproduction_results),
@@ -492,6 +495,64 @@ def _validate_report_artifact_consistency(root: Path, report: AuditReport) -> No
         "context_preflight_records"
     ):
         raise ValueError("metadata.json context preflight differs from the final report")
+    serialized_differential = (
+        report.repository_suite_differential.model_dump(mode="json")
+        if report.repository_suite_differential is not None
+        else None
+    )
+    if metadata.get("repository_suite_differential") != serialized_differential:
+        raise ValueError("metadata.json repository differential differs from the final report")
+    scanner_results = _read_json_artifact(root, "scanner-results.json")
+    if scanner_results.get("runs") != [run.model_dump(mode="json") for run in report.scanner_runs]:
+        raise ValueError("scanner-results.json differs from the final report")
+    differential_path = root / "repository-suite-differential.json"
+    fork_privacy_path = root / "privacy-fork-rpc-egress.json"
+    for path in (differential_path, fork_privacy_path):
+        if path.is_symlink() or path.is_junction():
+            raise ValueError(f"run differential artifact may not be a link: {path.name}")
+    expected_present = report.repository_suite_differential is not None
+    if differential_path.exists() != expected_present:
+        raise ValueError(
+            "repository-suite-differential.json presence differs from the final report"
+        )
+    if fork_privacy_path.exists() != expected_present:
+        raise ValueError("privacy-fork-rpc-egress.json presence differs from the final report")
+    if expected_present:
+        if (
+            _read_json_artifact(root, "repository-suite-differential.json")
+            != serialized_differential
+        ):
+            raise ValueError("repository-suite-differential.json differs from the final report")
+        if _read_json_artifact(root, "privacy-fork-rpc-egress.json") != report.privacy.get(
+            "fork_rpc_egress"
+        ):
+            raise ValueError("privacy-fork-rpc-egress.json differs from the final report")
+
+
+def _validate_repository_differential_configuration(
+    report: AuditReport,
+    config: AuditConfig,
+) -> None:
+    """Bind configured state/repetition authority to the serialized matrix result."""
+
+    suite = config.smart_contracts.repository_suite
+    differential = report.repository_suite_differential
+    configured = bool(suite.fork_matrix_states)
+    if configured != (differential is not None):
+        raise ValueError(
+            "repository differential result presence differs from effective configuration"
+        )
+    if differential is None:
+        return
+    expected_state_ids = tuple(state.state_id for state in suite.fork_matrix_states)
+    if (
+        differential.configuration_sha256 != suite.stable_hash()
+        or differential.requested_state_ids != expected_state_ids
+        or differential.required_repetitions != suite.fork_matrix_repetitions
+    ):
+        raise ValueError(
+            "repository differential result differs from effective state/repetition configuration"
+        )
 
 
 def _validated_context_manifest(
@@ -758,9 +819,11 @@ def validate_manifest_artifacts(
         _validate_report_artifact_consistency(root, report)
         context_manifest = _validated_context_manifest(root, report)
         if manifest.run_configuration is not None:
+            effective_config = manifest.run_configuration.reconstruct_effective_config()
+            _validate_repository_differential_configuration(report, effective_config)
             _validate_context_manifest_configuration(
                 context_manifest,
-                manifest.run_configuration.reconstruct_effective_config(),
+                effective_config,
             )
         expected_classification = (
             manifest.run_configuration.run_options.privacy_source_classification
@@ -1369,7 +1432,10 @@ def _extract_seed_values(
         for key in sorted(value):
             child = value[key]
             child_path = f"{path}/{key}"
-            if key in {"seed", "campaign_seed"} and isinstance(child, (int, str)):
+            if key in {"seed", "campaign_seed", "fuzz_seed"} and isinstance(
+                child,
+                (int, str),
+            ):
                 output.append((child_path, child))
             _extract_seed_values(child, path=child_path, output=output)
     elif isinstance(value, list):

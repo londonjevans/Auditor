@@ -221,6 +221,7 @@ class FoundryForkScanner(ScannerAdapter):
         allow_fork_probing: bool = False,
         expected_repository_sha256: str | None = None,
         repository_exclusion_root: Path | None = None,
+        fork_rpc_url_override: str | None = None,
     ) -> None:
         self.config = config
         self.reproduction = reproduction or ReproductionConfig()
@@ -228,6 +229,7 @@ class FoundryForkScanner(ScannerAdapter):
         self.allow_fork_probing = allow_fork_probing
         self.expected_repository_sha256 = expected_repository_sha256
         self.repository_exclusion_root = repository_exclusion_root
+        self.fork_rpc_url_override = fork_rpc_url_override
 
     def with_runtime_context(
         self,
@@ -244,6 +246,7 @@ class FoundryForkScanner(ScannerAdapter):
             allow_fork_probing=allow_fork_probing,
             expected_repository_sha256=expected_repository_sha256,
             repository_exclusion_root=repository_exclusion_root,
+            fork_rpc_url_override=self.fork_rpc_url_override,
         )
 
     def build_command(self, root: Path, private_dir: Path) -> list[str]:
@@ -490,16 +493,16 @@ class FoundryForkScanner(ScannerAdapter):
                 "repository fork-suite execution requires pinned chain ID and block number",
             )
 
-        rpc_url = os.environ.get(self.config.fork_rpc_url_env, "")
-        if not rpc_url:
-            return finish(
-                ScannerStatus.UNAVAILABLE,
-                f"{self.config.fork_rpc_url_env} is not set",
-            )
         try:
+            rpc_url = self._fork_rpc_url()
             rpc_port = local_fork_rpc_port(rpc_url)
-        except ForkRpcBindingError as exc:
-            return finish(ScannerStatus.FAILED, str(exc))
+        except ValueError as exc:
+            status = (
+                ScannerStatus.UNAVAILABLE
+                if str(exc) == f"{self.config.fork_rpc_url_env} is not set"
+                else ScannerStatus.FAILED
+            )
+            return finish(status, str(exc))
 
         try:
             _reject_unsafe_foundry_configuration(
@@ -973,7 +976,9 @@ class FoundryForkScanner(ScannerAdapter):
     def _fork_rpc_url(self) -> str:
         """Retain the legacy command-builder interface with strict loopback validation."""
 
-        value = os.environ.get(self.config.fork_rpc_url_env, "")
+        value = self.fork_rpc_url_override
+        if value is None:
+            value = os.environ.get(self.config.fork_rpc_url_env, "")
         if not value:
             raise ValueError(f"{self.config.fork_rpc_url_env} is not set")
         try:

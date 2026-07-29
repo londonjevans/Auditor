@@ -12,7 +12,7 @@ import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -307,6 +307,7 @@ class DependencyPreparationConfig(ConfigModel):
 _LEGACY_REPOSITORY_SUITE_FOUNDRY_PATHS = ("test/audit/*.t.sol",)
 _LEGACY_REPOSITORY_SUITE_FOUNDRY_TESTS = ("*",)
 _REPOSITORY_SUITE_FUZZ_SEED = "0x" + ("0" * 63) + "1"
+_MAX_REPOSITORY_FORK_MATRIX_EXECUTION_SLOTS = 100_000
 
 
 def _safe_repository_suite_path_glob(value: str) -> bool:
@@ -346,15 +347,66 @@ def _safe_repository_suite_test_glob(value: str) -> bool:
     )
 
 
-class RepositoryForkMatrixStateConfig(ConfigModel):
-    """Operator-authored identity for one local repository-suite execution state."""
+class RepositoryCleanForkMatrixStateConfig(ConfigModel):
+    """Exact trusted launcher policy for one internally created clean chain."""
 
     state_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
-    kind: Literal["clean_local", "pinned_fork"]
+    kind: Literal["clean_local"] = "clean_local"
+    expected_chain_id: int = Field(ge=1)
+    anvil_executable_env: str = Field(
+        default="MMAUDIT_ANVIL_EXECUTABLE",
+        pattern=r"^[A-Z_][A-Z0-9_]{0,127}$",
+    )
+    anvil_version: str = Field(
+        min_length=16,
+        max_length=160,
+        pattern=r"^anvil Version: [A-Za-z0-9][A-Za-z0-9.+-]{0,127}$",
+    )
+    anvil_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    hardfork: str = Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")
+    genesis_timestamp: int = Field(ge=1, lt=2**64)
+    startup_timeout_seconds: float = Field(gt=0, le=15)
+    shutdown_timeout_seconds: float = Field(gt=0, le=10)
+
+    @field_validator("expected_chain_id", "genesis_timestamp", mode="before")
+    @classmethod
+    def integer_controls_are_exact(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("clean Anvil integer controls require exact integers")
+        return value
+
+    @field_validator("anvil_executable_env")
+    @classmethod
+    def executable_environment_name_is_not_a_control_plane_secret(cls, value: str) -> str:
+        if value in RESERVED_OPERATOR_CONTROL_PLANE_NAMES:
+            raise ValueError("clean Anvil path cannot use an operator control-plane variable")
+        return value
+
+    @model_validator(mode="after")
+    def launcher_policy_is_exact_and_nonzero(self) -> RepositoryCleanForkMatrixStateConfig:
+        if self.hardfork == "latest":
+            raise ValueError("clean Anvil hardfork cannot use the mutable latest alias")
+        if self.anvil_sha256 == "0" * 64:
+            raise ValueError("clean Anvil requires a nonzero executable SHA-256")
+        return self
+
+
+class RepositoryPinnedForkMatrixStateConfig(ConfigModel):
+    """Operator-authored identity for one already-local pinned fork state."""
+
+    state_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
+    kind: Literal["pinned_fork"] = "pinned_fork"
     rpc_url_env: str = Field(pattern=r"^[A-Z_][A-Z0-9_]{0,127}$")
     expected_chain_id: int = Field(ge=1)
     pinned_block_number: int = Field(ge=0)
     state_source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("expected_chain_id", "pinned_block_number", mode="before")
+    @classmethod
+    def integer_controls_are_exact(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("pinned fork integer controls require exact integers")
+        return value
 
     @field_validator("rpc_url_env")
     @classmethod
@@ -364,12 +416,18 @@ class RepositoryForkMatrixStateConfig(ConfigModel):
         return value
 
     @model_validator(mode="after")
-    def clean_state_is_the_genesis_snapshot(self) -> RepositoryForkMatrixStateConfig:
-        if self.kind == "clean_local" and self.pinned_block_number != 0:
-            raise ValueError("clean-local fork matrix state must pin block zero")
+    def state_source_identity_is_nonzero(self) -> RepositoryPinnedForkMatrixStateConfig:
         if self.state_source_sha256 == "0" * 64:
-            raise ValueError("fork matrix state requires an operator-authored source identity")
+            raise ValueError(
+                "pinned fork matrix state requires an operator-authored source identity"
+            )
         return self
+
+
+RepositoryForkMatrixStateConfig = Annotated[
+    RepositoryCleanForkMatrixStateConfig | RepositoryPinnedForkMatrixStateConfig,
+    Field(discriminator="kind"),
+]
 
 
 class RepositoryForkSuiteConfig(ConfigModel):
@@ -465,6 +523,11 @@ class RepositoryForkSuiteConfig(ConfigModel):
                 )
             if self.fork_matrix_repetitions < 2:
                 raise ValueError("fork matrix requires at least two fresh repetitions")
+            execution_slots = (
+                len(self.fork_matrix_states) * self.fork_matrix_repetitions * self.max_total_tests
+            )
+            if execution_slots > _MAX_REPOSITORY_FORK_MATRIX_EXECUTION_SLOTS:
+                raise ValueError("fork matrix execution slots exceed the fixed aggregate bound")
         elif self.fork_matrix_repetitions != 2:
             raise ValueError("fork matrix repetitions cannot be customized without states")
 

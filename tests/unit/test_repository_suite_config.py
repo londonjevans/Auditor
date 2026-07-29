@@ -148,10 +148,14 @@ def test_repository_suite_fork_matrix_requires_clean_and_pinned_states() -> None
             {
                 "state_id": "clean-local",
                 "kind": "clean_local",
-                "rpc_url_env": "MMAUDIT_CLEAN_LOCAL_RPC_URL",
                 "expected_chain_id": 31_337,
-                "pinned_block_number": 0,
-                "state_source_sha256": "a" * 64,
+                "anvil_executable_env": "MMAUDIT_ANVIL_EXECUTABLE",
+                "anvil_version": "anvil Version: 1.3.2-stable",
+                "anvil_sha256": "a" * 64,
+                "hardfork": "cancun",
+                "genesis_timestamp": 1,
+                "startup_timeout_seconds": 5,
+                "shutdown_timeout_seconds": 5,
             },
             {
                 "state_id": "pinned-state",
@@ -169,6 +173,10 @@ def test_repository_suite_fork_matrix_requires_clean_and_pinned_states() -> None
         "clean-local",
         "pinned-state",
     ]
+    clean = suite.fork_matrix_states[0]
+    assert clean.kind == "clean_local"
+    assert not hasattr(clean, "rpc_url_env")
+    assert not hasattr(clean, "state_source_sha256")
 
     with pytest.raises(ValidationError, match="one clean-local state"):
         _explicit_config(
@@ -187,6 +195,73 @@ def test_repository_suite_fork_matrix_requires_clean_and_pinned_states() -> None
         _explicit_config(
             fork_matrix_repetitions=1,
             fork_matrix_states=suite.fork_matrix_states,
+        )
+    with pytest.raises(ValidationError, match="execution slots"):
+        _explicit_config(
+            max_total_tests=10_000,
+            fork_matrix_repetitions=10,
+            fork_matrix_states=suite.fork_matrix_states,
+        )
+
+
+def test_clean_matrix_state_requires_an_internal_exact_pinned_anvil() -> None:
+    old_external_clean = {
+        "state_id": "clean-local",
+        "kind": "clean_local",
+        "rpc_url_env": "MMAUDIT_CLEAN_LOCAL_RPC_URL",
+        "expected_chain_id": 31_337,
+        "pinned_block_number": 0,
+        "state_source_sha256": "a" * 64,
+    }
+    pinned = {
+        "state_id": "pinned-state",
+        "kind": "pinned_fork",
+        "rpc_url_env": "MMAUDIT_PINNED_FORK_RPC_URL",
+        "expected_chain_id": 1,
+        "pinned_block_number": 20_000_000,
+        "state_source_sha256": "b" * 64,
+    }
+
+    with pytest.raises(ValidationError, match=r"anvil_|extra"):
+        _explicit_config(fork_matrix_states=(old_external_clean, pinned))
+
+    clean = {
+        "state_id": "clean-local",
+        "kind": "clean_local",
+        "expected_chain_id": 31_337,
+        "anvil_executable_env": "MMAUDIT_ANVIL_EXECUTABLE",
+        "anvil_version": "anvil Version: 1.3.2-stable",
+        "anvil_sha256": "a" * 64,
+        "hardfork": "cancun",
+        "genesis_timestamp": 1,
+        "startup_timeout_seconds": 5,
+        "shutdown_timeout_seconds": 5,
+    }
+    with pytest.raises(ValidationError, match="latest"):
+        _explicit_config(
+            fork_matrix_states=({**clean, "hardfork": "latest"}, pinned),
+        )
+    with pytest.raises(ValidationError, match="control-plane"):
+        _explicit_config(
+            fork_matrix_states=(
+                {**clean, "anvil_executable_env": "OPENROUTER_API_KEY"},
+                pinned,
+            ),
+        )
+    with pytest.raises(ValidationError, match="extra"):
+        _explicit_config(
+            fork_matrix_states=(
+                clean,
+                {**pinned, "anvil_version": "target-controlled"},
+            ),
+        )
+    with pytest.raises(ValidationError, match="exact integers"):
+        _explicit_config(
+            fork_matrix_states=({**clean, "expected_chain_id": True}, pinned),
+        )
+    with pytest.raises(ValidationError, match="exact integers"):
+        _explicit_config(
+            fork_matrix_states=(clean, {**pinned, "pinned_block_number": 1.5}),
         )
 
 

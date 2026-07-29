@@ -554,6 +554,16 @@ are invisible to source review by construction.
   reporting, regressions.
 - **Dependencies:** `V3-FORKSUITE-001`.
 - **Status:** `IN_PROGRESS`
+- **Next action:** Close the independently reproduced matrix-runner
+  fail-closed gaps before crediting runtime evidence: per-test validated
+  state-read provenance, actual fresh-workspace/source-copy lifecycle binding,
+  finite monotonic deadlines with unconditional lease cleanup, canonical
+  private-root custody, preservation of material limitations, pre-execution
+  child Forge/compiler pins, complete private-path rejection, and full baseline
+  policy equivalence. Then add a conditional real local Anvil/Foundry matrix
+  integration and default offline-replay wiring. The typed bridge, report,
+  manifest, pipeline, replay, and clean-launcher slices are checkpointed
+  scaffolding, not ticket completion.
 
 ## V3-EXECORIGIN-001 — Execution-originated candidates
 
@@ -877,6 +887,92 @@ are invisible to source review by construction.
 - **Dependencies:** `V3-LIFECYCLE-001`.
 - **Status:** `QUEUED`
 
+## V3-OMISSION-001 — Bound the omission ledger and restore graceful degradation
+
+- **Priority:** Blocking. Take this at the next clean ticket boundary. In committed `HEAD`,
+  no Solidity repository above roughly 5,000 lines can complete context construction for any
+  specialist role, so no real-size protocol can be audited even once a model is qualified.
+- **Objective:** Stop the forensic omission ledger from consuming the byte budget it exists
+  to document, and restore bounded degradation in place of a hard failure.
+- **Observed defect:** `ContextBuilder.build` raises
+  `ContextBudgetError: serialized metadata for role specialist:access_control exceeds its
+  256000-byte allocation` on any Solidity tree above about 200 KB. Specialist role caps in
+  `SPECIALIST_ROLE_REGISTRY` are 192–256 KB, so every specialist role fails.
+  `build_context` converts that into `terminal_code = INCOMPLETE` with `budget_halted =
+  True`, and with `V3-FLOOR-001` now correctly enforcing the analysis floor the run produces
+  no audit at all. Previous behaviour on the same inputs was partial coverage, not failure.
+- **Measured evidence:** One synthetic 40-contract, 14,800-line, 548,790-byte Solidity tree,
+  role `specialist:access_control`, varying only `requested_budget`:
+
+  | budget | source delivered | omission records | omission bytes |
+  |---:|---:|---:|---:|
+  | 600,000 | 548,790 | 0 | 2 |
+  | 500,000 | 411,596 | 223 | 59,664 |
+  | 400,000 | 233,237 | 536 | 143,479 |
+  | 256,000 | — | — | `ContextBudgetError` |
+
+  At a 400,000-byte budget, 36 per cent of the whole allocation is spent recording what was
+  omitted rather than carrying source.
+- **Root cause:** The failure is self-reinforcing. `chunk_limit = min(48_000,
+  remaining_source_bytes, max(1, budget - used))` shrinks as `used` approaches `budget`.
+  Every remaining logical block then emits a `LOGICAL_BLOCK_EXCEEDS_LIMIT` omission carrying
+  three SHA-256 digests, roughly 250 bytes per record. Those records are counted in
+  `render_context`, so the ledger tightens the budget, which shrinks `chunk_limit`, which
+  emits more records. The recovery loop at `context.py:1123` removes only `package.excerpts`
+  and never omissions, so it strips all source and still exceeds the cap, then raises.
+- **Acceptance criteria:**
+  - The omission ledger is bounded. Aggregate by category and reason with counts and
+    representative samples rather than one hashed record per excluded block; per-record
+    digests are retained only up to an explicit cap, and truncation of the ledger itself is
+    stated in the ledger.
+  - Forensic omission accounting is not charged against the analysis budget it documents.
+    Either exclude it from the package byte budget and carry it in the run manifest, or
+    reserve a separate bounded allocation for it that cannot grow into source capacity.
+  - The recovery loop degrades rather than raises: it reduces omission detail before source,
+    and a package that cannot fit its metadata returns the largest valid bounded package with
+    an explicit limitation, not `ContextBudgetError`. Raising remains correct only when no
+    valid bounded package exists at all.
+  - Byte caps in `SPECIALIST_ROLE_REGISTRY` are reconciled with
+    `maximum_source_tokens_per_request`; a token ceiling implying about 600 KB of source
+    while the package cap is 192–256 KB is an inconsistency, and whichever bound is intended
+    to govern must be the one enforced.
+  - Regressions cover realistic scale, not only the existing small fixtures: context
+    construction succeeds and reports honest partial coverage at approximately 5,000, 15,000
+    and 35,000 lines, and the omission ledger stays within its declared bound at every size.
+  - No coverage denominator, gate, or report ever counts omitted source as reviewed.
+- **Principle to record:** Forensic completeness must never be charged against analysis
+  capacity. Evidence about what was not reviewed cannot be allowed to displace the source
+  that would have been reviewed.
+- **Files expected to change:** `src/mmaudit/orchestration/context.py`,
+  `src/mmaudit/agents/specialists.py`, `src/mmaudit/orchestration/context_manifest.py`,
+  context omission and manifest schemas, `tests/unit/test_context.py`,
+  `tests/unit/test_context_manifest.py`, new realistic-scale regressions.
+- **Dependencies:** `V3-FORKSUITE-001` may finish first; do not interrupt it.
+- **Status:** `QUEUED`
+
+## V3-FIXTURE-001 — Realistic-scale Solidity fixtures
+
+- **Objective:** Provide synthetic Solidity fixtures at realistic protocol scale so that
+  budget, sharding, coverage, token-planning, and execution work is exercised at the sizes
+  real targets actually have.
+- **Rationale:** The largest committed Solidity fixture is 300 lines and the entire fixture
+  corpus is about 5,000 lines, so the whole suite passes while `V3-OMISSION-001` blocks every
+  real-size repository. Scale-dependent defects are currently invisible to the test suite by
+  construction.
+- **Acceptance criteria:** Fixtures exist at approximately 5,000, 15,000 and 35,000 lines
+  with plausible protocol structure — multiple contracts, inheritance, proxies, external
+  calls, asset flows and privileged entry points — so index, graph and coverage paths are
+  genuinely exercised. Fixtures remain synthetic, non-deployable, credential-free and
+  deterministic, and carry no copied production source. Generation is scripted and
+  reproducible so sizes can be regenerated rather than hand-maintained. Slow, large-scale
+  tests are marked so they can be selected separately from the fast suite. At least one
+  fixture is wired into context-budget, sharding and coverage regressions.
+- **Files expected to change:** `tests/fixtures/solidity/`, fixture generation script,
+  `tests/` selection markers, affected regressions.
+- **Dependencies:** None; can be built alongside `V3-OMISSION-001` and is required by its
+  acceptance criteria.
+- **Status:** `QUEUED`
+
 ## Revised sequencing
 
 Three tracks are largely independent and should not be run as one strict chain. The
@@ -887,15 +983,20 @@ still applies within a track.
 
 **Track 1 — engine and execution evidence**
 
-1. `V3-TOKENS-001` — finish, in progress.
-2. `V3-FLOOR-001` — promote from its current late position. A standard-profile run with zero
-   available scanners and zero completed model roles still exits `0` and reports quality
-   status `completed` with zero findings. Fix before any external party sees a report.
-3. `V3-FORKSUITE-001`, `V3-FORKDIFF-001`, `V3-EXECORIGIN-001`, `V3-TESTQUALITY-001`.
-4. `V3-CI-001`.
-5. `V3-SHARD-001`, `V3-SCHEDULER-001`, `V3-TRUNCATION-001`, `V3-COVERAGE-001`,
+1. `V3-TOKENS-001` — `COMPLETE`.
+2. `V3-FLOOR-001` — `COMPLETE`. Verified independently: the previously false-clean
+   scanner-only run now exits `6`, reports `RUN STATUS: INCOMPLETE`, and names the failed
+   `minimum_analysis_floor` gate.
+3. `V3-FORKSUITE-001` — in progress; finish it, do not interrupt.
+4. `V3-OMISSION-001` with `V3-FIXTURE-001` — **take these next.** Until they land, no
+   Solidity repository above roughly 5,000 lines can complete context construction for any
+   specialist role, so every downstream ticket in this track is being validated only against
+   toy-sized inputs. `V3-FIXTURE-001` is what makes the defect visible to the suite at all.
+5. `V3-FORKDIFF-001`, `V3-EXECORIGIN-001`, `V3-TESTQUALITY-001`.
+6. `V3-CI-001`.
+7. `V3-SHARD-001`, `V3-SCHEDULER-001`, `V3-TRUNCATION-001`, `V3-COVERAGE-001`,
    `V3-TAXONOMY-001`, `V3-CONSENSUS-001`, `V3-REPORT-001`, `V3-SCOPE-001`.
-6. `V3-RETRIEVAL-001`.
+8. `V3-RETRIEVAL-001`.
 
 **Track 2 — model selection and quality**
 
