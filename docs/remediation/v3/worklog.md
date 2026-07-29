@@ -5,12 +5,12 @@ The objective source has SHA-256
 Do not record credentials, raw private prompts, or raw provider completions here.
 
 AUTORUN_STATUS: PAUSED_BY_OPERATOR
-CURRENT_MILESTONE: Paused after explicit privacy and retention profiles
-CURRENT_TICKET: NONE
+CURRENT_MILESTONE: Capability-adaptive structured output
+CURRENT_TICKET: V3-OUTPUT-001
 LAST_COMPLETED_TICKET: V3-PRIVACY-001
-NEXT_ACTION: On operator resume, begin V3-OUTPUT-001.
-LAST_COMMAND: git push origin main
-LAST_RESULT: PASS; SSH origin advanced from 9856440 to state checkpoint 0195279 on main.
+NEXT_ACTION: On operator resume, add failing V3-OUTPUT-001 regressions for strict JSON parsing and endpoint-bound output-mode negotiation before implementation.
+LAST_COMMAND: git status --short && rg -n persistent-state fields and V3-OUTPUT-001 in the v3 worklog and queue
+LAST_RESULT: PAUSED safely before production implementation; only the v3 queue/worklog contain uncommitted ticket-state changes.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -20,6 +20,30 @@ OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
 LAST_CHECKPOINT_COMMIT: 4da4fa08b66d0ebd04a2a8ae7d3bd181e140db33
+
+## 2026-07-29 — V3-OUTPUT-001
+
+- **Status:** `IN_PROGRESS`.
+- **Defensive objective:** Negotiate exact endpoint output capability as native
+  JSON Schema, JSON object, or locally validated text JSON while preserving
+  strict schema semantics, identity binding, truncation rejection, and review
+  credit gates.
+- **Starting state:** Clean synchronized `main` at
+  `d6a7a58fd6689b219772827389304133665d73ab`; `V3-PRIVACY-001` is complete.
+  No paid provider call, network access, or operator secret access is part of
+  this implementation slice.
+- **Next safe action:** Inspect request construction, endpoint discovery,
+  response parsing, usage evidence, candidate benchmarking, qualification
+  scoring, and existing malformed/truncated response tests; then add a failing
+  regression before implementation.
+- **Pause checkpoint:** Operator requested a pause before production
+  implementation began. Read-only mapping confirmed that request construction
+  currently always emits native JSON Schema, endpoint registration drops
+  structured-output capabilities, and review credit does not bind an achieved
+  output mode to exact endpoint capability evidence. It also identified strict
+  JSON regressions for duplicate keys and non-finite constants. No source or
+  test files were changed, no provider call was made, and all audit agents were
+  stopped.
 
 ## 2026-07-28 — V3-SMOKE-001
 

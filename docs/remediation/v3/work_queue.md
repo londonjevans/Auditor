@@ -223,7 +223,15 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   filter; malformed, semantically altered, truncated, or unbound output receives no
   review credit.
 - **Dependencies:** `V3-PRIVACY-001`.
-- **Status:** `QUEUED`
+- **Files expected to change:** `src/mmaudit/models/openrouter.py`,
+  `src/mmaudit/models/endpoint_snapshots.py`,
+  `src/mmaudit/models/candidate_benchmark.py`, typed model/evidence schemas,
+  and focused unit/integration regressions.
+- **Status:** `IN_PROGRESS`
+- **Next action:** Paused by operator before implementation. On resume, add
+  failing regressions for strict JSON parsing and endpoint-bound negotiation,
+  then map exact endpoint capabilities into three typed output modes before
+  implementing bounded local syntax-only repair.
 
 ## V3-TOKENS-001 — Endpoint-aware token budgets and context manifests
 
