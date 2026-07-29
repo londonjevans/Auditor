@@ -250,7 +250,13 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   fraction and sufficient finding/coverage/summary output budgets; preflight records
   source, framework, prior-audit, graph, prompt, and requested-output allocations.
 - **Dependencies:** `V3-OUTPUT-001`.
-- **Status:** `QUEUED`
+- **Files expected to change:** Context construction and orchestration budget
+  models, endpoint-derived request planning, typed run/context evidence, and
+  focused unit/local integration regressions.
+- **Status:** `IN_PROGRESS`
+- **Next action:** Map the current fixed byte-pool allocation, endpoint limit
+  evidence, prompt construction, and context-manifest serialization; reproduce
+  the equal-role allocation defect before implementation.
 
 ## V3-SHARD-001 — Deterministic coherent semantic shards
 

@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-07-29T00:10:18Z",
-  "candidate_commit": "4da4fa08b66d0ebd04a2a8ae7d3bd181e140db33",
-  "autorun_status": "PAUSED_BY_OPERATOR",
-  "current_milestone": "privacy_profiles_complete",
-  "current_ticket": null,
-  "last_checkpoint_commit": "4da4fa08b66d0ebd04a2a8ae7d3bd181e140db33",
+  "updated_at": "2026-07-29T02:35:30Z",
+  "candidate_commit": "4f04a6fd79ff96466b48bc14ddc7557bb3a809b5",
+  "autorun_status": "ACTIVE",
+  "current_milestone": "endpoint_aware_token_budgets",
+  "current_ticket": "V3-TOKENS-001",
+  "last_checkpoint_commit": "4f04a6fd79ff96466b48bc14ddc7557bb3a809b5",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,

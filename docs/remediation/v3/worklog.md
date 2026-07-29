@@ -5,12 +5,12 @@ The objective source has SHA-256
 Do not record credentials, raw private prompts, or raw provider completions here.
 
 AUTORUN_STATUS: ACTIVE
-CURRENT_MILESTONE: Capability-adaptive structured output
-CURRENT_TICKET: V3-OUTPUT-001
-LAST_COMPLETED_TICKET: V3-PRIVACY-001
-NEXT_ACTION: Review the final V3-OUTPUT-001 diff and artifact scope, refresh traceability from actual evidence, create the cohesive checkpoint commit, and push it over SSH.
-LAST_COMMAND: .venv/bin/pytest -q
-LAST_RESULT: PASS; 2206 tests passed and 10 explicit external-engine, isolation, loopback, and paid-provider prerequisites skipped in 272.93s. No provider, network, or secret access occurred.
+CURRENT_MILESTONE: Endpoint-aware token budgets and context manifests
+CURRENT_TICKET: V3-TOKENS-001
+LAST_COMPLETED_TICKET: V3-OUTPUT-001
+NEXT_ACTION: Map the fixed byte-pool allocation, endpoint limit evidence, prompt construction, and context-manifest serialization; reproduce the equal-role allocation defect before implementation.
+LAST_COMMAND: git commit -m "Add adaptive structured output validation"
+LAST_RESULT: PASS; implementation checkpoint 4f04a6fd79ff96466b48bc14ddc7557bb3a809b5 created from the fully validated 46-file V3-OUTPUT-001 scope.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: e7c7dcfc8cb85249caea29f271fb6f75308b0311
+LAST_CHECKPOINT_COMMIT: 4f04a6fd79ff96466b48bc14ddc7557bb3a809b5
 
 ## 2026-07-29 — V3-OUTPUT-001
 
@@ -186,6 +186,26 @@ LAST_CHECKPOINT_COMMIT: e7c7dcfc8cb85249caea29f271fb6f75308b0311
   ticket. Native, JSON-object, and validated-text behavior are executed through
   deterministic local fake-provider tests; no new paid provider execution is
   claimed. The next queue-priority ticket is `V3-TOKENS-001`.
+- **Validated implementation checkpoint:** Commit
+  `4f04a6fd79ff96466b48bc14ddc7557bb3a809b5` contains the cohesive
+  capability-adaptive output implementation, evidence projections,
+  documentation, generated qualification schema, and regression matrix.
+
+## 2026-07-29 — V3-TOKENS-001
+
+- **Status:** `IN_PROGRESS`.
+- **Defensive objective:** Replace equal division of one global byte pool with
+  endpoint-bound token planning that reserves protocol/output space and records
+  exact source, framework, prior-audit, graph, prompt, omission, and requested
+  output allocations.
+- **Starting state:** `V3-OUTPUT-001` is complete at implementation checkpoint
+  `4f04a6fd79ff96466b48bc14ddc7557bb3a809b5`. No provider, network, paid call,
+  or operator-secret access is authorized for the initial mapping and local
+  regression slice.
+- **Next safe action:** Inspect existing context builders, per-role byte
+  division, endpoint capacity evidence, run manifests, and prompt usage
+  reconciliation; then add a failing deterministic regression before changing
+  production planning.
 
 ## 2026-07-28 — V3-SMOKE-001
 
