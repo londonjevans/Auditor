@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Differential and multi-state fork matrix
 CURRENT_TICKET: V3-FORKDIFF-001
 LAST_COMPLETED_TICKET: V3-FLOOR-001
-NEXT_ACTION: On resume, implement and wire a deterministic matrix-wide timeout budget that preserves the configured child policy across all states and repetitions; then rerun the real local manifest-bound default replay acceptance test.
-LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_repository_fork_differential_schema.py tests/unit/test_fork_matrix.py tests/unit/test_foundry_execution_hardening.py tests/unit/test_scanner_workspace.py tests/unit/test_read_only_rpc_bridge.py tests/unit/test_replay.py tests/unit/test_reproduction.py tests/unit/test_scanners_reporting.py
-LAST_RESULT: PASS — 480 focused lifecycle, matrix, Foundry, workspace, read-only RPC, replay, reproduction, and reporting regressions passed in 50.26s after the expected-red real replay assay.
+NEXT_ACTION: On resume, make the differential replay projection compare stable security semantics rather than process-local RPC multiplicities and inventory self-hashes, retain the full qualifying-evidence checks, then rerun the unit and real local replay gates.
+LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_fork_matrix.py tests/integration/test_pipeline.py tests/unit/test_replay.py
+LAST_RESULT: PASS — 180 timeout-budget, pipeline, matrix, and replay regressions passed in 71.19s; inherited immutable pytest garbage directories emitted two non-fatal cleanup warnings.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -212,6 +212,37 @@ LAST_CHECKPOINT_COMMIT: dd5e6b159ba4f0c7c5d9c31bb2a34ff2bba2d8f4
 - **SSH publication:** Implementation checkpoint `dd5e6b1` and paused-state
   checkpoint `5b2e4c1` were pushed successfully on `main` to the configured SSH
   remote `git@github.com:londonjevans/Auditor.git`.
+- **Matrix-timeout expected-red and remediation:** Before implementation, the
+  focused timeout regressions produced two collection-time import errors because
+  no shared matrix-wide budget existed. The implemented helper now derives one
+  finite bounded budget from every state, repetition, exact child-suite timeout,
+  observation window, cleanup allowance, clean-node attestation/startup/shutdown,
+  and orchestration reserve. Pipeline and default replay use that same identity;
+  every child receives the exact configured suite timeout, and an
+  unschedulable fork-probe policy fails before execution.
+- **Timeout validation:** The core focused gate passed `94` tests, the replay
+  unit gate passed `34`, and affected Ruff and strict mypy checks passed. The
+  final combined command `.venv/bin/pytest -q tests/unit/test_fork_matrix.py
+  tests/integration/test_pipeline.py tests/unit/test_replay.py` passed `180`
+  tests in `71.19s`. Two warnings concerned inherited immutable pytest garbage
+  directories outside the repository and did not change the result.
+- **Real replay diagnostic:** The local-only command
+  `MMAUDIT_TEST_SOLC_EXECUTABLE=/private/tmp/mmaudit-trusted-solc-0.8.30/solc
+  .venv/bin/pytest -q --tb=short
+  tests/integration/test_repository_fork_differential_matrix.py` executed both
+  direct and replay matrices to `COMPLETE` with a matched scanner, but correctly
+  withheld `REPLAYED` because the stable projection still compared
+  process-local RPC call multiplicities/order hashes, the raw clean-process
+  source identity, and inventory self-hashes. The bounded diagnostic ended
+  `1 failed in 19.68s` and retained only field paths, not endpoints or payloads.
+  This is the next implementation defect; no qualifying-evidence gate was
+  weakened and the ticket remains `IN_PROGRESS`.
+- **Operator pause:** At `2026-07-29T23:24:57Z`, all launched tests and delegated
+  reviews had completed. The validated timeout slice and the expected-red replay
+  diagnostic are preserved for an in-progress checkpoint. No provider call,
+  credential access, public RPC, wallet, signing, broadcast, paid operation, or
+  budget reservation occurred; no process or listener launched by this slice
+  remains active.
 - **Defensive objective:** Execute the same bounded audited-repository suite
   against a clean local state and one or more operator-pinned fork states, then
   classify only repeated fresh-workspace agreement as typed divergence while a

@@ -254,6 +254,7 @@ from mmaudit.scanners.clean_chain import TrustedCleanAnvilLauncher
 from mmaudit.scanners.fork_matrix import (
     ForkMatrixDependencies,
     RepositoryForkMatrixRunner,
+    repository_fork_matrix_timeout_budget_seconds,
 )
 from mmaudit.scanners.runner import ScannerRunner
 from mmaudit.solidity.compile import compile_solidity_projects
@@ -3213,8 +3214,9 @@ class AuditPipeline:
             backend = getattr(self.reproduction_runner, "backend", None)
         if backend is None:
             return failed("The configured hardened isolation backend was unavailable.")
-        absolute_deadline = time.monotonic() + suite.total_timeout_seconds
         try:
+            timeout_budget_seconds = repository_fork_matrix_timeout_budget_seconds(suite)
+            absolute_deadline = time.monotonic() + timeout_budget_seconds
             observed = await asyncio.to_thread(
                 self.repository_fork_matrix_runner.run,
                 repository_root,

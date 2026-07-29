@@ -27,6 +27,7 @@ from urllib.parse import unquote, urlsplit
 from mmaudit.config import (
     RepositoryCleanForkMatrixStateConfig,
     RepositoryForkMatrixStateConfig,
+    RepositoryForkSuiteConfig,
     RepositoryPinnedForkMatrixStateConfig,
     ReproductionConfig,
     SmartContractsConfig,
@@ -60,6 +61,9 @@ from mmaudit.models.schemas import (
     SolidityProjectMetadata,
 )
 from mmaudit.scanners.base import ScannerIsolationBackend
+from mmaudit.scanners.clean_chain import (
+    CLEAN_ANVIL_VERSION_ATTESTATION_TIMEOUT_SECONDS,
+)
 from mmaudit.scanners.fork_rpc import (
     ForkRpcBindingError,
     ForkRpcUnavailableError,
@@ -83,7 +87,124 @@ _ATTEMPT_CLEANUP_RESERVE_SECONDS = (
     + REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS
     + _SCHEDULING_SLACK_SECONDS
 )
+_MAX_FORK_MATRIX_STATES = 8
+_MAX_FORK_MATRIX_REPETITIONS = 10
+_MAX_CHILD_SUITE_TIMEOUT_SECONDS = 7_200.0
+_MAX_CLEAN_STARTUP_TIMEOUT_SECONDS = 15.0
+_MAX_CLEAN_SHUTDOWN_TIMEOUT_SECONDS = 10.0
+# The state-level budgets remove every owned child. The matrix root then has its
+# own bounded empty-directory disposal, which must remain possible on every exit.
+_MATRIX_ROOT_CLEANUP_RESERVE_SECONDS = REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS
+_MATRIX_ORCHESTRATION_SLACK_SECONDS = 1.0
+_PER_ATTEMPT_MATRIX_OVERHEAD_SECONDS = (
+    (3 * _OBSERVATION_TIMEOUT_SECONDS)
+    + _BRIDGE_SHUTDOWN_RESERVE_SECONDS
+    + _SCHEDULING_SLACK_SECONDS
+)
+REPOSITORY_FORK_MATRIX_RETURN_CLEANUP_RESERVE_SECONDS = (
+    _BRIDGE_SHUTDOWN_RESERVE_SECONDS
+    + (_MAX_FORK_MATRIX_STATES * REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS)
+    + _MATRIX_ROOT_CLEANUP_RESERVE_SECONDS
+    + _SCHEDULING_SLACK_SECONDS
+)
+_MAX_FORK_MATRIX_TIMEOUT_BUDGET_SECONDS = (
+    _MAX_FORK_MATRIX_STATES
+    * _MAX_FORK_MATRIX_REPETITIONS
+    * (_MAX_CHILD_SUITE_TIMEOUT_SECONDS + _PER_ATTEMPT_MATRIX_OVERHEAD_SECONDS)
+    + (_MAX_FORK_MATRIX_STATES * REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS)
+    + _MATRIX_ROOT_CLEANUP_RESERVE_SECONDS
+    + CLEAN_ANVIL_VERSION_ATTESTATION_TIMEOUT_SECONDS
+    + _MAX_CLEAN_STARTUP_TIMEOUT_SECONDS
+    + _MAX_CLEAN_SHUTDOWN_TIMEOUT_SECONDS
+    + _MATRIX_ORCHESTRATION_SLACK_SECONDS
+)
 _URI_PATTERN = re.compile(r"(?i)\b(?:file|https?|wss?)://[^\s\"'<>]+")
+
+
+def _matrix_timeout_control(
+    value: object,
+    *,
+    name: str,
+    maximum: float,
+) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or float(value) <= 0
+        or float(value) > maximum
+    ):
+        raise ValueError(f"The matrix timeout budget {name} was invalid or unbounded.")
+    return float(value)
+
+
+def repository_fork_matrix_timeout_budget_seconds(
+    suite: RepositoryForkSuiteConfig,
+) -> float:
+    """Return one fixed wall-time ceiling without shrinking any child suite timeout."""
+
+    if not isinstance(suite, RepositoryForkSuiteConfig):
+        raise ValueError("The matrix timeout budget configuration was invalid.")
+    states = suite.fork_matrix_states
+    repetitions = suite.fork_matrix_repetitions
+    if (
+        not isinstance(states, tuple)
+        or not 2 <= len(states) <= _MAX_FORK_MATRIX_STATES
+        or isinstance(repetitions, bool)
+        or not isinstance(repetitions, int)
+        or not 2 <= repetitions <= _MAX_FORK_MATRIX_REPETITIONS
+    ):
+        raise ValueError("The matrix timeout budget state or repetition bound was invalid.")
+    if any(
+        not isinstance(
+            state,
+            RepositoryCleanForkMatrixStateConfig | RepositoryPinnedForkMatrixStateConfig,
+        )
+        for state in states
+    ):
+        raise ValueError("The matrix timeout budget states were not canonical.")
+    state_ids = tuple(state.state_id for state in states)
+    clean_states = tuple(
+        state for state in states if isinstance(state, RepositoryCleanForkMatrixStateConfig)
+    )
+    if state_ids != tuple(sorted(set(state_ids))) or len(clean_states) != 1:
+        raise ValueError("The matrix timeout budget states were not canonical.")
+
+    child_timeout = _matrix_timeout_control(
+        suite.total_timeout_seconds,
+        name="child suite timeout",
+        maximum=_MAX_CHILD_SUITE_TIMEOUT_SECONDS,
+    )
+    clean = clean_states[0]
+    clean_startup = _matrix_timeout_control(
+        clean.startup_timeout_seconds,
+        name="clean-state startup timeout",
+        maximum=_MAX_CLEAN_STARTUP_TIMEOUT_SECONDS,
+    )
+    clean_shutdown = _matrix_timeout_control(
+        clean.shutdown_timeout_seconds,
+        name="clean-state shutdown timeout",
+        maximum=_MAX_CLEAN_SHUTDOWN_TIMEOUT_SECONDS,
+    )
+    attempt_count = len(states) * repetitions
+    budget = math.fsum(
+        (
+            attempt_count * (child_timeout + _PER_ATTEMPT_MATRIX_OVERHEAD_SECONDS),
+            len(states) * REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS,
+            _MATRIX_ROOT_CLEANUP_RESERVE_SECONDS,
+            CLEAN_ANVIL_VERSION_ATTESTATION_TIMEOUT_SECONDS,
+            clean_startup,
+            clean_shutdown,
+            _MATRIX_ORCHESTRATION_SLACK_SECONDS,
+        )
+    )
+    if (
+        not math.isfinite(budget)
+        or budget <= child_timeout
+        or budget > _MAX_FORK_MATRIX_TIMEOUT_BUDGET_SECONDS
+    ):
+        raise ValueError("The matrix timeout budget arithmetic overflowed its fixed ceiling.")
+    return budget
 
 
 def _directory_open_flags() -> int:
@@ -1078,6 +1199,16 @@ class RepositoryForkMatrixRunner:
             return failed(str(exc))
         if self.dependencies.clean_state_provider is None:
             return failed("The trusted internal clean-state launcher was unavailable.")
+        max_fork_probe_seconds = self.smart_contracts.max_fork_probe_seconds
+        if (
+            isinstance(max_fork_probe_seconds, bool)
+            or not isinstance(max_fork_probe_seconds, (int, float))
+            or not math.isfinite(float(max_fork_probe_seconds))
+            or float(max_fork_probe_seconds) < suite.total_timeout_seconds
+        ):
+            return failed(
+                "The configured fork-probe timeout cannot preserve the child suite policy."
+            )
         if (
             isinstance(absolute_deadline, bool)
             or not isinstance(absolute_deadline, (int, float))
@@ -1820,12 +1951,13 @@ class RepositoryForkMatrixRunner:
                     attempt_binding_sha256=identity_sha256,
                 )
                 remaining = state_execution_deadline - clock.read()
-                if remaining <= _ATTEMPT_CLEANUP_RESERVE_SECONDS:
+                child_timeout_seconds = self.smart_contracts.repository_suite.total_timeout_seconds
+                if remaining < child_timeout_seconds + _ATTEMPT_CLEANUP_RESERVE_SECONDS:
                     raise TimeoutError
                 run = scanner.run(
                     root,
                     attempt_dir,
-                    remaining - _ATTEMPT_CLEANUP_RESERVE_SECONDS,
+                    child_timeout_seconds,
                     backend=backend,
                     expected_version=expected_forge_version,
                     expected_sha256=expected_forge_sha256,

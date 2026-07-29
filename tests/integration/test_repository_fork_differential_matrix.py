@@ -41,11 +41,13 @@ from mmaudit.models.schemas import (
     RepositoryForkEgressStatus,
     RepositoryForkRpcPrivacyEvidence,
     RepositoryMap,
+    RepositorySuiteDifferentialMatrix,
     RepositorySuiteDifferentialRun,
     RepositorySuiteWorkspaceLifecycleStatus,
     ScannerRun,
     ScannerStatus,
 )
+from mmaudit.orchestration import replay as replay_module
 from mmaudit.orchestration.manifest import (
     RunEvidenceManifest,
     build_run_evidence_manifest,
@@ -63,7 +65,12 @@ from mmaudit.orchestration.verification import RunVerificationStatus, verify_run
 from mmaudit.reporting.json_report import write_json
 from mmaudit.scanners.base import scanner_workspace_sha256
 from mmaudit.scanners.clean_chain import TrustedCleanAnvilLauncher
-from mmaudit.scanners.fork_matrix import ForkMatrixDependencies, RepositoryForkMatrixRunner
+from mmaudit.scanners.fork_matrix import (
+    REPOSITORY_FORK_MATRIX_RETURN_CLEANUP_RESERVE_SECONDS,
+    ForkMatrixDependencies,
+    RepositoryForkMatrixRunner,
+    repository_fork_matrix_timeout_budget_seconds,
+)
 from mmaudit.scanners.foundry import FoundryForkScanner
 from mmaudit.scanners.runner import ScannerRunner
 from mmaudit.solidity.reproduction import default_isolation_backend
@@ -94,6 +101,56 @@ def _canonical_sha256(value: object) -> str:
             allow_nan=False,
         ).encode("utf-8")
     ).hexdigest()
+
+
+def _projection_difference_paths(
+    expected: object,
+    observed: object,
+    *,
+    path: str = "$",
+    limit: int = 32,
+) -> tuple[str, ...]:
+    if limit <= 0:
+        return ()
+    if type(expected) is not type(observed):
+        return (path,)
+    if isinstance(expected, dict) and isinstance(observed, dict):
+        differences: list[str] = []
+        for key in sorted(set(expected) | set(observed)):
+            child_path = f"{path}.{key}"
+            if key not in expected or key not in observed:
+                differences.append(child_path)
+            else:
+                differences.extend(
+                    _projection_difference_paths(
+                        expected[key],
+                        observed[key],
+                        path=child_path,
+                        limit=limit - len(differences),
+                    )
+                )
+            if len(differences) >= limit:
+                break
+        return tuple(differences)
+    if isinstance(expected, list) and isinstance(observed, list):
+        differences = []
+        if len(expected) != len(observed):
+            differences.append(f"{path}.length")
+        for index, (expected_item, observed_item) in enumerate(
+            zip(expected, observed, strict=False)
+        ):
+            differences.extend(
+                _projection_difference_paths(
+                    expected_item,
+                    observed_item,
+                    path=f"{path}[{index}]",
+                    limit=limit - len(differences),
+                )
+            )
+            if len(differences) >= limit:
+                break
+        return tuple(differences)
+    return () if expected == observed else (path,)
 
 
 def _require_external_tool(name: str) -> tuple[Path, str, str]:
@@ -618,6 +675,7 @@ def test_real_local_repository_fork_matrix_is_replay_ready_and_disposes_workspac
     baseline: ScannerRun | None = None
     serialized_artifact = ""
     serialized_privacy = ""
+    differential_projections: list[dict[str, object]] = []
     replay_work = tmp_path / "offline-replay-work"
     try:
         _wait_for_anvil(endpoint)
@@ -638,6 +696,8 @@ def test_real_local_repository_fork_matrix_is_replay_ready_and_disposes_workspac
         assert baseline.status is ScannerStatus.SUCCESS, baseline.error
         assert baseline.execution_evidence is ExecutionEvidenceKind.REAL
 
+        matrix_timeout_budget_seconds = repository_fork_matrix_timeout_budget_seconds(suite)
+        direct_matrix_started_at = time.monotonic()
         result = RepositoryForkMatrixRunner(
             smart_contracts,
             reproduction,
@@ -655,8 +715,10 @@ def test_real_local_repository_fork_matrix_is_replay_ready_and_disposes_workspac
             repository_exclusion_root=matrix_private,
             backend=backend,
             baseline_run=baseline,
-            absolute_deadline=time.monotonic() + 300,
+            absolute_deadline=direct_matrix_started_at + matrix_timeout_budget_seconds,
         )
+        direct_matrix_elapsed_seconds = time.monotonic() - direct_matrix_started_at
+        assert 0 <= direct_matrix_elapsed_seconds <= matrix_timeout_budget_seconds
         assert result is not None
         if (
             result.status is not RepositoryDifferentialRunStatus.COMPLETE
@@ -714,13 +776,37 @@ def test_real_local_repository_fork_matrix_is_replay_ready_and_disposes_workspac
             },
             backend=backend,
         )
+        original_differential_projection = replay_module._repository_differential_projection
+
+        def capture_differential_projection(
+            value: RepositorySuiteDifferentialRun,
+        ) -> dict[str, object]:
+            projection = original_differential_projection(value)
+            differential_projections.append(projection)
+            return projection
+
+        monkeypatch.setattr(
+            replay_module,
+            "_repository_differential_projection",
+            capture_differential_projection,
+        )
         orchestrator = OfflineReplayOrchestrator(scanner_runner=replay_scanner)
+        replay_started_at = time.monotonic()
         replay = asyncio.run(
             orchestrator.replay(
                 manifest_path=manifest_path,
                 run_dir=run_dir,
                 repository_root=root,
                 work_dir=replay_work,
+            )
+        )
+        replay_elapsed_seconds = time.monotonic() - replay_started_at
+        assert (
+            0
+            <= replay_elapsed_seconds
+            <= (
+                matrix_timeout_budget_seconds
+                + REPOSITORY_FORK_MATRIX_RETURN_CLEANUP_RESERVE_SECONDS
             )
         )
         assert orchestrator.differential_runner is not None
@@ -779,6 +865,39 @@ def test_real_local_repository_fork_matrix_is_replay_ready_and_disposes_workspac
     assert matrix.comparisons[0].classification is RepositoryDifferentialClassification.DIVERGED
     assert matrix.repository_sha256 == scanner_workspace_sha256(root, root / ".mmaudit")
     assert len(matrix.attempts) == 4
+    baseline_selection = baseline.repository_suite_selection
+    baseline_policy = baseline.repository_suite_execution_policy
+    assert baseline_selection is not None
+    assert baseline_policy is not None
+    assert (
+        matrix.selection_configuration_sha256
+        == baseline_selection.configuration_sha256
+        == suite.stable_hash()
+    )
+    expected_execution_configuration_sha256 = (
+        RepositorySuiteDifferentialMatrix.execution_configuration_sha256_for_policy(baseline_policy)
+    )
+    assert matrix.execution_configuration_sha256 == expected_execution_configuration_sha256
+    assert all(
+        attempt.scanner_run.repository_suite_execution_policy is not None
+        and attempt.scanner_run.repository_suite_execution_policy.total_timeout_seconds
+        == suite.total_timeout_seconds
+        and attempt.scanner_run.repository_suite_execution_policy.selection_configuration_sha256
+        == baseline_policy.selection_configuration_sha256
+        and RepositorySuiteDifferentialMatrix.execution_configuration_sha256_for_policy(
+            attempt.scanner_run.repository_suite_execution_policy
+        )
+        == expected_execution_configuration_sha256
+        for attempt in matrix.attempts
+    )
+    last_attempt = matrix.attempts[-1]
+    assert last_attempt.state_id == suite.fork_matrix_states[-1].state_id
+    assert last_attempt.attempt_index == suite.fork_matrix_repetitions
+    assert last_attempt.scanner_run.repository_suite_execution_policy is not None
+    assert (
+        last_attempt.scanner_run.repository_suite_execution_policy.total_timeout_seconds
+        == suite.total_timeout_seconds
+    )
     assert len({attempt.workspace_identity_sha256 for attempt in matrix.attempts}) == 4
     assert len({attempt.workspace_freshness_attestation_sha256 for attempt in matrix.attempts}) == 4
     assert all(
@@ -816,16 +935,30 @@ def test_real_local_repository_fork_matrix_is_replay_ready_and_disposes_workspac
         for component in replay.components
         if component.kind is ReplayComponentKind.REPOSITORY_SUITE_DIFFERENTIAL
     )
-    assert replay.status is OfflineReplayStatus.REPLAYED, [
-        (
-            component.kind.value,
-            component.status.value,
-            component.expected_state,
-            component.observed_state,
-            component.limitations,
+    if replay.status is not OfflineReplayStatus.REPLAYED:
+        components = [
+            (
+                component.kind.value,
+                component.status.value,
+                component.expected_state,
+                component.observed_state,
+                component.limitations,
+            )
+            for component in replay.components
+        ]
+        difference_paths = (
+            _projection_difference_paths(
+                differential_projections[0],
+                differential_projections[-1],
+            )
+            if len(differential_projections) >= 2
+            else ("projection-capture-incomplete",)
         )
-        for component in replay.components
-    ]
+        pytest.fail(
+            f"replay components: {components}; projection differences: "
+            f"{', '.join(difference_paths)}",
+            pytrace=False,
+        )
     assert replay.missing_kinds == []
     assert replay_component.status is ReplayComponentStatus.MATCHED
     assert replay_component.executed

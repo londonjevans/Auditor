@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -37,6 +38,7 @@ from mmaudit.models.schemas import (
     RepositoryExecutionStateObservationStatus,
     RepositoryStateConsensusStatus,
     RepositoryStateInconclusiveReason,
+    RepositorySuiteDifferentialMatrix,
     RepositorySuiteDifferentialRun,
     RepositorySuiteExecutionPolicy,
     RepositorySuiteExecutionStateEvidence,
@@ -64,6 +66,7 @@ from mmaudit.scanners.fork_matrix import (
     RepositoryForkMatrixRunner,
     _baseline_limitation,
     fork_rpc_egress_from_snapshot,
+    repository_fork_matrix_timeout_budget_seconds,
 )
 from mmaudit.scanners.fork_rpc import ForkRpcUnavailableError, PinnedForkObservation
 from mmaudit.scanners.read_only_rpc import (
@@ -364,7 +367,15 @@ def _clean_attestation() -> RepositoryCleanStateAttestationEvidence:
 class _CleanLease:
     endpoint = "http://127.0.0.1:9100"
 
-    def __init__(self, *, stop_failure: BaseException | None = None) -> None:
+    def __init__(
+        self,
+        harness: _Harness,
+        *,
+        shutdown_timeout_seconds: float,
+        stop_failure: BaseException | None = None,
+    ) -> None:
+        self._harness = harness
+        self._shutdown_timeout_seconds = shutdown_timeout_seconds
         self.stopped = False
         self.stop_attempted = False
         self._stop_failure = stop_failure
@@ -374,6 +385,8 @@ class _CleanLease:
         self.stop_attempted = True
         if self._stop_failure is not None:
             raise self._stop_failure
+        if self._harness.consume_maximum_timeout_windows:
+            self._harness.clock.value += self._shutdown_timeout_seconds
         self.stopped = True
 
     def attestation(self) -> RepositoryCleanStateAttestationEvidence:
@@ -393,10 +406,16 @@ class _CleanProvider:
         private_root: Path,
         absolute_deadline: float,
     ) -> CleanStateLease:
-        del config, absolute_deadline
+        del absolute_deadline
         assert repository_root.is_dir()
         assert private_root.is_dir()
-        lease = _CleanLease(stop_failure=self._harness.clean_stop_failure)
+        if self._harness.consume_maximum_timeout_windows:
+            self._harness.clock.value += 3.0 + config.startup_timeout_seconds
+        lease = _CleanLease(
+            self._harness,
+            shutdown_timeout_seconds=config.shutdown_timeout_seconds,
+            stop_failure=self._harness.clean_stop_failure,
+        )
         self.leases.append(lease)
         if self._harness.clean_start_callback is not None:
             self._harness.clean_start_callback(private_root)
@@ -411,11 +430,13 @@ class _Bridge:
         expected_chain_id: int,
         pinned_block_number: int,
         pinned_block_hash: str,
+        timeout_seconds: float,
     ) -> None:
         self._harness = harness
         self._chain_id = expected_chain_id
         self._block_number = pinned_block_number
         self._block_hash = pinned_block_hash
+        self._timeout_seconds = timeout_seconds
         self._started = False
         self._stopped = False
         self._bridge_index = len(harness.bridges) + 1
@@ -429,11 +450,15 @@ class _Bridge:
         return f"http://127.0.0.1:{10_000 + self._bridge_index}"
 
     def start(self) -> None:
+        if self._harness.consume_maximum_timeout_windows:
+            self._harness.clock.value += self._timeout_seconds
         self._started = True
 
     def stop(self) -> None:
         assert self._started
         assert self._active_scope is None
+        if self._harness.consume_maximum_timeout_windows:
+            self._harness.clock.value += 1.0
         self._stopped = True
 
     @property
@@ -646,8 +671,9 @@ class _Scanner:
         expected_version: str | None = None,
         expected_sha256: str | None = None,
     ) -> ScannerRun:
-        del timeout_seconds, backend
+        del backend
         assert private_dir.is_dir()
+        self._harness.scanner_timeouts.append(timeout_seconds)
         self._harness.attempt_directories.append(private_dir)
         workspace = private_dir / "workspace"
         workspace.mkdir(mode=0o700)
@@ -744,7 +770,9 @@ class _Scanner:
             self._harness.advance_clock_after_first_scan
             and sum(self._harness.scanner_invocations.values()) == 1
         ):
-            self._harness.clock.value = 101
+            self._harness.clock.value = 1_000_000
+        elif self._harness.consume_maximum_timeout_windows:
+            self._harness.clock.value += timeout_seconds + 0.1
         return run
 
 
@@ -818,6 +846,7 @@ class _Harness:
         self.bridges: list[_Bridge] = []
         self.attempt_directories: list[Path] = []
         self.scanner_endpoints: list[str] = []
+        self.scanner_timeouts: list[float] = []
         self.scanner_trust_pins: list[tuple[str | None, str | None]] = []
         self.scanner_invocations: dict[int, int] = {}
         self.observer_failure: BaseException | None = None
@@ -826,6 +855,7 @@ class _Harness:
         self.unavailable_pinned = False
         self.drift_pinned = False
         self.advance_clock_after_first_scan = False
+        self.consume_maximum_timeout_windows = False
         self.retain_endpoint_in_run = False
         self.retained_diagnostic: Callable[[Path], str] | None = None
         self.omit_scope = False
@@ -1023,6 +1053,8 @@ class _Harness:
     ) -> PinnedForkObservation:
         assert timeout_seconds > 0
         self.observer_calls.append(endpoint)
+        if self.consume_maximum_timeout_windows:
+            self.clock.value += timeout_seconds
         if self.observer_failure is not None:
             raise self.observer_failure
         if endpoint == self.environment["MMAUDIT_PINNED_LOCAL_RPC_URL"]:
@@ -1059,6 +1091,7 @@ class _Harness:
             expected_chain_id=expected_chain_id,
             pinned_block_number=pinned_block_number,
             pinned_block_hash=pinned_block_hash,
+            timeout_seconds=timeout_seconds,
         )
         self.bridges.append(bridge)
         return bridge
@@ -1107,7 +1140,7 @@ class _Harness:
         tmp_path: Path,
         *,
         clean: bool = True,
-        deadline: float = 100,
+        deadline: float | None = None,
         private_root: Path | None = None,
         repository_exclusion_root: Path | None = None,
         backend: ScannerIsolationBackend | None = None,
@@ -1115,6 +1148,11 @@ class _Harness:
         tmp_path.mkdir(parents=True, exist_ok=True)
         selected_private_root = private_root or tmp_path / ".private"
         selected_exclusion_root = repository_exclusion_root or selected_private_root
+        selected_deadline = (
+            repository_fork_matrix_timeout_budget_seconds(self.smart_contracts.repository_suite)
+            if deadline is None
+            else deadline
+        )
         result = RepositoryForkMatrixRunner(
             self.smart_contracts,
             self.reproduction,
@@ -1127,10 +1165,174 @@ class _Harness:
             repository_exclusion_root=selected_exclusion_root,
             backend=backend or _Backend(),
             baseline_run=self.baseline,
-            absolute_deadline=deadline,
+            absolute_deadline=selected_deadline,
         )
         assert result is not None
         return result
+
+
+def test_matrix_timeout_budget_covers_every_canonical_runtime_quantity() -> None:
+    suite = _Harness().smart_contracts.repository_suite
+
+    observed = repository_fork_matrix_timeout_budget_seconds(suite)
+
+    attempt_count = len(suite.fork_matrix_states) * suite.fork_matrix_repetitions
+    expected = (
+        attempt_count * (suite.total_timeout_seconds + (3 * 5.0) + 1.0 + 0.1)
+        + (len(suite.fork_matrix_states) * 5.0)
+        + 5.0
+        + 3.0
+        + 1.0
+        + 1.0
+        + 1.0
+    )
+    assert observed == pytest.approx(expected)
+
+
+def test_matrix_timeout_budget_accepts_the_canonical_maximum_extrema() -> None:
+    baseline_suite = _Harness().smart_contracts.repository_suite
+    baseline_clean = next(
+        state
+        for state in baseline_suite.fork_matrix_states
+        if isinstance(state, RepositoryCleanForkMatrixStateConfig)
+    )
+    states = (
+        baseline_clean.model_copy(
+            update={
+                "startup_timeout_seconds": 15.0,
+                "shutdown_timeout_seconds": 10.0,
+            }
+        ),
+        *tuple(
+            RepositoryPinnedForkMatrixStateConfig(
+                state_id=f"pinned-{index}",
+                rpc_url_env=f"MMAUDIT_PINNED_{index}_RPC_URL",
+                expected_chain_id=40_000 + index,
+                pinned_block_number=index,
+                state_source_sha256=HASH_B,
+            )
+            for index in range(7)
+        ),
+    )
+    suite = RepositoryForkSuiteConfig.model_validate(
+        baseline_suite.model_copy(
+            update={
+                "fork_matrix_states": states,
+                "fork_matrix_repetitions": 10,
+                "total_timeout_seconds": 7_200.0,
+            }
+        ).model_dump(mode="python")
+    )
+
+    observed = repository_fork_matrix_timeout_budget_seconds(suite)
+
+    expected = 80 * (7_200.0 + (3 * 5.0) + 1.0 + 0.1) + (8 * 5.0) + 5.0 + 3.0 + 15.0 + 10.0 + 1.0
+    assert math.isfinite(observed)
+    assert observed == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("fork_matrix_repetitions", True),
+        ("fork_matrix_repetitions", 1),
+        ("fork_matrix_repetitions", 11),
+        ("total_timeout_seconds", True),
+        ("total_timeout_seconds", float("nan")),
+        ("total_timeout_seconds", float("inf")),
+        ("total_timeout_seconds", 7_200.1),
+        ("total_timeout_seconds", 1e308),
+    ],
+)
+def test_matrix_timeout_budget_rejects_unbounded_or_inexact_controls(
+    field: str,
+    value: object,
+) -> None:
+    suite = _Harness().smart_contracts.repository_suite.model_copy(update={field: value})
+
+    with pytest.raises(ValueError, match="matrix timeout budget"):
+        repository_fork_matrix_timeout_budget_seconds(suite)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("startup_timeout_seconds", True),
+        ("startup_timeout_seconds", float("nan")),
+        ("startup_timeout_seconds", 15.1),
+        ("shutdown_timeout_seconds", True),
+        ("shutdown_timeout_seconds", float("inf")),
+        ("shutdown_timeout_seconds", 10.1),
+    ],
+)
+def test_matrix_timeout_budget_rejects_invalid_clean_lifecycle_controls(
+    field: str,
+    value: object,
+) -> None:
+    suite = _Harness().smart_contracts.repository_suite
+    clean = next(
+        state
+        for state in suite.fork_matrix_states
+        if isinstance(state, RepositoryCleanForkMatrixStateConfig)
+    )
+    invalid_clean = clean.model_copy(update={field: value})
+    invalid_states = tuple(
+        invalid_clean if state is clean else state for state in suite.fork_matrix_states
+    )
+    invalid_suite = suite.model_copy(update={"fork_matrix_states": invalid_states})
+
+    with pytest.raises(ValueError, match="matrix timeout budget"):
+        repository_fork_matrix_timeout_budget_seconds(invalid_suite)
+
+
+def test_runner_passes_exact_child_suite_timeout_for_every_matrix_attempt(
+    tmp_path: Path,
+) -> None:
+    harness = _Harness()
+    harness.consume_maximum_timeout_windows = True
+    suite = harness.smart_contracts.repository_suite
+    deadline = harness.clock.value + repository_fork_matrix_timeout_budget_seconds(suite)
+
+    result = harness.run(tmp_path, deadline=deadline)
+
+    assert result.status is RepositoryDifferentialRunStatus.COMPLETE
+    assert result.matrix is not None
+    assert harness.scanner_timeouts == [suite.total_timeout_seconds] * (
+        len(suite.fork_matrix_states) * suite.fork_matrix_repetitions
+    )
+    baseline_policy = harness.baseline.repository_suite_execution_policy
+    assert baseline_policy is not None
+    expected_execution_configuration_sha256 = (
+        RepositorySuiteDifferentialMatrix.execution_configuration_sha256_for_policy(baseline_policy)
+    )
+    assert result.matrix.execution_configuration_sha256 == expected_execution_configuration_sha256
+    assert all(
+        attempt.scanner_run.repository_suite_execution_policy is not None
+        and attempt.scanner_run.repository_suite_execution_policy.total_timeout_seconds
+        == suite.total_timeout_seconds
+        and RepositorySuiteDifferentialMatrix.execution_configuration_sha256_for_policy(
+            attempt.scanner_run.repository_suite_execution_policy
+        )
+        == expected_execution_configuration_sha256
+        for attempt in result.matrix.attempts
+    )
+
+
+def test_runner_rejects_unschedulable_child_policy_before_launch(tmp_path: Path) -> None:
+    harness = _Harness()
+    harness.smart_contracts = harness.smart_contracts.model_copy(
+        update={"max_fork_probe_seconds": 899.0}
+    )
+
+    result = harness.run(tmp_path)
+
+    assert result.status is RepositoryDifferentialRunStatus.FAILED
+    assert result.matrix is None
+    assert result.limitations == (
+        "The configured fork-probe timeout cannot preserve the child suite policy.",
+    )
+    assert not harness.clean_provider.leases
+    assert not harness.scanner_timeouts
 
 
 def test_runner_emits_repeated_real_divergence_without_top_level_child_runs(
@@ -1723,7 +1925,7 @@ def test_runner_rejects_regressing_clock_before_clean_launch(tmp_path: Path) -> 
     harness = _Harness()
     harness.clock = cast(_Clock, _SequenceClock([10, 9]))
 
-    result = harness.run(tmp_path)
+    result = harness.run(tmp_path, deadline=100)
 
     assert result.status is RepositoryDifferentialRunStatus.FAILED
     assert result.matrix is None
@@ -1982,7 +2184,9 @@ def test_runner_preserves_material_limitation_and_cannot_complete(tmp_path: Path
         repository_exclusion_root=tmp_path / ".private",
         backend=_Backend(),
         baseline_run=harness.baseline,
-        absolute_deadline=100,
+        absolute_deadline=repository_fork_matrix_timeout_budget_seconds(
+            harness.smart_contracts.repository_suite
+        ),
     )
 
     assert result is not None

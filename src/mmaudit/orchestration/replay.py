@@ -62,8 +62,10 @@ from mmaudit.repository.secrets import is_sensitive_workspace_name
 from mmaudit.scanners.base import ScannerIsolationBackend, scanner_workspace_sha256
 from mmaudit.scanners.clean_chain import TrustedCleanAnvilLauncher
 from mmaudit.scanners.fork_matrix import (
+    REPOSITORY_FORK_MATRIX_RETURN_CLEANUP_RESERVE_SECONDS,
     ForkMatrixDependencies,
     RepositoryForkMatrixRunner,
+    repository_fork_matrix_timeout_budget_seconds,
 )
 from mmaudit.scanners.runner import ScannerRunner
 from mmaudit.solidity.invariant_execution import FoundryInvariantRunner
@@ -918,9 +920,9 @@ class OfflineReplayOrchestrator:
         assert expected_repository_sha256 is not None
         assert repository_exclusion_root is not None
         baseline_run = observed_baselines[0]
-        timeout_seconds = suite.total_timeout_seconds
-        absolute_deadline = time.monotonic() + timeout_seconds
         try:
+            matrix_timeout_budget_seconds = repository_fork_matrix_timeout_budget_seconds(suite)
+            absolute_deadline = time.monotonic() + matrix_timeout_budget_seconds
             current_value = await asyncio.wait_for(
                 asyncio.to_thread(
                     self.differential_runner.run,
@@ -932,7 +934,10 @@ class OfflineReplayOrchestrator:
                     baseline_run=baseline_run,
                     absolute_deadline=absolute_deadline,
                 ),
-                timeout=timeout_seconds,
+                timeout=(
+                    matrix_timeout_budget_seconds
+                    + REPOSITORY_FORK_MATRIX_RETURN_CLEANUP_RESERVE_SECONDS
+                ),
             )
             if current_value is None:
                 raise RuntimeError("repository differential runner returned no result")

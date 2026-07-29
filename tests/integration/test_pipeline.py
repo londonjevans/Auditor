@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -100,6 +101,7 @@ from mmaudit.privacy import (
     load_privacy_retention_consent,
 )
 from mmaudit.scanners.base import scanner_fingerprint, scanner_workspace_sha256
+from mmaudit.scanners.fork_matrix import repository_fork_matrix_timeout_budget_seconds
 from mmaudit.solidity.compile import CompilationRun
 from mmaudit.solidity.invariant_execution import FoundryInvariantRunner
 from mmaudit.solidity.reproduction import translate_foundry_test
@@ -4389,7 +4391,9 @@ async def test_pipeline_persists_configured_repository_fork_matrix_failure(
         repository_fork_matrix_runner=matrix_runner,  # type: ignore[arg-type]
     )
 
+    deadline_window_start = time.monotonic()
     result = await pipeline.run(scanner_only=True)
+    deadline_window_end = time.monotonic()
 
     assert result.exit_code is ExitCode.INCOMPLETE
     assert len(matrix_runner.calls) == 1
@@ -4398,7 +4402,11 @@ async def test_pipeline_persists_configured_repository_fork_matrix_failure(
     assert call["baseline_run"].scanner == "foundry_fork"
     assert call["repository_sha256"] == scanner_runner.expected_repository_sha256
     assert call["repository_exclusion_root"] == scanner_runner.repository_exclusion_root
-    assert call["absolute_deadline"] > 0
+    timeout_budget = repository_fork_matrix_timeout_budget_seconds(
+        config.smart_contracts.repository_suite
+    )
+    assert deadline_window_start + timeout_budget <= call["absolute_deadline"]
+    assert call["absolute_deadline"] <= deadline_window_end + timeout_budget
     differential = result.report.repository_suite_differential
     assert differential is not None
     assert differential.status is RepositoryDifferentialRunStatus.FAILED

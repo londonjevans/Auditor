@@ -48,6 +48,7 @@ _MAX_PROCESS_OUTPUT_BYTES = 64 * 1024
 _COPY_CHUNK_BYTES = 1024 * 1024
 _MAX_PORT_ATTEMPTS = 3
 _OBSERVATION_TIMEOUT_SECONDS = 1.0
+CLEAN_ANVIL_VERSION_ATTESTATION_TIMEOUT_SECONDS = 3.0
 _PORT_BIND_STABILITY_SECONDS = 0.05
 _STARTUP_POLL_SECONDS = 0.02
 _TERMINATION_POLL_SECONDS = 0.01
@@ -417,7 +418,7 @@ class TrustedCleanAnvilLauncher:
         child_environment, environment_policy_sha256 = _child_environment(workspace)
         version_deadline = min(
             absolute_deadline,
-            self._clock() + 3.0,
+            self._clock() + CLEAN_ANVIL_VERSION_ATTESTATION_TIMEOUT_SECONDS,
         )
         observed_version = self._attest_version(
             executable,

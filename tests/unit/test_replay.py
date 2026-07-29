@@ -104,7 +104,11 @@ from mmaudit.orchestration.verification import (
 )
 from mmaudit.reporting.json_report import write_json
 from mmaudit.scanners.base import scanner_workspace_sha256
-from mmaudit.scanners.fork_matrix import ForkMatrixDependencies
+from mmaudit.scanners.fork_matrix import (
+    REPOSITORY_FORK_MATRIX_RETURN_CLEANUP_RESERVE_SECONDS,
+    ForkMatrixDependencies,
+    repository_fork_matrix_timeout_budget_seconds,
+)
 from tests.unit.test_repository_fork_differential_schema import (
     _matrix as _repository_differential_matrix,
 )
@@ -294,6 +298,7 @@ class _DefaultDifferentialRunnerFactory:
         self.expected_clean_state_provider = expected_clean_state_provider
         self.constructed_smart_contracts: list[SmartContractsConfig] = []
         self.constructed_reproduction: list[ReproductionConfig] = []
+        self.absolute_deadlines: list[float] = []
         self.calls = 0
 
     def __call__(
@@ -330,6 +335,7 @@ class _DefaultDifferentialRunnerFactory:
         )
         assert absolute_deadline > 0
         assert backend is self.expected_backend
+        self.absolute_deadlines.append(absolute_deadline)
         self.calls += 1
         return self.result
 
@@ -1873,6 +1879,97 @@ async def test_profile_overridden_replay_builds_default_backend_bound_differenti
     assert factory.constructed_reproduction == [effective_config.reproduction]
     assert orchestrator.config is not None
     assert orchestrator.config.stable_hash() == effective_config.stable_hash()
+
+
+@pytest.mark.asyncio
+async def test_default_differential_replay_reserves_each_attempt_full_policy_timeout(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config_with_repository_differential(config_factory())
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    repository, run_dir, manifest_path = _write_replay_run(
+        tmp_path,
+        config,
+        candidate,
+        with_repository_differential=True,
+    )
+    expected = RepositorySuiteDifferentialRun.model_validate_json(
+        (run_dir / "repository-suite-differential.json").read_text(encoding="utf-8")
+    )
+    backend = _LocalIsolationBackend()
+    scanner = _ForkAwareScannerRunner(
+        [_differential_baseline(expected)],
+        backend=backend,
+    )
+    clean_state_provider = object()
+    factory = _DefaultDifferentialRunnerFactory(
+        expected,
+        backend,
+        clean_state_provider,
+    )
+    clock_value = 100.0
+    wait_for_timeouts: list[float | None] = []
+    original_wait_for = asyncio.wait_for
+
+    async def capture_wait_for_timeout(
+        future,
+        timeout: float | None,
+    ):
+        wait_for_timeouts.append(timeout)
+        return await original_wait_for(future, timeout)
+
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.RepositoryForkMatrixRunner",
+        factory,
+    )
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.TrustedCleanAnvilLauncher",
+        lambda: clean_state_provider,
+    )
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.default_isolation_backend",
+        lambda *_args, **_kwargs: backend,
+    )
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.time.monotonic",
+        lambda: clock_value,
+    )
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.asyncio.wait_for",
+        capture_wait_for_timeout,
+    )
+
+    replay = await OfflineReplayOrchestrator(
+        config,
+        scanner_runner=scanner,
+        invariant_runner=_LocalInvariantRunner(_invariant_result()),
+        reproduction_runner=_LocalReproductionRunner(_reproduction_result()),
+    ).replay(
+        manifest_path=manifest_path,
+        run_dir=run_dir,
+        repository_root=repository,
+        work_dir=tmp_path / "default-differential-timeout-work",
+    )
+
+    suite = config.smart_contracts.repository_suite
+    matrix_timeout_budget = repository_fork_matrix_timeout_budget_seconds(suite)
+    assert replay.status is OfflineReplayStatus.REPLAYED
+    assert factory.calls == 1
+    assert len(factory.absolute_deadlines) == 1
+    assert factory.absolute_deadlines[0] == pytest.approx(clock_value + matrix_timeout_budget)
+    assert wait_for_timeouts == pytest.approx(
+        [matrix_timeout_budget + REPOSITORY_FORK_MATRIX_RETURN_CLEANUP_RESERVE_SECONDS]
+    )
+    assert wait_for_timeouts[0] is not None
+    assert wait_for_timeouts[0] > factory.absolute_deadlines[0] - clock_value
 
 
 @pytest.mark.asyncio
