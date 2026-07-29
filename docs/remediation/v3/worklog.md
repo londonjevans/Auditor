@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 205e72df2d0c9b51faaf237c60e52994f838551a
+LAST_CHECKPOINT_COMMIT: dd5e6b159ba4f0c7c5d9c31bb2a34ff2bba2d8f4
 
 ## 2026-07-29 — V3-FORKDIFF-001
 
@@ -205,6 +205,10 @@ LAST_CHECKPOINT_COMMIT: 205e72df2d0c9b51faaf237c60e52994f838551a
   inherited immutable garbage directories outside the repository. The
   conditional real replay acceptance remains the separately recorded
   expected-red result and received no completion credit.
+- **Implementation checkpoint:** Commit
+  `dd5e6b159ba4f0c7c5d9c31bb2a34ff2bba2d8f4`
+  (`Harden fork differential replay evidence`) preserves the validated
+  in-progress slice. It does not mark `V3-FORKDIFF-001` complete.
 - **Defensive objective:** Execute the same bounded audited-repository suite
   against a clean local state and one or more operator-pinned fork states, then
   classify only repeated fresh-workspace agreement as typed divergence while a
