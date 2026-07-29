@@ -10,6 +10,7 @@ import stat
 from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
+from threading import Lock
 from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -279,6 +280,14 @@ class ContextRequestEvidence(FrozenContextEvidence):
     response_schema_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
     request_plan: RequestTokenPlan
     request_plan_sha256: str = Field(pattern=_SHA256_PATTERN)
+    atomic_token_reservations: tuple[AtomicTokenReservationEvidence, ...] = Field(
+        min_length=1,
+        max_length=32,
+    )
+    atomic_token_reservation_sha256s: tuple[str, ...] = Field(
+        min_length=1,
+        max_length=32,
+    )
     atomic_token_reservation: AtomicTokenReservationEvidence
     atomic_token_reservation_sha256: str = Field(pattern=_SHA256_PATTERN)
     omissions: tuple[ContextOmissionEvidence, ...] = Field(
@@ -290,8 +299,12 @@ class ContextRequestEvidence(FrozenContextEvidence):
 
     @classmethod
     def build(cls, usage: UsageRecord) -> Self:
-        token_reservation = _atomic_token_reservation_from_usage(usage)
         plan = _request_token_plan_from_usage(usage)
+        token_reservations = _atomic_token_reservations_from_usage(usage, plan)
+        token_reservation = token_reservations[-1]
+        token_reservation_sha256s = tuple(
+            evidence.evidence_sha256 for evidence in token_reservations
+        )
         omission_hashes = plan.context_omission_sha256s
         omissions = [
             ContextOmissionEvidence.build(
@@ -326,6 +339,8 @@ class ContextRequestEvidence(FrozenContextEvidence):
             "response_schema_sha256": usage.schema_sha256,
             "request_plan": plan,
             "request_plan_sha256": plan.plan_sha256,
+            "atomic_token_reservations": token_reservations,
+            "atomic_token_reservation_sha256s": token_reservation_sha256s,
             "atomic_token_reservation": token_reservation,
             "atomic_token_reservation_sha256": token_reservation.evidence_sha256,
             "omissions": ordered_omissions,
@@ -347,6 +362,8 @@ class ContextRequestEvidence(FrozenContextEvidence):
             response_schema_sha256=usage.schema_sha256,
             request_plan=plan,
             request_plan_sha256=plan.plan_sha256,
+            atomic_token_reservations=token_reservations,
+            atomic_token_reservation_sha256s=token_reservation_sha256s,
             atomic_token_reservation=token_reservation,
             atomic_token_reservation_sha256=token_reservation.evidence_sha256,
             omissions=ordered_omissions,
@@ -356,16 +373,24 @@ class ContextRequestEvidence(FrozenContextEvidence):
 
     @model_validator(mode="after")
     def request_join_is_consistent_and_self_hashed(self) -> ContextRequestEvidence:
+        expected_attempt_ids = tuple(
+            self.request_id if attempt == 1 else f"{self.request_id}:attempt:{attempt}"
+            for attempt in range(1, self.provider_attempts + 1)
+        )
         if (
             self.request_plan.request_id != self.request_id
             or self.request_plan.role != self.role
             or self.request_plan_sha256 != self.request_plan.plan_sha256
             or self.requested_model not in self.request_plan.route_intersection.exact_model_ids
-            or not _atomic_request_id_matches(
-                self.request_id,
-                self.atomic_token_reservation.request_id,
-                self.provider_attempts,
-            )
+            or len(self.atomic_token_reservations) != self.provider_attempts
+            or len(self.atomic_token_reservation_sha256s) != self.provider_attempts
+            or tuple(item.request_id for item in self.atomic_token_reservations)
+            != expected_attempt_ids
+            or self.atomic_token_reservation_sha256s
+            != tuple(item.evidence_sha256 for item in self.atomic_token_reservations)
+            or len(set(self.atomic_token_reservation_sha256s))
+            != len(self.atomic_token_reservation_sha256s)
+            or self.atomic_token_reservation != self.atomic_token_reservations[-1]
             or self.atomic_token_reservation.exact_model_id != self.requested_model
             or self.atomic_token_reservation.role != self.role
             or self.atomic_token_reservation.request_token_plan_sha256
@@ -381,6 +406,21 @@ class ContextRequestEvidence(FrozenContextEvidence):
             or self.atomic_token_reservation_sha256 != self.atomic_token_reservation.evidence_sha256
         ):
             raise ValueError("context request differs from its endpoint-bound token plan")
+        for reservation in self.atomic_token_reservations:
+            if (
+                reservation.exact_model_id != self.requested_model
+                or reservation.role != self.role
+                or reservation.request_token_plan_sha256 != self.request_plan.plan_sha256
+                or reservation.planned_prompt_tokens
+                != self.request_plan.prompt_byte_upper_bound_tokens
+                or reservation.planned_completion_tokens
+                != self.request_plan.requested_completion_tokens
+                or reservation.global_input_token_limit
+                != self.request_plan.global_budget.global_input_token_budget
+                or reservation.global_output_token_limit
+                != self.request_plan.global_budget.global_output_token_budget
+            ):
+                raise ValueError("context request reservation inventory differs from its plan")
         omission_keys = tuple(_omission_sort_key(item) for item in self.omissions)
         if omission_keys != tuple(sorted(set(omission_keys))):
             raise ValueError("context request omissions must be unique and sorted")
@@ -414,6 +454,7 @@ class ContextPreflightRequestEvidence(FrozenContextEvidence):
     schema_version: Literal["1.0"] = "1.0"
     evidence_kind: Literal["preflight"] = "preflight"
     request_id: str = Field(pattern=_REQUEST_ID_PATTERN)
+    logical_request_id: str = Field(pattern=_REQUEST_ID_PATTERN)
     role: str = Field(pattern=_ROLE_PATTERN)
     requested_model: str = Field(pattern=_MODEL_ID_PATTERN)
     request_state: Literal[
@@ -425,7 +466,7 @@ class ContextPreflightRequestEvidence(FrozenContextEvidence):
     decision_evidence_sha256s: tuple[str, ...] = Field(min_length=1, max_length=100)
     request_plan: RequestTokenPlan | None = None
     request_plan_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
-    estimated_prompt_tokens: int = Field(ge=0)
+    estimated_prompt_tokens: int | None = Field(default=None, ge=0)
     requested_completion_tokens: int = Field(gt=0)
     evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
 
@@ -434,6 +475,7 @@ class ContextPreflightRequestEvidence(FrozenContextEvidence):
         cls,
         *,
         request_id: str,
+        logical_request_id: str | None = None,
         role: str,
         requested_model: str,
         request_state: Literal[
@@ -443,15 +485,17 @@ class ContextPreflightRequestEvidence(FrozenContextEvidence):
         decision_source: ContextPreflightSource,
         reason: ContextPreflightReason,
         decision_evidence_sha256s: Sequence[str],
-        estimated_prompt_tokens: int,
+        estimated_prompt_tokens: int | None,
         requested_completion_tokens: int,
         request_plan: RequestTokenPlan | None = None,
     ) -> Self:
         evidence_hashes = tuple(sorted(decision_evidence_sha256s))
+        resolved_logical_request_id = logical_request_id or request_id
         payload: dict[str, Any] = {
             "schema_version": "1.0",
             "evidence_kind": "preflight",
             "request_id": request_id,
+            "logical_request_id": resolved_logical_request_id,
             "role": role,
             "requested_model": requested_model,
             "request_state": request_state,
@@ -467,6 +511,7 @@ class ContextPreflightRequestEvidence(FrozenContextEvidence):
             schema_version="1.0",
             evidence_kind="preflight",
             request_id=request_id,
+            logical_request_id=resolved_logical_request_id,
             role=role,
             requested_model=requested_model,
             request_state=request_state,
@@ -491,7 +536,7 @@ class ContextPreflightRequestEvidence(FrozenContextEvidence):
         if (self.request_plan is None) != (self.request_plan_sha256 is None):
             raise ValueError("preflight request plan and plan hash must appear together")
         if self.request_plan is not None and (
-            self.request_plan.request_id != self.request_id
+            self.request_plan.request_id != self.logical_request_id
             or self.request_plan.role != self.role
             or self.requested_model not in self.request_plan.route_intersection.exact_model_ids
             or self.request_plan.plan_sha256 != self.request_plan_sha256
@@ -499,8 +544,56 @@ class ContextPreflightRequestEvidence(FrozenContextEvidence):
             or self.request_plan.requested_completion_tokens != self.requested_completion_tokens
         ):
             raise ValueError("preflight evidence differs from its request token plan")
+        if self.request_state is ContextRequestState.NOT_SENT:
+            if (
+                self.decision_source is not ContextPreflightSource.ORCHESTRATOR
+                or self.reason is not ContextPreflightReason.ORCHESTRATOR_NOT_SCHEDULED
+                or self.logical_request_id != self.request_id
+            ):
+                raise ValueError("not-sent context evidence must be an orchestrator decision")
+        else:
+            permitted_rejections = {
+                ContextPreflightSource.TOKEN_PLANNER: {
+                    ContextPreflightReason.ENDPOINT_CAPACITY,
+                    ContextPreflightReason.ROUTE_UNAVAILABLE,
+                    ContextPreflightReason.CONTEXT_PLAN_INVALID,
+                    ContextPreflightReason.COST_BUDGET,
+                },
+                ContextPreflightSource.BUDGET_MANAGER: {
+                    ContextPreflightReason.GLOBAL_TOKEN_BUDGET,
+                    ContextPreflightReason.COST_BUDGET,
+                    ContextPreflightReason.CONTEXT_PLAN_INVALID,
+                },
+            }
+            if self.reason not in permitted_rejections.get(self.decision_source, set()):
+                raise ValueError("preflight rejection source and reason are inconsistent")
         _require_self_hash(self, "evidence_sha256")
         return self
+
+
+class ContextPreflightLedger:
+    """Thread-safe run-scoped inventory of host decisions made before transport."""
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._records: dict[str, ContextPreflightRequestEvidence] = {}
+
+    @property
+    def records(self) -> tuple[ContextPreflightRequestEvidence, ...]:
+        with self._lock:
+            return tuple(self._records[key] for key in sorted(self._records))
+
+    def add(self, record: ContextPreflightRequestEvidence) -> None:
+        if not isinstance(record, ContextPreflightRequestEvidence):
+            raise TypeError("context preflight ledger accepts only typed evidence")
+        with self._lock:
+            if record.request_id in self._records:
+                raise ContextManifestError("context preflight request identity is duplicated")
+            self._records[record.request_id] = record
+
+    def clear(self) -> None:
+        with self._lock:
+            self._records.clear()
 
 
 ContextManifestRequestEvidence = Annotated[
@@ -534,6 +627,10 @@ class ContextManifestTotals(FrozenContextEvidence):
     reserved_output_tokens: int = Field(ge=0)
     reserved_reasoning_tokens: int = Field(ge=0)
     requested_completion_tokens: int = Field(ge=0)
+    provider_attempt_count: int = Field(ge=0)
+    atomic_reservation_count: int = Field(ge=0)
+    attempt_reserved_prompt_tokens: int = Field(ge=0)
+    attempt_reserved_completion_tokens: int = Field(ge=0)
     provider_reported_request_count: int = Field(ge=0, le=_MAX_CONTEXT_REQUESTS)
     provider_reported_prompt_tokens: int = Field(ge=0)
     provider_reported_completion_tokens: int = Field(ge=0)
@@ -588,6 +685,8 @@ class ContextManifestTotals(FrozenContextEvidence):
             self.reserved_output_tokens + self.reserved_reasoning_tokens
         ):
             raise ValueError("completion totals do not conserve output and reasoning reserves")
+        if self.provider_attempt_count != self.atomic_reservation_count:
+            raise ValueError("provider attempts differ from the atomic reservation inventory")
         _require_self_hash(self, "totals_sha256")
         return self
 
@@ -625,12 +724,17 @@ class ContextManifestReportBinding(FrozenContextEvidence):
     planned_prompt_tokens: int = Field(ge=0)
     planned_source_tokens: int = Field(ge=0)
     reserved_output_tokens: int = Field(ge=0)
+    provider_attempt_count: int = Field(ge=0)
+    atomic_reservation_count: int = Field(ge=0)
+    attempt_reserved_prompt_tokens: int = Field(ge=0)
+    attempt_reserved_completion_tokens: int = Field(ge=0)
     provider_reported_request_count: int = Field(ge=0, le=_MAX_CONTEXT_REQUESTS)
     provider_reported_prompt_tokens: int = Field(ge=0)
     provider_reported_completion_tokens: int = Field(ge=0)
     mock_reported_request_count: int = Field(ge=0, le=_MAX_CONTEXT_REQUESTS)
     unavailable_actual_usage_count: int = Field(ge=0, le=_MAX_CONTEXT_REQUESTS)
     omitted_item_count: int = Field(ge=0)
+    preflight_evidence_sha256s: tuple[str, ...] = Field(max_length=_MAX_CONTEXT_REQUESTS)
     binding_sha256: str = Field(pattern=_SHA256_PATTERN)
 
     @classmethod
@@ -646,17 +750,32 @@ class ContextManifestReportBinding(FrozenContextEvidence):
             "planned_prompt_tokens": totals.planned_prompt_tokens,
             "planned_source_tokens": totals.planned_source_tokens,
             "reserved_output_tokens": totals.reserved_output_tokens,
+            "provider_attempt_count": totals.provider_attempt_count,
+            "atomic_reservation_count": totals.atomic_reservation_count,
+            "attempt_reserved_prompt_tokens": totals.attempt_reserved_prompt_tokens,
+            "attempt_reserved_completion_tokens": totals.attempt_reserved_completion_tokens,
             "provider_reported_request_count": totals.provider_reported_request_count,
             "provider_reported_prompt_tokens": totals.provider_reported_prompt_tokens,
             "provider_reported_completion_tokens": totals.provider_reported_completion_tokens,
             "mock_reported_request_count": totals.mock_reported_request_count,
             "unavailable_actual_usage_count": totals.unavailable_actual_usage_count,
             "omitted_item_count": totals.omitted_item_count,
+            "preflight_evidence_sha256s": tuple(
+                sorted(
+                    {
+                        request.evidence_sha256
+                        for request in manifest.requests
+                        if isinstance(request, ContextPreflightRequestEvidence)
+                    }
+                )
+            ),
         }
         return cls(**payload, binding_sha256=_canonical_sha256(payload))
 
     @model_validator(mode="after")
     def binding_is_self_hashed(self) -> ContextManifestReportBinding:
+        if self.preflight_evidence_sha256s != tuple(sorted(set(self.preflight_evidence_sha256s))):
+            raise ValueError("context preflight report hashes must be unique and sorted")
         _require_self_hash(self, "binding_sha256")
         return self
 
@@ -787,33 +906,33 @@ def _request_token_plan_from_usage(usage: UsageRecord) -> RequestTokenPlan:
     try:
         plan = parser(usage)
     except (TypeError, ValueError) as exc:
-        raise ContextManifestError("usage lacks valid request token-plan evidence") from exc
+        raise ContextManifestError(
+            "usage lacks valid request token-plan or atomic token-reservation evidence"
+        ) from exc
     if not isinstance(plan, RequestTokenPlan):
         raise ContextManifestError("usage token-plan parser returned invalid evidence")
     return plan
 
 
-def _atomic_token_reservation_from_usage(
+def _atomic_token_reservations_from_usage(
     usage: UsageRecord,
-) -> AtomicTokenReservationEvidence:
-    raw = usage.routing.get("atomic_token_reservation")
-    observed_sha256 = usage.routing.get("atomic_token_reservation_sha256")
-    if not isinstance(raw, dict) or not isinstance(observed_sha256, str):
-        raise ContextManifestError("usage lacks atomic token-reservation evidence")
+    plan: RequestTokenPlan,
+) -> tuple[AtomicTokenReservationEvidence, ...]:
+    from mmaudit.models import usage as usage_module
+
+    parser = getattr(usage_module, "atomic_token_reservations_from_usage", None)
+    if not callable(parser):
+        raise ContextManifestError("usage parser cannot validate reservation inventory")
     try:
-        evidence = AtomicTokenReservationEvidence.model_validate_json(
-            json.dumps(
-                raw,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=True,
-                allow_nan=False,
-            )
-        )
+        evidence = parser(usage, plan)
     except (TypeError, ValueError) as exc:
-        raise ContextManifestError("usage atomic token-reservation evidence is invalid") from exc
-    if evidence.model_dump(mode="json") != raw or evidence.evidence_sha256 != observed_sha256:
-        raise ContextManifestError("usage atomic token-reservation projection is not canonical")
+        raise ContextManifestError("usage reservation inventory is invalid") from exc
+    if (
+        not isinstance(evidence, tuple)
+        or not evidence
+        or any(not isinstance(item, AtomicTokenReservationEvidence) for item in evidence)
+    ):
+        raise ContextManifestError("usage parser returned an invalid reservation inventory")
     return evidence
 
 
@@ -823,15 +942,6 @@ def _request_state(usage: UsageRecord) -> ContextRequestState:
     if usage.validation_status is ModelRequestValidationStatus.TRUNCATED:
         return ContextRequestState.TRUNCATED
     return ContextRequestState.SENT_FAILED
-
-
-def _atomic_request_id_matches(
-    request_id: str,
-    reservation_request_id: str,
-    provider_attempts: int,
-) -> bool:
-    expected = request_id if provider_attempts == 1 else f"{request_id}:attempt:{provider_attempts}"
-    return reservation_request_id == expected
 
 
 def _actual_usage_source(usage: UsageRecord) -> ActualTokenUsageSource:
@@ -899,6 +1009,14 @@ def _context_totals_payload(
         if isinstance(request, ContextRequestEvidence)
         for omission in request.omissions
     ]
+    provider_requests = [
+        request for request in requests if isinstance(request, ContextRequestEvidence)
+    ]
+    reservation_inventory = [
+        reservation
+        for request in provider_requests
+        for reservation in request.atomic_token_reservations
+    ]
     return {
         "request_count": len(requests),
         "planned_request_count": len(request_plans),
@@ -924,6 +1042,14 @@ def _context_totals_payload(
         ),
         "requested_completion_tokens": sum(
             request_plan.requested_completion_tokens for request_plan in request_plans
+        ),
+        "provider_attempt_count": sum(request.provider_attempts for request in provider_requests),
+        "atomic_reservation_count": len(reservation_inventory),
+        "attempt_reserved_prompt_tokens": sum(
+            reservation.planned_prompt_tokens for reservation in reservation_inventory
+        ),
+        "attempt_reserved_completion_tokens": sum(
+            reservation.planned_completion_tokens for reservation in reservation_inventory
         ),
         "provider_reported_request_count": len(provider_usage),
         "provider_reported_prompt_tokens": _sum_actual_tokens(provider_usage, "prompt_tokens"),
@@ -1011,6 +1137,7 @@ __all__ = [
     "ContextOmissionEvidence",
     "ContextOmissionProvenance",
     "ContextOmissionReason",
+    "ContextPreflightLedger",
     "ContextPreflightReason",
     "ContextPreflightRequestEvidence",
     "ContextPreflightSource",

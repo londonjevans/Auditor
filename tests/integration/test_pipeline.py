@@ -70,6 +70,7 @@ from mmaudit.orchestration.budgets import BudgetManager
 from mmaudit.orchestration.context_manifest import (
     context_manifest_report_binding,
     load_context_manifest,
+    validate_context_manifest_against_usage,
 )
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.manifest import (
@@ -488,6 +489,14 @@ def _provider(
         max_output_tokens=config.execution.max_output_tokens_per_request,
         conservative_usd_per_million_tokens=(config.execution.conservative_usd_per_million_tokens),
         max_requests_per_agent=config.execution.max_requests_per_agent,
+        global_input_token_budget=config.token_budgets.global_input_token_budget,
+        global_output_token_budget=config.token_budgets.global_output_token_budget,
+        per_model_usd_caps={
+            model: str(cap) for model, cap in config.token_budgets.per_model_cost_budget_usd.items()
+        },
+        per_role_usd_caps={
+            role: str(cap) for role, cap in config.token_budgets.per_role_cost_budget_usd.items()
+        },
     )
     controls = build_openrouter_runtime_controls(config, certification=False)
     return (
@@ -500,6 +509,7 @@ def _provider(
             http_client=http_client,
             provider_policy=controls.provider_policy,
             reasoning=controls.reasoning,
+            token_budgets=config.token_budgets,
         ),
         http_client,
     )
@@ -928,6 +938,7 @@ async def test_successful_multi_agent_audit(
         "final-findings.json",
         "audit-report.md",
         "audit-results.sarif",
+        "context-manifest.json",
         "maximum_assurance_traceability.json",
         "run-evidence-manifest.json",
     ):
@@ -950,6 +961,31 @@ async def test_successful_multi_agent_audit(
         (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
     )
     validate_manifest_artifacts(manifest, result.run_dir)
+    context_manifest = load_context_manifest(result.run_dir / "context-manifest.json")
+    validate_context_manifest_against_usage(
+        context_manifest,
+        run_id=result.report.run_id,
+        usage_records=result.report.usage,
+    )
+    expected_context_binding = context_manifest_report_binding(context_manifest)
+    context_coverage_binding = next(
+        binding
+        for binding in manifest.bindings.coverage
+        if binding.identifier == "context-manifest/artifact"
+    )
+    assert context_manifest.run_id == result.report.run_id
+    assert context_manifest.totals.request_count == len(result.report.usage)
+    assert context_manifest.totals.mock_reported_request_count == len(result.report.usage)
+    assert context_manifest.totals.provider_reported_request_count == 0
+    assert context_manifest.totals.planned_prompt_tokens > 0
+    assert context_manifest.totals.reserved_output_tokens > 0
+    assert result.report.metadata["context_manifest"] == expected_context_binding.model_dump(
+        mode="json"
+    )
+    assert context_coverage_binding.sha256 == context_manifest.manifest_sha256
+    assert (tmp_path / "output" / "latest" / "context-manifest.json").read_bytes() == (
+        result.run_dir / "context-manifest.json"
+    ).read_bytes()
     assert manifest.run_id == result.report.run_id
     assert manifest.source_tree_sha256
     assert all(

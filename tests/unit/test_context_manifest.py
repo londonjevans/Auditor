@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -35,6 +36,7 @@ from mmaudit.orchestration.context_manifest import (
     ContextManifest,
     ContextManifestError,
     ContextOmissionReason,
+    ContextPreflightLedger,
     ContextPreflightReason,
     ContextPreflightRequestEvidence,
     ContextPreflightSource,
@@ -418,8 +420,8 @@ def test_context_manifest_retains_not_sent_valid_plan() -> None:
         role=plan.role,
         requested_model="alpha/frontier-secure",
         request_state=ContextRequestState.NOT_SENT,
-        decision_source=ContextPreflightSource.BUDGET_MANAGER,
-        reason=ContextPreflightReason.COST_BUDGET,
+        decision_source=ContextPreflightSource.ORCHESTRATOR,
+        reason=ContextPreflightReason.ORCHESTRATOR_NOT_SCHEDULED,
         decision_evidence_sha256s=("a" * 64, "b" * 64),
         estimated_prompt_tokens=plan.estimated_prompt_tokens,
         requested_completion_tokens=plan.requested_completion_tokens,
@@ -436,6 +438,160 @@ def test_context_manifest_retains_not_sent_valid_plan() -> None:
     assert manifest.totals.not_sent_request_count == 1
     assert manifest.totals.planned_prompt_tokens == plan.estimated_prompt_tokens
     assert manifest.totals.reserved_output_tokens == plan.reserved_output_tokens
+
+
+@pytest.mark.parametrize(
+    ("state", "source", "reason"),
+    [
+        (
+            ContextRequestState.NOT_SENT,
+            ContextPreflightSource.ORCHESTRATOR,
+            ContextPreflightReason.ORCHESTRATOR_NOT_SCHEDULED,
+        ),
+        *[
+            (
+                ContextRequestState.PRE_FLIGHT_REJECTED,
+                ContextPreflightSource.TOKEN_PLANNER,
+                reason,
+            )
+            for reason in (
+                ContextPreflightReason.ENDPOINT_CAPACITY,
+                ContextPreflightReason.ROUTE_UNAVAILABLE,
+                ContextPreflightReason.CONTEXT_PLAN_INVALID,
+                ContextPreflightReason.COST_BUDGET,
+            )
+        ],
+        *[
+            (
+                ContextRequestState.PRE_FLIGHT_REJECTED,
+                ContextPreflightSource.BUDGET_MANAGER,
+                reason,
+            )
+            for reason in (
+                ContextPreflightReason.GLOBAL_TOKEN_BUDGET,
+                ContextPreflightReason.COST_BUDGET,
+                ContextPreflightReason.CONTEXT_PLAN_INVALID,
+            )
+        ],
+    ],
+)
+def test_context_preflight_state_source_reason_matrix_accepts_only_valid_pairs(
+    state: ContextRequestState,
+    source: ContextPreflightSource,
+    reason: ContextPreflightReason,
+) -> None:
+    evidence = ContextPreflightRequestEvidence.build(
+        request_id=f"valid-{source.value.lower()}-{reason.value.lower()}",
+        role="source_audit",
+        requested_model="alpha/frontier-secure",
+        request_state=state,
+        decision_source=source,
+        reason=reason,
+        decision_evidence_sha256s=("a" * 64,),
+        estimated_prompt_tokens=None,
+        requested_completion_tokens=1_024,
+    )
+
+    assert evidence.request_state is state
+    assert evidence.decision_source is source
+    assert evidence.reason is reason
+
+
+_VALID_PREFLIGHT_MATRIX = {
+    (
+        ContextRequestState.NOT_SENT,
+        ContextPreflightSource.ORCHESTRATOR,
+        ContextPreflightReason.ORCHESTRATOR_NOT_SCHEDULED,
+    ),
+    *{
+        (
+            ContextRequestState.PRE_FLIGHT_REJECTED,
+            ContextPreflightSource.TOKEN_PLANNER,
+            reason,
+        )
+        for reason in (
+            ContextPreflightReason.ENDPOINT_CAPACITY,
+            ContextPreflightReason.ROUTE_UNAVAILABLE,
+            ContextPreflightReason.CONTEXT_PLAN_INVALID,
+            ContextPreflightReason.COST_BUDGET,
+        )
+    },
+    *{
+        (
+            ContextRequestState.PRE_FLIGHT_REJECTED,
+            ContextPreflightSource.BUDGET_MANAGER,
+            reason,
+        )
+        for reason in (
+            ContextPreflightReason.GLOBAL_TOKEN_BUDGET,
+            ContextPreflightReason.COST_BUDGET,
+            ContextPreflightReason.CONTEXT_PLAN_INVALID,
+        )
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("state", "source", "reason"),
+    [
+        (state, source, reason)
+        for state in (
+            ContextRequestState.NOT_SENT,
+            ContextRequestState.PRE_FLIGHT_REJECTED,
+        )
+        for source in ContextPreflightSource
+        for reason in ContextPreflightReason
+        if (state, source, reason) not in _VALID_PREFLIGHT_MATRIX
+    ],
+)
+def test_context_preflight_state_source_reason_matrix_rejects_invalid_pairs(
+    state: ContextRequestState,
+    source: ContextPreflightSource,
+    reason: ContextPreflightReason,
+) -> None:
+    with pytest.raises(ValidationError, match=r"orchestrator decision|source and reason"):
+        ContextPreflightRequestEvidence.build(
+            request_id="invalid-preflight-matrix",
+            role="source_audit",
+            requested_model="alpha/frontier-secure",
+            request_state=state,
+            decision_source=source,
+            reason=reason,
+            decision_evidence_sha256s=("b" * 64,),
+            estimated_prompt_tokens=None,
+            requested_completion_tokens=1_024,
+        )
+
+
+def test_context_preflight_ledger_is_thread_safe_sorted_and_duplicate_closed() -> None:
+    ledger = ContextPreflightLedger()
+    records = [
+        ContextPreflightRequestEvidence.build(
+            request_id=f"request-{index:03d}",
+            role="source_audit",
+            requested_model="alpha/frontier-secure",
+            request_state=ContextRequestState.PRE_FLIGHT_REJECTED,
+            decision_source=ContextPreflightSource.TOKEN_PLANNER,
+            reason=ContextPreflightReason.ENDPOINT_CAPACITY,
+            decision_evidence_sha256s=(hashlib.sha256(str(index).encode()).hexdigest(),),
+            estimated_prompt_tokens=None,
+            requested_completion_tokens=1_024,
+        )
+        for index in reversed(range(64))
+    ]
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(ledger.add, records))
+
+    assert [record.request_id for record in ledger.records] == [
+        f"request-{index:03d}" for index in range(64)
+    ]
+    with pytest.raises(ContextManifestError, match="identity is duplicated"):
+        ledger.add(records[0])
+    with pytest.raises(TypeError, match="typed evidence"):
+        ledger.add("not evidence")  # type: ignore[arg-type]
+    ledger.clear()
+    assert ledger.records == ()
 
 
 def test_context_manifest_semantic_verification_rejects_independently_resealed_drift() -> None:
@@ -502,7 +658,7 @@ def test_context_manifest_atomic_limits_bind_effective_configuration(
     )
     _validate_context_manifest_configuration(manifest, matching)
 
-    with pytest.raises(ValueError, match="differs from effective configuration"):
+    with pytest.raises(ValueError, match=r"differs from effective (?:token )?configuration"):
         _validate_context_manifest_configuration(manifest, config_factory())
 
 

@@ -12,7 +12,7 @@ import random
 import re
 import time
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -122,6 +122,13 @@ from mmaudit.orchestration.budgets import (
     EndpointRequestCostBound,
     Reservation,
     UnprovenCostBoundError,
+)
+from mmaudit.orchestration.context_manifest import (
+    ContextPreflightLedger,
+    ContextPreflightReason,
+    ContextPreflightRequestEvidence,
+    ContextPreflightSource,
+    ContextRequestState,
 )
 from mmaudit.privacy import (
     EffectivePrivacyPolicyEvidence,
@@ -1193,6 +1200,7 @@ class OpenRouterClient:
         qualification_routing: tuple[OpenRouterQualificationRoutingEvidence, ...] = (),
         effective_privacy_policy: EffectivePrivacyPolicyEvidence | None = None,
         privacy_authorization: TrustedPrivacyAuthorization | None = None,
+        context_preflight_ledger: ContextPreflightLedger | None = None,
     ) -> None:
         if (
             not api_key
@@ -1205,6 +1213,7 @@ class OpenRouterClient:
         self.privacy = privacy
         self.budget = budget
         self.usage = usage
+        self.context_preflight = context_preflight_ledger or ContextPreflightLedger()
         self.run_dir = run_dir
         self.logger = logger or logging.getLogger("mmaudit.openrouter")
         self._random = random.Random(random_seed)
@@ -3425,42 +3434,74 @@ class OpenRouterClient:
         qualification_binding: OpenRouterQualificationRoutingEvidence | None,
     ) -> StructuredCompletion[ResponseT]:
         request_id = str(uuid.uuid4())
-        request_provider_policy = (
-            qualification_binding.request_provider_policy()
-            if qualification_binding is not None and self.provider_policy.certification
-            else self.provider_policy
+        required_output_tokens = self._required_output_tokens()
+        requested_completion_tokens = required_output_tokens + self._reserved_reasoning_tokens(
+            required_output_tokens
         )
-        request_provider_policy = _canonical_provider_policy(request_provider_policy)
-        if self._requires_paid_controls:
-            self._validate_paid_privacy_policy(
-                (model,),
-                request_provider_endpoints=request_provider_policy.configured_endpoints,
+        try:
+            request_provider_policy = (
+                qualification_binding.request_provider_policy()
+                if qualification_binding is not None and self.provider_policy.certification
+                else self.provider_policy
             )
-        endpoint_policy = self._endpoint_pricing.get(model)
-        structured_output_mode = (
-            endpoint_policy.structured_output_mode
-            if endpoint_policy is not None
-            else StructuredOutputMode.NATIVE_JSON_SCHEMA
-        )
-        structured_output_plan = _structured_output_request_plan(
-            mode=structured_output_mode,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            response_model=response_model,
-            schema_name=schema_name,
-            reasoning=self.reasoning,
-        )
-        request_token_plan = self._request_token_plan(
-            request_id=request_id,
-            role=role,
-            model=model,
-            provider_policy=request_provider_policy,
-            structured_output_plan=structured_output_plan,
-            original_system_prompt=system_prompt,
-            response_model=response_model,
-            schema_name=schema_name,
-            context_package=context_package,
-        )
+            request_provider_policy = _canonical_provider_policy(request_provider_policy)
+            if self._requires_paid_controls:
+                self._validate_paid_privacy_policy(
+                    (model,),
+                    request_provider_endpoints=request_provider_policy.configured_endpoints,
+                )
+            endpoint_policy = self._endpoint_pricing.get(model)
+            structured_output_mode = (
+                endpoint_policy.structured_output_mode
+                if endpoint_policy is not None
+                else StructuredOutputMode.NATIVE_JSON_SCHEMA
+            )
+            structured_output_plan = _structured_output_request_plan(
+                mode=structured_output_mode,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                reasoning=self.reasoning,
+            )
+        except Exception as exc:
+            self._record_context_preflight(
+                request_id=request_id,
+                logical_request_id=request_id,
+                role=role,
+                model=model,
+                requested_completion_tokens=requested_completion_tokens,
+                request_plan=None,
+                decision_source=ContextPreflightSource.TOKEN_PLANNER,
+                reason=ContextPreflightReason.ROUTE_UNAVAILABLE,
+                error=exc,
+            )
+            raise
+        try:
+            request_token_plan = self._request_token_plan(
+                request_id=request_id,
+                role=role,
+                model=model,
+                provider_policy=request_provider_policy,
+                structured_output_plan=structured_output_plan,
+                original_system_prompt=system_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                context_package=context_package,
+            )
+        except Exception as exc:
+            self._record_context_preflight(
+                request_id=request_id,
+                logical_request_id=request_id,
+                role=role,
+                model=model,
+                requested_completion_tokens=requested_completion_tokens,
+                request_plan=None,
+                decision_source=ContextPreflightSource.TOKEN_PLANNER,
+                reason=ContextPreflightReason.ENDPOINT_CAPACITY,
+                error=exc,
+            )
+            raise
         prompt_hash = _structured_output_prompt_sha256_from_plan(structured_output_plan)
         user_prompt_hash = hashlib.sha256(user_prompt.encode()).hexdigest()
         schema = strict_json_schema(response_model)
@@ -3497,37 +3538,55 @@ class OpenRouterClient:
             )
         if qualification_binding is not None:
             request_metadata.update(qualification_binding.request_metadata())
-        body = self.build_request(
-            model=model,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            response_model=response_model,
-            schema_name=schema_name,
-            request_metadata=request_metadata,
-            provider_policy=request_provider_policy,
-            structured_output_mode=structured_output_mode,
-            request_token_plan=request_token_plan,
-        )
-        self._ensure_request_size(body)
-        request_body_hash = _canonical_sha256(body)
-        request_material = json.dumps(
-            body,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-        )
-        endpoint_cost_bound = self._endpoint_request_cost_bound(
-            model=model,
-            request_material=request_material,
-            request_token_plan=request_token_plan,
-        )
+        try:
+            body = self.build_request(
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                request_metadata=request_metadata,
+                provider_policy=request_provider_policy,
+                structured_output_mode=structured_output_mode,
+                request_token_plan=request_token_plan,
+            )
+            self._ensure_request_size(body)
+            request_body_hash = _canonical_sha256(body)
+            request_material = json.dumps(
+                body,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            )
+            endpoint_cost_bound = self._endpoint_request_cost_bound(
+                model=model,
+                request_material=request_material,
+                request_token_plan=request_token_plan,
+            )
+        except Exception as exc:
+            self._record_context_preflight(
+                request_id=request_id,
+                logical_request_id=request_id,
+                role=role,
+                model=model,
+                requested_completion_tokens=requested_completion_tokens,
+                request_plan=request_token_plan,
+                decision_source=ContextPreflightSource.TOKEN_PLANNER,
+                reason=(
+                    ContextPreflightReason.COST_BUDGET
+                    if isinstance(exc, UnprovenCostBoundError)
+                    else ContextPreflightReason.CONTEXT_PLAN_INVALID
+                ),
+                error=exc,
+            )
+            raise
         if self.privacy.store_raw_prompts:
             self._store_debug(request_id, "prompt.json", body)
         attempts = 0
         usage_recorded = False
         accounted_cost_usd = 0.0
         active_reservation: Reservation | None = None
-        last_reservation: Reservation | None = None
+        attempt_reservations: list[Reservation] = []
         active_network_attempted = False
         active_actual_cost: Decimal | None = None
         active_actual_prompt_tokens: int | None = None
@@ -3574,18 +3633,38 @@ class OpenRouterClient:
 
         try:
             while True:
-                attempts += 1
-                active_reservation = await self.budget.reserve(
-                    (request_id if attempts == 1 else f"{request_id}:attempt:{attempts}"),
-                    role,
-                    request_material,
-                    endpoint_cost_bound=endpoint_cost_bound,
-                    exact_model_id=model,
-                    planned_prompt_tokens=(request_token_plan.prompt_byte_upper_bound_tokens),
-                    planned_completion_tokens=(request_token_plan.requested_completion_tokens),
-                    request_token_plan_sha256=request_token_plan.plan_sha256,
+                next_attempt = attempts + 1
+                reservation_id = (
+                    request_id if next_attempt == 1 else f"{request_id}:attempt:{next_attempt}"
                 )
-                last_reservation = active_reservation
+                try:
+                    active_reservation = await self.budget.reserve(
+                        reservation_id,
+                        role,
+                        request_material,
+                        endpoint_cost_bound=endpoint_cost_bound,
+                        exact_model_id=model,
+                        planned_prompt_tokens=(request_token_plan.prompt_byte_upper_bound_tokens),
+                        planned_completion_tokens=(request_token_plan.requested_completion_tokens),
+                        request_token_plan_sha256=request_token_plan.plan_sha256,
+                    )
+                except Exception as exc:
+                    self._record_context_preflight(
+                        request_id=(request_id if attempts == 0 else f"{reservation_id}:preflight"),
+                        logical_request_id=request_id,
+                        role=role,
+                        model=model,
+                        requested_completion_tokens=requested_completion_tokens,
+                        request_plan=request_token_plan,
+                        decision_source=ContextPreflightSource.BUDGET_MANAGER,
+                        reason=(
+                            self._budget_preflight_reason(request_token_plan)
+                            if isinstance(exc, BudgetExhaustedError)
+                            else ContextPreflightReason.CONTEXT_PLAN_INVALID
+                        ),
+                        error=exc,
+                    )
+                    raise
                 active_network_attempted = False
                 active_actual_cost = None
                 active_actual_prompt_tokens = None
@@ -3606,6 +3685,30 @@ class OpenRouterClient:
                                 request_provider_policy.configured_endpoints
                             ),
                         )
+                except Exception as exc:
+                    assert active_reservation is not None
+                    reservation_evidence = active_reservation.token_reservation_evidence
+                    self._record_context_preflight(
+                        request_id=(request_id if attempts == 0 else f"{reservation_id}:preflight"),
+                        logical_request_id=request_id,
+                        role=role,
+                        model=model,
+                        requested_completion_tokens=requested_completion_tokens,
+                        request_plan=request_token_plan,
+                        decision_source=ContextPreflightSource.TOKEN_PLANNER,
+                        reason=ContextPreflightReason.ROUTE_UNAVAILABLE,
+                        error=exc,
+                        decision_evidence_sha256s=(
+                            (reservation_evidence.evidence_sha256,)
+                            if reservation_evidence is not None
+                            else ()
+                        ),
+                    )
+                    raise
+                try:
+                    assert active_reservation is not None
+                    attempt_reservations.append(active_reservation)
+                    attempts = next_attempt
                     active_network_attempted = True
                     response = await self._bounded_request(
                         "POST",
@@ -3743,7 +3846,7 @@ class OpenRouterClient:
                 provider_policy=request_provider_policy,
                 host_model_fallback_used=fallback_used,
                 request_token_plan=request_token_plan,
-                token_reservation=last_reservation,
+                token_reservations=attempt_reservations,
             )
             usage_record = UsageRecord(
                 request_id=request_id,
@@ -3816,7 +3919,7 @@ class OpenRouterClient:
                         await release_active()
                 except Exception as budget_error:
                     terminal_error = budget_error
-            if not usage_recorded and last_reservation is not None:
+            if not usage_recorded and attempt_reservations:
                 raw_content = (
                     _response_content_if_string(raw_payload) if raw_payload is not None else None
                 )
@@ -3893,7 +3996,7 @@ class OpenRouterClient:
                         requested_model=model,
                         model_identity=self._model_identities.get(model),
                         request_token_plan=request_token_plan,
-                        token_reservation=last_reservation,
+                        token_reservations=attempt_reservations,
                     ),
                     prompt_sha256=prompt_hash,
                     user_prompt_sha256=user_prompt_hash,
@@ -3965,6 +4068,76 @@ class OpenRouterClient:
             if terminal_error is exc:
                 raise
             raise terminal_error from exc
+
+    def _record_context_preflight(
+        self,
+        *,
+        request_id: str,
+        logical_request_id: str,
+        role: str,
+        model: str,
+        requested_completion_tokens: int,
+        request_plan: RequestTokenPlan | None,
+        decision_source: ContextPreflightSource,
+        reason: ContextPreflightReason,
+        error: Exception,
+        decision_evidence_sha256s: Sequence[str] = (),
+    ) -> None:
+        """Retain a hash-only host decision when provider transport did not begin."""
+
+        endpoint_policy = self._endpoint_pricing.get(model)
+        decision_payload = {
+            "request_id": request_id,
+            "logical_request_id": logical_request_id,
+            "role": role,
+            "requested_model": model,
+            "decision_source": decision_source.value,
+            "reason": reason.value,
+            "error_class": type(error).__name__,
+            "request_plan_sha256": request_plan.plan_sha256 if request_plan is not None else None,
+            "endpoint_snapshot_sha256": (
+                endpoint_policy.snapshot_sha256 if endpoint_policy is not None else None
+            ),
+        }
+        evidence_hashes = {
+            _canonical_sha256(decision_payload),
+            *decision_evidence_sha256s,
+        }
+        if request_plan is not None:
+            evidence_hashes.add(request_plan.plan_sha256)
+        self.context_preflight.add(
+            ContextPreflightRequestEvidence.build(
+                request_id=request_id,
+                logical_request_id=logical_request_id,
+                role=role,
+                requested_model=model,
+                request_state=ContextRequestState.PRE_FLIGHT_REJECTED,
+                decision_source=decision_source,
+                reason=reason,
+                decision_evidence_sha256s=tuple(sorted(evidence_hashes)),
+                estimated_prompt_tokens=(
+                    request_plan.estimated_prompt_tokens if request_plan is not None else None
+                ),
+                requested_completion_tokens=requested_completion_tokens,
+                request_plan=request_plan,
+            )
+        )
+
+    def _budget_preflight_reason(
+        self,
+        request_token_plan: RequestTokenPlan,
+    ) -> ContextPreflightReason:
+        remaining_input = self.budget.remaining_input_tokens
+        remaining_output = self.budget.remaining_output_tokens
+        if (
+            remaining_input is not None
+            and request_token_plan.prompt_byte_upper_bound_tokens > remaining_input
+        ) or (
+            remaining_output is not None
+            and request_token_plan.requested_completion_tokens > remaining_output
+        ):
+            return ContextPreflightReason.GLOBAL_TOKEN_BUDGET
+        return ContextPreflightReason.COST_BUDGET
 
     def _endpoint_request_cost_bound(
         self,
@@ -4039,24 +4212,47 @@ class OpenRouterClient:
     def _token_plan_routing_evidence(
         *,
         request_token_plan: RequestTokenPlan,
-        reservation: Reservation | None,
+        reservations: Sequence[Reservation],
     ) -> dict[str, Any]:
-        if (
-            reservation is None
-            or reservation.request_token_plan_sha256 != request_token_plan.plan_sha256
-            or reservation.planned_prompt_tokens
-            != request_token_plan.prompt_byte_upper_bound_tokens
-            or reservation.planned_completion_tokens
-            != request_token_plan.requested_completion_tokens
-            or reservation.token_reservation_evidence is None
-        ):
+        if not reservations or len(reservations) > 32:
             raise OpenRouterCostControlError(
                 "request usage lacks matching atomic token reservation evidence"
             )
-        atomic_evidence = reservation.token_reservation_evidence
+        atomic_inventory = []
+        for reservation in reservations:
+            if (
+                reservation.request_token_plan_sha256 != request_token_plan.plan_sha256
+                or reservation.planned_prompt_tokens
+                != request_token_plan.prompt_byte_upper_bound_tokens
+                or reservation.planned_completion_tokens
+                != request_token_plan.requested_completion_tokens
+                or reservation.token_reservation_evidence is None
+            ):
+                raise OpenRouterCostControlError(
+                    "request usage has inconsistent atomic token reservation evidence"
+                )
+            atomic_inventory.append(reservation.token_reservation_evidence)
+        expected_ids = tuple(
+            (
+                request_token_plan.request_id
+                if attempt == 1
+                else f"{request_token_plan.request_id}:attempt:{attempt}"
+            )
+            for attempt in range(1, len(atomic_inventory) + 1)
+        )
+        if tuple(item.request_id for item in atomic_inventory) != expected_ids:
+            raise OpenRouterCostControlError(
+                "request usage has incomplete atomic token reservation attempts"
+            )
+        atomic_evidence = atomic_inventory[-1]
+        atomic_hashes = [item.evidence_sha256 for item in atomic_inventory]
         return {
             "request_token_plan": request_token_plan.model_dump(mode="json"),
             "request_token_plan_sha256": request_token_plan.plan_sha256,
+            "atomic_token_reservations": [
+                item.model_dump(mode="json") for item in atomic_inventory
+            ],
+            "atomic_token_reservation_sha256s": atomic_hashes,
             "atomic_token_reservation": atomic_evidence.model_dump(mode="json"),
             "atomic_token_reservation_sha256": atomic_evidence.evidence_sha256,
         }
@@ -4132,7 +4328,7 @@ class OpenRouterClient:
         provider_policy: OpenRouterProviderPolicy,
         host_model_fallback_used: bool,
         request_token_plan: RequestTokenPlan,
-        token_reservation: Reservation | None,
+        token_reservations: Sequence[Reservation],
         repair_request: bool = False,
     ) -> dict[str, Any]:
         usage = envelope.usage
@@ -4353,7 +4549,7 @@ class OpenRouterClient:
         evidence.update(
             self._token_plan_routing_evidence(
                 request_token_plan=request_token_plan,
-                reservation=token_reservation,
+                reservations=token_reservations,
             )
         )
         if qualification_binding is not None:
@@ -4379,7 +4575,7 @@ class OpenRouterClient:
         requested_model: str,
         model_identity: _RegisteredModelIdentity | None,
         request_token_plan: RequestTokenPlan,
-        token_reservation: Reservation | None,
+        token_reservations: Sequence[Reservation],
     ) -> dict[str, Any]:
         router_metadata = payload.get("openrouter_metadata") if isinstance(payload, dict) else None
         finish_reason = _optional_finish_reason(payload)
@@ -4455,7 +4651,7 @@ class OpenRouterClient:
         evidence.update(
             self._token_plan_routing_evidence(
                 request_token_plan=request_token_plan,
-                reservation=token_reservation,
+                reservations=token_reservations,
             )
         )
         identity_diagnostic = _identity_failure_diagnostic(

@@ -286,51 +286,103 @@ def request_token_plan_from_usage(record: UsageRecord) -> RequestTokenPlan | Non
     )
     if configured_endpoints and not local_mock_route and configured_endpoints != planned_endpoints:
         raise ValueError("usage routing token plan differs from configured endpoints")
-    _atomic_token_reservation_from_usage(record, plan)
+    atomic_token_reservations_from_usage(record, plan)
     return plan
+
+
+def atomic_token_reservations_from_usage(
+    record: UsageRecord,
+    plan: RequestTokenPlan | None = None,
+) -> tuple[AtomicTokenReservationEvidence, ...]:
+    """Return the exact ordered atomic reservation inventory for every provider attempt."""
+
+    resolved_plan = plan
+    if resolved_plan is None:
+        raw_plan = record.routing.get("request_token_plan")
+        raw_hash = record.routing.get("request_token_plan_sha256")
+        if not isinstance(raw_plan, dict) or not _is_sha256(raw_hash):
+            raise ValueError("usage routing token-plan evidence is malformed")
+        resolved_plan = _strict_json_evidence(
+            RequestTokenPlan,
+            raw_plan,
+            label="request token plan",
+        )
+    raw_evidence = record.routing.get("atomic_token_reservation")
+    raw_hash = record.routing.get("atomic_token_reservation_sha256")
+    if not isinstance(raw_evidence, dict) or not _is_sha256(raw_hash):
+        raise ValueError("usage routing atomic token reservation is malformed")
+    assert isinstance(raw_hash, str)
+    final_evidence = _strict_json_evidence(
+        AtomicTokenReservationEvidence,
+        raw_evidence,
+        label="atomic token reservation",
+    )
+    raw_inventory = record.routing.get("atomic_token_reservations")
+    raw_inventory_hashes = record.routing.get("atomic_token_reservation_sha256s")
+    inventory: tuple[AtomicTokenReservationEvidence, ...]
+    inventory_hashes: tuple[str, ...]
+    if raw_inventory is None and raw_inventory_hashes is None:
+        if record.attempts != 1:
+            raise ValueError("retried usage lacks a complete atomic reservation inventory")
+        inventory = (final_evidence,)
+        inventory_hashes = (raw_hash,)
+    else:
+        if (
+            not isinstance(raw_inventory, list)
+            or not isinstance(raw_inventory_hashes, list)
+            or len(raw_inventory) != record.attempts
+            or len(raw_inventory_hashes) != record.attempts
+            or any(not isinstance(item, dict) for item in raw_inventory)
+            or any(not _is_sha256(item) for item in raw_inventory_hashes)
+        ):
+            raise ValueError("usage routing atomic reservation inventory is malformed")
+        inventory = tuple(
+            _strict_json_evidence(
+                AtomicTokenReservationEvidence,
+                item,
+                label="atomic token reservation",
+            )
+            for item in raw_inventory
+        )
+        inventory_hashes = tuple(raw_inventory_hashes)
+    expected_request_ids = tuple(
+        record.request_id if attempt == 1 else f"{record.request_id}:attempt:{attempt}"
+        for attempt in range(1, record.attempts + 1)
+    )
+    if tuple(item.request_id for item in inventory) != expected_request_ids:
+        raise ValueError("usage routing atomic reservation attempts are incomplete or unordered")
+    if len(set(inventory_hashes)) != len(inventory_hashes):
+        raise ValueError("usage routing atomic reservation hashes must be unique")
+    for evidence, evidence_hash in zip(inventory, inventory_hashes, strict=True):
+        if (
+            evidence_hash != evidence.evidence_sha256
+            or evidence.exact_model_id != record.requested_model
+            or evidence.role != record.role
+            or evidence.request_token_plan_sha256 != resolved_plan.plan_sha256
+            or evidence.planned_prompt_tokens != resolved_plan.prompt_byte_upper_bound_tokens
+            or evidence.planned_completion_tokens != resolved_plan.requested_completion_tokens
+            or evidence.global_input_token_limit
+            != resolved_plan.global_budget.global_input_token_budget
+            or evidence.global_output_token_limit
+            != resolved_plan.global_budget.global_output_token_budget
+        ):
+            raise ValueError("usage routing atomic reservation differs from its token plan")
+    if (
+        final_evidence != inventory[-1]
+        or raw_evidence != final_evidence.model_dump(mode="json")
+        or raw_hash != final_evidence.evidence_sha256
+    ):
+        raise ValueError(
+            "usage routing final atomic reservation differs from its token plan or inventory"
+        )
+    return inventory
 
 
 def _atomic_token_reservation_from_usage(
     record: UsageRecord,
     plan: RequestTokenPlan,
 ) -> AtomicTokenReservationEvidence:
-    raw_evidence = record.routing.get("atomic_token_reservation")
-    raw_hash = record.routing.get("atomic_token_reservation_sha256")
-    if not isinstance(raw_evidence, dict) or not _is_sha256(raw_hash):
-        raise ValueError("usage routing atomic token reservation is malformed")
-    evidence = _strict_json_evidence(
-        AtomicTokenReservationEvidence,
-        raw_evidence,
-        label="atomic token reservation",
-    )
-    request_id_matches = evidence.request_id == record.request_id or bool(
-        re.fullmatch(
-            re.escape(record.request_id) + r":attempt:[2-9][0-9]*",
-            evidence.request_id,
-        )
-    )
-    if (
-        evidence.model_dump(mode="json") != raw_evidence
-        or raw_hash != evidence.evidence_sha256
-        or not request_id_matches
-        or evidence.exact_model_id != record.requested_model
-        or evidence.role != record.role
-        or evidence.request_token_plan_sha256 != plan.plan_sha256
-        or evidence.planned_prompt_tokens != plan.prompt_byte_upper_bound_tokens
-        or evidence.planned_completion_tokens != plan.requested_completion_tokens
-    ):
-        raise ValueError("usage routing atomic reservation differs from its token plan")
-    if (
-        evidence.global_input_token_limit is not None
-        and evidence.global_input_token_limit != plan.global_budget.global_input_token_budget
-    ):
-        raise ValueError("atomic input token limit differs from its token plan")
-    if (
-        evidence.global_output_token_limit is not None
-        and evidence.global_output_token_limit != plan.global_budget.global_output_token_budget
-    ):
-        raise ValueError("atomic output token limit differs from its token plan")
-    return evidence
+    return atomic_token_reservations_from_usage(record, plan)[-1]
 
 
 def _strict_json_evidence[EvidenceT: BaseModel](
@@ -354,7 +406,7 @@ def _strict_json_evidence[EvidenceT: BaseModel](
 
 def _has_valid_token_plan_routing(record: UsageRecord) -> bool:
     if "request_token_plan" not in record.routing:
-        return "request_token_plan_sha256" not in record.routing
+        return False
     try:
         plan = request_token_plan_from_usage(record)
     except ValueError:

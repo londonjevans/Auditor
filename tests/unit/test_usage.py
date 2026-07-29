@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -14,7 +15,18 @@ from mmaudit.models.schemas import (
     ModelRequestValidationStatus,
     UsageRecord,
 )
-from mmaudit.models.usage import is_creditable_usage_record
+from mmaudit.models.token_planning import (
+    PROMPT_ALLOCATION_CATEGORIES,
+    EndpointRouteIntersection,
+    EndpointRouteTokenCapacity,
+    PromptAllocationCategory,
+    PromptTokenAllocation,
+    RequestTokenPlan,
+    build_request_token_plan,
+)
+from mmaudit.models.usage import is_creditable_usage_record, request_token_plan_from_usage
+from mmaudit.orchestration.budgets import AtomicTokenReservationEvidence
+from mmaudit.orchestration.context_manifest import ContextManifestError, build_context_manifest
 from mmaudit.privacy import EndpointPolicyClass, PrivacyProfile, PrivacySourceClassification
 from tests.identity_fixtures import bind_synthetic_usage_identity
 from tests.output_evidence_fixtures import (
@@ -51,7 +63,7 @@ def _creditable_record(
     request_body_sha256 = "c" * 64
     provider_policy_sha256 = "f" * 64
     endpoint_snapshot_sha256 = "9" * 64
-    return UsageRecord(
+    record = UsageRecord(
         request_id="request-test",
         role="source_audit",
         execution_evidence=execution_evidence,
@@ -132,6 +144,134 @@ def _creditable_record(
         status="success",
         attempts=1,
     )
+    plan, atomic = _token_plan_for_record(record)
+    return record.model_copy(
+        update={
+            "routing": {
+                **record.routing,
+                "request_token_plan": plan.model_dump(mode="json"),
+                "request_token_plan_sha256": plan.plan_sha256,
+                "atomic_token_reservations": [atomic.model_dump(mode="json")],
+                "atomic_token_reservation_sha256s": [atomic.evidence_sha256],
+                "atomic_token_reservation": atomic.model_dump(mode="json"),
+                "atomic_token_reservation_sha256": atomic.evidence_sha256,
+            }
+        }
+    )
+
+
+def _token_plan_for_record(
+    record: UsageRecord,
+    *,
+    request_id: str | None = None,
+    role: str | None = None,
+    exact_model_id: str | None = None,
+    reserved_reasoning_tokens: int = 50,
+) -> tuple[RequestTokenPlan, AtomicTokenReservationEvidence]:
+    planned_request_id = request_id or record.request_id
+    planned_role = role or record.role
+    planned_model = exact_model_id or record.requested_model
+    route = EndpointRouteTokenCapacity.build(
+        exact_model_id=planned_model,
+        provider_endpoint=record.configured_provider_endpoints[0],
+        endpoint_snapshot_sha256="9" * 64,
+        context_tokens=10_000,
+        max_prompt_tokens=8_000,
+        max_prompt_tokens_source="metadata",
+        max_completion_tokens=1_000,
+        max_completion_tokens_source="metadata",
+    )
+    allocations = tuple(
+        PromptTokenAllocation.from_text(
+            category,
+            (
+                ""
+                if category is PromptAllocationCategory.PRIOR_AUDIT
+                else f"{category.value}:{'x' * 40}"
+            ),
+        )
+        for category in PROMPT_ALLOCATION_CATEGORIES
+    )
+    plan = build_request_token_plan(
+        request_id=planned_request_id,
+        role=planned_role,
+        route_intersection=EndpointRouteIntersection.build((route,)),
+        allocations=allocations,
+        required_output_tokens=100,
+        reserved_reasoning_tokens=reserved_reasoning_tokens,
+        global_input_token_budget=100_000,
+        global_output_token_budget=10_000,
+        context_utilization=Decimal("0.70"),
+    )
+    atomic = AtomicTokenReservationEvidence.build(
+        request_id=planned_request_id,
+        exact_model_id=planned_model,
+        role=planned_role,
+        request_token_plan_sha256=plan.plan_sha256,
+        planned_prompt_tokens=plan.prompt_byte_upper_bound_tokens,
+        planned_completion_tokens=plan.requested_completion_tokens,
+        global_input_token_limit=plan.global_budget.global_input_token_budget,
+        global_output_token_limit=plan.global_budget.global_output_token_budget,
+        spent_input_tokens_before=0,
+        reserved_input_tokens_before=0,
+        spent_output_tokens_before=0,
+        reserved_output_tokens_before=0,
+    )
+    return plan, atomic
+
+
+def _token_bound_creditable_record() -> UsageRecord:
+    record = _creditable_record()
+    plan, atomic = _token_plan_for_record(record)
+    return record.model_copy(
+        update={
+            "routing": {
+                **record.routing,
+                "request_token_plan": plan.model_dump(mode="json"),
+                "request_token_plan_sha256": plan.plan_sha256,
+                "atomic_token_reservations": [atomic.model_dump(mode="json")],
+                "atomic_token_reservation_sha256s": [atomic.evidence_sha256],
+                "atomic_token_reservation": atomic.model_dump(mode="json"),
+                "atomic_token_reservation_sha256": atomic.evidence_sha256,
+            }
+        }
+    )
+
+
+def _retry_token_bound_creditable_record() -> UsageRecord:
+    record = _creditable_record()
+    plan, first = _token_plan_for_record(record)
+    second = AtomicTokenReservationEvidence.build(
+        request_id=f"{record.request_id}:attempt:2",
+        exact_model_id=record.requested_model,
+        role=record.role,
+        request_token_plan_sha256=plan.plan_sha256,
+        planned_prompt_tokens=plan.prompt_byte_upper_bound_tokens,
+        planned_completion_tokens=plan.requested_completion_tokens,
+        global_input_token_limit=plan.global_budget.global_input_token_budget,
+        global_output_token_limit=plan.global_budget.global_output_token_budget,
+        spent_input_tokens_before=record.prompt_tokens,
+        reserved_input_tokens_before=0,
+        spent_output_tokens_before=record.completion_tokens,
+        reserved_output_tokens_before=0,
+    )
+    inventory = [first.model_dump(mode="json"), second.model_dump(mode="json")]
+    hashes = [first.evidence_sha256, second.evidence_sha256]
+    return record.model_copy(
+        update={
+            "attempts": 2,
+            "retry_count": 1,
+            "routing": {
+                **record.routing,
+                "request_token_plan": plan.model_dump(mode="json"),
+                "request_token_plan_sha256": plan.plan_sha256,
+                "atomic_token_reservations": inventory,
+                "atomic_token_reservation_sha256s": hashes,
+                "atomic_token_reservation": inventory[-1],
+                "atomic_token_reservation_sha256": hashes[-1],
+            },
+        }
+    )
 
 
 def test_creditable_usage_accepts_strict_mock_only_when_real_is_not_required() -> None:
@@ -151,6 +291,167 @@ def test_creditable_usage_accepts_strict_mock_only_when_real_is_not_required() -
         require_real=True,
         require_certification=True,
     )
+
+
+def test_creditable_usage_accepts_matching_plan_and_atomic_reservation() -> None:
+    record = _token_bound_creditable_record()
+
+    plan = request_token_plan_from_usage(record)
+    assert plan is not None
+    assert plan.request_id == record.request_id
+    assert plan.role == record.role
+    assert plan.route_intersection.exact_model_ids == (record.requested_model,)
+    assert is_creditable_usage_record(record)
+
+
+@pytest.mark.parametrize(
+    "routing_field",
+    [
+        "request_token_plan_sha256",
+        "atomic_token_reservation_sha256",
+    ],
+)
+def test_creditable_usage_rejects_tampered_token_evidence_hash(
+    routing_field: str,
+) -> None:
+    record = _token_bound_creditable_record()
+
+    assert not is_creditable_usage_record(
+        record.model_copy(
+            update={
+                "routing": {
+                    **record.routing,
+                    routing_field: "0" * 64,
+                }
+            }
+        )
+    )
+
+
+def test_creditable_usage_rejects_valid_atomic_reservation_for_different_plan() -> None:
+    record = _token_bound_creditable_record()
+    _different_plan, different_atomic = _token_plan_for_record(
+        record,
+        reserved_reasoning_tokens=75,
+    )
+    swapped = record.model_copy(
+        update={
+            "routing": {
+                **record.routing,
+                "atomic_token_reservation": different_atomic.model_dump(mode="json"),
+                "atomic_token_reservation_sha256": different_atomic.evidence_sha256,
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="differs from its token plan"):
+        request_token_plan_from_usage(swapped)
+    assert not is_creditable_usage_record(swapped)
+
+
+@pytest.mark.parametrize(
+    ("request_id", "role", "model"),
+    [
+        ("other-request", None, None),
+        (None, "business_logic", None),
+        (None, None, "other/model"),
+    ],
+)
+def test_creditable_usage_rejects_self_consistent_plan_for_other_request_identity(
+    request_id: str | None,
+    role: str | None,
+    model: str | None,
+) -> None:
+    record = _token_bound_creditable_record()
+    foreign_plan, foreign_atomic = _token_plan_for_record(
+        record,
+        request_id=request_id,
+        role=role,
+        exact_model_id=model,
+    )
+    swapped = record.model_copy(
+        update={
+            "routing": {
+                **record.routing,
+                "request_token_plan": foreign_plan.model_dump(mode="json"),
+                "request_token_plan_sha256": foreign_plan.plan_sha256,
+                "atomic_token_reservation": foreign_atomic.model_dump(mode="json"),
+                "atomic_token_reservation_sha256": foreign_atomic.evidence_sha256,
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="differs from its request"):
+        request_token_plan_from_usage(swapped)
+    assert not is_creditable_usage_record(swapped)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing",
+        "duplicate",
+        "reordered",
+        "wrong_attempt",
+        "wrong_limit",
+    ],
+)
+def test_retry_inventory_mutations_reject_usage_credit_and_context_manifest(
+    mutation: str,
+) -> None:
+    record = _retry_token_bound_creditable_record()
+    assert is_creditable_usage_record(record)
+    assert build_context_manifest(run_id="retry-inventory", usage_records=[record])
+
+    routing = dict(record.routing)
+    inventory = [dict(item) for item in routing["atomic_token_reservations"]]
+    hashes = list(routing["atomic_token_reservation_sha256s"])
+    plan = request_token_plan_from_usage(record)
+    assert plan is not None
+    if mutation == "missing":
+        routing.pop("atomic_token_reservations")
+        routing.pop("atomic_token_reservation_sha256s")
+    elif mutation == "duplicate":
+        inventory[1] = dict(inventory[0])
+        hashes[1] = hashes[0]
+    elif mutation == "reordered":
+        inventory.reverse()
+        hashes.reverse()
+    else:
+        replacement = AtomicTokenReservationEvidence.build(
+            request_id=(
+                f"{record.request_id}:attempt:3"
+                if mutation == "wrong_attempt"
+                else f"{record.request_id}:attempt:2"
+            ),
+            exact_model_id=record.requested_model,
+            role=record.role,
+            request_token_plan_sha256=plan.plan_sha256,
+            planned_prompt_tokens=plan.prompt_byte_upper_bound_tokens,
+            planned_completion_tokens=plan.requested_completion_tokens,
+            global_input_token_limit=(
+                plan.global_budget.global_input_token_budget
+                if mutation == "wrong_attempt"
+                else plan.global_budget.global_input_token_budget - 1
+            ),
+            global_output_token_limit=plan.global_budget.global_output_token_budget,
+            spent_input_tokens_before=record.prompt_tokens,
+            reserved_input_tokens_before=0,
+            spent_output_tokens_before=record.completion_tokens,
+            reserved_output_tokens_before=0,
+        )
+        inventory[1] = replacement.model_dump(mode="json")
+        hashes[1] = replacement.evidence_sha256
+    if mutation != "missing":
+        routing["atomic_token_reservations"] = inventory
+        routing["atomic_token_reservation_sha256s"] = hashes
+        routing["atomic_token_reservation"] = inventory[-1]
+        routing["atomic_token_reservation_sha256"] = hashes[-1]
+    mutated = record.model_copy(update={"routing": routing})
+
+    assert not is_creditable_usage_record(mutated)
+    with pytest.raises(ContextManifestError):
+        build_context_manifest(run_id="retry-inventory", usage_records=[mutated])
 
 
 def _consent_bound_non_zdr_record() -> UsageRecord:

@@ -224,6 +224,21 @@
       "additionalProperties": false,
       "description": "Conserved aggregate counts for a complete context manifest.",
       "properties": {
+        "atomic_reservation_count": {
+          "minimum": 0,
+          "title": "Atomic Reservation Count",
+          "type": "integer"
+        },
+        "attempt_reserved_completion_tokens": {
+          "minimum": 0,
+          "title": "Attempt Reserved Completion Tokens",
+          "type": "integer"
+        },
+        "attempt_reserved_prompt_tokens": {
+          "minimum": 0,
+          "title": "Attempt Reserved Prompt Tokens",
+          "type": "integer"
+        },
         "categories": {
           "items": {
             "$ref": "#/$defs/ContextCategoryTotals"
@@ -299,6 +314,11 @@
           "title": "Preflight Rejected Request Count",
           "type": "integer"
         },
+        "provider_attempt_count": {
+          "minimum": 0,
+          "title": "Provider Attempt Count",
+          "type": "integer"
+        },
         "provider_reported_completion_tokens": {
           "minimum": 0,
           "title": "Provider Reported Completion Tokens",
@@ -367,6 +387,10 @@
         "reserved_output_tokens",
         "reserved_reasoning_tokens",
         "requested_completion_tokens",
+        "provider_attempt_count",
+        "atomic_reservation_count",
+        "attempt_reserved_prompt_tokens",
+        "attempt_reserved_completion_tokens",
         "provider_reported_request_count",
         "provider_reported_prompt_tokens",
         "provider_reported_completion_tokens",
@@ -510,9 +534,17 @@
           "$ref": "#/$defs/ContextPreflightSource"
         },
         "estimated_prompt_tokens": {
-          "minimum": 0,
-          "title": "Estimated Prompt Tokens",
-          "type": "integer"
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Estimated Prompt Tokens"
         },
         "evidence_kind": {
           "const": "preflight",
@@ -523,6 +555,11 @@
         "evidence_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "logical_request_id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$",
+          "title": "Logical Request Id",
           "type": "string"
         },
         "reason": {
@@ -589,13 +626,13 @@
       },
       "required": [
         "request_id",
+        "logical_request_id",
         "role",
         "requested_model",
         "request_state",
         "decision_source",
         "reason",
         "decision_evidence_sha256s",
-        "estimated_prompt_tokens",
         "requested_completion_tokens",
         "evidence_sha256"
       ],
@@ -626,6 +663,24 @@
           "pattern": "^[0-9a-f]{64}$",
           "title": "Atomic Token Reservation Sha256",
           "type": "string"
+        },
+        "atomic_token_reservation_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Atomic Token Reservation Sha256S",
+          "type": "array"
+        },
+        "atomic_token_reservations": {
+          "items": {
+            "$ref": "#/$defs/AtomicTokenReservationEvidence"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Atomic Token Reservations",
+          "type": "array"
         },
         "evidence_kind": {
           "const": "provider_usage",
@@ -754,6 +809,8 @@
         "prompt_sha256",
         "request_plan",
         "request_plan_sha256",
+        "atomic_token_reservations",
+        "atomic_token_reservation_sha256s",
         "atomic_token_reservation",
         "atomic_token_reservation_sha256",
         "omissions",

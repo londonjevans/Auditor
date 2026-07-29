@@ -173,6 +173,7 @@ from mmaudit.orchestration.context import (
 )
 from mmaudit.orchestration.context_manifest import (
     ContextManifest,
+    ContextPreflightRequestEvidence,
     build_context_manifest,
     context_manifest_report_binding,
     write_context_manifest,
@@ -469,6 +470,8 @@ class AuditPipeline:
             raise ValueError("provider audits require an explicit existing cumulative cost ledger")
         if not scanner_only and self.client is not None and self.client.usage.records:
             raise ValueError("provider audits require a fresh empty client usage ledger")
+        if not scanner_only and self.client is not None and self.client.context_preflight.records:
+            raise ValueError("provider audits require a fresh empty context preflight ledger")
         if (
             not scanner_only
             and self.client is not None
@@ -2317,6 +2320,11 @@ class AuditPipeline:
         context_manifest = build_context_manifest(
             run_id=run_id,
             usage_records=usage.records,
+            preflight_records=(
+                self.client.context_preflight.records
+                if self.client is not None and not scanner_only
+                else ()
+            ),
         )
 
         report = self._build_report(
@@ -2829,6 +2837,11 @@ class AuditPipeline:
                 "context_manifest": context_manifest_report_binding(context_manifest).model_dump(
                     mode="json"
                 ),
+                "context_preflight_records": [
+                    request.model_dump(mode="json")
+                    for request in context_manifest.requests
+                    if isinstance(request, ContextPreflightRequestEvidence)
+                ],
                 "raw_material_stored": (
                     self.config.privacy.store_raw_prompts or self.config.privacy.store_raw_responses
                 ),

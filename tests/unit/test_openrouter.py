@@ -64,14 +64,37 @@ from mmaudit.models.openrouter import (
     strict_json_schema,
 )
 from mmaudit.models.output_modes import StructuredOutputMode
-from mmaudit.models.schemas import ExecutionEvidenceKind, UsageRecord
+from mmaudit.models.schemas import (
+    ContextExcerpt,
+    ContextPackage,
+    ExecutionEvidenceKind,
+    ModelRequestValidationStatus,
+    RepositoryMap,
+    UsageRecord,
+)
 from mmaudit.models.structured_output import StructuredOutputFailureCode
+from mmaudit.models.token_planning import PromptAllocationCategory
 from mmaudit.models.usage import (
     UsageLedger,
     _attest_owned_real_usage_record,
     is_creditable_usage_record,
 )
-from mmaudit.orchestration.budgets import BudgetExhaustedError, BudgetManager
+from mmaudit.orchestration.budgets import (
+    BudgetExhaustedError,
+    BudgetManager,
+    TokenReservationOverrunError,
+)
+from mmaudit.orchestration.context import (
+    context_category_measurements,
+    render_context,
+)
+from mmaudit.orchestration.context_manifest import (
+    ContextPreflightReason,
+    ContextPreflightSource,
+    ContextRequestEvidence,
+    ContextRequestState,
+    build_context_manifest,
+)
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.privacy import (
     REQUIRED_PROHIBITED_CONTENT,
@@ -259,6 +282,9 @@ def _endpoint_snapshot(
     model: str = "alpha/atlas-secure",
     provider: str = "approved-provider",
     provider_name: str = "Approved Provider",
+    context_length: int = 200_000,
+    max_prompt_tokens: int = 180_000,
+    max_completion_tokens: int = 20_000,
     pricing: dict[str, str] | None = None,
     require_zdr: bool = True,
     supported_parameters: list[str] | None = None,
@@ -269,9 +295,9 @@ def _endpoint_snapshot(
         "tag": provider,
         "provider_name": provider_name,
         "status": 0,
-        "context_length": 200_000,
-        "max_prompt_tokens": 180_000,
-        "max_completion_tokens": 20_000,
+        "context_length": context_length,
+        "max_prompt_tokens": max_prompt_tokens,
+        "max_completion_tokens": max_completion_tokens,
         "supported_parameters": supported_parameters
         or ["max_tokens", "response_format", "temperature"],
         "pricing": pricing
@@ -728,6 +754,60 @@ def _multi_endpoint_snapshot(
     )
 
 
+def _asymmetric_token_endpoint_snapshot() -> OpenRouterEndpointSnapshotEvidence:
+    endpoints = [
+        {
+            "tag": "provider-wide",
+            "provider_name": "Provider Wide",
+            "status": 0,
+            "context_length": 160_000,
+            "max_prompt_tokens": 140_000,
+            "max_completion_tokens": 24_000,
+            "supported_parameters": ["max_tokens", "response_format", "temperature"],
+            "pricing": {
+                "prompt": "0.000001",
+                "completion": "0.00001",
+                "request": "0",
+            },
+        },
+        {
+            "tag": "provider-narrow",
+            "provider_name": "Provider Narrow",
+            "status": 0,
+            "context_length": 96_000,
+            "max_prompt_tokens": 72_000,
+            "max_completion_tokens": 12_000,
+            "supported_parameters": ["max_tokens", "response_format", "temperature"],
+            "pricing": {
+                "prompt": "0.000002",
+                "completion": "0.00002",
+                "request": "0",
+            },
+        },
+    ]
+    return validate_openrouter_endpoint_snapshot(
+        exact_model_id="alpha/atlas-secure",
+        configured_provider_endpoints=("provider-narrow", "provider-wide"),
+        provider_policy_mode="only",
+        endpoint_payload={
+            "data": {
+                "id": "alpha/atlas-secure",
+                "endpoints": endpoints,
+            }
+        },
+        require_zdr=True,
+        zdr_payload={
+            "data": [
+                {
+                    **endpoint,
+                    "model_id": "alpha/atlas-secure",
+                }
+                for endpoint in endpoints
+            ]
+        },
+    )
+
+
 def _client(
     config,
     handler: Callable[[httpx.Request], httpx.Response],
@@ -750,6 +830,8 @@ def _client(
         max_output_tokens=config.execution.max_output_tokens_per_request,
         conservative_usd_per_million_tokens=(config.execution.conservative_usd_per_million_tokens),
         max_requests_per_agent=config.execution.max_requests_per_agent,
+        global_input_token_budget=config.token_budgets.global_input_token_budget,
+        global_output_token_budget=config.token_budgets.global_output_token_budget,
     )
     policy = provider_policy or OpenRouterProviderPolicy()
     if qualification_routing is None and policy.certification:
@@ -773,6 +855,7 @@ def _client(
         run_dir=run_dir,
         provider_policy=policy,
         reasoning=reasoning,
+        token_budgets=config.token_budgets,
         qualification_routing=qualification_routing or (),
         effective_privacy_policy=effective_privacy_policy,
     )
@@ -4159,6 +4242,287 @@ async def test_rate_limit_retries_once(config_factory, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_retry_success_emits_complete_ordered_atomic_inventory(
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(
+                429,
+                headers={"Retry-After": "0"},
+                json={
+                    "error": {"code": 429, "message": "synthetic retry"},
+                    "usage": {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                        "cost": 0,
+                    },
+                },
+            )
+        return _completion_response(
+            '{"answer":"after bounded retry"}',
+            provider="approved-provider",
+        )
+
+    policy = OpenRouterProviderPolicy(only=("approved-provider",))
+    client, http_client, usage = _client(
+        config_factory(execution={"max_model_retries": 1}),
+        handler,
+        provider_policy=policy,
+    )
+    client.register_endpoint_snapshot(evidence=_endpoint_snapshot())
+
+    async def no_wait(attempt: int, retry_after: str | None) -> None:
+        del attempt, retry_after
+
+    monkeypatch.setattr(client, "_backoff", no_wait)
+    try:
+        result = await client.complete(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="synthetic local input",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert result.answer == "after bounded retry"
+    assert calls == 2
+    record = usage.records[0]
+    inventory = record.routing["atomic_token_reservations"]
+    inventory_hashes = record.routing["atomic_token_reservation_sha256s"]
+    assert record.attempts == 2
+    assert [item["request_id"] for item in inventory] == [
+        record.request_id,
+        f"{record.request_id}:attempt:2",
+    ]
+    assert inventory_hashes == [item["evidence_sha256"] for item in inventory]
+    assert len(set(inventory_hashes)) == 2
+    assert record.routing["atomic_token_reservation"] == inventory[-1]
+    assert record.routing["atomic_token_reservation_sha256"] == inventory_hashes[-1]
+    assert is_creditable_usage_record(record)
+
+    manifest = build_context_manifest(run_id="retry-success", usage_records=[record])
+    request = manifest.requests[0]
+    assert isinstance(request, ContextRequestEvidence)
+    assert request.provider_attempts == 2
+    assert request.atomic_token_reservations == tuple(
+        type(request.atomic_token_reservation).model_validate(item) for item in inventory
+    )
+    assert manifest.totals.provider_attempt_count == 2
+    assert manifest.totals.atomic_reservation_count == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_reservation_rejection_records_one_attempt_and_plan_bound_preflight(
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            429,
+            headers={"Retry-After": "0"},
+            json={
+                "error": {"code": 429, "message": "retry before budget rejection"},
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "cost": 0,
+                },
+            },
+        )
+
+    client, http_client, usage = _client(
+        config_factory(execution={"max_model_retries": 1}),
+        handler,
+    )
+    original_reserve = client.budget.reserve
+    reserve_calls = 0
+
+    async def reject_second_reservation(*args: Any, **kwargs: Any) -> Any:
+        nonlocal reserve_calls
+        reserve_calls += 1
+        if reserve_calls == 2:
+            raise BudgetExhaustedError("synthetic retry reservation rejection")
+        return await original_reserve(*args, **kwargs)
+
+    async def no_wait(attempt: int, retry_after: str | None) -> None:
+        del attempt, retry_after
+
+    monkeypatch.setattr(client.budget, "reserve", reject_second_reservation)
+    monkeypatch.setattr(client, "_backoff", no_wait)
+    try:
+        with pytest.raises(BudgetExhaustedError, match="retry reservation rejection"):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 1
+    assert reserve_calls == 2
+    assert len(usage.records) == 1
+    failed = usage.records[0]
+    assert failed.attempts == 1
+    assert failed.retry_count == 0
+    assert len(failed.routing["atomic_token_reservations"]) == 1
+    assert failed.routing["atomic_token_reservations"][0]["request_id"] == failed.request_id
+
+    assert len(client.context_preflight.records) == 1
+    preflight = client.context_preflight.records[0]
+    assert preflight.request_state is ContextRequestState.PRE_FLIGHT_REJECTED
+    assert preflight.decision_source is ContextPreflightSource.BUDGET_MANAGER
+    assert preflight.reason is ContextPreflightReason.COST_BUDGET
+    assert preflight.logical_request_id == failed.request_id
+    assert preflight.request_id == f"{failed.request_id}:attempt:2:preflight"
+    assert preflight.request_plan is not None
+    assert preflight.request_plan_sha256 == failed.routing["request_token_plan_sha256"]
+
+    manifest = build_context_manifest(
+        run_id="retry-preflight",
+        usage_records=[failed],
+        preflight_records=client.context_preflight.records,
+    )
+    assert manifest.totals.provider_attempt_count == 1
+    assert manifest.totals.atomic_reservation_count == 1
+    assert manifest.totals.preflight_rejected_request_count == 1
+
+
+@pytest.mark.asyncio
+async def test_endpoint_capacity_planning_failure_is_planless_preflight(
+    config_factory,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    policy = OpenRouterProviderPolicy(only=("approved-provider",))
+    client, http_client, usage = _client(
+        config_factory(execution={"max_output_tokens_per_request": 2_048}),
+        handler,
+        provider_policy=policy,
+    )
+    client.register_endpoint_snapshot(
+        evidence=_endpoint_snapshot(
+            context_length=8_192,
+            max_prompt_tokens=7_168,
+            max_completion_tokens=1_024,
+        )
+    )
+    try:
+        with pytest.raises(OpenRouterRequestLimitError, match="endpoint-bound token plan"):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 0
+    assert usage.records == []
+    assert len(client.context_preflight.records) == 1
+    preflight = client.context_preflight.records[0]
+    assert preflight.request_state is ContextRequestState.PRE_FLIGHT_REJECTED
+    assert preflight.decision_source is ContextPreflightSource.TOKEN_PLANNER
+    assert preflight.reason is ContextPreflightReason.ENDPOINT_CAPACITY
+    assert preflight.request_plan is None
+    assert preflight.request_plan_sha256 is None
+    assert preflight.estimated_prompt_tokens is None
+    manifest = build_context_manifest(
+        run_id="capacity-preflight",
+        usage_records=[],
+        preflight_records=client.context_preflight.records,
+    )
+    assert manifest.requests == client.context_preflight.records
+
+
+@pytest.mark.asyncio
+async def test_initial_global_token_rejection_is_plan_bound_preflight(
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    config = config_factory(
+        token_budgets={
+            "global_input_token_budget": 10_000,
+            "global_output_token_budget": 10_000,
+        }
+    )
+    client, http_client, usage = _client(config, handler)
+
+    async def reject_after_concurrent_input_reservation(*_args: Any, **_kwargs: Any) -> Any:
+        client.budget._spent_input_tokens = config.token_budgets.global_input_token_budget
+        raise BudgetExhaustedError("synthetic global input token race")
+
+    monkeypatch.setattr(
+        client.budget,
+        "reserve",
+        reject_after_concurrent_input_reservation,
+    )
+    try:
+        with pytest.raises(BudgetExhaustedError, match="global input token race"):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 0
+    assert usage.records == []
+    assert len(client.context_preflight.records) == 1
+    preflight = client.context_preflight.records[0]
+    assert preflight.request_state is ContextRequestState.PRE_FLIGHT_REJECTED
+    assert preflight.decision_source is ContextPreflightSource.BUDGET_MANAGER
+    assert preflight.reason is ContextPreflightReason.GLOBAL_TOKEN_BUDGET
+    assert preflight.request_plan is not None
+    assert preflight.request_plan_sha256 == preflight.request_plan.plan_sha256
+    assert preflight.estimated_prompt_tokens == preflight.request_plan.estimated_prompt_tokens
+    manifest = build_context_manifest(
+        run_id="global-token-preflight",
+        usage_records=[],
+        preflight_records=client.context_preflight.records,
+    )
+    assert manifest.totals.planned_request_count == 1
+    assert manifest.totals.preflight_rejected_request_count == 1
+
+
+@pytest.mark.asyncio
 async def test_concurrent_usage_records_account_only_their_own_request_cost(
     config_factory,
 ) -> None:
@@ -6232,3 +6596,218 @@ async def test_reasoning_cached_cost_and_latency_evidence_are_recorded(
     assert record.latency_ms is not None
     assert record.started_at is not None
     assert record.ended_at is not None
+
+
+def test_token_route_intersection_uses_exact_endpoint_minima_and_snapshot_provenance(
+    config_factory,
+) -> None:
+    snapshot = _asymmetric_token_endpoint_snapshot()
+    policy = OpenRouterProviderPolicy(
+        only=("provider-narrow", "provider-wide"),
+        allow_fallbacks=False,
+    )
+    client, http_client, _usage = _client(
+        config_factory(),
+        lambda _request: _completion_response('{"answer":"unused"}'),
+        provider_policy=policy,
+    )
+    try:
+        client.register_endpoint_snapshot(evidence=snapshot)
+        intersection = client._route_token_intersection(
+            model="alpha/atlas-secure",
+            provider_policy=policy,
+            requested_completion_tokens=2_048,
+        )
+    finally:
+        asyncio.run(http_client.aclose())
+
+    assert intersection.context_tokens == 96_000
+    assert intersection.max_prompt_tokens == 72_000
+    assert intersection.max_completion_tokens == 12_000
+    assert intersection.provider_endpoints == ("provider-narrow", "provider-wide")
+    route_hashes = {
+        route.provider_endpoint: route.endpoint_snapshot_sha256 for route in intersection.routes
+    }
+    assert route_hashes == {
+        endpoint.provider_endpoint: endpoint.endpoint_snapshot_sha256
+        for endpoint in snapshot.endpoints
+    }
+    assert all(
+        route.endpoint_snapshot_sha256 != snapshot.snapshot_sha256 for route in intersection.routes
+    )
+
+
+@pytest.mark.asyncio
+async def test_context_package_token_plan_binds_category_hashes_and_omissions(
+    config_factory,
+) -> None:
+    source = "contract SyntheticVault { function totalAssets() external pure returns (uint256) {} }"
+    source_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    package = ContextPackage(
+        role="source_audit",
+        byte_budget=100_000,
+        bytes_used=0,
+        repository_map=RepositoryMap(
+            root_name="synthetic-token-context",
+            languages={"Solidity": 1},
+            frameworks=[],
+            manifests=[],
+            entry_points=["SyntheticVault.totalAssets"],
+            api_surfaces=["SyntheticVault.totalAssets"],
+            auth_components=[],
+            data_layers=[],
+            network_clients=[],
+            file_handlers=[],
+            configuration_files=[],
+            sensitive_processing=[],
+            security_tests=[],
+            files=[],
+            omitted_files=[],
+        ),
+        scanner_findings=[],
+        excerpts=[
+            ContextExcerpt(
+                path="src/SyntheticVault.sol",
+                start_line=1,
+                end_line=1,
+                content_hash=source_sha256,
+                content=source,
+                categories=["smart_contract", "evm_value"],
+            )
+        ],
+        omissions=[
+            "src/Generated.sol omitted by deterministic source budget",
+            "test/Noise.t.sol omitted by role relevance",
+        ],
+    )
+    rendered = render_context(package)
+    workflow_prefix = "Review this synthetic context.\n"
+    expected_measurements = context_category_measurements(package)
+
+    client, http_client, usage = _client(
+        config_factory(),
+        lambda _request: _completion_response('{"answer":"context reviewed"}'),
+    )
+    try:
+        result = await client.complete(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="Review only the supplied synthetic source.",
+            user_prompt=workflow_prefix + rendered,
+            context_package=package,
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert result.answer == "context reviewed"
+    plan = usage.records[0].routing["request_token_plan"]
+    allocations = {
+        allocation["category"]: allocation["estimate"] for allocation in plan["allocations"]
+    }
+    for category, measurement in expected_measurements.items():
+        if category == PromptAllocationCategory.WORKFLOW.value:
+            continue
+        assert allocations[category]["content_sha256"] == measurement.content_sha256
+        assert allocations[category]["utf8_bytes"] == measurement.utf8_bytes
+    assert allocations[PromptAllocationCategory.WORKFLOW.value]["content_sha256"] == (
+        hashlib.sha256(workflow_prefix.encode("utf-8")).hexdigest()
+    )
+    assert plan["context_omission_sha256s"] == sorted(
+        hashlib.sha256(omission.encode("utf-8")).hexdigest() for omission in package.omissions
+    )
+
+
+@pytest.mark.asyncio
+async def test_request_max_tokens_reserves_visible_output_and_reasoning(
+    config_factory,
+) -> None:
+    observed_bodies: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed_bodies.append(json.loads(request.content))
+        return _completion_response('{"answer":"bounded reasoning"}')
+
+    config = config_factory(
+        execution={
+            "max_output_tokens_per_request": 2_048,
+        }
+    )
+    client, http_client, usage = _client(
+        config,
+        handler,
+        reasoning=OpenRouterReasoning(max_tokens=512),
+    )
+    try:
+        await client.complete(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="synthetic local input",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert len(observed_bodies) == 1
+    assert observed_bodies[0]["max_tokens"] == 2_560
+    assert observed_bodies[0]["reasoning"]["max_tokens"] == 512
+    assert observed_bodies[0]["reasoning"]["exclude"] is False
+    routing = usage.records[0].routing
+    plan = routing["request_token_plan"]
+    atomic = routing["atomic_token_reservation"]
+    assert plan["required_output_tokens"] == 2_048
+    assert plan["reserved_reasoning_tokens"] == 512
+    assert plan["requested_completion_tokens"] == 2_560
+    assert atomic["planned_completion_tokens"] == 2_560
+    assert atomic["request_token_plan_sha256"] == plan["plan_sha256"]
+
+
+@pytest.mark.asyncio
+async def test_provider_token_overrun_fails_closed_and_retains_plan_evidence(
+    config_factory,
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        payload = _completion('{"answer":"usage overrun"}')
+        payload["usage"].update(
+            {
+                "prompt_tokens": 1_000_000,
+                "completion_tokens": 5,
+                "total_tokens": 1_000_005,
+            }
+        )
+        return httpx.Response(
+            200,
+            headers={"X-Generation-Id": "generation-test"},
+            json=payload,
+        )
+
+    client, http_client, usage = _client(config_factory(), handler)
+    try:
+        with pytest.raises(TokenReservationOverrunError):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert len(usage.records) == 1
+    failed = usage.records[0]
+    assert failed.status != "success"
+    assert failed.validation_status is not ModelRequestValidationStatus.VALID
+    assert (
+        failed.routing["request_token_plan_sha256"]
+        == (failed.routing["request_token_plan"]["plan_sha256"])
+    )
+    assert (
+        failed.routing["atomic_token_reservation_sha256"]
+        == (failed.routing["atomic_token_reservation"]["evidence_sha256"])
+    )
+    assert not is_creditable_usage_record(failed)

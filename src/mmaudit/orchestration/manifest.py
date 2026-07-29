@@ -29,6 +29,7 @@ from mmaudit.models.schemas import (
 from mmaudit.orchestration.context_manifest import (
     ContextManifest,
     ContextManifestReportBinding,
+    ContextPreflightRequestEvidence,
     ContextRequestEvidence,
     context_manifest_report_binding,
     load_context_manifest,
@@ -487,6 +488,10 @@ def _validate_report_artifact_consistency(root: Path, report: AuditReport) -> No
         raise ValueError("metadata.json lacks typed report metadata")
     if embedded_metadata.get("context_manifest") != report.metadata.get("context_manifest"):
         raise ValueError("metadata.json context manifest differs from the final report")
+    if embedded_metadata.get("context_preflight_records") != report.metadata.get(
+        "context_preflight_records"
+    ):
+        raise ValueError("metadata.json context preflight differs from the final report")
 
 
 def _validated_context_manifest(
@@ -497,7 +502,30 @@ def _validated_context_manifest(
 
     path = root / "context-manifest.json"
     report_binding_payload = report.metadata.get("context_manifest")
-    required = bool(report.usage) or report_binding_payload is not None
+    raw_preflight_records = report.metadata.get("context_preflight_records", [])
+    if not isinstance(raw_preflight_records, list) or any(
+        not isinstance(item, dict) for item in raw_preflight_records
+    ):
+        raise ValueError("final report context preflight projection is invalid")
+    try:
+        preflight_records = tuple(
+            ContextPreflightRequestEvidence.model_validate_json(
+                json.dumps(
+                    item,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                    allow_nan=False,
+                ),
+                strict=True,
+            )
+            for item in raw_preflight_records
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("final report context preflight projection is invalid") from exc
+    if [item.model_dump(mode="json") for item in preflight_records] != raw_preflight_records:
+        raise ValueError("final report context preflight projection is not canonical")
+    required = bool(report.usage) or report_binding_payload is not None or bool(preflight_records)
     if not path.exists():
         if required:
             raise ValueError("final provider usage lacks context-manifest.json")
@@ -511,14 +539,31 @@ def _validated_context_manifest(
         manifest,
         run_id=report.run_id,
         usage_records=report.usage,
+        preflight_records=preflight_records,
     )
     try:
-        reported_binding = ContextManifestReportBinding.model_validate(report_binding_payload)
+        reported_binding = ContextManifestReportBinding.model_validate_json(
+            json.dumps(
+                report_binding_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ),
+            strict=True,
+        )
     except (TypeError, ValueError) as exc:
         raise ValueError("final report context-manifest binding is invalid") from exc
     expected_binding = context_manifest_report_binding(manifest)
     if reported_binding != expected_binding:
         raise ValueError("final report context-manifest binding differs from its artifact")
+    manifest_preflights = tuple(
+        request
+        for request in manifest.requests
+        if isinstance(request, ContextPreflightRequestEvidence)
+    )
+    if preflight_records != manifest_preflights:
+        raise ValueError("final report context preflight differs from its artifact")
     return manifest
 
 
@@ -533,16 +578,32 @@ def _validate_context_manifest_configuration(
     expected_input = config.token_budgets.global_input_token_budget
     expected_output = config.token_budgets.global_output_token_budget
     for request in manifest.requests:
+        if isinstance(request, ContextPreflightRequestEvidence):
+            plan = request.request_plan
+            if plan is not None and (
+                plan.global_budget.global_input_token_budget != expected_input
+                or plan.global_budget.global_output_token_budget != expected_output
+            ):
+                raise ValueError(
+                    "context preflight plan differs from effective token configuration"
+                )
+            continue
         if not isinstance(request, ContextRequestEvidence):
             continue
-        reservation = request.atomic_token_reservation
+        plan = request.request_plan
         if (
-            reservation.global_input_token_limit != expected_input
-            or reservation.global_output_token_limit != expected_output
+            plan.global_budget.global_input_token_budget != expected_input
+            or plan.global_budget.global_output_token_budget != expected_output
         ):
-            raise ValueError(
-                "context manifest token reservation differs from effective configuration"
-            )
+            raise ValueError("context request plan differs from effective token configuration")
+        for reservation in request.atomic_token_reservations:
+            if (
+                reservation.global_input_token_limit != expected_input
+                or reservation.global_output_token_limit != expected_output
+            ):
+                raise ValueError(
+                    "context manifest token reservation differs from effective configuration"
+                )
 
 
 def _run_configuration_binding(

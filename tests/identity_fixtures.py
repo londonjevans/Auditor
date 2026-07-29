@@ -11,6 +11,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 from mmaudit.models.identity import (
     OpenRouterGenerationIdentityEvidence,
@@ -27,7 +28,15 @@ from mmaudit.models.output_modes import (
     supported_output_modes,
 )
 from mmaudit.models.schemas import ModelIdentityStrength, StructuredOutputEvidence, UsageRecord
+from mmaudit.models.token_planning import (
+    PROMPT_ALLOCATION_CATEGORIES,
+    EndpointRouteIntersection,
+    EndpointRouteTokenCapacity,
+    PromptTokenAllocation,
+    build_request_token_plan,
+)
 from mmaudit.models.usage import _attest_owned_real_usage_record
+from mmaudit.orchestration.budgets import AtomicTokenReservationEvidence
 from mmaudit.privacy import EndpointPolicyClass, PrivacyProfile, PrivacySourceClassification
 from tests.output_evidence_fixtures import synthetic_structured_output_routing
 
@@ -43,6 +52,16 @@ _PRIVACY_ROUTING_FIELDS = frozenset(
         "privacy_consent_sha256",
         "privacy_consent_expires_at",
         "privacy_endpoint_policy_class",
+    }
+)
+_TOKEN_ROUTING_FIELDS = frozenset(
+    {
+        "request_token_plan",
+        "request_token_plan_sha256",
+        "atomic_token_reservations",
+        "atomic_token_reservation_sha256s",
+        "atomic_token_reservation",
+        "atomic_token_reservation_sha256",
     }
 )
 
@@ -104,6 +123,83 @@ def synthetic_strict_zdr_privacy_routing(
     return completed
 
 
+def synthetic_token_plan_routing(
+    record: UsageRecord,
+    routing: Mapping[str, object],
+) -> dict[str, object]:
+    """Complete wholly absent token evidence without masking partial-evidence tests."""
+
+    completed = dict(routing)
+    if _TOKEN_ROUTING_FIELDS.intersection(completed):
+        return completed
+    endpoint = record.actual_provider_endpoint
+    if endpoint is None:
+        return completed
+    allocation_bytes = max(12, ((max(1, record.prompt_tokens) + 9) // 10) * 3)
+    allocations = tuple(
+        PromptTokenAllocation.from_text(
+            category,
+            (
+                ""
+                if category.value == "prior_audit"
+                else f"{category.value}:{'x' * allocation_bytes}"
+            ),
+        )
+        for category in PROMPT_ALLOCATION_CATEGORIES
+    )
+    prompt_ceiling = sum(item.estimate.byte_upper_bound_tokens for item in allocations)
+    completion_ceiling = max(1, record.completion_tokens)
+    route = EndpointRouteTokenCapacity.build(
+        exact_model_id=record.requested_model,
+        provider_endpoint=endpoint,
+        endpoint_snapshot_sha256=_hash_or_default(
+            completed.get("endpoint_snapshot_sha256"),
+            "synthetic endpoint snapshot",
+        ),
+        context_tokens=prompt_ceiling + completion_ceiling,
+        max_prompt_tokens=prompt_ceiling,
+        max_prompt_tokens_source="metadata",
+        max_completion_tokens=completion_ceiling,
+        max_completion_tokens_source="metadata",
+    )
+    plan = build_request_token_plan(
+        request_id=record.request_id,
+        role=record.role,
+        route_intersection=EndpointRouteIntersection.build((route,)),
+        allocations=allocations,
+        required_output_tokens=completion_ceiling,
+        reserved_reasoning_tokens=0,
+        global_input_token_budget=max(prompt_ceiling, 1_000_000),
+        global_output_token_budget=max(completion_ceiling, 100_000),
+        context_utilization=Decimal("0.75"),
+    )
+    atomic = AtomicTokenReservationEvidence.build(
+        request_id=record.request_id,
+        exact_model_id=record.requested_model,
+        role=record.role,
+        request_token_plan_sha256=plan.plan_sha256,
+        planned_prompt_tokens=plan.prompt_byte_upper_bound_tokens,
+        planned_completion_tokens=plan.requested_completion_tokens,
+        global_input_token_limit=plan.global_budget.global_input_token_budget,
+        global_output_token_limit=plan.global_budget.global_output_token_budget,
+        spent_input_tokens_before=0,
+        reserved_input_tokens_before=0,
+        spent_output_tokens_before=0,
+        reserved_output_tokens_before=0,
+    )
+    completed.update(
+        {
+            "request_token_plan": plan.model_dump(mode="json"),
+            "request_token_plan_sha256": plan.plan_sha256,
+            "atomic_token_reservations": [atomic.model_dump(mode="json")],
+            "atomic_token_reservation_sha256s": [atomic.evidence_sha256],
+            "atomic_token_reservation": atomic.model_dump(mode="json"),
+            "atomic_token_reservation_sha256": atomic.evidence_sha256,
+        }
+    )
+    return completed
+
+
 def bind_synthetic_usage_identity(
     record: UsageRecord,
     *,
@@ -128,6 +224,7 @@ def bind_synthetic_usage_identity(
         record.routing,
         source_label=f"{record.request_id}:{record.prompt_sha256}",
     )
+    routing = synthetic_token_plan_routing(record, routing)
     provider_fallback_used = routing.get("provider_fallback_used")
     host_model_fallback_used = routing.get("host_model_fallback_used")
     if not isinstance(provider_fallback_used, bool):
