@@ -247,6 +247,9 @@ LAST_CHECKPOINT_COMMIT: af2ea7a690a573c887726291fdbebe32f59e4c8d
   `af2ea7a690a573c887726291fdbebe32f59e4c8d` (`Bound fork matrix timeout
   identity`) preserves this validated in-progress slice. It does not mark
   `V3-FORKDIFF-001` complete.
+- **SSH publication:** Implementation checkpoint `af2ea7a` and paused-state
+  checkpoint `dcb31c9` were pushed successfully at `2026-07-29T23:27:01Z` on
+  `main` to `git@github.com:londonjevans/Auditor.git`.
 - **Defensive objective:** Execute the same bounded audited-repository suite
   against a clean local state and one or more operator-pinned fork states, then
   classify only repeated fresh-workspace agreement as typed divergence while a
