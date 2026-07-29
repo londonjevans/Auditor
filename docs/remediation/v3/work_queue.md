@@ -554,16 +554,17 @@ are invisible to source review by construction.
   reporting, regressions.
 - **Dependencies:** `V3-FORKSUITE-001`.
 - **Status:** `IN_PROGRESS`
-- **Next action:** Add typed evidence of actual exclusive
-  source-copy/workspace creation, stable pre/post source and workspace
-  identities, bounded removal, and endpoint/path non-retention. Then add a
-  conditional real local Anvil/Foundry matrix integration and default
-  offline-replay wiring. Per-test validated state-read provenance, finite
-  monotonic deadlines with unconditional lease cleanup, canonical private-root
-  custody, preservation of material limitations, pre-execution child
-  Forge/compiler pins, complete private-path rejection, and full baseline
-  policy equivalence are checkpointed. The ticket remains incomplete until the
-  remaining lifecycle, replay, and real local integration evidence is validated.
+- **Next action:** Add default offline-replay wiring and its stable lifecycle
+  projection, then run the conditional real local clean-Anvil-versus-pinned
+  Anvil/Foundry matrix integration with an explicit trusted compiler. Typed
+  evidence now binds exclusive source-copy creation, stable pre/post source and
+  workspace identities, scanner execution, bounded no-follow removal, exact
+  absence, and endpoint/path non-retention. Per-test validated state-read
+  provenance, finite monotonic deadlines with unconditional lease cleanup,
+  canonical private-root custody, preservation of material limitations,
+  pre-execution child Forge/compiler pins, complete private-path rejection, and
+  full baseline policy equivalence are also checkpointed. The ticket remains
+  incomplete until replay and real local integration evidence are validated.
 
 ## V3-EXECORIGIN-001 — Execution-originated candidates
 

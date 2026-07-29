@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_BY_OPERATOR
+AUTORUN_STATUS: PAUSED
 CURRENT_MILESTONE: Differential and multi-state fork matrix
 CURRENT_TICKET: V3-FORKDIFF-001
 LAST_COMPLETED_TICKET: V3-FLOOR-001
-NEXT_ACTION: Continue V3-FORKDIFF-001 with typed evidence of actual exclusive source-copy creation, stable pre/post source and workspace identities, bounded removal, and endpoint/path non-retention; then add default replay and a real local differential integration.
-LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_repository_fork_differential_schema.py tests/unit/test_fork_matrix.py tests/unit/test_foundry_execution_hardening.py tests/unit/test_assurance.py; capability-granted .venv/bin/pytest -q tests/unit/test_read_only_rpc_bridge.py; .venv/bin/ruff format --check and .venv/bin/ruff check on the ten affected source/test files; .venv/bin/mypy src/mmaudit/models/schemas.py src/mmaudit/orchestration/assurance.py src/mmaudit/scanners/read_only_rpc.py src/mmaudit/scanners/foundry.py src/mmaudit/scanners/fork_matrix.py; git diff --check
-LAST_RESULT: PASS — the final non-socket provenance gate passed 358 tests in 23.91 seconds; the capability-granted local-loopback bridge gate passed 70 tests in 37.23 seconds; all ten affected files were formatted and passed Ruff; strict mypy passed all five affected source modules; git diff --check passed. Pytest emitted only pre-existing managed-sandbox cleanup warnings for protected synthetic toolchain directories.
+NEXT_ACTION: Resume V3-FORKDIFF-001 with default offline-replay wiring and its stable lifecycle projection, then run the conditional real local clean-Anvil-versus-pinned Anvil/Foundry matrix integration with an explicit trusted compiler.
+LAST_COMMAND: git diff --check
+LAST_RESULT: PASS — no whitespace errors after 289 focused tests, Ruff format/check, strict mypy, and release-schema verification passed.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,11 +19,72 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: f940dd1ca3051a38b7ff4dfa539bf5ac47653f6b
+LAST_CHECKPOINT_COMMIT: 82fe859dc9cd66c9d7e10f608d7d17c2f11b181b
 
 ## 2026-07-29 — V3-FORKDIFF-001
 
 - **Status:** `IN_PROGRESS`.
+- **Workspace lifecycle resume:** The expected-red retained-directory regression
+  was followed by implementation of exclusive descriptor-custodied audited
+  source copies, stable pre/post source and workspace inventories, path-free
+  copy evidence, bounded no-follow attempt-tree disposal, exact absence checks,
+  and typed copy-to-execution-to-removal joins. The matrix owner removes its
+  attempt trees on success, failure, timeout, and interruption without removing
+  its caller-owned private root or following symlinks.
+- **Focused lifecycle validation:** `.venv/bin/pytest -q
+  tests/unit/test_repository_fork_differential_schema.py
+  tests/unit/test_fork_matrix.py
+  tests/unit/test_foundry_execution_hardening.py
+  tests/unit/test_scanner_workspace.py` passed `222` tests in `2.32s`.
+  `.venv/bin/pytest -q tests/unit/test_replay.py` passed `29` tests in `1.50s`
+  after its synthetic matrix rebinding helper was updated to preserve every new
+  selection, copy, scope, egress, observation, and lifecycle hash join. These
+  are unit and synthetic evidence only; default replay and conditional real
+  local Anvil/Foundry integration remain unimplemented and uncredited.
+- **Requested pause boundary:** At `2026-07-29T21:32:15Z`, no new ticket or
+  replay/integration slice was started. Repository-wide validation is running
+  solely to make this in-progress lifecycle checkpoint safe to pause and push.
+- **First full-suite result:** `.venv/bin/pytest -q` completed in `315.93s`
+  with `2857 passed`, `12 skipped`, `22 failed`, and `65 errors`. All `65`
+  errors were the same managed-sandbox denial of numeric-loopback listener
+  creation in `test_read_only_rpc_bridge.py`, before the bridge tests could run.
+  The `22` failures exposed stale release-test fixture writers that emitted a
+  placeholder `scanner-results.json` even though release validation correctly
+  requires it to match the final report. Both fixture writers now emit the
+  exact typed empty run list; their focused combined gate passed `38` tests in
+  `6.63s`. At `2026-07-29T21:39:38Z`, the full suite is being retried with
+  local-loopback permission; no public network or external service is in scope.
+- **Loopback-enabled full-suite result:** The materially different retry of
+  `.venv/bin/pytest -q` completed in `368.88s` with `2947 passed`, `7 skipped`,
+  and `2 failed`. Local bridge coverage ran instead of being denied. The two
+  failures are exact external-tool mismatches unrelated to this slice:
+  the discoverable Halmos `0.3.3` binary was rejected by the configured
+  supported-version policy, and the default `/opt/homebrew/bin/solc` selector
+  failed external compiler validation. A focused diagnostic retry reproduced
+  those same typed fail-closed results, so they were not retried again or
+  credited as execution. The conditional matrix integration will use an
+  explicit pinned compiler on resume; neither blocker weakens a gate.
+- **Final focused and static gates:** After tightening the copy operation to use
+  the already-retained source and destination descriptors directly,
+  `.venv/bin/pytest -q tests/unit/test_foundry_execution_hardening.py
+  tests/unit/test_scanner_workspace.py tests/unit/test_fork_matrix.py
+  tests/unit/test_repository_fork_differential_schema.py
+  tests/unit/test_replay.py tests/unit/test_release_artifacts.py
+  tests/unit/test_release_run.py` passed `289` tests in `10.14s`.
+  Ruff reported all `11` affected Python files formatted and clean; strict mypy
+  reported no issues in the four affected source files;
+  `.venv/bin/python scripts/generate_release_schemas.py` passed; and
+  `git diff --check` passed.
+- **Pause state:** At `2026-07-29T21:50:25Z`, the workspace-copy and bounded
+  disposal slice is validated and ready for an isolated checkpoint.
+  `V3-FORKDIFF-001` remains `IN_PROGRESS`: default replay and the conditional
+  real local matrix integration are unimplemented and uncredited. No child
+  agent, subprocess, local listener, provider call, budget reservation, secret
+  access, or external network operation remains active.
+- **Implementation checkpoint:** The cohesive source, schema, and regression
+  slice was committed as `82fe859dc9cd66c9d7e10f608d7d17c2f11b181b`
+  (`Bind fork workspace lifecycle evidence`). This is an in-progress
+  `V3-FORKDIFF-001` checkpoint, not ticket completion.
 - **Defensive objective:** Execute the same bounded audited-repository suite
   against a clean local state and one or more operator-pinned fork states, then
   classify only repeated fresh-workspace agreement as typed divergence while a
@@ -465,6 +526,21 @@ LAST_CHECKPOINT_COMMIT: f940dd1ca3051a38b7ff4dfa539bf5ac47653f6b
   worktree contains only this persistent-state update; no implementation file,
   test, provider request, listener, child process, public RPC, secret, wallet,
   signing, transaction, budget reservation, or paid operation is active.
+- **Goal continuation:** At `2026-07-29T21:04:25Z`, persistent autorun resumed
+  from clean SSH-synchronized state commit
+  `3c41c22796bd389220b3d32397a8f0dcd85bff9a`. The complete 1,417-line
+  objective was reread in bounded chunks and hash-verified; repository
+  instructions, the active queue/worklog state, and Git status/diff were
+  reloaded. Work resumes only on typed source-copy and disposal evidence for
+  `V3-FORKDIFF-001`; no provider, public RPC, secret, wallet, signing,
+  transaction, or paid path is involved.
+- **Workspace-lifecycle expected-red proof:** The exact command
+  `.venv/bin/pytest -q
+  tests/unit/test_fork_matrix.py::test_runner_emits_repeated_real_divergence_without_top_level_child_runs`
+  failed `1` test in `0.16s` after the assertion was corrected from retained
+  directories to required absence. All four nominally disposable attempt trees
+  survived a result that otherwise reported `COMPLETE`, directly reproducing
+  the unproven-disposal defect before implementation.
 
 ## 2026-07-29 — V3-FORKSUITE-001
 
