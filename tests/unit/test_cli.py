@@ -53,7 +53,12 @@ from mmaudit.config import (
 )
 from mmaudit.constants import ALL_MODEL_ROLES, ExitCode
 from mmaudit.models.qualification_workflow import seal_qualification_release_bindings
-from mmaudit.models.schemas import AuditProfile
+from mmaudit.models.schemas import (
+    AuditProfile,
+    AuditQualityStatus,
+    AuditRunStatus,
+    ScannerStatus,
+)
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.privacy import PrivacyProfile
@@ -303,6 +308,54 @@ def test_scanner_only_run_does_not_require_provider_retention_consent(
 
     assert result.exit_code == ExitCode.SUCCESS, result.stdout
     assert constructed
+
+
+def test_scanner_only_cli_fails_closed_when_no_real_analysis_completed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    config = config_factory()
+    repository = _synthetic_run_repository(tmp_path)
+    output = tmp_path / "audit-output"
+    _patch_loaded_audit_config(monkeypatch, config)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--repo",
+            str(repository),
+            "--output",
+            str(output),
+            "--scanner-only",
+            "--skip-codeql",
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.INCOMPLETE, result.stdout
+    run_dirs = sorted((output / "runs").iterdir())
+    assert len(run_dirs) == 1
+    report = json.loads((run_dirs[0] / "final-findings.json").read_text(encoding="utf-8"))
+    assert report["completed"] is False
+    assert report["quality_status"] == AuditQualityStatus.INCOMPLETE.value
+    assert report["run_status"] == AuditRunStatus.INCOMPLETE.value
+    assert report["findings"] == []
+    assert report["usage"] == []
+    assert not any(run["status"] == ScannerStatus.SUCCESS.value for run in report["scanner_runs"])
+    metadata = json.loads((run_dirs[0] / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["completed"] is False
+    assert metadata["quality_status"] == AuditQualityStatus.INCOMPLETE.value
+    assert metadata["run_status"] == AuditRunStatus.INCOMPLETE.value
+    markdown = (run_dirs[0] / "audit-report.md").read_text(encoding="utf-8")
+    assert (
+        "No reportable findings were identified by the analyses that completed. "
+        "This run is incomplete and does not support a conclusion about repository safety."
+        in markdown
+    )
 
 
 def test_explicit_cost_ledger_is_recorded_as_canonical_cli_provenance(
@@ -2407,7 +2460,7 @@ def test_scanner_only_cli_never_requires_api_key(
             "--no-color",
         ],
     )
-    assert result.exit_code == 0, result.stdout
+    assert result.exit_code == ExitCode.INCOMPLETE, result.stdout
     assert (output / "latest" / "scanner-results.json").is_file()
     assert (output / "latest" / "audit-results.sarif").is_file()
     serialized = result.stdout + result.stderr

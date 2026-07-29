@@ -678,7 +678,7 @@ def _is_structurally_generation_reconcilable_usage_record(
     )
 
 
-def _is_structurally_creditable_usage_record(
+def is_structurally_creditable_usage_record(
     record: UsageRecord,
     *,
     require_real: bool = False,
@@ -693,6 +693,11 @@ def _is_structurally_creditable_usage_record(
         allow_unbound_real=False,
         require_runtime_attestation=False,
     )
+
+
+# Retain the existing internal import surface while callers migrate to the
+# explicitly named serialized-evidence predicate.
+_is_structurally_creditable_usage_record = is_structurally_creditable_usage_record
 
 
 def _usage_record_sha256(record: UsageRecord) -> str:

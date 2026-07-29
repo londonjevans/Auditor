@@ -7,6 +7,7 @@ from typing import Final
 
 VERSION = "0.1.0"
 REPORT_SCHEMA_VERSION: Final = "1.0"
+AUDIT_REPORT_SCHEMA_VERSION: Final = "1.2"
 SARIF_VERSION = "2.1.0"
 OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_CONFIG_NAME = "mmaudit.toml"

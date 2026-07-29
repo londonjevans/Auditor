@@ -8,9 +8,9 @@ AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Honest minimum analysis floor and run status
 CURRENT_TICKET: V3-FLOOR-001
 LAST_COMPLETED_TICKET: V3-TOKENS-001
-NEXT_ACTION: Reproduce the zero-scanner and zero-completed-model-role false-complete path, then add an evidence-derived fail-closed run-status gate and regressions.
-LAST_COMMAND: git commit -m "Add endpoint-aware token planning"
-LAST_RESULT: PASS — validated V3-TOKENS-001 implementation checkpoint 94b9f0791dee832273f016d81c06af3a56158d3e created.
+NEXT_ACTION: Run `.venv/bin/pytest -q` for the final V3-FLOOR-001 tree; then review, checkpoint, SSH-push, and pause at the ticket boundary.
+LAST_COMMAND: .venv/bin/ruff format .; .venv/bin/python scripts/generate_release_schemas.py; .venv/bin/ruff check .; .venv/bin/mypy; git diff --check
+LAST_RESULT: PASS — Ruff formatted one affected file and left 315 unchanged; schema synchronization, Ruff, strict mypy over 140 source files, and diff integrity all passed.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -20,6 +20,87 @@ OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
 LAST_CHECKPOINT_COMMIT: 94b9f0791dee832273f016d81c06af3a56158d3e
+
+## 2026-07-29 — V3-FLOOR-001 implementation and focused validation
+
+- **Status:** `IN_PROGRESS`.
+- **Expected-red defect proof:** The original scanner-only regression used an
+  unavailable scanner, zero provider calls, and zero completed model roles yet
+  returned `SUCCESS`. The inverted regression failed before the implementation,
+  proving the false-complete condition.
+- **Implementation:** Added typed `COMPLETE`, `DEGRADED`, `INCOMPLETE`, and
+  `FAILED` run states; a serialized minimum-analysis-floor assessment; strict
+  REAL scanner/model evidence credit; pre-spend model-surface assignment
+  feasibility; and run-state-consistent report completion and quality status.
+  Required infeasible scope and surface assignments now block provider work
+  before spend.
+- **Reporting:** Incomplete zero-finding Markdown leads with the required
+  limitation and does not present a normal no-findings headline. SARIF and
+  metadata carry consistent run-state evidence and report unsuccessful
+  execution unless the explicit state is `COMPLETE`.
+- **Focused evidence:** Affected Ruff formatting/check and strict mypy passed.
+  The combined integration, CLI, typed status, model coverage, and reporting
+  matrix passed `108` tests in `3.80s`.
+- **Broad-matrix correction:** The first compatibility run passed `502`, skipped
+  one explicit hardened-replay prerequisite, and failed `15` in `148.98s`.
+  Thirteen failures were stale assertions that MOCK, UNVERIFIED, unavailable,
+  or synthetic execution completed an audit; those tests now assert
+  `INCOMPLETE` while retaining their privacy, ordering, evidence, finding, and
+  artifact checks. Two failures exposed real control-flow defects: local model
+  qualification evidence could be skipped while its filename was declared,
+  and a pre-authorized maximum-assurance scope downgrade blocked all bounded
+  analysis. Qualification validation is now emitted before transport decisions,
+  only an emitted qualification artifact is credited, and explicit maximum
+  scope downgrade preserves reduced analysis without permitting `COMPLETE`.
+- **Corrected regression evidence:** The `16` exact affected production and
+  compatibility nodes passed in `18.43s`; affected Ruff and strict mypy also
+  passed. Mock scanner findings remain in SARIF, but `INCOMPLETE` correctly
+  takes precedence over a findings-only exit.
+- **Independent evidence-binding review:** A direct assay proved that the first
+  typed report draft could accept a self-consistent `COMPLETE` floor while the
+  serialized report contained zero scanner runs and zero model usage. Report
+  schema `1.2` now requires the floor and its gate and cross-binds claimed
+  source, compilation, qualifying REAL scanner, qualifying REAL model-role, and
+  coverage evidence to the report. Legacy schemas `1.0` and `1.1` cannot carry
+  the new typed floor. A schema-1.2 report cannot become legacy-valid merely by
+  deleting the floor fields.
+- **Additional fail-closed corrections:** An enabled formal-adapter exception
+  now makes the terminal run non-successful. Surface feasibility uses one
+  approved root lineage for a lower profile and three for maximum assurance;
+  applicable infeasibility blocks provider transport, while a maximum downgrade
+  proceeds only when the lower-profile gate is feasible. SARIF rejects
+  contradictory run-status, quality-status, completion, or missing limitation
+  tuples instead of serializing them.
+- **Post-review focused evidence:** The exact status, coverage, reporting,
+  schema-binding, surface preflight, formal failure, scope, qualification, and
+  maximum-downgrade matrix passed `46` tests in `12.63s`. The reporting,
+  manifest, replay, release, and benchmark-model evidence subset passed `201`
+  tests in `13.16s`; the complete pipeline and CLI files passed `134` in
+  `83.52s`. Affected Ruff and strict mypy checks passed.
+- **Consolidated compatibility evidence:** The corrected broad local matrix
+  passed `523` tests with one explicit hardened-isolation replay prerequisite
+  skipped in `125.44s`.
+- **Final serialized-evidence review:** A typed REAL usage record now retains
+  credit after JSON round-trip only when its complete structural execution
+  identity validates; `COMPLETE` rejects retained incomplete reasons and any
+  failed required quality gate. A maximum-assurance report can be `COMPLETE`
+  only when its requested assurance assessment is also `COMPLETE`; legitimate
+  pre-authorized downgraded assessments remain serializable as non-complete.
+  The typed report suite passed `12` tests, and both affected maximum-assurance
+  pipeline regressions passed in `23.46s`.
+- **Honesty boundary:** Unit evidence may construct typed REAL records to test
+  the deterministic decision function, but it is not recorded as a real
+  scanner or provider integration. No provider call, network access, operator
+  secret access, reservation, or spend occurred.
+- **Pre-final-gate state:** V3-FLOOR-001 remains `IN_PROGRESS` until the
+  repository-wide formatter, Ruff, strict mypy, release-schema synchronization,
+  diff-integrity, and complete pytest gates pass. No paid-provider or external
+  network execution is part of those gates.
+- **Final static/schema gate:** `.venv/bin/ruff format .` reformatted one
+  affected file and left `315` unchanged; `.venv/bin/ruff check .` passed;
+  strict `.venv/bin/mypy` passed all `140` source files; release-schema
+  synchronization and `git diff --check` passed without output. The complete
+  local pytest suite is the remaining validation.
 
 ## 2026-07-29 — Operator pause during V3-TOKENS-001
 
@@ -197,6 +278,19 @@ LAST_CHECKPOINT_COMMIT: 94b9f0791dee832273f016d81c06af3a56158d3e
   the existing terminal exit, report-completion, scanner, and model-role
   evidence before implementing the minimum floor. This local diagnostic work
   requires no network, provider call, secret access, or paid spend.
+- **Defect reproduced:** The renamed negative regression
+  `tests/integration/test_pipeline.py::test_zero_completed_analysis_fails_closed`
+  failed at the first assertion because the standard-profile scanner-only run
+  returned `ExitCode.SUCCESS` despite an unavailable scanner, zero provider
+  calls, zero completed model roles, and no findings. The local assay completed
+  in `1.04s` and made no external call.
+- **Independent review:** Three read-only reviews agreed that `completed` is
+  currently derived from terminal control flow rather than qualifying runtime
+  evidence; mock or unverified scanner/model records can receive completion
+  credit; scanner-only bypasses substantive gates; incomplete zero-finding
+  Markdown leads with a misleading finding-count sentence; and current
+  critical-surface assignment feasibility is not checked before provider
+  spend.
 
 ## 2026-07-29 — V3-OUTPUT-001
 

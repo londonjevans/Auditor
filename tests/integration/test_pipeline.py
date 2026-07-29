@@ -24,8 +24,11 @@ from mmaudit.isolation.dependencies import dependency_tree_sha256
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterRequestLimitError
 from mmaudit.models.runtime import build_openrouter_runtime_controls
 from mmaudit.models.schemas import (
+    AnalysisState,
     AuditProfile,
+    AuditQualityStatus,
     AuditReport,
+    AuditRunStatus,
     AuditScope,
     AuditScopeAssessment,
     CandidateFinding,
@@ -409,7 +412,9 @@ async def test_reused_provider_client_cannot_carry_usage_into_another_provider_r
     finally:
         await http_client.aclose()
 
-    assert first.exit_code is ExitCode.SUCCESS
+    assert first.exit_code is ExitCode.INCOMPLETE
+    assert not first.report.completed
+    assert first.report.run_status is AuditRunStatus.INCOMPLETE
     assert request_count > 0
     assert len(fake.requests) == request_count
     assert tuple((output / "runs").iterdir()) == run_directories
@@ -900,7 +905,7 @@ def _solidity_reproduction_config(config_factory):
 
 
 @pytest.mark.asyncio
-async def test_successful_multi_agent_audit(
+async def test_mock_multi_agent_audit_preserves_artifacts_without_false_completion(
     config_factory, vulnerable_repo: Path, tmp_path: Path
 ) -> None:
     config = config_factory(privacy={"fail_on_detected_secret": False})
@@ -916,8 +921,9 @@ async def test_successful_multi_agent_audit(
         for path in vulnerable_repo.rglob("*")
         if path.is_file()
     }
-    assert result.exit_code is ExitCode.SUCCESS
-    assert result.report.completed
+    assert result.exit_code is ExitCode.INCOMPLETE
+    assert not result.report.completed
+    assert result.report.run_status is AuditRunStatus.INCOMPLETE
     assert any(finding.status == "confirmed" for finding in result.report.findings)
     assert before == after
     assert fake.chat_calls == 6
@@ -1164,7 +1170,9 @@ async def test_strict_default_links_effective_privacy_evidence_to_report_and_man
 
     result = await _run(config, vulnerable_repo, tmp_path, fake)
 
-    assert result.exit_code is ExitCode.SUCCESS
+    assert result.exit_code is ExitCode.INCOMPLETE
+    assert not result.report.completed
+    assert result.report.run_status is AuditRunStatus.INCOMPLETE
     effective = result.report.privacy["effective_policy"]
     assert isinstance(effective, dict)
     assert effective["privacy_profile"] == PrivacyProfile.STRICT_ZDR
@@ -1610,7 +1618,9 @@ async def test_prior_audit_is_loaded_only_after_blind_model_discovery(
 
     result = await _run(config, vulnerable_repo, tmp_path, fake)
 
-    assert result.exit_code is ExitCode.SUCCESS
+    assert result.exit_code is ExitCode.INCOMPLETE
+    assert not result.report.completed
+    assert result.report.run_status is AuditRunStatus.INCOMPLETE
     assert load_observations == [6]
     assert "audit/prior.json" not in {file.path for file in result.report.repository.files}
     assert all(
@@ -1664,7 +1674,9 @@ async def test_generated_foundry_reproduction_caps_solidity_classification(
         if path.is_file()
     }
     assert before == after
-    assert result.report.completed
+    assert result.exit_code is ExitCode.INCOMPLETE
+    assert not result.report.completed
+    assert result.report.run_status is AuditRunStatus.INCOMPLETE
     reproduction_artifact = json.loads(
         (result.run_dir / "reproduction-results.json").read_text(encoding="utf-8")
     )
@@ -1788,6 +1800,9 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
         if path.is_file()
     }
     assert before == after
+    assert result.exit_code is ExitCode.INCOMPLETE
+    assert not result.report.completed
+    assert result.report.run_status is AuditRunStatus.INCOMPLETE
     assert result.report.maximum_assurance is not None
     assert result.report.maximum_assurance.status.value == "DOWNGRADED"
     assert result.report.maximum_assurance.status.value != "COMPLETE"
@@ -3511,7 +3526,7 @@ async def test_required_scanner_timeout_stops_before_models(
 
 
 @pytest.mark.asyncio
-async def test_optional_unavailable_scanner_only_completes(
+async def test_zero_completed_analysis_fails_closed(
     config_factory, vulnerable_repo: Path, tmp_path: Path
 ) -> None:
     config = config_factory()
@@ -3531,8 +3546,28 @@ async def test_optional_unavailable_scanner_only_completes(
         result = await pipeline.run(scanner_only=True)
     finally:
         await http_client.aclose()
-    assert result.exit_code is ExitCode.SUCCESS
-    assert result.report.completed
+    assert result.exit_code is ExitCode.INCOMPLETE
+    assert result.exit_for_findings(None) is ExitCode.INCOMPLETE
+    assert result.exit_for_findings(Severity.CRITICAL) is ExitCode.INCOMPLETE
+    assert not result.report.completed
+    assert result.report.quality_status is AuditQualityStatus.INCOMPLETE
+    assert result.report.run_status is AuditRunStatus.INCOMPLETE
+    assert result.report.minimum_analysis_floor is not None
+    assert not result.report.minimum_analysis_floor.minimum_floor_met
+    assert not result.report.findings
+    assert not result.report.rejected_findings
+    assert not result.report.usage
+    assert not any(run.status is ScannerStatus.SUCCESS for run in result.report.scanner_runs)
+    floor_gate = next(
+        gate for gate in result.report.quality_gates if gate.gate == "minimum_analysis_floor"
+    )
+    assert floor_gate.required
+    assert not floor_gate.passed
+    assert floor_gate.state is AnalysisState.NOT_ANALYZED
+    assert any(
+        "minimum_analysis_floor" in reason and "real scanner" in reason and "real model" in reason
+        for reason in result.report.incomplete_reasons
+    )
     assert fake.chat_calls == 0
     context_manifest = load_context_manifest(result.run_dir / "context-manifest.json")
     assert context_manifest.run_id == result.report.run_id
@@ -3543,6 +3578,22 @@ async def test_optional_unavailable_scanner_only_completes(
     assert (tmp_path / "output" / "latest" / "context-manifest.json").read_bytes() == (
         result.run_dir / "context-manifest.json"
     ).read_bytes()
+    serialized_report = AuditReport.model_validate_json(
+        (result.run_dir / "final-findings.json").read_text(encoding="utf-8")
+    )
+    assert not serialized_report.completed
+    assert serialized_report.quality_status is AuditQualityStatus.INCOMPLETE
+    assert serialized_report.run_status is AuditRunStatus.INCOMPLETE
+    metadata = json.loads((result.run_dir / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["completed"] is False
+    assert metadata["quality_status"] == AuditQualityStatus.INCOMPLETE.value
+    assert metadata["run_status"] == AuditRunStatus.INCOMPLETE.value
+    markdown = (result.run_dir / "audit-report.md").read_text(encoding="utf-8")
+    assert (
+        "No reportable findings were identified by the analyses that completed. "
+        "This run is incomplete and does not support a conclusion about repository safety."
+        in markdown
+    )
 
 
 @pytest.mark.asyncio
@@ -3571,7 +3622,9 @@ async def test_dependency_preparation_emits_validated_artifacts_without_discover
 
     result = await pipeline.run(scanner_only=True)
 
-    assert result.exit_code is ExitCode.SUCCESS
+    assert result.exit_code is ExitCode.INCOMPLETE
+    assert not result.report.completed
+    assert result.report.run_status is AuditRunStatus.INCOMPLETE
     preparation_payload = json.loads(
         (result.run_dir / "dependency-preparation.json").read_text(encoding="utf-8")
     )
@@ -3644,6 +3697,131 @@ async def test_required_deployment_scope_is_incomplete_when_evidence_is_missing(
 
 
 @pytest.mark.asyncio
+async def test_required_infeasible_scope_blocks_provider_spend(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "contracts_without_required_deployment"
+    (repo / "src").mkdir(parents=True)
+    (repo / "foundry.toml").write_text(
+        '[profile.default]\nsrc = "src"\n',
+        encoding="utf-8",
+    )
+    (repo / "src" / "Vault.sol").write_text(
+        "pragma solidity ^0.8.24;\ncontract Vault {}\n",
+        encoding="utf-8",
+    )
+    config = config_factory(
+        scope={
+            "mode": AuditScope.CONTRACTS_AND_DEPLOYMENT,
+            "require_complete": True,
+        },
+        privacy={"fail_on_detected_secret": False},
+    )
+    fake = FakeOpenRouter()
+    client, http_client = _provider(config, fake)
+    pipeline = AuditPipeline(
+        config,
+        repo=repo,
+        output=tmp_path / "scope-preflight-output",
+        client=client,
+        scanner_runner=StaticScannerRunner(  # type: ignore[arg-type]
+            status=ScannerStatus.UNAVAILABLE,
+        ),
+    )
+    try:
+        result = await pipeline.run(allow_code_egress=True)
+    finally:
+        await http_client.aclose()
+
+    assert result.exit_code is ExitCode.INCOMPLETE
+    assert not result.report.completed
+    assert fake.requests == []
+    assert any(
+        "quality gate failed before provider spend: requested_audit_scope" in reason
+        for reason in result.report.incomplete_reasons
+    )
+
+
+@pytest.mark.asyncio
+async def test_infeasible_model_surface_assignments_block_provider_spend(
+    config_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = _foundry_repo(tmp_path, patched=True)
+    config = config_factory(
+        privacy={"fail_on_detected_secret": False},
+        smart_contracts={"compile": False},
+        reproduction={"required_for_solidity": False},
+    )
+    fake = FakeOpenRouter()
+    monkeypatch.setattr(
+        "mmaudit.orchestration.pipeline.plan_model_surface_review_assignments",
+        lambda *_args, **_kwargs: {},
+    )
+
+    result = await _run(
+        config,
+        repository,
+        tmp_path,
+        fake,
+        scanner_runner=StaticScannerRunner(status=ScannerStatus.UNAVAILABLE),
+    )
+
+    assert result.exit_code is ExitCode.INCOMPLETE
+    assert result.report.run_status is AuditRunStatus.FAILED
+    assert fake.requests == []
+    gate = next(
+        item
+        for item in result.report.quality_gates
+        if item.gate == "model_surface_assignment_feasibility"
+    )
+    assert gate.required
+    assert not gate.passed
+    assert any(
+        "quality gate failed before provider spend: model_surface_assignment_feasibility" in reason
+        for reason in result.report.incomplete_reasons
+    )
+
+
+@pytest.mark.asyncio
+async def test_formal_adapter_failure_prevents_complete_and_provider_spend(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    class FailingFormalRunner:
+        def run(self, **_kwargs: Any) -> list[Any]:
+            raise RuntimeError("synthetic formal adapter failure")
+
+    repository = _foundry_repo(tmp_path, patched=True)
+    config = config_factory(
+        privacy={"fail_on_detected_secret": False},
+        smart_contracts={"compile": False},
+        reproduction={"required_for_solidity": False},
+        formal={"enabled": True},
+    )
+    fake = FakeOpenRouter()
+
+    result = await _run(
+        config,
+        repository,
+        tmp_path,
+        fake,
+        scanner_runner=StaticScannerRunner(status=ScannerStatus.UNAVAILABLE),
+        formal_runner=FailingFormalRunner(),
+    )
+
+    assert result.exit_code is ExitCode.INCOMPLETE
+    assert result.report.run_status is AuditRunStatus.FAILED
+    assert fake.requests == []
+    assert any(
+        reason == "formal adapter layer failed safely: RuntimeError"
+        for reason in result.report.incomplete_reasons
+    )
+
+
+@pytest.mark.asyncio
 async def test_scanner_only_findings_are_needs_review_and_in_sarif(
     config_factory, vulnerable_repo: Path, tmp_path: Path
 ) -> None:
@@ -3662,7 +3840,9 @@ async def test_scanner_only_findings_are_needs_review_and_in_sarif(
     finally:
         await http_client.aclose()
     assert [finding.status.value for finding in result.report.findings] == ["needs_review"]
-    assert result.exit_for_findings(Severity.HIGH) is ExitCode.FINDINGS
+    assert result.exit_for_findings(Severity.HIGH) is ExitCode.INCOMPLETE
+    assert not result.report.completed
+    assert result.report.run_status is AuditRunStatus.INCOMPLETE
     sarif = json.loads((result.run_dir / "audit-results.sarif").read_text(encoding="utf-8"))
     assert len(sarif["runs"][0]["results"]) == 1
 
@@ -3721,7 +3901,9 @@ async def test_scanner_only_prior_match_satisfies_required_missed_finding_gate(
 
     result = await pipeline.run(scanner_only=True)
 
-    assert result.exit_code is ExitCode.SUCCESS
+    assert result.exit_code is ExitCode.INCOMPLETE
+    assert not result.report.completed
+    assert result.report.run_status is AuditRunStatus.INCOMPLETE
     comparison = result.report.prior_audit_comparison
     assert comparison is not None
     assert comparison.model_request_count_before_load == 0
@@ -3903,7 +4085,9 @@ async def test_first_pass_contexts_exclude_peer_model_findings(
 
     result = await _run(config, vulnerable_repo, tmp_path, fake)
 
-    assert result.exit_code is ExitCode.SUCCESS
+    assert result.exit_code is ExitCode.INCOMPLETE
+    assert not result.report.completed
+    assert result.report.run_status is AuditRunStatus.INCOMPLETE
     first_pass_schemas = {
         "mmaudit_source_audit_findings",
         "mmaudit_business_logic_findings",
@@ -4041,7 +4225,9 @@ async def test_latest_report_refresh_does_not_follow_hardlink(
         scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
     )
     result = await pipeline.run(scanner_only=True)
-    assert result.exit_code is ExitCode.SUCCESS
+    assert result.exit_code is ExitCode.INCOMPLETE
+    assert not result.report.completed
+    assert result.report.run_status is AuditRunStatus.INCOMPLETE
     assert outside.read_text(encoding="utf-8") == "sentinel\n"
     assert (
         (latest / "audit-report.md")
@@ -4074,7 +4260,9 @@ async def test_scanner_only_latest_refresh_removes_stale_provider_privacy_artifa
     )
     result = await pipeline.run(scanner_only=True)
 
-    assert result.exit_code is ExitCode.SUCCESS
+    assert result.exit_code is ExitCode.INCOMPLETE
+    assert not result.report.completed
+    assert result.report.run_status is AuditRunStatus.INCOMPLETE
     for name in stale_names:
         assert not (result.run_dir / name).exists()
         assert not (latest / name).exists()

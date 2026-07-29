@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 from mmaudit.config import AuditConfig
 from mmaudit.models.schemas import (
+    AnalysisState,
     ContextExcerpt,
     ContextPackage,
     ExecutionEvidenceKind,
@@ -47,6 +48,7 @@ from mmaudit.orchestration.model_coverage import (
     build_model_review_coverage,
     build_model_surface_requests,
     model_review_critical_surface_gate,
+    model_surface_assignment_feasibility_gate,
     plan_model_surface_review_assignments,
 )
 from tests.identity_fixtures import (
@@ -562,6 +564,163 @@ def test_surface_request_plan_excludes_unapproved_lineage(
     for request in requests:
         assigned = sum(request in role_requests for role_requests in assignments.values())
         assert assigned == (2 if request.critical else 1)
+
+
+def test_surface_assignment_feasibility_passes_with_distinct_approved_primaries(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = config_factory()
+    index, _, _, requests = _requests()
+    assignments = plan_model_surface_review_assignments(config, requests)
+
+    gate = model_surface_assignment_feasibility_gate(
+        config,
+        index=index,
+        requests=requests,
+        assignments=assignments,
+        required=True,
+    )
+
+    assert gate.required
+    assert gate.passed
+    assert gate.state is AnalysisState.DETERMINISTIC
+    assert "underassigned=0" in gate.detail
+    assert "required_distinct_primary_root_lineages=critical:3,noncritical:1" in gate.detail
+
+
+def test_surface_assignment_feasibility_rejects_an_underassigned_surface(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = config_factory()
+    index, _, _, requests = _requests()
+    assignments = plan_model_surface_review_assignments(config, requests)
+    critical_request = next(request for request in requests if request.critical)
+    assigned_role = next(
+        role for role, role_requests in assignments.items() if critical_request in role_requests
+    )
+    assignments[assigned_role] = [
+        request for request in assignments[assigned_role] if request != critical_request
+    ]
+
+    gate = model_surface_assignment_feasibility_gate(
+        config,
+        index=index,
+        requests=requests,
+        assignments=assignments,
+        required=True,
+    )
+
+    assert not gate.passed
+    assert gate.state is AnalysisState.ATTEMPTED_FAILED
+    assert "underassigned=1" in gate.detail
+
+
+def test_surface_assignment_feasibility_uses_the_selected_lineage_floor(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = config_factory()
+    index, _, _, requests = _requests()
+    assignments = plan_model_surface_review_assignments(config, requests)
+    critical_request = next(request for request in requests if request.critical)
+    assigned_roles = sorted(
+        role for role, role_requests in assignments.items() if critical_request in role_requests
+    )
+    for role in assigned_roles[1:]:
+        assignments[role] = [
+            request for request in assignments[role] if request != critical_request
+        ]
+
+    maximum_gate = model_surface_assignment_feasibility_gate(
+        config,
+        index=index,
+        requests=requests,
+        assignments=assignments,
+        required=True,
+    )
+    lower_profile_gate = model_surface_assignment_feasibility_gate(
+        config,
+        index=index,
+        requests=requests,
+        assignments=assignments,
+        required=True,
+        minimum_critical_root_lineages=1,
+    )
+
+    assert not maximum_gate.passed
+    assert lower_profile_gate.passed
+    assert "critical:1,noncritical:1" in lower_profile_gate.detail
+
+
+def test_surface_assignment_feasibility_rejects_empty_applicable_inventory(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = config_factory()
+    index, _, _, _ = _requests()
+    empty_index = index.model_copy(update={"entities": []})
+
+    gate = model_surface_assignment_feasibility_gate(
+        config,
+        index=empty_index,
+        requests=[],
+        assignments=plan_model_surface_review_assignments(config, []),
+        required=True,
+    )
+
+    assert not gate.passed
+    assert gate.state is AnalysisState.ATTEMPTED_FAILED
+    assert "empty (0/0)" in gate.detail
+
+
+def test_surface_assignment_feasibility_rejects_missing_solidity_index_when_required(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    gate = model_surface_assignment_feasibility_gate(
+        config_factory(),
+        index=None,
+        requests=[],
+        assignments={},
+        required=True,
+    )
+
+    assert gate.required
+    assert not gate.passed
+    assert gate.state is AnalysisState.NOT_ANALYZED
+    assert "symbol index was unavailable" in gate.detail
+
+
+def test_surface_assignment_feasibility_deduplicates_aliases_of_the_same_lineage(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    base = config_factory()
+    data = base.model_dump(mode="python")
+    source_primary = data["models"]["source_audit"]["primary"]
+    source_entry = next(
+        entry
+        for entry in data["models"]["registry"]
+        if entry["canonical_model_id"] == source_primary
+    )
+    source_alias = "alias/borealis-secure"
+    source_entry["aliases"] = (source_alias,)
+    data["models"]["configuration"]["primary"] = source_alias
+    config = AuditConfig.model_validate(data)
+    index, _, _, requests = _requests()
+    assignments = {
+        "business_logic": list(requests),
+        "configuration": list(requests),
+        "source_audit": list(requests),
+    }
+
+    gate = model_surface_assignment_feasibility_gate(
+        config,
+        index=index,
+        requests=requests,
+        assignments=assignments,
+        required=True,
+    )
+
+    assert not gate.passed
+    assert gate.state is AnalysisState.ATTEMPTED_FAILED
+    assert "underassigned=" in gate.detail
 
 
 def test_context_delivery_or_successful_usage_without_response_earns_no_credit(

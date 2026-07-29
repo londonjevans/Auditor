@@ -6,7 +6,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 
-from mmaudit.config import AuditConfig, model_lineage_index
+from mmaudit.config import AuditConfig, ModelLineageConfig, model_lineage_index
 from mmaudit.constants import SPECIALIST_INVESTIGATOR_ROLES
 from mmaudit.models.schemas import (
     AnalysisState,
@@ -277,6 +277,103 @@ def plan_model_surface_review_assignments(
         role: sorted(role_requests, key=lambda item: item.surface_id)
         for role, role_requests in assignments.items()
     }
+
+
+def model_surface_assignment_feasibility_gate(
+    config: AuditConfig,
+    *,
+    index: SoliditySymbolIndex | None,
+    requests: list[ModelSurfaceReviewRequest],
+    assignments: dict[str, list[ModelSurfaceReviewRequest]],
+    required: bool,
+    minimum_critical_root_lineages: int = 3,
+) -> QualityGateResult:
+    """Prove the planned surface assignments are feasible before provider spend.
+
+    Only distinct, operator-approved root lineages resolved from a configured
+    review role's registered primary model count. Aliases therefore cannot add
+    independence, and fallback models cannot make a primary assignment feasible.
+    """
+
+    if minimum_critical_root_lineages < 1:
+        raise ValueError("critical surface feasibility requires at least one root lineage")
+    gate = "model_surface_assignment_feasibility"
+    if index is None:
+        return QualityGateResult(
+            gate=gate,
+            required=required,
+            passed=False,
+            detail="Solidity symbol index was unavailable; assignment feasibility is unknown",
+            state=AnalysisState.NOT_ANALYZED,
+        )
+    if not requests:
+        return QualityGateResult(
+            gate=gate,
+            required=required,
+            passed=False,
+            detail=(
+                "Solidity analysis was applicable but the deterministic model-surface "
+                "inventory was empty (0/0)"
+            ),
+            state=AnalysisState.ATTEMPTED_FAILED,
+        )
+
+    requests_by_id = {request.surface_id: request for request in requests}
+    duplicate_inventory_ids = len(requests_by_id) != len(requests)
+    assigned_lineages: dict[str, set[str]] = {surface_id: set() for surface_id in requests_by_id}
+    invalid_assignments: set[str] = set()
+    lineage_by_model = model_lineage_index(config)
+    approved_lineages = set(config.privacy.approved_model_lineages)
+
+    for role, role_requests in sorted(assignments.items()):
+        root_lineage = _approved_registered_primary_lineage(
+            config,
+            role,
+            lineage_by_model=lineage_by_model,
+            approved_lineages=approved_lineages,
+        )
+        for assigned_request in role_requests:
+            inventory_request = requests_by_id.get(assigned_request.surface_id)
+            if inventory_request is None:
+                invalid_assignments.add(f"{role}:unknown-surface:{assigned_request.surface_id}")
+                continue
+            if assigned_request != inventory_request:
+                invalid_assignments.add(f"{role}:mismatched-surface:{assigned_request.surface_id}")
+                continue
+            if root_lineage is None:
+                invalid_assignments.add(
+                    f"{role}:unapproved-or-unregistered-primary:{assigned_request.surface_id}"
+                )
+                continue
+            assigned_lineages[assigned_request.surface_id].add(root_lineage)
+
+    underassigned = [
+        (
+            request.surface_id,
+            len(assigned_lineages[request.surface_id]),
+            minimum_critical_root_lineages if request.critical else 1,
+        )
+        for request in sorted(requests, key=lambda item: item.surface_id)
+        if len(assigned_lineages[request.surface_id])
+        < (minimum_critical_root_lineages if request.critical else 1)
+    ]
+    passed = not duplicate_inventory_ids and not invalid_assignments and not underassigned
+    return QualityGateResult(
+        gate=gate,
+        required=required,
+        passed=passed,
+        detail=(
+            f"surfaces={len(requests)}; "
+            f"critical={sum(request.critical for request in requests)}; "
+            f"noncritical={sum(not request.critical for request in requests)}; "
+            f"underassigned={len(underassigned)}; "
+            f"invalid_assignments={len(invalid_assignments)}; "
+            f"duplicate_inventory_ids={int(duplicate_inventory_ids)}; "
+            "required_distinct_primary_root_lineages="
+            f"critical:{minimum_critical_root_lineages},noncritical:1"
+        ),
+        state=AnalysisState.DETERMINISTIC if passed else AnalysisState.ATTEMPTED_FAILED,
+    )
 
 
 def model_review_critical_surface_gate(
@@ -579,6 +676,28 @@ def _configured_models_for_role(config: AuditConfig, role: str) -> frozenset[str
     if specialist_config is None:
         return frozenset()
     return frozenset((specialist_config.primary, *specialist_config.fallbacks))
+
+
+def _approved_registered_primary_lineage(
+    config: AuditConfig,
+    role: str,
+    *,
+    lineage_by_model: dict[str, ModelLineageConfig],
+    approved_lineages: set[str],
+) -> str | None:
+    if role in _BASE_REVIEW_ROLES:
+        primary = config.models.role(role).primary
+    elif role.startswith("specialist:"):
+        specialist = config.models.specialists.get(role.removeprefix("specialist:"))
+        if specialist is None:
+            return None
+        primary = specialist.primary
+    else:
+        return None
+    lineage = lineage_by_model.get(primary.lower())
+    if lineage is None or lineage.root_lineage not in approved_lineages:
+        return None
+    return lineage.root_lineage
 
 
 def _record_validation_failures(

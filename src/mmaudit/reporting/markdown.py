@@ -9,7 +9,9 @@ from collections import Counter
 from mmaudit.constants import ALL_MODEL_ROLES
 from mmaudit.models.schemas import (
     AttackerCapabilityPolicy,
+    AuditQualityStatus,
     AuditReport,
+    AuditRunStatus,
     EconomicMetrics,
     Finding,
     FindingStatus,
@@ -128,6 +130,22 @@ def _status_qualification(status: FindingStatus) -> str:
         FindingStatus.UNSUPPORTED: "**Unsupported by the current engine**",
         FindingStatus.REJECTED: "**Rejected finding**",
     }[status]
+
+
+def _effective_run_status(report: AuditReport) -> AuditRunStatus:
+    if report.run_status is not None:
+        return report.run_status
+    if report.quality_status in {
+        AuditQualityStatus.FAILED,
+        AuditQualityStatus.ENVIRONMENT_UNSAFE,
+        AuditQualityStatus.TARGET_UNSUPPORTED,
+    }:
+        return AuditRunStatus.FAILED
+    if not report.completed or report.quality_status is AuditQualityStatus.INCOMPLETE:
+        return AuditRunStatus.INCOMPLETE
+    if report.quality_status is AuditQualityStatus.COMPLETED_WITH_LIMITATIONS:
+        return AuditRunStatus.DEGRADED
+    return AuditRunStatus.COMPLETE
 
 
 def _finding(finding: Finding, report: AuditReport) -> list[str]:
@@ -259,6 +277,24 @@ def render_markdown(report: AuditReport) -> str:
         else {}
     )
     solidity_compilation = solidity.get("compilation", []) if isinstance(solidity, dict) else []
+    run_status = _effective_run_status(report)
+    incomplete_empty_run = not report.findings and run_status in {
+        AuditRunStatus.DEGRADED,
+        AuditRunStatus.INCOMPLETE,
+        AuditRunStatus.FAILED,
+    }
+    executive_summary = (
+        "No reportable findings were identified by the analyses that completed. "
+        "This run is incomplete and does not support a conclusion about repository safety."
+        if incomplete_empty_run
+        else (
+            f"The audit produced **{len(report.findings)} surviving finding(s)**: "
+            f"{status_counts[FindingStatus.CONFIRMED.value]} confirmed, "
+            f"{status_counts[FindingStatus.STRONGLY_SUPPORTED.value]} strongly supported, "
+            f"{status_counts[FindingStatus.HIGH_CONFIDENCE.value]} high-confidence, and "
+            f"{status_counts[FindingStatus.NEEDS_REVIEW.value]} needing human review."
+        )
+    )
     lines = [
         "# Corrovera Security Assurance Report",
         "",
@@ -268,13 +304,9 @@ def render_markdown(report: AuditReport) -> str:
         "",
         "## Executive summary",
         "",
-        (
-            f"The audit produced **{len(report.findings)} surviving finding(s)**: "
-            f"{status_counts[FindingStatus.CONFIRMED.value]} confirmed, "
-            f"{status_counts[FindingStatus.STRONGLY_SUPPORTED.value]} strongly supported, "
-            f"{status_counts[FindingStatus.HIGH_CONFIDENCE.value]} high-confidence, and "
-            f"{status_counts[FindingStatus.NEEDS_REVIEW.value]} needing human review."
-        ),
+        executive_summary,
+        "",
+        f"> **RUN STATUS: {_text(run_status.value)}**",
         "",
         f"Audit profile: **{_text(report.audit_profile.value)}**. "
         f"Quality status: **{_text(report.quality_status.value)}**.",

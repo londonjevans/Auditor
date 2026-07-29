@@ -51,6 +51,8 @@ from mmaudit.config import (
     validate_model_independence,
 )
 from mmaudit.constants import (
+    ANALYSIS_ROLES,
+    AUDIT_REPORT_SCHEMA_VERSION,
     REPORT_SCHEMA_VERSION,
     SEVERITY_ORDER,
     SPECIALIST_AUXILIARY_ROLES,
@@ -79,7 +81,11 @@ from mmaudit.models.openrouter import (
     OpenRouterQualificationRoutingEvidence,
 )
 from mmaudit.models.qualification import VerifiedProductionQualification
-from mmaudit.models.registry import ModelRegistry, extract_zdr_model_ids
+from mmaudit.models.registry import (
+    ModelRegistry,
+    ProductionQualificationValidation,
+    extract_zdr_model_ids,
+)
 from mmaudit.models.runtime import (
     build_openrouter_runtime_controls,
     maximum_assurance_model_certification_required,
@@ -89,6 +95,7 @@ from mmaudit.models.schemas import (
     AuditProfile,
     AuditQualityStatus,
     AuditReport,
+    AuditRunStatus,
     AuditScopeAssessment,
     CandidateCrossExaminationDecision,
     CandidateFinding,
@@ -117,6 +124,7 @@ from mmaudit.models.schemas import (
     Location,
     LocationValidation,
     MaximumAssuranceAssessment,
+    MinimumAnalysisFloor,
     ModelReviewCoverage,
     ModelSurfaceReviewArtifact,
     ModelSurfaceReviewRequest,
@@ -191,12 +199,18 @@ from mmaudit.orchestration.model_coverage import (
     build_model_review_coverage,
     build_model_surface_requests,
     model_review_critical_surface_gate,
+    model_surface_assignment_feasibility_gate,
     plan_model_surface_review_assignments,
 )
 from mmaudit.orchestration.prior_audit import (
     build_prior_audit_comparison,
     prior_audit_quality_gate,
     withhold_prior_audit_from_discovery,
+)
+from mmaudit.orchestration.run_status import (
+    assess_minimum_analysis_floor,
+    audit_quality_status_for_run_status,
+    minimum_analysis_floor_quality_gate,
 )
 from mmaudit.orchestration.scope import (
     assess_audit_scope,
@@ -860,6 +874,8 @@ class AuditPipeline:
             incomplete.append(
                 f"Solidity deterministic analysis failed safely: {type(exc).__name__}"
             )
+            if terminal_code is ExitCode.SUCCESS:
+                terminal_code = ExitCode.INCOMPLETE
             solidity_compilations = [
                 result
                 for result in solidity_compilations
@@ -879,6 +895,26 @@ class AuditPipeline:
                 "assessment": scope_assessment.model_dump(mode="json"),
             },
         )
+        scope_preflight_gate = scope_quality_gate(scope_assessment)
+        if (
+            scope_preflight_gate.required
+            and not scope_preflight_gate.passed
+            and terminal_code is ExitCode.SUCCESS
+        ):
+            if (
+                self.config.profile is AuditProfile.MAXIMUM_ASSURANCE
+                and assurance_contract.allow_downgrade
+            ):
+                incomplete.append(
+                    "maximum-assurance preflight downgrade: "
+                    f"{scope_preflight_gate.gate}: {scope_preflight_gate.detail}"
+                )
+            else:
+                incomplete.append(
+                    "quality gate failed before provider spend: "
+                    f"{scope_preflight_gate.gate}: {scope_preflight_gate.detail}"
+                )
+                terminal_code = ExitCode.INCOMPLETE
         if (
             self.config.formal.enabled
             and not preflight_blocked
@@ -897,6 +933,8 @@ class AuditPipeline:
                 )
             except (OSError, ValueError, RuntimeError) as exc:
                 incomplete.append(f"formal adapter layer failed safely: {type(exc).__name__}")
+                if terminal_code is ExitCode.SUCCESS:
+                    terminal_code = ExitCode.INCOMPLETE
         write_json(
             run_dir / "dependency-preparation.json",
             {
@@ -1111,6 +1149,16 @@ class AuditPipeline:
                 ):
                     final_findings.append(finding)
         model_certification_required = maximum_assurance_model_certification_required(self.config)
+        qualification_preflight: ProductionQualificationValidation | None = None
+        if not scanner_only:
+            qualification_preflight = self._write_model_qualification_runtime(
+                run_dir,
+                required=model_certification_required,
+            )
+            if qualification_preflight.required and not qualification_preflight.valid:
+                incomplete.append("; ".join(qualification_preflight.errors))
+                if terminal_code is ExitCode.SUCCESS:
+                    terminal_code = ExitCode.MODEL_FAILURE
         usage = (
             UsageLedger()
             if scanner_only
@@ -1144,18 +1192,68 @@ class AuditPipeline:
                 },
             )
         )
+        model_surface_requests = build_model_surface_requests(
+            index=solidity_index,
+            graphs=solidity_graphs,
+            invariants=solidity_invariants,
+            economic_simulations=economic_simulations,
+        )
+        minimum_critical_surface_lineages = (
+            3 if self.config.profile is AuditProfile.MAXIMUM_ASSURANCE else 1
+        )
         model_surface_review_assignments = plan_model_surface_review_assignments(
             self.config,
-            build_model_surface_requests(
-                index=solidity_index,
-                graphs=solidity_graphs,
-                invariants=solidity_invariants,
-                economic_simulations=economic_simulations,
-            ),
+            model_surface_requests,
+            minimum_critical_root_lineages=minimum_critical_surface_lineages,
         )
+        model_surface_assignment_gate = model_surface_assignment_feasibility_gate(
+            self.config,
+            index=solidity_index,
+            requests=model_surface_requests,
+            assignments=model_surface_review_assignments,
+            required=bool(solidity_projects) and not scanner_only,
+            minimum_critical_root_lineages=minimum_critical_surface_lineages,
+        )
+        lower_profile_surface_gate = model_surface_assignment_feasibility_gate(
+            self.config,
+            index=solidity_index,
+            requests=model_surface_requests,
+            assignments=model_surface_review_assignments,
+            required=bool(solidity_projects) and not scanner_only,
+            minimum_critical_root_lineages=1,
+        )
+        surface_downgrade_authorized = (
+            self.config.profile is AuditProfile.MAXIMUM_ASSURANCE
+            and assurance_contract.allow_downgrade
+            and lower_profile_surface_gate.passed
+        )
+        model_spend_preflight_blocked = (
+            model_surface_assignment_gate.required
+            and not model_surface_assignment_gate.passed
+            and not surface_downgrade_authorized
+        )
+        if model_surface_assignment_gate.required and not model_surface_assignment_gate.passed:
+            if surface_downgrade_authorized:
+                incomplete.append(
+                    "maximum-assurance preflight downgrade: "
+                    f"{model_surface_assignment_gate.gate}: "
+                    f"{model_surface_assignment_gate.detail}"
+                )
+            else:
+                incomplete.append(
+                    "quality gate failed before provider spend: "
+                    f"{model_surface_assignment_gate.gate}: "
+                    f"{model_surface_assignment_gate.detail}"
+                )
+                if terminal_code is ExitCode.SUCCESS:
+                    terminal_code = ExitCode.INCOMPLETE
 
         context_builder: ContextBuilder | None = None
-        if not scanner_only and terminal_code is ExitCode.SUCCESS:
+        if (
+            not scanner_only
+            and terminal_code is ExitCode.SUCCESS
+            and not model_spend_preflight_blocked
+        ):
             if self.client is None:
                 controls = build_openrouter_runtime_controls(
                     self.config,
@@ -1188,6 +1286,7 @@ class AuditPipeline:
                     run_dir,
                     refresh=refresh_models,
                     source_egress_requested=True,
+                    qualification_preflight=qualification_preflight,
                 )
                 context_builder = ContextBuilder(
                     discovery=discovery,
@@ -2172,6 +2271,7 @@ class AuditPipeline:
                 record.role for record in usage.records if is_creditable_usage_record(record)
             },
             scanner_only=scanner_only,
+            model_surface_assignment_gate=model_surface_assignment_gate,
         )
         if (
             not scanner_only
@@ -2372,22 +2472,8 @@ class AuditPipeline:
             reproductions=reproductions,
             usage_roles=successful_usage_roles,
             scanner_only=scanner_only,
+            model_surface_assignment_gate=model_surface_assignment_gate,
         )
-        failed_required_gates = [
-            gate for gate in quality_gates if gate.required and not gate.passed
-        ]
-        if (
-            failed_required_gates
-            and terminal_code is ExitCode.SUCCESS
-            and not (
-                self.config.profile is AuditProfile.MAXIMUM_ASSURANCE
-                and assurance_contract.allow_downgrade
-            )
-        ):
-            incomplete.extend(
-                f"quality gate failed: {gate.gate}: {gate.detail}" for gate in failed_required_gates
-            )
-            terminal_code = ExitCode.INCOMPLETE
         high_critical = {candidate.candidate_id for candidate in assurance_high_critical_candidates}
         feasible_high_critical = {
             candidate.candidate_id
@@ -2418,7 +2504,6 @@ class AuditPipeline:
             "cross-examination.json",
             "specialist-execution.json",
             "model-review-coverage.json",
-            "model-qualification-runtime.json",
             "scope-assessment.json",
             "prior-audit-comparison.json",
             "maximum_assurance_traceability.json",
@@ -2508,7 +2593,78 @@ class AuditPipeline:
                 if requirement.required and not requirement.passed
             )
             terminal_code = ExitCode.INCOMPLETE
-        quality_status = _quality_status(terminal_code, failed_required_gates)
+
+        failed_required_pre_floor = [
+            gate for gate in quality_gates if gate.required and not gate.passed
+        ]
+        maximum_downgrade_authorized = (
+            self.config.profile is AuditProfile.MAXIMUM_ASSURANCE
+            and assurance_contract.allow_downgrade
+            and maximum_assurance.downgraded
+        )
+        if (
+            failed_required_pre_floor
+            and terminal_code is ExitCode.SUCCESS
+            and not maximum_downgrade_authorized
+        ):
+            incomplete.extend(
+                f"quality gate failed: {gate.gate}: {gate.detail}"
+                for gate in failed_required_pre_floor
+            )
+            terminal_code = ExitCode.INCOMPLETE
+
+        explicit_downgrade_reason: str | None = None
+        if scanner_only:
+            explicit_downgrade_reason = "operator selected scanner-only reduced analysis"
+        elif maximum_downgrade_authorized:
+            explicit_downgrade_reason = "operator pre-authorized maximum-assurance downgrade"
+        surface_analysis_feasible = (
+            not solidity_projects
+            or scanner_only
+            or model_surface_assignment_gate.passed
+            or (maximum_downgrade_authorized and lower_profile_surface_gate.passed)
+        )
+        model_review_applicable = not scanner_only
+        minimum_analysis_floor = assess_minimum_analysis_floor(
+            repository=repository_map,
+            compilations=solidity_compilations,
+            scanner_runs=scanner_runs,
+            usage=model_credit_usage,
+            required_model_roles=(ANALYSIS_ROLES if model_review_applicable else ()),
+            coverage_metrics=(
+                solidity_coverage.quality_metrics if solidity_coverage is not None else {}
+            ),
+            solidity_applicable=bool(solidity_projects),
+            static_analysis_applicable=bool(solidity_projects) or scanner_only,
+            model_review_applicable=model_review_applicable,
+            scanner_only=scanner_only,
+            explicit_downgrade_reason=explicit_downgrade_reason,
+            surface_analysis_feasible=surface_analysis_feasible,
+            surface_feasibility_reasons=(
+                () if surface_analysis_feasible else (model_surface_assignment_gate.detail,)
+            ),
+            orchestration_failures=(() if terminal_code is ExitCode.SUCCESS else tuple(incomplete)),
+        )
+        minimum_floor_gate = minimum_analysis_floor_quality_gate(minimum_analysis_floor)
+        quality_gates = [*quality_gates, minimum_floor_gate]
+        if minimum_analysis_floor.run_status in {
+            AuditRunStatus.INCOMPLETE,
+            AuditRunStatus.FAILED,
+        }:
+            floor_reason = (
+                f"quality gate failed: minimum_analysis_floor: {minimum_floor_gate.detail}"
+            )
+            if floor_reason not in incomplete:
+                incomplete.append(floor_reason)
+            if terminal_code is ExitCode.SUCCESS:
+                terminal_code = ExitCode.INCOMPLETE
+        elif minimum_analysis_floor.run_status is AuditRunStatus.DEGRADED:
+            degraded_reason = (
+                f"run degraded by explicit operator authorization: {explicit_downgrade_reason}"
+            )
+            if degraded_reason not in incomplete:
+                incomplete.append(degraded_reason)
+        quality_status = audit_quality_status_for_run_status(minimum_analysis_floor.run_status)
         context_manifest = build_context_manifest(
             run_id=run_id,
             usage_records=usage.records,
@@ -2525,7 +2681,7 @@ class AuditPipeline:
             run_started_at=run_started_at,
             duration_seconds=time.monotonic() - run_started_monotonic,
             time_to_first_candidate_seconds=time_to_first_candidate_seconds,
-            completed=terminal_code is ExitCode.SUCCESS,
+            completed=minimum_analysis_floor.run_status is AuditRunStatus.COMPLETE,
             incomplete=incomplete,
             run_options=run_options,
             repository_map=repository_map,
@@ -2564,6 +2720,8 @@ class AuditPipeline:
             falsifications=falsifications,
             quality_gates=quality_gates,
             quality_status=quality_status,
+            run_status=minimum_analysis_floor.run_status,
+            minimum_analysis_floor=minimum_analysis_floor,
             maximum_assurance=maximum_assurance,
             report_quality_review=report_quality_review,
             context_manifest=context_manifest,
@@ -2688,31 +2846,52 @@ class AuditPipeline:
                 )
         return results
 
+    def _write_model_qualification_runtime(
+        self,
+        run_dir: Path,
+        *,
+        required: bool,
+    ) -> ProductionQualificationValidation:
+        """Persist deterministic qualification evidence before any provider transport."""
+
+        cache_dir = _safe_output_directory(self.output, "cache")
+        registry = ModelRegistry(cache_dir / "openrouter-models.json")
+        validation = registry.validate_production_qualification(
+            self.config,
+            self.production_qualification,
+            required=required,
+            now=datetime.now(UTC).replace(microsecond=0),
+        )
+        write_json(
+            run_dir / "model-qualification-runtime.json",
+            validation.as_dict(),
+        )
+        return validation
+
     async def _validate_models(
         self,
         run_dir: Path,
         *,
         refresh: bool,
         source_egress_requested: bool,
+        qualification_preflight: ProductionQualificationValidation | None = None,
     ) -> None:
         assert self.client is not None
         cache_dir = _safe_output_directory(self.output, "cache")
         registry = ModelRegistry(cache_dir / "openrouter-models.json")
         provider_policy = self.client.provider_policy
-        qualification_now = datetime.now(UTC).replace(microsecond=0)
         qualification_required = maximum_assurance_model_certification_required(self.config)
-        qualification_validation = registry.validate_production_qualification(
-            self.config,
-            self.production_qualification,
-            required=qualification_required,
-            now=qualification_now,
-        )
-        write_json(
-            run_dir / "model-qualification-runtime.json",
-            qualification_validation.as_dict(),
+        qualification_validation = (
+            qualification_preflight
+            if qualification_preflight is not None
+            else self._write_model_qualification_runtime(
+                run_dir,
+                required=qualification_required,
+            )
         )
         if not qualification_validation.valid:
             raise OpenRouterError("; ".join(qualification_validation.errors))
+        qualification_now = qualification_validation.observed_at
         if source_egress_requested and self.effective_privacy_policy is None:
             raise OpenRouterError("source egress lacks resolved effective privacy evidence")
         if source_egress_requested and not provider_policy.configured_endpoints:
@@ -2930,6 +3109,8 @@ class AuditPipeline:
         falsifications: FalsificationBatch,
         quality_gates: list[QualityGateResult],
         quality_status: AuditQualityStatus,
+        run_status: AuditRunStatus,
+        minimum_analysis_floor: MinimumAnalysisFloor,
         maximum_assurance: MaximumAssuranceAssessment,
         report_quality_review: ReportQualityReview | None,
         context_manifest: ContextManifest,
@@ -2938,7 +3119,7 @@ class AuditPipeline:
             self.config.smart_contracts.allow_fork_probing or allow_fork_probing
         )
         return AuditReport(
-            schema_version=REPORT_SCHEMA_VERSION,
+            schema_version=AUDIT_REPORT_SCHEMA_VERSION,
             run_id=run_id,
             generated_at=generated_at,
             completed=completed,
@@ -2968,6 +3149,8 @@ class AuditPipeline:
             rejected_findings=rejected,
             audit_profile=self.config.profile,
             quality_status=quality_status,
+            run_status=run_status,
+            minimum_analysis_floor=minimum_analysis_floor,
             quality_gates=quality_gates,
             scope_assessment=scope_assessment,
             prior_audit_comparison=prior_audit_comparison,
@@ -3206,6 +3389,13 @@ class AuditPipeline:
                 "run_id": report.run_id,
                 "generated_at": report.generated_at.isoformat(),
                 "completed": report.completed,
+                "quality_status": report.quality_status.value,
+                "run_status": (report.run_status.value if report.run_status is not None else None),
+                "minimum_analysis_floor": (
+                    report.minimum_analysis_floor.model_dump(mode="json")
+                    if report.minimum_analysis_floor is not None
+                    else None
+                ),
                 "incomplete_reasons": report.incomplete_reasons,
                 "configuration_hash": report.configuration_hash,
                 "model_configuration_hash": report.model_configuration_hash,
@@ -3336,6 +3526,10 @@ class AuditPipeline:
             generate_sarif(
                 report.findings,
                 maximum_assurance=report.maximum_assurance,
+                run_status=report.run_status,
+                quality_status=report.quality_status,
+                completed=report.completed,
+                incomplete_reasons=report.incomplete_reasons,
             ),
         )
         traceability = build_traceability_matrix(report.repository.git_commit)
@@ -4197,8 +4391,12 @@ def _evaluate_quality_gates(
     reproductions: list[ReproductionResult],
     usage_roles: set[str],
     scanner_only: bool,
+    model_surface_assignment_gate: QualityGateResult,
 ) -> list[QualityGateResult]:
-    base_gates = [scope_quality_gate(scope_assessment)]
+    base_gates = [
+        scope_quality_gate(scope_assessment),
+        model_surface_assignment_gate,
+    ]
     if prior_audit_comparison is not None:
         base_gates.append(prior_audit_quality_gate(prior_audit_comparison, config.prior_audit))
     if not solidity_projects or scanner_only:
@@ -4480,23 +4678,6 @@ def _coverage_quality_gate(
         ),
         state=metric.state,
     )
-
-
-def _quality_status(
-    terminal_code: ExitCode,
-    failed_required_gates: list[QualityGateResult],
-) -> AuditQualityStatus:
-    if terminal_code is ExitCode.SUCCESS:
-        return (
-            AuditQualityStatus.COMPLETED_WITH_LIMITATIONS
-            if failed_required_gates
-            else AuditQualityStatus.COMPLETED
-        )
-    if terminal_code is ExitCode.PRIVACY_REFUSAL:
-        return AuditQualityStatus.ENVIRONMENT_UNSAFE
-    if terminal_code is ExitCode.INCOMPLETE:
-        return AuditQualityStatus.INCOMPLETE
-    return AuditQualityStatus.FAILED
 
 
 def _group_payload(

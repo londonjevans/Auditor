@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 from urllib.parse import quote
 
 from mmaudit.models.schemas import (
+    AuditQualityStatus,
+    AuditRunStatus,
     Finding,
     FindingStatus,
     MaximumAssuranceAssessment,
@@ -25,7 +28,30 @@ def generate_sarif(
     findings: list[Finding],
     *,
     maximum_assurance: MaximumAssuranceAssessment | None = None,
+    run_status: AuditRunStatus | None = None,
+    quality_status: AuditQualityStatus | None = None,
+    completed: bool | None = None,
+    incomplete_reasons: Sequence[str] = (),
 ) -> dict[str, Any]:
+    if run_status is not None:
+        expected_completed = run_status is AuditRunStatus.COMPLETE
+        expected_quality = {
+            AuditRunStatus.COMPLETE: AuditQualityStatus.COMPLETED,
+            AuditRunStatus.DEGRADED: AuditQualityStatus.COMPLETED_WITH_LIMITATIONS,
+            AuditRunStatus.INCOMPLETE: AuditQualityStatus.INCOMPLETE,
+            AuditRunStatus.FAILED: AuditQualityStatus.FAILED,
+        }[run_status]
+        if completed is not None and completed != expected_completed:
+            raise ValueError("SARIF completion conflicts with the typed run status")
+        if quality_status is not None and quality_status is not expected_quality:
+            raise ValueError("SARIF quality status conflicts with the typed run status")
+        if run_status is not AuditRunStatus.COMPLETE and not incomplete_reasons:
+            raise ValueError("non-complete SARIF requires a prominent incomplete reason")
+    elif completed is not None and quality_status is not None:
+        completed_quality = quality_status is AuditQualityStatus.COMPLETED
+        if completed != completed_quality:
+            raise ValueError("SARIF completion conflicts with the quality status")
+
     included = [
         finding
         for finding in findings
@@ -99,6 +125,76 @@ def generate_sarif(
                 },
             }
         )
+    run_properties: dict[str, Any] = {
+        "maximumAssurance": (
+            maximum_assurance.model_dump(mode="json") if maximum_assurance is not None else None
+        )
+    }
+    if run_status is not None:
+        run_properties["runStatus"] = run_status.value
+    if quality_status is not None:
+        run_properties["qualityStatus"] = quality_status.value
+    if completed is not None:
+        run_properties["completed"] = completed
+
+    invocation: dict[str, Any] | None = None
+    run_evidence_supplied = any(
+        (
+            run_status is not None,
+            quality_status is not None,
+            completed is not None,
+            bool(incomplete_reasons),
+        )
+    )
+    if run_evidence_supplied:
+        invocation_properties: dict[str, Any] = {}
+        if run_status is not None:
+            invocation_properties["runStatus"] = run_status.value
+        if quality_status is not None:
+            invocation_properties["qualityStatus"] = quality_status.value
+        if completed is not None:
+            invocation_properties["completed"] = completed
+        invocation = {
+            "executionSuccessful": run_status is AuditRunStatus.COMPLETE,
+            "properties": invocation_properties,
+            "toolExecutionNotifications": [
+                {
+                    "level": (
+                        "error"
+                        if run_status in {AuditRunStatus.INCOMPLETE, AuditRunStatus.FAILED}
+                        else "warning"
+                    ),
+                    "message": {"text": reason},
+                }
+                for reason in incomplete_reasons
+            ],
+        }
+        if maximum_assurance is not None:
+            invocation_properties["maximumAssuranceStatus"] = maximum_assurance.status.value
+            invocation_properties["downgraded"] = maximum_assurance.downgraded
+            invocation["toolExecutionNotifications"].extend(
+                {
+                    "level": "warning",
+                    "message": {"text": reason},
+                }
+                for reason in maximum_assurance.downgrade_reasons
+            )
+    elif maximum_assurance is not None:
+        invocation = {
+            "executionSuccessful": maximum_assurance.status.value == "COMPLETE",
+            "properties": {
+                "maximumAssuranceStatus": maximum_assurance.status.value,
+                "downgraded": maximum_assurance.downgraded,
+            },
+            "toolExecutionNotifications": [
+                {
+                    "level": "warning",
+                    "message": {"text": reason},
+                }
+                for reason in maximum_assurance.downgrade_reasons
+            ],
+        }
+
     return {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
@@ -112,33 +208,8 @@ def generate_sarif(
                         "rules": rules,
                     }
                 },
-                "properties": {
-                    "maximumAssurance": (
-                        maximum_assurance.model_dump(mode="json")
-                        if maximum_assurance is not None
-                        else None
-                    )
-                },
-                "invocations": (
-                    [
-                        {
-                            "executionSuccessful": (maximum_assurance.status.value == "COMPLETE"),
-                            "properties": {
-                                "maximumAssuranceStatus": maximum_assurance.status.value,
-                                "downgraded": maximum_assurance.downgraded,
-                            },
-                            "toolExecutionNotifications": [
-                                {
-                                    "level": "warning",
-                                    "message": {"text": reason},
-                                }
-                                for reason in maximum_assurance.downgrade_reasons
-                            ],
-                        }
-                    ]
-                    if maximum_assurance is not None
-                    else []
-                ),
+                "properties": run_properties,
+                "invocations": [invocation] if invocation is not None else [],
                 "originalUriBaseIds": {"%SRCROOT%": {"uri": "./"}},
                 "results": results,
             }

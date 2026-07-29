@@ -19,6 +19,7 @@ from pydantic import (
     model_validator,
 )
 
+from mmaudit.constants import ANALYSIS_ROLES
 from mmaudit.models.identity import OpenRouterIdentityStrength
 from mmaudit.models.output_modes import (
     STRUCTURED_OUTPUT_PROTOCOL_VERSION,
@@ -366,6 +367,15 @@ class AuditQualityStatus(StrEnum):
     FAILED = "failed"
     ENVIRONMENT_UNSAFE = "environment_unsafe"
     TARGET_UNSUPPORTED = "target_unsupported"
+
+
+class AuditRunStatus(StrEnum):
+    """Evidence-derived terminal state for an audit run."""
+
+    COMPLETE = "COMPLETE"
+    DEGRADED = "DEGRADED"
+    INCOMPLETE = "INCOMPLETE"
+    FAILED = "FAILED"
 
 
 class MaximumAssuranceStatus(StrEnum):
@@ -4927,8 +4937,163 @@ class ContextPackage(StrictModel):
         return value
 
 
+class MinimumAnalysisFloor(StrictModel):
+    """Normalized evidence supporting the audit run's minimum analysis floor."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    run_status: AuditRunStatus
+    source_files_ingested: int = Field(ge=0)
+    source_ingestion_succeeded: bool
+    solidity_applicable: bool
+    compilation_statuses: dict[CompilationStatus, int] = Field(default_factory=dict)
+    qualifying_compilations: int = Field(ge=0)
+    compilation_satisfied: bool
+    static_analysis_applicable: bool
+    qualifying_real_static_scanners: list[str] = Field(default_factory=list, max_length=100)
+    static_analysis_satisfied: bool
+    model_review_required: bool
+    scanner_only: bool
+    explicit_downgrade_reason: str | None = Field(default=None, max_length=2_000)
+    required_model_roles: list[str] = Field(default_factory=list, max_length=1_000)
+    completed_real_model_roles: list[str] = Field(default_factory=list, max_length=1_000)
+    model_review_satisfied: bool
+    coverage_metric_ids: list[str] = Field(default_factory=list, max_length=1_000)
+    coverage_denominators_valid: bool
+    surface_analysis_feasible: bool
+    orchestration_failures: list[str] = Field(default_factory=list, max_length=100)
+    minimum_floor_met: bool
+    limitations: list[str] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def evidence_and_status_are_consistent(self) -> MinimumAnalysisFloor:
+        canonical_lists = (
+            ("qualifying real static scanners", self.qualifying_real_static_scanners),
+            ("required model roles", self.required_model_roles),
+            ("completed real model roles", self.completed_real_model_roles),
+            ("coverage metric IDs", self.coverage_metric_ids),
+            ("orchestration failures", self.orchestration_failures),
+            ("minimum-floor limitations", self.limitations),
+        )
+        for label, values in canonical_lists:
+            if values != sorted(set(values)):
+                raise ValueError(f"{label} must be unique and sorted")
+            if any(
+                not value.strip()
+                or value != value.strip()
+                or any(ord(character) < 32 or ord(character) == 127 for character in value)
+                for value in values
+            ):
+                raise ValueError(f"{label} must contain bounded printable text")
+        if list(self.compilation_statuses) != sorted(
+            self.compilation_statuses,
+            key=lambda status: status.value,
+        ):
+            raise ValueError("compilation status counts must be canonically ordered")
+        if any(count <= 0 for count in self.compilation_statuses.values()):
+            raise ValueError("compilation status counts must be positive")
+        if self.qualifying_compilations > self.compilation_statuses.get(
+            CompilationStatus.SUCCESS,
+            0,
+        ):
+            raise ValueError("qualifying compilation count exceeds successful compilations")
+        if self.source_ingestion_succeeded != (self.source_files_ingested > 0):
+            raise ValueError("source-ingestion state does not match ingested source evidence")
+
+        compilation_attempts = sum(self.compilation_statuses.values())
+        expected_compilation = not self.solidity_applicable or (
+            compilation_attempts > 0 and self.qualifying_compilations == compilation_attempts
+        )
+        if self.compilation_satisfied != expected_compilation:
+            raise ValueError("compilation state does not match compilation evidence")
+        if not self.solidity_applicable and (
+            self.compilation_statuses or self.qualifying_compilations
+        ):
+            raise ValueError("non-applicable Solidity compilation cannot retain run evidence")
+
+        expected_static = not self.static_analysis_applicable or bool(
+            self.qualifying_real_static_scanners
+        )
+        if self.static_analysis_satisfied != expected_static:
+            raise ValueError("static-analysis state does not match REAL scanner evidence")
+        if not self.static_analysis_applicable and self.qualifying_real_static_scanners:
+            raise ValueError("non-applicable static analysis cannot retain scanner credit")
+
+        if self.explicit_downgrade_reason is not None and (
+            not self.explicit_downgrade_reason.strip()
+            or self.explicit_downgrade_reason != self.explicit_downgrade_reason.strip()
+            or any(
+                ord(character) < 32 or ord(character) == 127
+                for character in self.explicit_downgrade_reason
+            )
+        ):
+            raise ValueError("explicit downgrade reason must be bounded printable text")
+        if self.scanner_only and self.model_review_required:
+            raise ValueError("scanner-only analysis cannot simultaneously require model review")
+        expected_model_review = not self.model_review_required or (
+            bool(self.required_model_roles)
+            and set(self.required_model_roles) <= set(self.completed_real_model_roles)
+        )
+        if self.model_review_satisfied != expected_model_review:
+            raise ValueError("model-review state does not match completed REAL role evidence")
+
+        qualifying_real_analysis = bool(
+            self.qualifying_real_static_scanners or self.completed_real_model_roles
+        )
+        hard_failure = (
+            not self.source_ingestion_succeeded
+            or (bool(self.orchestration_failures) and not qualifying_real_analysis)
+            or any(
+                status in {CompilationStatus.FAILED, CompilationStatus.TIMED_OUT}
+                for status in self.compilation_statuses
+            )
+        )
+        complete_floor = (
+            qualifying_real_analysis
+            and self.source_ingestion_succeeded
+            and self.compilation_satisfied
+            and self.static_analysis_satisfied
+            and self.model_review_satisfied
+            and self.coverage_denominators_valid
+            and bool(self.coverage_metric_ids)
+            and self.surface_analysis_feasible
+            and not self.orchestration_failures
+            and not self.scanner_only
+            and self.explicit_downgrade_reason is None
+        )
+        degraded_floor = (
+            self.explicit_downgrade_reason is not None
+            and qualifying_real_analysis
+            and self.source_ingestion_succeeded
+            and self.compilation_satisfied
+            and self.coverage_denominators_valid
+            and bool(self.coverage_metric_ids)
+            and self.surface_analysis_feasible
+            and not self.orchestration_failures
+            and (
+                not self.scanner_only
+                or (self.static_analysis_applicable and bool(self.qualifying_real_static_scanners))
+            )
+        )
+        expected_status = (
+            AuditRunStatus.FAILED
+            if hard_failure
+            else (
+                AuditRunStatus.COMPLETE
+                if complete_floor
+                else (AuditRunStatus.DEGRADED if degraded_floor else AuditRunStatus.INCOMPLETE)
+            )
+        )
+        if self.run_status is not expected_status:
+            raise ValueError("run status does not match minimum-floor evidence")
+        if self.minimum_floor_met != (expected_status is AuditRunStatus.COMPLETE):
+            raise ValueError("minimum-floor result does not match the run status")
+        if (expected_status is AuditRunStatus.COMPLETE) == bool(self.limitations):
+            raise ValueError("only non-complete minimum-floor evidence requires limitations")
+        return self
+
+
 class AuditReport(StrictModel):
-    schema_version: Literal["1.0", "1.1"]
+    schema_version: Literal["1.0", "1.1", "1.2"]
     run_id: str
     generated_at: datetime
     completed: bool
@@ -4945,6 +5110,8 @@ class AuditReport(StrictModel):
     rejected_findings: list[Finding]
     audit_profile: AuditProfile = AuditProfile.STANDARD
     quality_status: AuditQualityStatus = AuditQualityStatus.COMPLETED
+    run_status: AuditRunStatus | None = None
+    minimum_analysis_floor: MinimumAnalysisFloor | None = None
     quality_gates: list[QualityGateResult] = Field(default_factory=list)
     scope_assessment: AuditScopeAssessment | None = None
     prior_audit_comparison: PriorAuditComparison | None = None
@@ -4964,6 +5131,158 @@ class AuditReport(StrictModel):
     model_review_coverage: ModelReviewCoverage | None = None
     report_quality_review: ReportQualityReview | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def run_status_matches_minimum_analysis_floor(self) -> AuditReport:
+        if self.schema_version != "1.2":
+            if self.run_status is not None or self.minimum_analysis_floor is not None:
+                raise ValueError("typed minimum-floor evidence requires report schema 1.2")
+            return self
+        if self.run_status is None or self.minimum_analysis_floor is None:
+            raise ValueError("report schema 1.2 requires typed minimum-floor evidence")
+        if self.run_status is not self.minimum_analysis_floor.run_status:
+            raise ValueError("report run status conflicts with minimum analysis floor")
+        if self.completed != (self.run_status is AuditRunStatus.COMPLETE):
+            raise ValueError("report completion must be true only for a COMPLETE run")
+        expected_quality = {
+            AuditRunStatus.COMPLETE: AuditQualityStatus.COMPLETED,
+            AuditRunStatus.DEGRADED: AuditQualityStatus.COMPLETED_WITH_LIMITATIONS,
+            AuditRunStatus.INCOMPLETE: AuditQualityStatus.INCOMPLETE,
+            AuditRunStatus.FAILED: AuditQualityStatus.FAILED,
+        }[self.run_status]
+        if self.quality_status is not expected_quality:
+            raise ValueError("report quality status conflicts with evidence-derived run status")
+        if self.run_status is AuditRunStatus.COMPLETE and self.incomplete_reasons:
+            raise ValueError("COMPLETE report cannot retain incomplete reasons")
+        if self.run_status is not AuditRunStatus.COMPLETE and not self.incomplete_reasons:
+            raise ValueError("non-complete report requires a prominent incomplete reason")
+        if not set(self.minimum_analysis_floor.orchestration_failures) <= set(
+            self.incomplete_reasons
+        ):
+            raise ValueError("minimum-floor orchestration failures are absent from the report")
+        floor_gates = [gate for gate in self.quality_gates if gate.gate == "minimum_analysis_floor"]
+        if (
+            len(floor_gates) != 1
+            or not floor_gates[0].required
+            or floor_gates[0].passed != (self.run_status is AuditRunStatus.COMPLETE)
+        ):
+            raise ValueError("report minimum-floor gate conflicts with typed run status")
+        if self.run_status is AuditRunStatus.COMPLETE and any(
+            gate.required and not gate.passed for gate in self.quality_gates
+        ):
+            raise ValueError("COMPLETE report contains a failed required quality gate")
+        if self.audit_profile is AuditProfile.MAXIMUM_ASSURANCE and (
+            self.maximum_assurance is None or not self.maximum_assurance.requested
+        ):
+            raise ValueError("maximum-assurance profile requires a requested assurance assessment")
+        if self.maximum_assurance is not None:
+            assessment_complete = self.maximum_assurance.status is MaximumAssuranceStatus.COMPLETE
+            if assessment_complete != (self.run_status is AuditRunStatus.COMPLETE) and (
+                self.audit_profile is AuditProfile.MAXIMUM_ASSURANCE
+                or self.maximum_assurance.required
+            ):
+                raise ValueError(
+                    "run completion conflicts with the required maximum-assurance assessment"
+                )
+        self._validate_minimum_floor_runtime_bindings(self.minimum_analysis_floor)
+        return self
+
+    def _validate_minimum_floor_runtime_bindings(self, floor: MinimumAnalysisFloor) -> None:
+        """Bind serialized floor claims back to the report's normalized runtime evidence."""
+
+        from mmaudit.models.usage import is_structurally_creditable_usage_record
+        from mmaudit.orchestration.assurance import is_qualifying_real_scanner_run
+        from mmaudit.orchestration.run_status import DEFAULT_STATIC_SCANNER_NAMES
+
+        scanner_only = self.metadata.get("scanner_only")
+        if not isinstance(scanner_only, bool) or scanner_only != floor.scanner_only:
+            raise ValueError("minimum-floor scanner-only state conflicts with report metadata")
+
+        solidity = self.metadata.get("solidity")
+        if not isinstance(solidity, dict):
+            raise ValueError("report schema 1.2 requires typed Solidity runtime metadata")
+        raw_projects = solidity.get("projects")
+        raw_compilations = solidity.get("compilation")
+        if not isinstance(raw_projects, list) or not isinstance(raw_compilations, list):
+            raise ValueError("Solidity runtime metadata omits projects or compilation evidence")
+        projects = [SolidityProjectMetadata.model_validate(item) for item in raw_projects]
+        compilations = [SolidityCompilationResult.model_validate(item) for item in raw_compilations]
+        solidity_applicable = bool(projects)
+        if floor.solidity_applicable != solidity_applicable:
+            raise ValueError("minimum-floor Solidity applicability conflicts with runtime evidence")
+
+        source_files_ingested = sum(
+            (file.language.casefold() == "solidity" or file.path.casefold().endswith(".sol"))
+            if solidity_applicable
+            else bool(file.path and file.language)
+            for file in self.repository.files
+        )
+        if floor.source_files_ingested != source_files_ingested:
+            raise ValueError("minimum-floor source count conflicts with repository evidence")
+
+        compilation_statuses: dict[CompilationStatus, int] = {}
+        for compilation in compilations:
+            compilation_statuses[compilation.status] = (
+                compilation_statuses.get(compilation.status, 0) + 1
+            )
+        qualifying_compilations = sum(
+            compilation.status is CompilationStatus.SUCCESS
+            and compilation.ast_available
+            and bool(compilation.contracts_compiled)
+            for compilation in compilations
+        )
+        if (
+            floor.compilation_statuses != compilation_statuses
+            or floor.qualifying_compilations != qualifying_compilations
+        ):
+            raise ValueError("minimum-floor compilation claims conflict with runtime evidence")
+
+        expected_static_applicability = solidity_applicable or scanner_only
+        if floor.static_analysis_applicable != expected_static_applicability:
+            raise ValueError("minimum-floor static applicability conflicts with runtime evidence")
+        qualifying_scanners = sorted(
+            {
+                run.scanner
+                for run in self.scanner_runs
+                if (
+                    expected_static_applicability
+                    and run.scanner in DEFAULT_STATIC_SCANNER_NAMES
+                    and is_qualifying_real_scanner_run(run)
+                )
+            }
+        )
+        if floor.qualifying_real_static_scanners != qualifying_scanners:
+            raise ValueError("minimum-floor scanner claims conflict with report scanner evidence")
+
+        completed_real_roles = sorted(
+            {
+                record.role
+                for record in self.usage
+                if is_structurally_creditable_usage_record(record, require_real=True)
+            }
+        )
+        if floor.completed_real_model_roles != completed_real_roles:
+            raise ValueError("minimum-floor model claims conflict with report usage evidence")
+        expected_model_review_required = not scanner_only
+        expected_required_roles = sorted(ANALYSIS_ROLES) if expected_model_review_required else []
+        if (
+            floor.model_review_required != expected_model_review_required
+            or floor.required_model_roles != expected_required_roles
+        ):
+            raise ValueError("minimum-floor required model roles conflict with run mode")
+
+        coverage = self.effective_solidity_coverage()
+        coverage_metrics = coverage.quality_metrics if coverage is not None else {}
+        coverage_ids = sorted(coverage_metrics)
+        coverage_valid = bool(coverage_ids) and all(
+            not metric.failures and (metric.denominator > 0 or bool(metric.not_applicable_evidence))
+            for metric in coverage_metrics.values()
+        )
+        if (
+            floor.coverage_metric_ids != coverage_ids
+            or floor.coverage_denominators_valid != coverage_valid
+        ):
+            raise ValueError("minimum-floor coverage claims conflict with report coverage evidence")
 
     @model_validator(mode="after")
     def solidity_coverage_sources_are_consistent(self) -> AuditReport:

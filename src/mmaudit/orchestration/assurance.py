@@ -1640,13 +1640,21 @@ def _scanner_execution_observation_matches(run: ScannerRun) -> bool:
     )
 
 
+def is_qualifying_real_scanner_run(run: ScannerRun) -> bool:
+    """Return whether a scanner has strict REAL, isolated, machine-validated evidence."""
+
+    return (
+        _is_real_scanner_run(run)
+        and run.machine_output_validated
+        and _scanner_execution_observation_matches(run)
+    )
+
+
 def _is_real_slither_run(run: ScannerRun) -> bool:
     return (
         run.scanner == "slither"
-        and _is_real_scanner_run(run)
+        and is_qualifying_real_scanner_run(run)
         and run.process_exit_code == 0
-        and run.machine_output_validated
-        and _scanner_execution_observation_matches(run)
     )
 
 
