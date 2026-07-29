@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 625c718761212ddd127bc1e43fa6fb6957eeab94
+LAST_CHECKPOINT_COMMIT: 6d23d16d872d69902d176a3de8ea89c30633e4c4
 
 ## 2026-07-29 — V3-FORKDIFF-001
 
@@ -290,6 +290,12 @@ LAST_CHECKPOINT_COMMIT: 625c718761212ddd127bc1e43fa6fb6957eeab94
   RPC, credential access, wallet, signing, transaction, budget reservation, or
   paid action occurred, and cumulative OpenRouter spend remains
   `0.0033415625 USD`.
+- **In-progress implementation checkpoint:** Commit
+  `6d23d16d872d69902d176a3de8ea89c30633e4c4` preserves the validated typed
+  bridge, clean-launcher, matrix, pipeline, report, manifest, and replay
+  scaffolding plus regressions. This is deliberately an `IN_PROGRESS`
+  checkpoint, not accepted real differential evidence and not a release
+  candidate.
 
 ## 2026-07-29 — V3-FORKSUITE-001
 
