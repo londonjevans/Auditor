@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 14908b3dcd38cdb1c91428306d160d80d67eb325
+LAST_CHECKPOINT_COMMIT: 6c67db4e95567200d51038665c65bb18bf5b5f16
 
 ## 2026-07-29 — V3-FORKSUITE-001
 
@@ -136,6 +136,10 @@ LAST_CHECKPOINT_COMMIT: 14908b3dcd38cdb1c91428306d160d80d67eb325
   not run after the latest changes. This is a partial-ticket checkpoint, not
   ticket completion. No provider request, public RPC, operator secret access,
   budget reservation, container, or external network operation is active.
+- **Checkpoint:** The bounded partial-ticket implementation was committed as
+  `6c67db4e95567200d51038665c65bb18bf5b5f16` (`Add pinned repository suite
+  execution`) and pushed to `origin/main` over SSH. This does not mark
+  `V3-FORKSUITE-001` complete.
 
 ## 2026-07-29 — V3-FLOOR-001 implementation and focused validation
 
