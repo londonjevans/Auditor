@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_BY_OPERATOR
+AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Differential and multi-state fork matrix
 CURRENT_TICKET: V3-FORKDIFF-001
 LAST_COMPLETED_TICKET: V3-FLOOR-001
-NEXT_ACTION: On explicit resume, complete the interrupted `_execute_state` custody/clock/tool-pin join and the `_remove_ephemeral_run_data` call-site join until the 19 expected-red matrix failures and 7 mypy errors are green; then continue the still-open per-test state-read provenance, actual workspace lifecycle, baseline-policy equivalence, default replay, and real local matrix integration work.
-LAST_COMMAND: .venv/bin/mypy src/mmaudit/scanners/fork_matrix.py
-LAST_RESULT: EXPECTED_RED — strict mypy reported 7 exact unfinished-join errors: five new `_execute_state` keyword arguments are not yet accepted and two `_remove_ephemeral_run_data` call sites do not yet pass their new custody roots. The immediately preceding focused matrix run reported 19 failed and 13 passed; this work is checkpointed only as unvalidated WIP. The independently validated clean-chain command passed 23 tests.
+NEXT_ACTION: On explicit resume, continue V3-FORKDIFF-001 with typed per-test state-read provenance and actual disposable-workspace lifecycle evidence; then add default replay and a real local differential integration without crediting aggregate egress or claimed workspace disposal.
+LAST_COMMAND: .venv/bin/ruff format src/mmaudit/scanners/fork_matrix.py tests/unit/test_fork_matrix.py && .venv/bin/ruff check src/mmaudit/scanners/fork_matrix.py tests/unit/test_fork_matrix.py && .venv/bin/mypy src/mmaudit/scanners/fork_matrix.py && .venv/bin/pytest -q tests/unit/test_fork_matrix.py tests/unit/test_repository_fork_differential_schema.py && git diff --check
+LAST_RESULT: PASS — both files were already formatted, Ruff passed, strict mypy passed for the affected source module, the focused matrix/schema suite passed 98 tests in 0.62 seconds, and git diff --check passed. Pytest emitted only pre-existing sandbox cleanup warnings for protected synthetic toolchain directories.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -339,6 +339,34 @@ LAST_CHECKPOINT_COMMIT: 74768911f6e98ac6587786ba718a658470cb85e4
   provider request, public RPC, secret access, wallet, signing, transaction,
   budget reservation, or paid operation remains active. OpenRouter spend
   remains `0.0033415625 USD`.
+- **Goal continuation after pause:** At `2026-07-29T19:33:26Z`, the persisted
+  product-completion goal resumed from clean, SSH-synchronized commit
+  `dd987f0b25c85907de23680e43ff6728aae69eb6`. The complete 1,417-line
+  objective was reread in bounded chunks and hash-verified at
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`;
+  repository instructions, queues, worklog, runtime state, Git state, and the
+  expected-red handoff were reloaded. Work resumes only on the existing
+  `V3-FORKDIFF-001` join; no provider, public RPC, secret, wallet, signing,
+  transaction, or paid path is involved.
+- **Matrix hardening join completed:** The interrupted custody, monotonic-clock,
+  child-tool-pin, baseline-backend, recursive private-reference, and
+  unconditional lifecycle-cleanup join is now coherent. Four new negative
+  regressions first produced the intended `4 failed, 3 passed` result for
+  cleanup exception precedence, supplied-backend drift, multiply encoded
+  private paths, and case-folded private paths. After remediation, the narrow
+  command passed `7` tests. A material limitation without an inconclusive
+  comparison now fails the configured run without retaining a completed matrix;
+  the existing schema gate remains fail-closed.
+- **Static validation:** Ruff formatting and checks passed for the four affected
+  files, strict mypy passed for both affected source modules, and
+  `git diff --check` passed. Pytest emitted only sandbox cleanup warnings for
+  protected synthetic toolchain directories; no product test failed.
+- **Remaining ticket scope:** Per-test state-read provenance, typed evidence of
+  actual disposable-workspace creation and removal, default replay, and a real
+  local differential integration remain unimplemented. Aggregate bridge reads
+  and claimed workspace freshness are not being credited for those requirements.
+  No provider request, public RPC, secret access, wallet, signing, transaction,
+  budget reservation, or paid operation occurred.
 
 ## 2026-07-29 — V3-FORKSUITE-001
 

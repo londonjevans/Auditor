@@ -107,6 +107,7 @@ class _DirectoryCustody:
     descriptor: int
     device: int
     inode: int
+    closed: bool = False
 
     def assert_stable(self) -> None:
         try:
@@ -151,12 +152,20 @@ class _DirectoryCustody:
         try:
             child.assert_stable()
         except BaseException:
-            os.close(child_descriptor)
+            with suppress(OSError):
+                os.close(child_descriptor)
             raise
         return child
 
-    def close(self) -> None:
-        os.close(self.descriptor)
+    def close(self) -> bool:
+        if self.closed:
+            return True
+        self.closed = True
+        try:
+            os.close(self.descriptor)
+        except OSError:
+            return False
+        return True
 
 
 def _path_is_within(path: Path, parent: Path) -> bool:
@@ -414,6 +423,13 @@ class _RawState:
     clean_attestation: RepositoryCleanStateAttestationEvidence | None = None
 
 
+@dataclass
+class _StateLifecycle:
+    clean_lease: CleanStateLease | None = None
+    clean_stop_attempted: bool = False
+    directories: list[_DirectoryCustody] = field(default_factory=list)
+
+
 def _canonical_sha256(value: object) -> str:
     return hashlib.sha256(
         json.dumps(
@@ -462,7 +478,7 @@ def _reseal_run(
 
 def _decoded_forms(value: str) -> tuple[str, ...]:
     forms = [value]
-    for _ in range(3):
+    for _ in range(16):
         decoded = unquote(forms[-1])
         if decoded == forms[-1]:
             break
@@ -496,9 +512,13 @@ def _retains_prohibited_private_reference(
     prohibited_endpoints: tuple[str, ...],
 ) -> bool:
     if isinstance(value, str):
-        for form in _decoded_forms(value):
+        forms = _decoded_forms(value)
+        if len(forms) == 17 and unquote(forms[-1]) != forms[-1]:
+            return True
+        prohibited_path_forms = tuple(str(path).casefold() for path in prohibited_paths)
+        for form in forms:
             casefolded = form.casefold()
-            if any(str(path) in form for path in prohibited_paths):
+            if any(path in casefolded for path in prohibited_path_forms):
                 return True
             if any(endpoint.casefold() in casefolded for endpoint in prohibited_endpoints):
                 return True
@@ -572,6 +592,7 @@ def _baseline_limitation(
     *,
     repository_sha256: str,
     smart_contracts: SmartContractsConfig,
+    backend: ScannerIsolationBackend,
 ) -> str | None:
     selection = run.repository_suite_selection
     policy = run.repository_suite_execution_policy
@@ -598,9 +619,28 @@ def _baseline_limitation(
         or policy.selection_sha256 != selection.selection_sha256
         or policy.selection_configuration_sha256 != selection.configuration_sha256
         or policy.fuzz_seed != smart_contracts.repository_suite.fuzz_seed
+        or policy.fuzz_runs != smart_contracts.foundry_fuzz_runs
+        or policy.invariant_runs != smart_contracts.foundry_invariant_runs
+        or policy.per_test_timeout_seconds
+        != smart_contracts.repository_suite.per_test_timeout_seconds
+        or policy.total_timeout_seconds != smart_contracts.repository_suite.total_timeout_seconds
+        or policy.max_output_bytes_per_test
+        != smart_contracts.repository_suite.max_output_bytes_per_test
+        or policy.max_total_output_bytes != smart_contracts.repository_suite.max_total_output_bytes
         or policy.tool_version != run.version
         or policy.tool_sha256 != run.executable_sha256
+        or policy.compiler_version is None
+        or policy.compiler_sha256 is None
+        or (
+            smart_contracts.solc_version is not None
+            and policy.compiler_version != smart_contracts.solc_version
+        )
+        or (
+            smart_contracts.solc_sha256 is not None
+            and policy.compiler_sha256 != smart_contracts.solc_sha256
+        )
         or policy.isolation_backend != run.isolation_backend
+        or policy.isolation_backend != backend.name
         or policy.isolation_attestation_sha256 != run.isolation_attestation_sha256
     ):
         return "The qualifying baseline Foundry identity differed from the matrix configuration."
@@ -649,21 +689,24 @@ class RepositoryForkMatrixRunner:
             return None
         configuration_sha256 = suite.stable_hash()
         requested_state_ids = tuple(state.state_id for state in configured_states)
+        limitations: list[str] = []
 
         def failed(detail: str) -> RepositorySuiteDifferentialRun:
+            failure_limitations = tuple(dict.fromkeys((*limitations, detail)))
             return RepositorySuiteDifferentialRun.sealed(
                 status=RepositoryDifferentialRunStatus.FAILED,
                 configuration_sha256=configuration_sha256,
                 requested_state_ids=requested_state_ids,
                 required_repetitions=suite.fork_matrix_repetitions,
                 matrix=None,
-                limitations=(detail,),
+                limitations=failure_limitations,
             )
 
         baseline_error = _baseline_limitation(
             baseline_run,
             repository_sha256=repository_sha256,
             smart_contracts=self.smart_contracts,
+            backend=backend,
         )
         if baseline_error is not None:
             return failed(baseline_error)
@@ -685,8 +728,10 @@ class RepositoryForkMatrixRunner:
 
         private_custody: _DirectoryCustody | None = None
         matrix_custody: _DirectoryCustody | None = None
-        limitations: list[str] = []
         raw_states: list[_RawState] = []
+        states: tuple[RepositorySuiteExecutionStateEvidence, ...] = ()
+        state_execution_failed = False
+        custody_cleanup_failed = False
         try:
             private_custody = _open_private_root(
                 private_root,
@@ -732,13 +777,17 @@ class RepositoryForkMatrixRunner:
                 for raw_state in sorted(raw_states, key=lambda item: item.config.state_id)
             )
         except Exception:
-            return failed("The differential state evidence failed closed.")
+            state_execution_failed = True
         finally:
-            if matrix_custody is not None:
-                matrix_custody.close()
-            if private_custody is not None:
-                private_custody.close()
+            if matrix_custody is not None and not matrix_custody.close():
+                custody_cleanup_failed = True
+            if private_custody is not None and not private_custody.close():
+                custody_cleanup_failed = True
 
+        if state_execution_failed:
+            return failed("The differential state evidence failed closed.")
+        if custody_cleanup_failed:
+            return failed("The differential workspace custody did not close cleanly.")
         if not raw_states:
             return failed("The differential matrix deadline expired before execution.")
         snapshots = [
@@ -918,9 +967,11 @@ class RepositoryForkMatrixRunner:
         if has_inconclusive:
             limitations.append("At least one clean-versus-pinned comparison was inconclusive.")
         unique_limitations = tuple(dict.fromkeys(limitations))
+        if unique_limitations and not has_inconclusive:
+            return failed("A material matrix limitation prevented evidence completion.")
         status = (
             RepositoryDifferentialRunStatus.INCONCLUSIVE
-            if has_inconclusive or unique_limitations
+            if has_inconclusive
             else RepositoryDifferentialRunStatus.COMPLETE
         )
         return RepositorySuiteDifferentialRun.sealed(
@@ -937,15 +988,105 @@ class RepositoryForkMatrixRunner:
         state_config: RepositoryForkMatrixStateConfig,
         *,
         root: Path,
-        matrix_root: Path,
+        private_root: Path,
+        matrix_custody: _DirectoryCustody,
         matrix_nonce_sha256: str,
         projects: Sequence[SolidityProjectMetadata],
         repository_sha256: str,
         repository_exclusion_root: Path,
         backend: ScannerIsolationBackend,
         absolute_deadline: float,
+        clock: _MonotonicClock,
+        expected_forge_version: str | None,
+        expected_forge_sha256: str | None,
         limitations: list[str],
     ) -> _RawState:
+        lifecycle = _StateLifecycle()
+        try:
+            result = self._execute_state_inner(
+                state_config,
+                root=root,
+                private_root=private_root,
+                matrix_custody=matrix_custody,
+                matrix_nonce_sha256=matrix_nonce_sha256,
+                projects=projects,
+                repository_sha256=repository_sha256,
+                repository_exclusion_root=repository_exclusion_root,
+                backend=backend,
+                absolute_deadline=absolute_deadline,
+                clock=clock,
+                expected_forge_version=expected_forge_version,
+                expected_forge_sha256=expected_forge_sha256,
+                limitations=limitations,
+                lifecycle=lifecycle,
+            )
+        except BaseException as original_error:
+            cleanup_error = self._cleanup_state_lifecycle(
+                lifecycle,
+                absolute_deadline=absolute_deadline,
+            )
+            if isinstance(original_error, (KeyboardInterrupt, SystemExit)):
+                raise
+            if isinstance(cleanup_error, (KeyboardInterrupt, SystemExit)):
+                raise cleanup_error from original_error
+            if cleanup_error is not None:
+                raise _MatrixEvidenceError(
+                    "The differential state lifecycle did not close cleanly."
+                ) from cleanup_error
+            raise
+        cleanup_error = self._cleanup_state_lifecycle(
+            lifecycle,
+            absolute_deadline=absolute_deadline,
+        )
+        if isinstance(cleanup_error, (KeyboardInterrupt, SystemExit)):
+            raise cleanup_error
+        if cleanup_error is not None:
+            raise _MatrixEvidenceError(
+                "The differential state lifecycle did not close cleanly."
+            ) from cleanup_error
+        return result
+
+    @staticmethod
+    def _cleanup_state_lifecycle(
+        lifecycle: _StateLifecycle,
+        *,
+        absolute_deadline: float,
+    ) -> BaseException | None:
+        cleanup_error: BaseException | None = None
+        if lifecycle.clean_lease is not None and not lifecycle.clean_stop_attempted:
+            lifecycle.clean_stop_attempted = True
+            try:
+                lifecycle.clean_lease.stop(absolute_deadline)
+            except BaseException as exc:
+                cleanup_error = exc
+        for custody in reversed(lifecycle.directories):
+            if not custody.close() and cleanup_error is None:
+                cleanup_error = _MatrixEvidenceError(
+                    "A differential workspace descriptor did not close cleanly."
+                )
+        lifecycle.directories.clear()
+        return cleanup_error
+
+    def _execute_state_inner(
+        self,
+        state_config: RepositoryForkMatrixStateConfig,
+        *,
+        root: Path,
+        private_root: Path,
+        matrix_custody: _DirectoryCustody,
+        matrix_nonce_sha256: str,
+        projects: Sequence[SolidityProjectMetadata],
+        repository_sha256: str,
+        repository_exclusion_root: Path,
+        backend: ScannerIsolationBackend,
+        absolute_deadline: float,
+        clock: _MonotonicClock,
+        expected_forge_version: str | None,
+        expected_forge_sha256: str | None,
+        limitations: list[str],
+        lifecycle: _StateLifecycle,
+    ) -> _RawState:
+        matrix_root = matrix_custody.path
         repetitions = self.smart_contracts.repository_suite.fork_matrix_repetitions
         attempts: list[_RawAttempt] = []
         observations: list[PinnedForkObservation] = []
@@ -959,19 +1100,20 @@ class RepositoryForkMatrixRunner:
             provider = self.dependencies.clean_state_provider
             assert provider is not None
             try:
-                if (
-                    self.dependencies.monotonic() + state_config.shutdown_timeout_seconds
-                    >= absolute_deadline
-                ):
+                if clock.read() + state_config.shutdown_timeout_seconds >= absolute_deadline:
                     raise TimeoutError
-                clean_private = matrix_root / f"{state_config.state_id}-clean-origin"
-                clean_private.mkdir(mode=0o700, exist_ok=False)
+                clean_custody = matrix_custody.create_child(f"{state_config.state_id}-clean-origin")
+                lifecycle.directories.append(clean_custody)
                 clean_lease = provider.start(
                     state_config,
                     root,
-                    clean_private,
+                    clean_custody.path,
                     absolute_deadline,
                 )
+                lifecycle.clean_lease = clean_lease
+                clock.read()
+                matrix_custody.assert_stable()
+                clean_custody.assert_stable()
                 endpoint = clean_lease.endpoint
                 local_fork_rpc_port(endpoint)
             except (ForkRpcBindingError, OSError, RuntimeError, TimeoutError, ValueError):
@@ -999,20 +1141,16 @@ class RepositoryForkMatrixRunner:
             else absolute_deadline
         )
         for index in range(1, repetitions + 1):
-            try:
-                attempt_dir, identity_sha256, freshness_sha256 = self._fresh_attempt_dir(
-                    matrix_root,
-                    matrix_nonce_sha256=matrix_nonce_sha256,
-                    state_id=state_config.state_id,
-                    attempt_index=index,
-                    repository_sha256=repository_sha256,
-                )
-            except OSError:
-                if clean_lease is not None:
-                    with suppress(OSError, RuntimeError, ValueError):
-                        clean_lease.stop(absolute_deadline)
-                raise
-            if endpoint is None or self.dependencies.monotonic() >= state_execution_deadline:
+            attempt_custody, identity_sha256, freshness_sha256 = self._fresh_attempt_dir(
+                matrix_custody,
+                matrix_nonce_sha256=matrix_nonce_sha256,
+                state_id=state_config.state_id,
+                attempt_index=index,
+                repository_sha256=repository_sha256,
+            )
+            lifecycle.directories.append(attempt_custody)
+            attempt_dir = attempt_custody.path
+            if endpoint is None or clock.read() >= state_execution_deadline:
                 detail = (
                     observation_detail
                     or "The differential matrix deadline expired before this attempt."
@@ -1045,7 +1183,7 @@ class RepositoryForkMatrixRunner:
                 if isinstance(state_config, RepositoryCleanForkMatrixStateConfig)
                 else state_config.pinned_block_number
             )
-            remaining = state_execution_deadline - self.dependencies.monotonic()
+            remaining = state_execution_deadline - clock.read()
             try:
                 pre = self.dependencies.observer(
                     endpoint,
@@ -1093,7 +1231,7 @@ class RepositoryForkMatrixRunner:
                 now=self.dependencies.now,
             )
             try:
-                remaining = state_execution_deadline - self.dependencies.monotonic()
+                remaining = state_execution_deadline - clock.read()
                 if remaining <= _ATTEMPT_CLEANUP_RESERVE_SECONDS:
                     raise TimeoutError
                 bridge = self.dependencies.bridge_factory(
@@ -1105,6 +1243,8 @@ class RepositoryForkMatrixRunner:
                 )
                 bridge.start()
                 bridge_endpoint = bridge.endpoint
+                matrix_custody.assert_stable()
+                attempt_custody.assert_stable()
                 state_smart_contracts = self.smart_contracts.model_copy(
                     update={
                         "fork_rpc_url_env": (
@@ -1132,7 +1272,7 @@ class RepositoryForkMatrixRunner:
                     repository_exclusion_root=repository_exclusion_root,
                     fork_rpc_url_override=bridge_endpoint,
                 )
-                remaining = state_execution_deadline - self.dependencies.monotonic()
+                remaining = state_execution_deadline - clock.read()
                 if remaining <= _ATTEMPT_CLEANUP_RESERVE_SECONDS:
                     raise TimeoutError
                 run = scanner.run(
@@ -1140,11 +1280,26 @@ class RepositoryForkMatrixRunner:
                     attempt_dir,
                     remaining - _ATTEMPT_CLEANUP_RESERVE_SECONDS,
                     backend=backend,
+                    expected_version=expected_forge_version,
+                    expected_sha256=expected_forge_sha256,
                 )
+                if (
+                    run.version != expected_forge_version
+                    or run.executable_sha256 != expected_forge_sha256
+                ):
+                    limitations.append(
+                        f"State {state_config.state_id} returned a child Forge identity "
+                        "outside the qualifying baseline trust pin."
+                    )
+                    raise ValueError("child Forge identity differed from its trust pin")
+                matrix_custody.assert_stable()
+                attempt_custody.assert_stable()
                 run = _remove_ephemeral_run_data(
                     run,
                     origin_endpoint=endpoint,
                     bridge_endpoint=bridge_endpoint,
+                    private_root=private_root,
+                    repository_exclusion_root=repository_exclusion_root,
                     attempt_dir=attempt_dir,
                     matrix_root=matrix_root,
                 )
@@ -1172,7 +1327,7 @@ class RepositoryForkMatrixRunner:
                             f"State {state_config.state_id} had an unverified RPC bridge stop."
                         )
 
-            if self.dependencies.monotonic() >= state_execution_deadline:
+            if clock.read() >= state_execution_deadline:
                 run = _unavailable_run(
                     "The differential matrix absolute deadline was exceeded.",
                     now=self.dependencies.now,
@@ -1187,7 +1342,7 @@ class RepositoryForkMatrixRunner:
                         pinned_block_number=pinned_block_number,
                         timeout_seconds=min(
                             _OBSERVATION_TIMEOUT_SECONDS,
-                            state_execution_deadline - self.dependencies.monotonic(),
+                            state_execution_deadline - clock.read(),
                         ),
                     )
                     observations.append(post)
@@ -1217,8 +1372,12 @@ class RepositoryForkMatrixRunner:
                 )
             )
 
+        for custody in lifecycle.directories:
+            custody.assert_stable()
+        matrix_custody.assert_stable()
         clean_attestation: RepositoryCleanStateAttestationEvidence | None = None
         if clean_lease is not None:
+            lifecycle.clean_stop_attempted = True
             try:
                 clean_lease.stop(absolute_deadline)
                 clean_attestation = clean_lease.attestation()
@@ -1259,16 +1418,14 @@ class RepositoryForkMatrixRunner:
 
     def _fresh_attempt_dir(
         self,
-        matrix_root: Path,
+        matrix_custody: _DirectoryCustody,
         *,
         matrix_nonce_sha256: str,
         state_id: str,
         attempt_index: int,
         repository_sha256: str,
-    ) -> tuple[Path, str, str]:
-        attempt_dir = matrix_root / f"{state_id}-attempt-{attempt_index}"
-        attempt_dir.mkdir(mode=0o700, exist_ok=False)
-        stat = attempt_dir.stat()
+    ) -> tuple[_DirectoryCustody, str, str]:
+        attempt_custody = matrix_custody.create_child(f"{state_id}-attempt-{attempt_index}")
         identity_sha256 = _canonical_sha256(
             {
                 "matrix_nonce_sha256": matrix_nonce_sha256,
@@ -1281,11 +1438,11 @@ class RepositoryForkMatrixRunner:
             {
                 "workspace_identity_sha256": identity_sha256,
                 "created_with_exist_ok_false": True,
-                "device": stat.st_dev,
-                "inode": stat.st_ino,
+                "device": attempt_custody.device,
+                "inode": attempt_custody.inode,
             }
         )
-        return attempt_dir, identity_sha256, freshness_sha256
+        return attempt_custody, identity_sha256, freshness_sha256
 
     @staticmethod
     def _seal_state(raw: _RawState) -> RepositorySuiteExecutionStateEvidence:

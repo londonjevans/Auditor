@@ -296,11 +296,16 @@ def _clean_attestation() -> RepositoryCleanStateAttestationEvidence:
 class _CleanLease:
     endpoint = "http://127.0.0.1:9100"
 
-    def __init__(self) -> None:
+    def __init__(self, *, stop_failure: BaseException | None = None) -> None:
         self.stopped = False
+        self.stop_attempted = False
+        self._stop_failure = stop_failure
 
     def stop(self, deadline: float) -> None:
         del deadline
+        self.stop_attempted = True
+        if self._stop_failure is not None:
+            raise self._stop_failure
         self.stopped = True
 
     def attestation(self) -> RepositoryCleanStateAttestationEvidence:
@@ -323,7 +328,7 @@ class _CleanProvider:
         del config, absolute_deadline
         assert repository_root.is_dir()
         assert private_root.is_dir()
-        lease = _CleanLease()
+        lease = _CleanLease(stop_failure=self._harness.clean_stop_failure)
         self.leases.append(lease)
         if self._harness.clean_start_callback is not None:
             self._harness.clean_start_callback(private_root)
@@ -471,6 +476,13 @@ class _Scanner:
             test_status=test_status,
             machine_result_sha256=result_hash,
         )
+        if self._harness.child_tool_mismatch:
+            run = run.model_copy(
+                update={
+                    "version": "forge 9.9.9-unapproved",
+                    "executable_sha256": HASH_F,
+                }
+            )
         if self._harness.retain_endpoint_in_run or self._harness.retained_diagnostic is not None:
             payload = run.model_dump(mode="python")
             payload["error"] = (
@@ -552,6 +564,7 @@ class _Harness:
         )
         self.clock = _Clock()
         self.clean_start_callback: Callable[[Path], None] | None = None
+        self.clean_stop_failure: BaseException | None = None
         self.clean_provider = _CleanProvider(self)
         self.environment = {
             "MMAUDIT_PINNED_LOCAL_RPC_URL": "http://127.0.0.1:9200",
@@ -564,6 +577,7 @@ class _Harness:
         self.scanner_invocations: dict[int, int] = {}
         self.observer_failure: BaseException | None = None
         self.scanner_failure: BaseException | None = None
+        self.child_tool_mismatch = False
         self.unavailable_pinned = False
         self.drift_pinned = False
         self.advance_clock_after_first_scan = False
@@ -839,6 +853,7 @@ class _Harness:
         deadline: float = 100,
         private_root: Path | None = None,
         repository_exclusion_root: Path | None = None,
+        backend: ScannerIsolationBackend | None = None,
     ) -> RepositorySuiteDifferentialRun:
         tmp_path.mkdir(parents=True, exist_ok=True)
         selected_private_root = private_root or tmp_path / ".private"
@@ -853,7 +868,7 @@ class _Harness:
             projects=(),
             repository_sha256=HASH_B,
             repository_exclusion_root=selected_exclusion_root,
-            backend=_Backend(),
+            backend=backend or _Backend(),
             baseline_run=self.baseline,
             absolute_deadline=deadline,
         )
@@ -1113,6 +1128,20 @@ def test_runner_typed_failure_after_clean_acquisition_cleans_every_lease(
     assert all(bridge.stopped for bridge in harness.bridges)
 
 
+def test_runner_failed_clean_stop_cannot_preserve_complete_status(tmp_path: Path) -> None:
+    harness = _Harness()
+    harness.clean_stop_failure = RuntimeError("synthetic clean stop failure")
+
+    result = harness.run(tmp_path)
+
+    assert result.status is RepositoryDifferentialRunStatus.INCONCLUSIVE
+    assert result.matrix is not None
+    assert harness.clean_provider.leases
+    assert all(lease.stop_attempted for lease in harness.clean_provider.leases)
+    assert all(bridge.stopped for bridge in harness.bridges)
+    assert result.limitations
+
+
 def test_runner_keyboard_interrupt_propagates_after_lifecycle_cleanup(tmp_path: Path) -> None:
     harness = _Harness()
     harness.scanner_failure = KeyboardInterrupt()
@@ -1122,6 +1151,22 @@ def test_runner_keyboard_interrupt_propagates_after_lifecycle_cleanup(tmp_path: 
 
     assert harness.clean_provider.leases
     assert all(lease.stopped for lease in harness.clean_provider.leases)
+    assert harness.bridges
+    assert all(bridge.stopped for bridge in harness.bridges)
+
+
+def test_runner_preserves_original_interrupt_when_clean_stop_also_interrupts(
+    tmp_path: Path,
+) -> None:
+    harness = _Harness()
+    harness.scanner_failure = KeyboardInterrupt("scanner interrupted")
+    harness.clean_stop_failure = SystemExit("cleanup interrupted")
+
+    with pytest.raises(KeyboardInterrupt, match="scanner interrupted"):
+        harness.run(tmp_path)
+
+    assert harness.clean_provider.leases
+    assert all(lease.stop_attempted for lease in harness.clean_provider.leases)
     assert harness.bridges
     assert all(bridge.stopped for bridge in harness.bridges)
 
@@ -1136,6 +1181,57 @@ def test_runner_passes_baseline_forge_trust_pin_to_every_child(tmp_path: Path) -
     assert set(harness.scanner_trust_pins) == {
         (harness.baseline.version, harness.baseline.executable_sha256)
     }
+
+
+def test_runner_rejects_child_forge_identity_outside_baseline_pin(tmp_path: Path) -> None:
+    harness = _Harness()
+    harness.child_tool_mismatch = True
+
+    result = harness.run(tmp_path)
+
+    assert result.status is RepositoryDifferentialRunStatus.INCONCLUSIVE
+    assert result.matrix is not None
+    assert all(
+        attempt.scanner_run.status is ScannerStatus.FAILED for attempt in result.matrix.attempts
+    )
+    assert any("child Forge identity" in item for item in result.limitations)
+
+
+@pytest.mark.parametrize(
+    "config_update",
+    [
+        {"foundry_fuzz_runs": 257},
+        {"foundry_invariant_runs": 65},
+        {"solc_version": "solc 0.8.31", "solc_sha256": HASH_F},
+    ],
+)
+def test_runner_rejects_baseline_policy_drift_before_launch(
+    tmp_path: Path,
+    config_update: dict[str, object],
+) -> None:
+    harness = _Harness()
+    harness.smart_contracts = harness.smart_contracts.model_copy(update=config_update)
+
+    result = harness.run(tmp_path)
+
+    assert result.status is RepositoryDifferentialRunStatus.FAILED
+    assert result.matrix is None
+    assert not harness.clean_provider.leases
+    assert not harness.bridges
+
+
+def test_runner_rejects_supplied_backend_drift_before_launch(tmp_path: Path) -> None:
+    harness = _Harness()
+
+    class _OtherBackend(_Backend):
+        name = "different-hardened-isolation"
+
+    result = harness.run(tmp_path, backend=_OtherBackend())
+
+    assert result.status is RepositoryDifferentialRunStatus.FAILED
+    assert result.matrix is None
+    assert not harness.clean_provider.leases
+    assert not harness.bridges
 
 
 def test_runner_rejects_repository_root_as_private_root(tmp_path: Path) -> None:
@@ -1251,7 +1347,8 @@ def test_runner_preserves_material_limitation_and_cannot_complete(tmp_path: Path
     )
 
     assert result is not None
-    assert result.status is RepositoryDifferentialRunStatus.INCONCLUSIVE
+    assert result.status is RepositoryDifferentialRunStatus.FAILED
+    assert result.matrix is None
     assert "Synthetic material matrix limitation." in result.limitations
 
 
@@ -1265,6 +1362,20 @@ def test_runner_preserves_material_limitation_and_cannot_complete(tmp_path: Path
         ),
         lambda _private_dir: "normalized endpoint HTTP://LOCALHOST:19999/evidence",
         lambda _private_dir: "normalized endpoint http://127.1:19999/evidence",
+        lambda private_dir: (
+            "multiply encoded private path "
+            + quote(
+                quote(
+                    quote(
+                        quote(str(private_dir.parent.parent), safe=""),
+                        safe="",
+                    ),
+                    safe="",
+                ),
+                safe="",
+            )
+        ),
+        lambda private_dir: "case-folded private path " + str(private_dir.parent.parent).swapcase(),
     ],
 )
 def test_runner_recursively_rejects_normalized_private_path_and_loopback_uri_leaks(
