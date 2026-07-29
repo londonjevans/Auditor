@@ -8,9 +8,13 @@ serialized result.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
+import math
 import os
+import re
 import secrets
+import stat
 import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
@@ -18,6 +22,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import unquote, urlsplit
 
 from mmaudit.config import (
     RepositoryCleanForkMatrixStateConfig,
@@ -68,6 +73,180 @@ _WORKSPACE_DISPOSAL_POLICY_SHA256 = hashlib.sha256(
     b'{"disposition":"private-root-lifecycle","endpoint_retained":false,'
     b'"path_retained":false,"version":"1.0"}'
 ).hexdigest()
+_URI_PATTERN = re.compile(r"(?i)\b(?:file|https?|wss?)://[^\s\"'<>]+")
+_DIRECTORY_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+
+class _MatrixEvidenceError(Exception):
+    """Expected trust-boundary failure converted to typed failed evidence."""
+
+
+@dataclass
+class _MonotonicClock:
+    source: Callable[[], float]
+    last: float | None = None
+
+    def read(self) -> float:
+        raw = self.source()
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise _MatrixEvidenceError("The monotonic clock returned a non-numeric value.")
+        value = float(raw)
+        if not math.isfinite(value):
+            raise _MatrixEvidenceError("The monotonic clock returned a non-finite value.")
+        if self.last is not None and value < self.last:
+            raise _MatrixEvidenceError("The monotonic clock regressed during matrix execution.")
+        self.last = value
+        return value
+
+
+@dataclass
+class _DirectoryCustody:
+    """Open-descriptor custody for one private execution directory."""
+
+    path: Path
+    descriptor: int
+    device: int
+    inode: int
+
+    def assert_stable(self) -> None:
+        try:
+            path_stat = self.path.lstat()
+            descriptor_stat = os.fstat(self.descriptor)
+            resolved = self.path.resolve(strict=True)
+        except OSError as exc:
+            raise _MatrixEvidenceError("A private workspace identity became unavailable.") from exc
+        if (
+            stat.S_ISLNK(path_stat.st_mode)
+            or not stat.S_ISDIR(path_stat.st_mode)
+            or not stat.S_ISDIR(descriptor_stat.st_mode)
+            or resolved != self.path
+            or (path_stat.st_dev, path_stat.st_ino) != (self.device, self.inode)
+            or (descriptor_stat.st_dev, descriptor_stat.st_ino) != (self.device, self.inode)
+            or descriptor_stat.st_uid != os.geteuid()
+            or stat.S_IMODE(descriptor_stat.st_mode) & 0o077
+        ):
+            raise _MatrixEvidenceError("A private workspace failed ownership or identity checks.")
+
+    def create_child(self, name: str) -> _DirectoryCustody:
+        if (
+            not name
+            or name in {".", ".."}
+            or "/" in name
+            or (os.altsep is not None and os.altsep in name)
+        ):
+            raise _MatrixEvidenceError("A private workspace child name was invalid.")
+        self.assert_stable()
+        try:
+            os.mkdir(name, mode=0o700, dir_fd=self.descriptor)
+            child_descriptor = os.open(name, _DIRECTORY_OPEN_FLAGS, dir_fd=self.descriptor)
+        except OSError as exc:
+            raise _MatrixEvidenceError("A private workspace child could not be created.") from exc
+        descriptor_stat = os.fstat(child_descriptor)
+        child = _DirectoryCustody(
+            path=self.path / name,
+            descriptor=child_descriptor,
+            device=descriptor_stat.st_dev,
+            inode=descriptor_stat.st_ino,
+        )
+        try:
+            child.assert_stable()
+        except BaseException:
+            os.close(child_descriptor)
+            raise
+        return child
+
+    def close(self) -> None:
+        os.close(self.descriptor)
+
+
+def _path_is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def _absolute_lexical(path: Path) -> Path:
+    return Path(os.path.abspath(path))
+
+
+def _validate_existing_canonical_directory(path: Path) -> Path:
+    absolute = _absolute_lexical(path)
+    try:
+        path_stat = absolute.lstat()
+        resolved = absolute.resolve(strict=True)
+    except OSError as exc:
+        raise _MatrixEvidenceError("A required custody directory was unavailable.") from exc
+    if (
+        stat.S_ISLNK(path_stat.st_mode)
+        or not stat.S_ISDIR(path_stat.st_mode)
+        or resolved != absolute
+    ):
+        raise _MatrixEvidenceError("A custody directory was not canonical.")
+    return absolute
+
+
+def _open_private_root(
+    private_root: Path,
+    *,
+    repository_root: Path,
+    repository_exclusion_root: Path,
+) -> _DirectoryCustody:
+    root = _validate_existing_canonical_directory(repository_root)
+    private = _absolute_lexical(private_root)
+    exclusion = _absolute_lexical(repository_exclusion_root)
+    if private == root or _path_is_within(root, private):
+        raise _MatrixEvidenceError("The private workspace overlaps the repository root.")
+    if _path_is_within(private, root):
+        if (
+            exclusion == root
+            or not _path_is_within(exclusion, root)
+            or not _path_is_within(private, exclusion)
+        ):
+            raise _MatrixEvidenceError(
+                "The private workspace was not contained by the validated exclusion root."
+            )
+        if exclusion.exists() or exclusion.is_symlink():
+            canonical_exclusion = _validate_existing_canonical_directory(exclusion)
+            if canonical_exclusion != exclusion:
+                raise _MatrixEvidenceError("The repository exclusion root was not canonical.")
+        elif private != exclusion:
+            raise _MatrixEvidenceError("The repository exclusion root was unavailable.")
+
+    parent = _validate_existing_canonical_directory(private.parent)
+    try:
+        parent_descriptor = os.open(parent, _DIRECTORY_OPEN_FLAGS)
+    except OSError as exc:
+        raise _MatrixEvidenceError("The private workspace parent could not be opened.") from exc
+    try:
+        parent_stat = os.fstat(parent_descriptor)
+        if parent_stat.st_uid != os.geteuid() or stat.S_IMODE(parent_stat.st_mode) & 0o022:
+            raise _MatrixEvidenceError("The private workspace parent was not safely owned.")
+        if private.exists() or private.is_symlink():
+            path_stat = private.lstat()
+            if stat.S_ISLNK(path_stat.st_mode) or not stat.S_ISDIR(path_stat.st_mode):
+                raise _MatrixEvidenceError("The private workspace was not a direct directory.")
+        else:
+            os.mkdir(private.name, mode=0o700, dir_fd=parent_descriptor)
+        descriptor = os.open(private.name, _DIRECTORY_OPEN_FLAGS, dir_fd=parent_descriptor)
+    except OSError as exc:
+        raise _MatrixEvidenceError("The private workspace could not be opened safely.") from exc
+    finally:
+        os.close(parent_descriptor)
+    descriptor_stat = os.fstat(descriptor)
+    custody = _DirectoryCustody(
+        path=private,
+        descriptor=descriptor,
+        device=descriptor_stat.st_dev,
+        inode=descriptor_stat.st_ino,
+    )
+    try:
+        custody.assert_stable()
+    except BaseException:
+        custody.close()
+        raise
+    return custody
 
 
 class ForkMatrixScanner(Protocol):
@@ -281,28 +460,105 @@ def _reseal_run(
     return ScannerRun.model_validate(payload)
 
 
+def _decoded_forms(value: str) -> tuple[str, ...]:
+    forms = [value]
+    for _ in range(3):
+        decoded = unquote(forms[-1])
+        if decoded == forms[-1]:
+            break
+        forms.append(decoded)
+    return tuple(forms)
+
+
+def _uri_is_loopback(value: str) -> bool:
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+    except ValueError:
+        return True
+    if hostname is None:
+        return False
+    normalized = hostname.casefold().rstrip(".")
+    if normalized == "localhost" or normalized.endswith(".localhost"):
+        return True
+    if normalized == "::1" or normalized.startswith("127."):
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
+def _retains_prohibited_private_reference(
+    value: object,
+    *,
+    prohibited_paths: tuple[Path, ...],
+    prohibited_endpoints: tuple[str, ...],
+) -> bool:
+    if isinstance(value, str):
+        for form in _decoded_forms(value):
+            casefolded = form.casefold()
+            if any(str(path) in form for path in prohibited_paths):
+                return True
+            if any(endpoint.casefold() in casefolded for endpoint in prohibited_endpoints):
+                return True
+            if any(_uri_is_loopback(match.group(0)) for match in _URI_PATTERN.finditer(form)):
+                return True
+        return False
+    if isinstance(value, Mapping):
+        return any(
+            _retains_prohibited_private_reference(
+                key,
+                prohibited_paths=prohibited_paths,
+                prohibited_endpoints=prohibited_endpoints,
+            )
+            or _retains_prohibited_private_reference(
+                item,
+                prohibited_paths=prohibited_paths,
+                prohibited_endpoints=prohibited_endpoints,
+            )
+            for key, item in value.items()
+        )
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        return any(
+            _retains_prohibited_private_reference(
+                item,
+                prohibited_paths=prohibited_paths,
+                prohibited_endpoints=prohibited_endpoints,
+            )
+            for item in value
+        )
+    return False
+
+
 def _remove_ephemeral_run_data(
     run: ScannerRun,
     *,
     origin_endpoint: str,
     bridge_endpoint: str,
+    private_root: Path,
+    repository_exclusion_root: Path,
     attempt_dir: Path,
     matrix_root: Path,
 ) -> ScannerRun:
     """Reject evidence that retains an endpoint or private workspace identity."""
 
     sanitized = _reseal_run(run, egress=None)
-    serialized = sanitized.model_dump_json()
-    prohibited = (
-        origin_endpoint,
-        bridge_endpoint,
-        str(attempt_dir),
-        str(matrix_root),
-        "http://localhost:",
-        "http://127.0.0.1:",
-        "http://[::1]:",
+    prohibited_paths = tuple(
+        dict.fromkeys(
+            (
+                _absolute_lexical(private_root),
+                _absolute_lexical(repository_exclusion_root),
+                _absolute_lexical(matrix_root),
+                _absolute_lexical(attempt_dir),
+            )
+        )
     )
-    if any(value and value in serialized for value in prohibited):
+    if _retains_prohibited_private_reference(
+        sanitized.model_dump(mode="python"),
+        prohibited_paths=prohibited_paths,
+        prohibited_endpoints=(origin_endpoint, bridge_endpoint),
+    ):
         return _unavailable_run(
             "The matrix attempt retained prohibited ephemeral execution data.",
             now=lambda: sanitized.finished_at,
@@ -327,6 +583,8 @@ def _baseline_limitation(
         or run.isolation_backend is None
         or run.isolation_attestation_sha256 is None
         or not run.machine_output_validated
+        or not run.version
+        or run.executable_sha256 is None
         or run.execution_observation_sha256 is None
         or run.execution_observation_sha256 != run.expected_execution_observation_sha256()
         or selection is None
@@ -340,6 +598,8 @@ def _baseline_limitation(
         or policy.selection_sha256 != selection.selection_sha256
         or policy.selection_configuration_sha256 != selection.configuration_sha256
         or policy.fuzz_seed != smart_contracts.repository_suite.fuzz_seed
+        or policy.tool_version != run.version
+        or policy.tool_sha256 != run.executable_sha256
         or policy.isolation_backend != run.isolation_backend
         or policy.isolation_attestation_sha256 != run.isolation_attestation_sha256
     ):
@@ -409,48 +669,78 @@ class RepositoryForkMatrixRunner:
             return failed(baseline_error)
         if self.dependencies.clean_state_provider is None:
             return failed("The trusted internal clean-state launcher was unavailable.")
-        if self.dependencies.monotonic() >= absolute_deadline:
-            return failed("The differential matrix deadline expired before execution.")
-
+        if (
+            isinstance(absolute_deadline, bool)
+            or not isinstance(absolute_deadline, (int, float))
+            or not math.isfinite(float(absolute_deadline))
+        ):
+            return failed("The differential matrix deadline was not a finite numeric value.")
+        deadline = float(absolute_deadline)
+        clock = _MonotonicClock(self.dependencies.monotonic)
         try:
-            private_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if clock.read() >= deadline:
+                return failed("The differential matrix deadline expired before execution.")
+        except Exception:
+            return failed("The differential matrix clock failed validation before execution.")
+
+        private_custody: _DirectoryCustody | None = None
+        matrix_custody: _DirectoryCustody | None = None
+        limitations: list[str] = []
+        raw_states: list[_RawState] = []
+        try:
+            private_custody = _open_private_root(
+                private_root,
+                repository_root=root,
+                repository_exclusion_root=repository_exclusion_root,
+            )
             matrix_nonce = self.dependencies.nonce()
             if (
                 not matrix_nonce
                 or len(matrix_nonce) > 256
                 or any(ord(character) < 33 or ord(character) > 126 for character in matrix_nonce)
             ):
-                return failed("The fresh-workspace nonce source returned invalid data.")
+                raise _MatrixEvidenceError(
+                    "The fresh-workspace nonce source returned invalid data."
+                )
             matrix_nonce_sha256 = hashlib.sha256(matrix_nonce.encode("utf-8")).hexdigest()
-            matrix_root = private_root / f"repository-fork-matrix-{matrix_nonce_sha256[:16]}"
-            matrix_root.mkdir(mode=0o700, exist_ok=False)
-        except OSError:
-            return failed("The private differential workspace could not be created.")
-
-        limitations: list[str] = []
-        raw_states: list[_RawState] = []
-        try:
+            matrix_custody = private_custody.create_child(
+                f"repository-fork-matrix-{matrix_nonce_sha256[:16]}"
+            )
             for state_config in configured_states:
                 raw_states.append(
                     self._execute_state(
                         state_config,
                         root=root,
-                        matrix_root=matrix_root,
+                        private_root=private_custody.path,
+                        matrix_custody=matrix_custody,
                         matrix_nonce_sha256=matrix_nonce_sha256,
                         projects=projects,
                         repository_sha256=repository_sha256,
                         repository_exclusion_root=repository_exclusion_root,
                         backend=backend,
-                        absolute_deadline=absolute_deadline,
+                        absolute_deadline=deadline,
+                        clock=clock,
+                        expected_forge_version=baseline_run.version,
+                        expected_forge_sha256=baseline_run.executable_sha256,
                         limitations=limitations,
                     )
                 )
+            private_custody.assert_stable()
+            matrix_custody.assert_stable()
             states = tuple(
                 self._seal_state(raw_state)
                 for raw_state in sorted(raw_states, key=lambda item: item.config.state_id)
             )
-        except (OSError, RuntimeError, ValueError):
+        except Exception:
             return failed("The differential state evidence failed closed.")
+        finally:
+            if matrix_custody is not None:
+                matrix_custody.close()
+            if private_custody is not None:
+                private_custody.close()
+
+        if not raw_states:
+            return failed("The differential matrix deadline expired before execution.")
         snapshots = [
             attempt.snapshot
             for raw_state in raw_states
@@ -630,11 +920,9 @@ class RepositoryForkMatrixRunner:
         unique_limitations = tuple(dict.fromkeys(limitations))
         status = (
             RepositoryDifferentialRunStatus.INCONCLUSIVE
-            if has_inconclusive
+            if has_inconclusive or unique_limitations
             else RepositoryDifferentialRunStatus.COMPLETE
         )
-        if status is RepositoryDifferentialRunStatus.COMPLETE:
-            unique_limitations = ()
         return RepositorySuiteDifferentialRun.sealed(
             status=status,
             configuration_sha256=configuration_sha256,
