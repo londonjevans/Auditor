@@ -37,6 +37,7 @@ from mmaudit.models.endpoint_snapshots import (
     validate_openrouter_endpoint_snapshot,
 )
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterPrivacyError
+from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.usage import UsageLedger
 from mmaudit.orchestration.budgets import BudgetManager
 from mmaudit.privacy import (
@@ -105,7 +106,7 @@ def _endpoint_snapshot(
         },
         require_zdr=True,
         zdr_payload={"data": [exact_endpoint]},
-        reasoning_requested=True,
+        reasoning_requested=False,
     )
 
 
@@ -277,6 +278,13 @@ def test_current_like_null_limits_are_derived_and_exact_endpoint_is_bound() -> N
     assert evidence.data_collection_deny_evidence_sha256
     assert evidence.data_collection_deny_evidence_expires_at is None
     assert evidence.structured_output_supported is True
+    assert evidence.supported_output_modes == (
+        StructuredOutputMode.NATIVE_JSON_SCHEMA,
+        StructuredOutputMode.JSON_OBJECT,
+        StructuredOutputMode.VALIDATED_TEXT_JSON,
+    )
+    assert evidence.structured_output_mode is StructuredOutputMode.NATIVE_JSON_SCHEMA
+    assert len(evidence.output_capability_sha256) == 64
     assert evidence.reasoning_supported is True
     assert len(evidence.catalog_identity_binding_sha256) == 64
     assert len(evidence.model_metadata_snapshot_sha256) == 64
@@ -325,6 +333,150 @@ def test_non_zdr_non_native_endpoint_remains_a_capability_candidate() -> None:
     assert payload.data_collection_deny_evidence_sha256 is None
     assert payload.structured_output_supported is False
     assert payload.structured_output_parameters == ()
+    assert payload.supported_output_modes == (StructuredOutputMode.VALIDATED_TEXT_JSON,)
+    assert payload.structured_output_mode is StructuredOutputMode.VALIDATED_TEXT_JSON
+
+
+def test_reasoning_aliases_do_not_authorize_the_emitted_reasoning_request() -> None:
+    model = _model()
+    model["supported_parameters"] = [
+        "max_tokens",
+        "reasoning_effort",
+        "response_format",
+        "temperature",
+    ]
+    endpoint = _endpoint()
+    endpoint["supported_parameters"] = [
+        "max_tokens",
+        "reasoning_effort",
+        "response_format",
+        "temperature",
+    ]
+    snapshot = validate_openrouter_endpoint_snapshot(
+        exact_model_id="alpha/atlas-secure",
+        configured_provider_endpoints=("approved-provider/fp8",),
+        provider_policy_mode="only",
+        endpoint_payload={
+            "data": {
+                "id": "alpha/atlas-secure",
+                "endpoints": [{key: value for key, value in endpoint.items() if key != "model_id"}],
+            }
+        },
+        require_zdr=False,
+        reasoning_requested=False,
+        structured_output_required=False,
+    )
+
+    payload = validate_openrouter_model_discovery(
+        exact_model_id="alpha/atlas-secure",
+        models_payload={"data": [model]},
+        single_model_payload={"data": copy.deepcopy(model)},
+        endpoint_snapshot=snapshot,
+    )
+
+    assert payload.reasoning_parameters == ("reasoning_effort",)
+    assert payload.reasoning_supported is False
+
+
+def test_discovery_rejects_a_runtime_specific_reasoning_request_profile() -> None:
+    endpoint = _endpoint()
+    snapshot = validate_openrouter_endpoint_snapshot(
+        exact_model_id="alpha/atlas-secure",
+        configured_provider_endpoints=("approved-provider/fp8",),
+        provider_policy_mode="only",
+        endpoint_payload={
+            "data": {
+                "id": "alpha/atlas-secure",
+                "endpoints": [{key: value for key, value in endpoint.items() if key != "model_id"}],
+            }
+        },
+        require_zdr=False,
+        reasoning_requested=True,
+        structured_output_required=False,
+    )
+
+    with pytest.raises(ValidationError, match="capability-oriented"):
+        validate_openrouter_model_discovery(
+            exact_model_id="alpha/atlas-secure",
+            models_payload={"data": [_model()]},
+            single_model_payload={"data": _model()},
+            endpoint_snapshot=snapshot,
+        )
+
+
+def test_equivalent_native_schema_markers_negotiate_native_mode() -> None:
+    model = _model()
+    model["supported_parameters"] = [
+        "json_schema",
+        "max_tokens",
+        "response_format",
+        "temperature",
+    ]
+    endpoint = _endpoint()
+    endpoint["supported_parameters"] = [
+        "max_tokens",
+        "response_format",
+        "structured_outputs",
+        "temperature",
+    ]
+    snapshot = validate_openrouter_endpoint_snapshot(
+        exact_model_id="alpha/atlas-secure",
+        configured_provider_endpoints=("approved-provider/fp8",),
+        provider_policy_mode="only",
+        endpoint_payload={
+            "data": {
+                "id": "alpha/atlas-secure",
+                "endpoints": [{key: value for key, value in endpoint.items() if key != "model_id"}],
+            }
+        },
+        require_zdr=False,
+        reasoning_requested=False,
+        structured_output_required=False,
+    )
+
+    payload = validate_openrouter_model_discovery(
+        exact_model_id="alpha/atlas-secure",
+        models_payload={"data": [model]},
+        single_model_payload={"data": copy.deepcopy(model)},
+        endpoint_snapshot=snapshot,
+    )
+
+    assert payload.structured_output_parameters == ("response_format",)
+    assert payload.structured_output_mode is StructuredOutputMode.NATIVE_JSON_SCHEMA
+    assert payload.structured_output_supported is True
+
+
+@pytest.mark.parametrize("marker", ["json_schema", "structured_outputs"])
+def test_marker_without_response_format_falls_back_to_validated_text(marker: str) -> None:
+    model = _model()
+    model["supported_parameters"] = ["max_tokens", marker, "temperature"]
+    endpoint = _endpoint()
+    endpoint["supported_parameters"] = ["max_tokens", marker, "temperature"]
+    snapshot = validate_openrouter_endpoint_snapshot(
+        exact_model_id="alpha/atlas-secure",
+        configured_provider_endpoints=("approved-provider/fp8",),
+        provider_policy_mode="only",
+        endpoint_payload={
+            "data": {
+                "id": "alpha/atlas-secure",
+                "endpoints": [{key: value for key, value in endpoint.items() if key != "model_id"}],
+            }
+        },
+        require_zdr=False,
+        reasoning_requested=False,
+        structured_output_required=False,
+    )
+
+    payload = validate_openrouter_model_discovery(
+        exact_model_id="alpha/atlas-secure",
+        models_payload={"data": [model]},
+        single_model_payload={"data": copy.deepcopy(model)},
+        endpoint_snapshot=snapshot,
+    )
+
+    assert payload.structured_output_parameters == (marker,)
+    assert payload.structured_output_mode is StructuredOutputMode.VALIDATED_TEXT_JSON
+    assert payload.structured_output_supported is False
 
 
 def test_non_zdr_endpoint_without_policy_remains_unverified() -> None:
@@ -357,6 +509,62 @@ def test_non_zdr_endpoint_without_policy_remains_unverified() -> None:
         payload.data_collection_deny_evidence_source is DataCollectionDenyEvidenceSource.UNVERIFIED
     )
     assert payload.data_collection_deny_evidence_sha256 is None
+
+
+def test_model_and_endpoint_capabilities_negotiate_json_object_mode() -> None:
+    model = _model()
+    model["supported_parameters"].remove("structured_outputs")
+    payload = _discover(models=[model])
+
+    assert payload.structured_output_parameters == ("response_format",)
+    assert payload.supported_output_modes == (
+        StructuredOutputMode.JSON_OBJECT,
+        StructuredOutputMode.VALIDATED_TEXT_JSON,
+    )
+    assert payload.structured_output_mode is StructuredOutputMode.JSON_OBJECT
+
+
+def test_discovery_preserves_only_model_endpoint_common_native_markers() -> None:
+    endpoint = _endpoint()
+    endpoint["supported_parameters"].append("json_schema")
+    snapshot = validate_openrouter_endpoint_snapshot(
+        exact_model_id="alpha/atlas-secure",
+        configured_provider_endpoints=("approved-provider/fp8",),
+        provider_policy_mode="only",
+        endpoint_payload={
+            "data": {
+                "id": "alpha/atlas-secure",
+                "endpoints": [{key: value for key, value in endpoint.items() if key != "model_id"}],
+            }
+        },
+        require_zdr=False,
+        structured_output_required=False,
+    )
+
+    payload = _discover(endpoint_snapshot=snapshot)
+
+    assert payload.endpoint_snapshot.endpoints[0].structured_output_parameters == (
+        "json_schema",
+        "response_format",
+        "structured_outputs",
+    )
+    assert payload.structured_output_parameters == (
+        "response_format",
+        "structured_outputs",
+    )
+    assert payload.structured_output_mode is StructuredOutputMode.NATIVE_JSON_SCHEMA
+
+
+def test_discovery_rejects_tampered_negotiated_output_mode_and_capability_hash() -> None:
+    payload = _discover().model_dump(mode="json")
+    payload["structured_output_mode"] = StructuredOutputMode.JSON_OBJECT.value
+    with pytest.raises(ValidationError, match="negotiated discovery output mode"):
+        OpenRouterModelDiscoveryPayload.model_validate(payload)
+
+    payload = _discover().model_dump(mode="json")
+    payload["output_capability_sha256"] = "0" * 64
+    with pytest.raises(ValidationError, match="output-capability hash"):
+        OpenRouterModelDiscoveryPayload.model_validate(payload)
 
 
 def test_non_zdr_endpoint_credits_exact_consent_bound_policy_hash() -> None:
@@ -582,13 +790,15 @@ def test_catalog_and_exact_endpoint_limits_must_be_compatible() -> None:
     assert evidence.output_limit == 200_000
 
 
-def test_native_snapshot_rejects_catalog_without_its_required_output_parameter() -> None:
+def test_catalog_without_native_output_parameter_downgrades_to_validated_text() -> None:
     model = _model()
     model["supported_parameters"].remove("response_format")
     model["supported_parameters"].remove("structured_outputs")
 
-    with pytest.raises(ValidationError, match="parameter required by the exact endpoint"):
-        _discover(models=[model])
+    evidence = _discover(models=[model])
+
+    assert evidence.supported_output_modes == (StructuredOutputMode.VALIDATED_TEXT_JSON,)
+    assert evidence.structured_output_mode is StructuredOutputMode.VALIDATED_TEXT_JSON
 
 
 def test_self_hashes_reject_metadata_and_artifact_tampering() -> None:

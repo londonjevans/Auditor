@@ -215,6 +215,8 @@ async def test_real_openrouter_exact_private_structured_smoke() -> None:
                     endpoint_payload=endpoint_payload,
                     require_zdr=True,
                     zdr_payload=zdr_payload,
+                    reasoning_requested=False,
+                    structured_output_required=False,
                 )
                 discovery_payload = validate_openrouter_model_discovery(
                     exact_model_id=settings.model_id,

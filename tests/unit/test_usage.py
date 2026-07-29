@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from mmaudit.models.identity import OpenRouterIdentityBindingResult
+from mmaudit.models.output_modes import StructuredOutputMode, supported_output_modes
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     ModelRequestValidationStatus,
@@ -16,6 +17,10 @@ from mmaudit.models.schemas import (
 from mmaudit.models.usage import is_creditable_usage_record
 from mmaudit.privacy import EndpointPolicyClass, PrivacyProfile, PrivacySourceClassification
 from tests.identity_fixtures import bind_synthetic_usage_identity
+from tests.output_evidence_fixtures import (
+    SYNTHETIC_OUTPUT_CAPABILITY_SHA256,
+    synthetic_structured_output_routing,
+)
 
 _REQUESTED_MODEL = "author/exact-model"
 _CANONICAL_MODEL = "author/exact-model-20260727"
@@ -40,6 +45,12 @@ def _creditable_record(
     generation_id = "generation-test"
     endpoint = "anthropic"
     schema_sha256 = "d" * 64
+    prompt_sha256 = "a" * 64
+    response_sha256 = "b" * 64
+    validated_response_sha256 = "d" * 64
+    request_body_sha256 = "c" * 64
+    provider_policy_sha256 = "f" * 64
+    endpoint_snapshot_sha256 = "9" * 64
     return UsageRecord(
         request_id="request-test",
         role="source_audit",
@@ -67,7 +78,9 @@ def _creditable_record(
             "finish_reason": "stop",
             "schema_sha256": schema_sha256,
             "router_metadata_sha256": "e" * 64,
-            "provider_policy_sha256": "f" * 64,
+            "provider_policy_sha256": provider_policy_sha256,
+            "endpoint_snapshot_sha256": endpoint_snapshot_sha256,
+            "output_capability_sha256": SYNTHETIC_OUTPUT_CAPABILITY_SHA256,
             "provider_fallbacks_allowed": False,
             "certification_request": False,
             "validation_status": "valid",
@@ -87,14 +100,25 @@ def _creditable_record(
             "privacy_endpoint_policy_class": EndpointPolicyClass.ZDR.value,
             "repair_used": False,
             "repair_request": False,
+            "structured_output": synthetic_structured_output_routing(
+                configured_provider_endpoints=(endpoint,),
+                selected_provider_endpoint=endpoint,
+                endpoint_snapshot_sha256=endpoint_snapshot_sha256,
+                prompt_sha256=prompt_sha256,
+                request_body_sha256=request_body_sha256,
+                provider_policy_sha256=provider_policy_sha256,
+                schema_sha256=schema_sha256,
+                original_response_sha256=response_sha256,
+                validated_response_sha256=validated_response_sha256,
+            ),
             "request_started_at": started_at.isoformat(),
             "request_ended_at": ended_at.isoformat(),
             "latency_ms": 125,
         },
-        prompt_sha256="a" * 64,
-        response_sha256="b" * 64,
-        validated_response_sha256="d" * 64,
-        request_body_sha256="c" * 64,
+        prompt_sha256=prompt_sha256,
+        response_sha256=response_sha256,
+        validated_response_sha256=validated_response_sha256,
+        request_body_sha256=request_body_sha256,
         schema_sha256=schema_sha256,
         openrouter_generation_id=generation_id,
         configured_provider_endpoints=[endpoint],
@@ -534,6 +558,314 @@ def test_creditable_usage_rejects_incomplete_or_incoherent_evidence(
         }
 
     assert not is_creditable_usage_record(record.model_copy(update=updates))
+
+
+def test_creditable_usage_requires_self_hashed_structured_output_evidence() -> None:
+    record = _creditable_record()
+    without_evidence = {
+        key: value for key, value in record.routing.items() if key != "structured_output"
+    }
+    assert not is_creditable_usage_record(record.model_copy(update={"routing": without_evidence}))
+
+    tampered = dict(record.routing["structured_output"])
+    tampered["output_capability_sha256"] = "0" * 64
+    assert not is_creditable_usage_record(
+        record.model_copy(
+            update={
+                "routing": {
+                    **record.routing,
+                    "structured_output": tampered,
+                }
+            }
+        )
+    )
+
+
+def test_creditable_usage_rejects_output_evidence_bound_to_other_request() -> None:
+    record = _creditable_record()
+    mismatched = synthetic_structured_output_routing(
+        configured_provider_endpoints=tuple(record.configured_provider_endpoints),
+        selected_provider_endpoint=record.actual_provider_endpoint or "",
+        endpoint_snapshot_sha256=record.routing["endpoint_snapshot_sha256"],
+        prompt_sha256=record.prompt_sha256,
+        request_body_sha256="0" * 64,
+        provider_policy_sha256=record.routing["provider_policy_sha256"],
+        schema_sha256=record.schema_sha256 or "",
+        original_response_sha256=record.response_sha256 or "",
+        validated_response_sha256=record.validated_response_sha256 or "",
+    )
+
+    assert not is_creditable_usage_record(
+        record.model_copy(
+            update={
+                "routing": {
+                    **record.routing,
+                    "structured_output": mismatched,
+                }
+            }
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("structured_output_mode", StructuredOutputMode.VALIDATED_TEXT_JSON.value),
+        ("structured_output_request_shape_sha256", "0" * 64),
+        ("structured_output_require_parameters", False),
+        ("structured_output_required_provider_parameters", []),
+        ("structured_output_response_format", None),
+        ("structured_output_protocol_sha256", "0" * 64),
+        ("structured_output_supported_modes", ["NATIVE_JSON_SCHEMA"]),
+        ("structured_output_capability_sha256", "1" * 64),
+        ("structured_output_request_body_sha256", "2" * 64),
+        ("structured_output_original_response_sha256", "3" * 64),
+        ("structured_output_validated_response_sha256", "4" * 64),
+    ],
+)
+def test_credit_rejects_structured_request_shape_routing_drift(
+    field: str,
+    value: object,
+) -> None:
+    record = _creditable_record()
+    structured = record.routing["structured_output"]
+    coherent_routing = {
+        **record.routing,
+        "structured_output_mode": structured["requested_mode"],
+        "structured_output_request_shape_sha256": structured["request_shape_sha256"],
+        "structured_output_require_parameters": structured["provider_require_parameters"],
+        "structured_output_required_provider_parameters": structured[
+            "required_provider_parameters"
+        ],
+        "structured_output_reasoning_request_sha256": structured["reasoning_request_sha256"],
+        "structured_output_response_format": structured["response_format"],
+        "structured_output_protocol_sha256": structured["strict_protocol_sha256"],
+        "structured_output_supported_modes": [
+            mode.value
+            for mode in supported_output_modes(structured["endpoint_structured_output_parameters"])
+        ],
+        "structured_output_capability_sha256": structured["output_capability_sha256"],
+        "structured_output_request_body_sha256": structured["request_body_sha256"],
+        "structured_output_original_response_sha256": structured["original_response_sha256"],
+        "structured_output_validated_response_sha256": structured["validated_response_sha256"],
+    }
+    coherent = record.model_copy(update={"routing": coherent_routing})
+    assert is_creditable_usage_record(coherent)
+
+    assert not is_creditable_usage_record(
+        coherent.model_copy(update={"routing": {**coherent.routing, field: value}})
+    )
+
+
+def test_real_credit_binds_text_reasoning_require_parameters_to_identity() -> None:
+    provisional = _creditable_record(execution_evidence=ExecutionEvidenceKind.REAL)
+    text_reasoning = synthetic_structured_output_routing(
+        configured_provider_endpoints=tuple(provisional.configured_provider_endpoints),
+        selected_provider_endpoint=provisional.actual_provider_endpoint or "",
+        endpoint_snapshot_sha256=provisional.routing["endpoint_snapshot_sha256"],
+        prompt_sha256=provisional.prompt_sha256,
+        request_body_sha256=provisional.request_body_sha256 or "",
+        provider_policy_sha256=provisional.routing["provider_policy_sha256"],
+        schema_sha256=provisional.schema_sha256 or "",
+        original_response_sha256=provisional.response_sha256 or "",
+        validated_response_sha256=provisional.validated_response_sha256 or "",
+        mode=StructuredOutputMode.VALIDATED_TEXT_JSON,
+        reasoning_requested=True,
+    )
+    with_reasoning = provisional.model_copy(
+        update={
+            "routing": {
+                **provisional.routing,
+                "selected_provider_name": provisional.provider,
+                "structured_output": text_reasoning,
+            }
+        }
+    )
+    bound = bind_synthetic_usage_identity(with_reasoning)
+    assert is_creditable_usage_record(bound, require_real=True)
+
+    without_reasoning = synthetic_structured_output_routing(
+        configured_provider_endpoints=tuple(bound.configured_provider_endpoints),
+        selected_provider_endpoint=bound.actual_provider_endpoint or "",
+        endpoint_snapshot_sha256=bound.routing["endpoint_snapshot_sha256"],
+        prompt_sha256=bound.prompt_sha256,
+        request_body_sha256=bound.request_body_sha256 or "",
+        provider_policy_sha256=bound.routing["provider_policy_sha256"],
+        schema_sha256=bound.schema_sha256 or "",
+        original_response_sha256=bound.response_sha256 or "",
+        validated_response_sha256=bound.validated_response_sha256 or "",
+        mode=StructuredOutputMode.VALIDATED_TEXT_JSON,
+    )
+    assert not is_creditable_usage_record(
+        bound.model_copy(
+            update={
+                "routing": {
+                    **bound.routing,
+                    "structured_output": without_reasoning,
+                }
+            }
+        ),
+        require_real=True,
+    )
+
+
+def test_real_credit_rejects_mode_different_from_bound_endpoint_capability() -> None:
+    provisional = _creditable_record(execution_evidence=ExecutionEvidenceKind.REAL)
+    record = bind_synthetic_usage_identity(
+        provisional.model_copy(
+            update={
+                "routing": {
+                    **provisional.routing,
+                    "selected_provider_name": provisional.provider,
+                }
+            }
+        )
+    )
+    text_evidence = synthetic_structured_output_routing(
+        configured_provider_endpoints=tuple(record.configured_provider_endpoints),
+        selected_provider_endpoint=record.actual_provider_endpoint or "",
+        endpoint_snapshot_sha256=record.routing["endpoint_snapshot_sha256"],
+        prompt_sha256=record.prompt_sha256,
+        request_body_sha256=record.request_body_sha256 or "",
+        provider_policy_sha256=record.routing["provider_policy_sha256"],
+        schema_sha256=record.schema_sha256 or "",
+        original_response_sha256=record.response_sha256 or "",
+        validated_response_sha256=record.validated_response_sha256 or "",
+        mode=StructuredOutputMode.VALIDATED_TEXT_JSON,
+    )
+    record = record.model_copy(
+        update={
+            "routing": {
+                **record.routing,
+                "structured_output": text_evidence,
+            }
+        }
+    )
+
+    assert not is_creditable_usage_record(record, require_real=True)
+
+
+def test_native_mode_credit_accepts_full_bound_endpoint_capability_inventory() -> None:
+    provisional = _creditable_record()
+    native_evidence = synthetic_structured_output_routing(
+        configured_provider_endpoints=tuple(provisional.configured_provider_endpoints),
+        selected_provider_endpoint=provisional.actual_provider_endpoint or "",
+        endpoint_snapshot_sha256=provisional.routing["endpoint_snapshot_sha256"],
+        prompt_sha256=provisional.prompt_sha256,
+        request_body_sha256=provisional.request_body_sha256 or "",
+        provider_policy_sha256=provisional.routing["provider_policy_sha256"],
+        schema_sha256=provisional.schema_sha256 or "",
+        original_response_sha256=provisional.response_sha256 or "",
+        validated_response_sha256=provisional.validated_response_sha256 or "",
+        mode=StructuredOutputMode.NATIVE_JSON_SCHEMA,
+    )
+    provisional = provisional.model_copy(
+        update={
+            "routing": {
+                **provisional.routing,
+                "structured_output": native_evidence,
+            }
+        }
+    )
+    record = bind_synthetic_usage_identity(
+        provisional.model_copy(
+            update={
+                "routing": {
+                    **provisional.routing,
+                    "selected_provider_name": provisional.provider,
+                }
+            }
+        ),
+        endpoint_supported_parameters=(
+            "json_schema",
+            "max_tokens",
+            "response_format",
+            "structured_outputs",
+            "temperature",
+        ),
+        model_supported_parameters=(
+            "json_schema",
+            "max_tokens",
+            "response_format",
+            "structured_outputs",
+            "temperature",
+        ),
+    )
+
+    assert is_creditable_usage_record(record)
+
+
+def test_json_object_credit_accepts_model_endpoint_common_mode_downgrade() -> None:
+    provisional = _creditable_record()
+    record = bind_synthetic_usage_identity(
+        provisional.model_copy(
+            update={
+                "routing": {
+                    **provisional.routing,
+                    "selected_provider_name": provisional.provider,
+                }
+            }
+        ),
+        endpoint_supported_parameters=(
+            "json_schema",
+            "max_tokens",
+            "response_format",
+            "structured_outputs",
+            "temperature",
+        ),
+        model_supported_parameters=(
+            "max_tokens",
+            "response_format",
+            "temperature",
+        ),
+    )
+
+    assert is_creditable_usage_record(record)
+    binding = OpenRouterIdentityBindingResult.model_validate(record.routing["identity_binding"])
+    assert (
+        binding.snapshot.endpoint_capabilities.structured_output_mode
+        is StructuredOutputMode.JSON_OBJECT
+    )
+    assert set(
+        record.routing["structured_output"]["endpoint_structured_output_parameters"]
+    ).issubset(binding.snapshot.endpoint_capabilities.structured_output_parameters)
+
+
+def test_credit_rejects_capability_hash_different_from_bound_identity() -> None:
+    provisional = _creditable_record()
+    record = bind_synthetic_usage_identity(
+        provisional.model_copy(
+            update={
+                "routing": {
+                    **provisional.routing,
+                    "selected_provider_name": provisional.provider,
+                }
+            }
+        )
+    )
+    mismatched = synthetic_structured_output_routing(
+        configured_provider_endpoints=tuple(record.configured_provider_endpoints),
+        selected_provider_endpoint=record.actual_provider_endpoint or "",
+        endpoint_snapshot_sha256=record.routing["endpoint_snapshot_sha256"],
+        output_capability_sha256="0" * 64,
+        prompt_sha256=record.prompt_sha256,
+        request_body_sha256=record.request_body_sha256 or "",
+        provider_policy_sha256=record.routing["provider_policy_sha256"],
+        schema_sha256=record.schema_sha256 or "",
+        original_response_sha256=record.response_sha256 or "",
+        validated_response_sha256=record.validated_response_sha256 or "",
+    )
+    record = record.model_copy(
+        update={
+            "routing": {
+                **record.routing,
+                "output_capability_sha256": "0" * 64,
+                "structured_output": mismatched,
+            }
+        }
+    )
+
+    assert not is_creditable_usage_record(record)
 
 
 def test_recorded_explicit_fallback_is_not_itself_a_model_substitution() -> None:

@@ -15,10 +15,13 @@ from typing import Any
 from pydantic import ValidationError
 
 from mmaudit.models.identity import OpenRouterIdentityBindingResult
+from mmaudit.models.output_modes import supported_output_modes
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     ModelIdentityStrength,
     ModelRequestValidationStatus,
+    StructuredOutputEvidence,
+    StructuredOutputResponseFormat,
     UsageRecord,
 )
 from mmaudit.privacy import EndpointPolicyClass, PrivacyProfile, PrivacySourceClassification
@@ -180,6 +183,7 @@ def _is_strict_usage_record(
         and _is_sha256(routing.get("provider_policy_sha256"))
         and routing.get("validation_status") == "valid"
         and _has_valid_privacy_routing(record)
+        and _has_valid_structured_output_routing(record)
         and routing.get("repair_used") is False
         and routing.get("repair_request") is False
         and routing.get("request_started_at") == record.started_at.isoformat()
@@ -245,6 +249,90 @@ def _is_strict_usage_record(
 
 def _is_sha256(value: Any) -> bool:
     return isinstance(value, str) and _SHA256.fullmatch(value) is not None
+
+
+def _has_valid_structured_output_routing(record: UsageRecord) -> bool:
+    raw_evidence = record.routing.get("structured_output")
+    if not isinstance(raw_evidence, dict):
+        return False
+    try:
+        evidence = StructuredOutputEvidence.model_validate(raw_evidence)
+    except ValidationError:
+        return False
+    if evidence.model_dump(mode="json") != raw_evidence:
+        return False
+    if (
+        evidence.repair_used
+        or evidence.truncated
+        or evidence.requested_mode is not evidence.achieved_mode
+        or tuple(record.configured_provider_endpoints) != evidence.configured_provider_endpoints
+        or record.actual_provider_endpoint != evidence.selected_provider_endpoint
+        or record.prompt_sha256 != evidence.prompt_sha256
+        or record.request_body_sha256 != evidence.request_body_sha256
+        or record.schema_sha256 != evidence.schema_sha256
+        or record.response_sha256 != evidence.original_response_sha256
+        or record.validated_response_sha256 != evidence.validated_response_sha256
+        or record.routing.get("provider_policy_sha256") != evidence.provider_policy_sha256
+        or record.routing.get("endpoint_snapshot_sha256") != evidence.endpoint_snapshot_sha256
+        or record.routing.get("output_capability_sha256") != evidence.output_capability_sha256
+        or record.routing.get("repair_used") is not evidence.repair_used
+    ):
+        return False
+    request_shape_routing = {
+        "structured_output_mode": evidence.requested_mode.value,
+        "structured_output_request_shape_sha256": evidence.request_shape_sha256,
+        "structured_output_require_parameters": evidence.provider_require_parameters,
+        "structured_output_required_provider_parameters": list(
+            evidence.required_provider_parameters
+        ),
+        "structured_output_reasoning_request_sha256": (evidence.reasoning_request_sha256),
+        "structured_output_response_format": (
+            None
+            if evidence.response_format is StructuredOutputResponseFormat.OMITTED
+            else evidence.response_format.value
+        ),
+        "structured_output_protocol_sha256": evidence.strict_protocol_sha256,
+    }
+    if any(key in record.routing for key in request_shape_routing) and any(
+        record.routing.get(key) != value for key, value in request_shape_routing.items()
+    ):
+        return False
+
+    redundant_routing = {
+        "structured_output_supported_modes": [
+            mode.value
+            for mode in supported_output_modes(evidence.endpoint_structured_output_parameters)
+        ],
+        "structured_output_capability_sha256": evidence.output_capability_sha256,
+        "structured_output_request_body_sha256": evidence.request_body_sha256,
+        "structured_output_original_response_sha256": (evidence.original_response_sha256),
+        "structured_output_validated_response_sha256": (evidence.validated_response_sha256),
+    }
+    if any(
+        key in record.routing and record.routing.get(key) != value
+        for key, value in redundant_routing.items()
+    ):
+        return False
+
+    binding = _validated_identity_binding(record)
+    if binding is None:
+        return True
+    capabilities = binding.snapshot.endpoint_capabilities
+    required_special_parameters = set(capabilities.required_parameters) - {
+        "max_tokens",
+        "temperature",
+    }
+    return (
+        binding.snapshot.endpoint_snapshot_sha256 == evidence.endpoint_snapshot_sha256
+        and capabilities.output_capability_sha256 == evidence.output_capability_sha256
+        and capabilities.structured_output_mode is evidence.requested_mode
+        and set(evidence.endpoint_structured_output_parameters).issubset(
+            capabilities.structured_output_parameters
+        )
+        and set(evidence.required_provider_parameters) == required_special_parameters
+        and binding.snapshot.provider_policy.require_parameters
+        is evidence.provider_require_parameters
+    )
 
 
 def _has_valid_privacy_routing(record: UsageRecord) -> bool:

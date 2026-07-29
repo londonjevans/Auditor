@@ -21,8 +21,15 @@ from mmaudit.models.openrouter import (
     OpenRouterClient,
     OpenRouterError,
     strict_json_schema,
+    structured_output_prompt_sha256,
 )
-from mmaudit.models.schemas import ExecutionEvidenceKind, StrictModel, UsageRecord
+from mmaudit.models.output_modes import StructuredOutputMode
+from mmaudit.models.schemas import (
+    ExecutionEvidenceKind,
+    StrictModel,
+    StructuredOutputEvidence,
+    UsageRecord,
+)
 from mmaudit.models.usage import (
     _is_structurally_creditable_usage_record,
     is_creditable_usage_record,
@@ -1006,20 +1013,26 @@ def verify_model_benchmark_report_structure(
             if [item.dimension for item in case_result.dimensions] != expected_dimensions:
                 raise ValueError(f"model benchmark case dimensions drifted: {case_result.case_id}")
             record = case_result.usage_record
-            expected_prompt_sha256 = _provider_payload_sha256(
-                [
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {
-                        "role": "user",
-                        "content": blinded_model_benchmark_request(case),
-                    },
-                ]
-            )
-            if record is not None and (
-                record.prompt_sha256 != expected_prompt_sha256
-                or record.schema_sha256 != expected_schema_sha256
-            ):
-                raise ValueError(f"model benchmark request binding drifted: {case_result.case_id}")
+            if record is not None:
+                output_mode = _usage_structured_output_mode(record)
+                if output_mode is None:
+                    raise ValueError(
+                        f"model benchmark request binding drifted: {case_result.case_id}"
+                    )
+                expected_prompt_sha256 = structured_output_prompt_sha256(
+                    mode=output_mode,
+                    system_prompt=_SYSTEM_PROMPT,
+                    user_prompt=blinded_model_benchmark_request(case),
+                    response_model=ModelBenchmarkResponse,
+                    schema_name="mmaudit_model_benchmark",
+                )
+                if (
+                    record.prompt_sha256 != expected_prompt_sha256
+                    or record.schema_sha256 != expected_schema_sha256
+                ):
+                    raise ValueError(
+                        f"model benchmark request binding drifted: {case_result.case_id}"
+                    )
             response = case_result.normalized_response
             expected_error = case_result.error_kind
             scorable_response: ModelBenchmarkResponse | None = None
@@ -1378,11 +1391,15 @@ def _successful_usage_error(
         require_certification=evidence is ExecutionEvidenceKind.REAL,
     ):
         return "UsageValidationError"
-    expected_prompt_sha256 = _provider_payload_sha256(
-        [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
+    output_mode = _usage_structured_output_mode(record)
+    if output_mode is None:
+        return "UsageOutputModeBindingError"
+    expected_prompt_sha256 = structured_output_prompt_sha256(
+        mode=output_mode,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        response_model=ModelBenchmarkResponse,
+        schema_name="mmaudit_model_benchmark",
     )
     if record.prompt_sha256 != expected_prompt_sha256:
         return "UsagePromptBindingError"
@@ -1390,6 +1407,30 @@ def _successful_usage_error(
     if record.schema_sha256 != expected_schema_sha256:
         return "UsageSchemaBindingError"
     return None
+
+
+def _usage_structured_output_mode(
+    record: UsageRecord,
+) -> StructuredOutputMode | None:
+    raw_evidence = record.routing.get("structured_output")
+    if isinstance(raw_evidence, dict):
+        try:
+            evidence = StructuredOutputEvidence.model_validate(raw_evidence)
+        except ValidationError:
+            return None
+        if evidence.model_dump(mode="json") != raw_evidence:
+            return None
+        raw_mode = record.routing.get("structured_output_mode")
+        if raw_mode is not None and raw_mode != evidence.requested_mode.value:
+            return None
+        return evidence.requested_mode
+    raw_mode = record.routing.get("structured_output_mode")
+    if not isinstance(raw_mode, str):
+        return None
+    try:
+        return StructuredOutputMode(raw_mode)
+    except ValueError:
+        return None
 
 
 def _provider_payload_sha256(value: object) -> str:

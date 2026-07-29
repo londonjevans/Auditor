@@ -20,6 +20,7 @@ from mmaudit.constants import (
     ALL_SPECIALIST_ROLES,
     SPECIALIST_INVESTIGATOR_ROLES,
 )
+from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.qualification import VerifiedProductionQualification
 from mmaudit.models.schemas import (
     AnalysisState,
@@ -119,6 +120,7 @@ from mmaudit.traceability import (
     build_traceability_matrix,
 )
 from tests.identity_fixtures import bind_synthetic_usage_identity
+from tests.output_evidence_fixtures import synthetic_structured_output_routing
 from tests.qualification_support import (
     bind_usage_to_qualification as _bind_base_usage_to_qualification,
 )
@@ -134,31 +136,70 @@ def _bind_usage_to_qualification(
 ) -> UsageRecord:
     bound = _bind_base_usage_to_qualification(record, qualification, now)
     model = qualification.model_for(record.requested_model, now=now)
-    return bind_synthetic_usage_identity(
-        bound.model_copy(
-            update={
-                "routing": {
-                    **bound.routing,
-                    "qualified_exact_model_id": model.exact_model_id,
-                    "qualified_canonical_model_slug": model.canonical_model_slug,
-                    "qualified_root_lineage": model.root_lineage,
-                    "qualified_provider_endpoint": model.approved_provider_endpoint,
-                    "qualified_provider_name": model.approved_provider_name,
-                    "qualified_endpoint_snapshot_sha256": model.endpoint_snapshot_sha256,
-                    "qualified_model_metadata_snapshot_sha256": (
-                        model.model_metadata_snapshot_sha256
-                    ),
-                    "qualified_pricing_snapshot_sha256": model.pricing_snapshot_sha256,
-                    "qualified_roles": list(model.approved_roles),
-                    "qualification_verified_at": qualification.verified_at.isoformat(),
-                    "qualification_expires_at": model.expires_at.isoformat(),
-                    "endpoint_snapshot_sha256": model.endpoint_snapshot_sha256,
-                    "endpoint_pricing_sha256": model.pricing_snapshot_sha256,
-                    "model_metadata_snapshot_sha256": model.model_metadata_snapshot_sha256,
-                }
+    rebound = bound.model_copy(
+        update={
+            "routing": {
+                **bound.routing,
+                "qualified_exact_model_id": model.exact_model_id,
+                "qualified_canonical_model_slug": model.canonical_model_slug,
+                "qualified_root_lineage": model.root_lineage,
+                "qualified_provider_endpoint": model.approved_provider_endpoint,
+                "qualified_provider_name": model.approved_provider_name,
+                "qualified_endpoint_snapshot_sha256": model.endpoint_snapshot_sha256,
+                "qualified_output_capability_sha256": model.output_capability_sha256,
+                "qualified_structured_output_mode": model.structured_output_mode.value,
+                "qualified_model_metadata_snapshot_sha256": (model.model_metadata_snapshot_sha256),
+                "qualified_pricing_snapshot_sha256": model.pricing_snapshot_sha256,
+                "qualified_roles": list(model.approved_roles),
+                "qualification_verified_at": qualification.verified_at.isoformat(),
+                "qualification_expires_at": model.expires_at.isoformat(),
+                "endpoint_snapshot_sha256": model.endpoint_snapshot_sha256,
+                "output_capability_sha256": model.output_capability_sha256,
+                "endpoint_pricing_sha256": model.pricing_snapshot_sha256,
+                "model_metadata_snapshot_sha256": model.model_metadata_snapshot_sha256,
             }
-        )
+        }
     )
+    return _with_output_evidence(
+        rebound,
+        endpoint_snapshot_sha256=model.endpoint_snapshot_sha256,
+        output_capability_sha256=model.output_capability_sha256,
+        mode=model.structured_output_mode,
+    )
+
+
+def _with_output_evidence(
+    record: UsageRecord,
+    *,
+    endpoint_snapshot_sha256: str,
+    output_capability_sha256: str,
+    mode: StructuredOutputMode,
+) -> UsageRecord:
+    assert record.actual_provider_endpoint is not None
+    assert record.request_body_sha256 is not None
+    assert record.schema_sha256 is not None
+    assert record.response_sha256 is not None
+    assert record.validated_response_sha256 is not None
+    provider_policy_sha256 = record.routing["provider_policy_sha256"]
+    routing = {
+        **record.routing,
+        "endpoint_snapshot_sha256": endpoint_snapshot_sha256,
+        "output_capability_sha256": output_capability_sha256,
+        "structured_output": synthetic_structured_output_routing(
+            configured_provider_endpoints=tuple(record.configured_provider_endpoints),
+            selected_provider_endpoint=record.actual_provider_endpoint,
+            endpoint_snapshot_sha256=endpoint_snapshot_sha256,
+            output_capability_sha256=output_capability_sha256,
+            prompt_sha256=record.prompt_sha256,
+            request_body_sha256=record.request_body_sha256,
+            provider_policy_sha256=provider_policy_sha256,
+            schema_sha256=record.schema_sha256,
+            original_response_sha256=record.response_sha256,
+            validated_response_sha256=record.validated_response_sha256,
+            mode=mode,
+        ),
+    }
+    return bind_synthetic_usage_identity(record.model_copy(update={"routing": routing}))
 
 
 def _specialists(*, families: int = 8) -> dict[str, dict[str, object]]:
@@ -511,7 +552,7 @@ def _real_model_usage(now: datetime) -> list[UsageRecord]:
         }
     )
     role_models = {**base_models, **specialist_models}
-    return [
+    records = [
         bind_synthetic_usage_identity(
             UsageRecord(
                 request_id=f"request-{index:02d}",
@@ -585,6 +626,17 @@ def _real_model_usage(now: datetime) -> list[UsageRecord]:
             )
         )
         for index, role in enumerate(roles)
+    ]
+    return [
+        _with_output_evidence(
+            record,
+            endpoint_snapshot_sha256=record.routing["endpoint_snapshot_sha256"],
+            output_capability_sha256=hashlib.sha256(
+                f"output-capability:{record.requested_model}".encode()
+            ).hexdigest(),
+            mode=StructuredOutputMode.JSON_OBJECT,
+        )
+        for record in records
     ]
 
 
@@ -1381,7 +1433,18 @@ def test_mismatched_qualified_usage_projection_revokes_runtime_credit(
             }
             routing[fault] = mismatched_values[fault]
             record = record.model_copy(update={"routing": routing})
-        record = bind_synthetic_usage_identity(record)
+        raw_structured_output = record.routing["structured_output"]
+        assert isinstance(raw_structured_output, dict)
+        endpoint_snapshot_sha256 = record.routing["endpoint_snapshot_sha256"]
+        output_capability_sha256 = record.routing["output_capability_sha256"]
+        assert isinstance(endpoint_snapshot_sha256, str)
+        assert isinstance(output_capability_sha256, str)
+        record = _with_output_evidence(
+            record,
+            endpoint_snapshot_sha256=endpoint_snapshot_sha256,
+            output_capability_sha256=output_capability_sha256,
+            mode=StructuredOutputMode(raw_structured_output["requested_mode"]),
+        )
         assert is_creditable_usage_record(
             record,
             require_real=True,

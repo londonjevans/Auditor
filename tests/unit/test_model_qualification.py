@@ -34,6 +34,7 @@ from mmaudit.models.generation_evidence import (
     OpenRouterGenerationEvidence,
     validate_openrouter_generation_payload,
 )
+from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.qualification import (
     CandidateBenchmarkStatus,
     CandidateFalsifierEvidence,
@@ -85,6 +86,10 @@ from mmaudit.privacy import EndpointPolicyClass, PrivacyProfile, PrivacySourceCl
 from tests.identity_fixtures import (
     bind_synthetic_usage_identity,
     reattest_synthetic_real_usage,
+)
+from tests.output_evidence_fixtures import (
+    SYNTHETIC_OUTPUT_CAPABILITY_SHA256,
+    synthetic_structured_output_routing,
 )
 from tests.qualification_support import synthetic_release_observation
 
@@ -152,7 +157,7 @@ def _discovery_run(
         },
         require_zdr=True,
         zdr_payload={"data": [endpoint]},
-        reasoning_requested=True,
+        reasoning_requested=False,
     )
     catalog_model = {
         "id": model_id,
@@ -266,6 +271,12 @@ def _usage_record(
 ) -> UsageRecord:
     ended_at = _NOW + timedelta(seconds=1)
     generation_id = f"generation-{request_id}"
+    schema_sha256 = _sha("schema")
+    provider_policy_sha256 = _sha("provider-policy")
+    prompt_sha256 = _sha(f"prompt-{request_id}")
+    response_sha256 = _sha(f"response-{request_id}")
+    validated_response_sha256 = _sha(f"validated-response-{request_id}")
+    request_body_sha256 = _sha(f"request-{request_id}")
     routing: dict[str, object] = {
         "generation_id": generation_id,
         "selected_model": candidate.canonical_model_slug,
@@ -277,12 +288,13 @@ def _usage_record(
         "router_attempt_count": 1,
         "router_pipeline": [],
         "finish_reason": "stop",
-        "schema_sha256": _sha("schema"),
+        "schema_sha256": schema_sha256,
         "router_metadata_sha256": _sha(f"router-{request_id}"),
-        "provider_policy_sha256": _sha("provider-policy"),
+        "provider_policy_sha256": provider_policy_sha256,
         "provider_fallbacks_allowed": False,
         "certification_request": True,
         "endpoint_snapshot_sha256": candidate.endpoint_snapshot_sha256,
+        "output_capability_sha256": SYNTHETIC_OUTPUT_CAPABILITY_SHA256,
         "endpoint_pricing_sha256": candidate.pricing_snapshot_sha256,
         "model_metadata_snapshot_sha256": candidate.model_metadata_snapshot_sha256,
         "catalog_identity_binding_sha256": canonical_sha256(
@@ -311,6 +323,18 @@ def _usage_record(
         "privacy_endpoint_policy_class": EndpointPolicyClass.ZDR.value,
         "repair_used": False,
         "repair_request": False,
+        "structured_output": synthetic_structured_output_routing(
+            configured_provider_endpoints=(candidate.approved_provider_endpoint,),
+            selected_provider_endpoint=candidate.approved_provider_endpoint,
+            endpoint_snapshot_sha256=candidate.endpoint_snapshot_sha256,
+            prompt_sha256=prompt_sha256,
+            request_body_sha256=request_body_sha256,
+            provider_policy_sha256=provider_policy_sha256,
+            schema_sha256=schema_sha256,
+            original_response_sha256=response_sha256,
+            validated_response_sha256=validated_response_sha256,
+            mode=candidate.structured_output_mode,
+        ),
         "request_started_at": _NOW.isoformat(),
         "request_ended_at": ended_at.isoformat(),
         "latency_ms": 1_000,
@@ -336,11 +360,11 @@ def _usage_record(
             reported_cost_usd=0.01,
             accounted_cost_usd=0.01,
             routing=routing,
-            prompt_sha256=_sha(f"prompt-{request_id}"),
-            response_sha256=_sha(f"response-{request_id}"),
-            validated_response_sha256=_sha(f"validated-response-{request_id}"),
-            request_body_sha256=_sha(f"request-{request_id}"),
-            schema_sha256=_sha("schema"),
+            prompt_sha256=prompt_sha256,
+            response_sha256=response_sha256,
+            validated_response_sha256=validated_response_sha256,
+            request_body_sha256=request_body_sha256,
+            schema_sha256=schema_sha256,
             openrouter_generation_id=generation_id,
             configured_provider_endpoints=[candidate.approved_provider_endpoint],
             actual_provider_endpoint=candidate.approved_provider_endpoint,
@@ -471,6 +495,8 @@ def _bundle(
     failed_dimension: ModelBenchmarkDimension | None = None,
     benchmark_execution: ExecutionEvidenceKind = ExecutionEvidenceKind.REAL,
     validity_days: int = 6,
+    structured_output_supported: bool = True,
+    structured_output_mode: StructuredOutputMode = StructuredOutputMode.JSON_OBJECT,
 ) -> _Bundle:
     model_ids = tuple(_model_id(index) for index in range(8))
     grouped_ids = {
@@ -522,11 +548,13 @@ def _bundle(
             approved_provider_endpoint=f"provider-{index}",
             approved_provider_name=f"Approved Provider {index}",
             endpoint_snapshot_sha256=_sha(f"endpoint-{model_id}"),
+            output_capability_sha256=SYNTHETIC_OUTPUT_CAPABILITY_SHA256,
             model_metadata_snapshot_sha256=_sha(f"metadata-{model_id}"),
             pricing_snapshot_sha256=_sha(f"pricing-{model_id}"),
             context_size=100_000,
             output_limit=8_192,
-            structured_output_supported=True,
+            structured_output_supported=structured_output_supported,
+            structured_output_mode=structured_output_mode,
             reasoning_supported=True,
             zdr_eligible=True,
             data_collection_deny_eligible=True,
@@ -620,8 +648,10 @@ def _bundle(
             approved_provider_endpoint=candidate.approved_provider_endpoint,
             approved_provider_name=candidate.approved_provider_name,
             endpoint_snapshot_sha256=candidate.endpoint_snapshot_sha256,
+            output_capability_sha256=candidate.output_capability_sha256 or "",
             model_metadata_snapshot_sha256=candidate.model_metadata_snapshot_sha256,
             pricing_snapshot_sha256=candidate.pricing_snapshot_sha256,
+            structured_output_mode=candidate.structured_output_mode,
             benchmark_report_sha256=evidence.benchmark_report_sha256,
             benchmark_verification_sha256=evidence.verification_sha256,
             disposition=QualificationDisposition.TIER_A,
@@ -789,6 +819,22 @@ def test_complete_real_tier_a_artifact_and_all_eligible_selection_verify() -> No
     )
 
 
+def test_tier_a_eligibility_uses_measured_output_reliability_not_native_flag() -> None:
+    bundle = _bundle(
+        structured_output_supported=False,
+        structured_output_mode=StructuredOutputMode.VALIDATED_TEXT_JSON,
+    )
+
+    assert bundle.verification.valid
+    assert bundle.verification.production_selection_ready
+    assert len(bundle.verification.eligible_tier_a_model_ids) == 8
+    assert all(
+        candidate.structured_output_supported is False
+        and candidate.structured_output_mode is StructuredOutputMode.VALIDATED_TEXT_JSON
+        for candidate in bundle.registry.candidates
+    )
+
+
 def test_verified_production_capability_is_opaque_current_and_exact() -> None:
     bundle = _bundle()
     verified_at = _NOW + timedelta(hours=3)
@@ -945,8 +991,10 @@ def test_quality_measurement_is_stable_across_verification_and_time_refresh() ->
         approved_provider_endpoint=original.approved_provider_endpoint,
         approved_provider_name=original.approved_provider_name,
         endpoint_snapshot_sha256=original.endpoint_snapshot_sha256,
+        output_capability_sha256=original.output_capability_sha256,
         model_metadata_snapshot_sha256=original.model_metadata_snapshot_sha256,
         pricing_snapshot_sha256=original.pricing_snapshot_sha256,
+        structured_output_mode=original.structured_output_mode,
         benchmark_report_sha256=original.benchmark_report_sha256,
         benchmark_verification_sha256=_sha("fresh-verification"),
         disposition=original.disposition,
@@ -1233,8 +1281,10 @@ def test_verified_production_capability_rejects_inconclusive_artifact_result() -
         approved_provider_endpoint=original.approved_provider_endpoint,
         approved_provider_name=original.approved_provider_name,
         endpoint_snapshot_sha256=original.endpoint_snapshot_sha256,
+        output_capability_sha256=original.output_capability_sha256,
         model_metadata_snapshot_sha256=original.model_metadata_snapshot_sha256,
         pricing_snapshot_sha256=original.pricing_snapshot_sha256,
+        structured_output_mode=original.structured_output_mode,
         benchmark_report_sha256=original.benchmark_report_sha256,
         benchmark_verification_sha256=None,
         disposition=QualificationDisposition.INCONCLUSIVE,
@@ -1701,11 +1751,13 @@ def test_candidate_registry_rejects_mixed_discovery_run_provenance() -> None:
         approved_provider_endpoint=evidence.approved_provider_endpoint,
         approved_provider_name=evidence.provider_name,
         endpoint_snapshot_sha256=evidence.endpoint_snapshot_sha256,
+        output_capability_sha256=evidence.output_capability_sha256,
         model_metadata_snapshot_sha256=evidence.model_metadata_snapshot_sha256,
         pricing_snapshot_sha256=evidence.pricing_snapshot_sha256,
         context_size=evidence.context_size,
         output_limit=evidence.output_limit,
         structured_output_supported=evidence.structured_output_supported,
+        structured_output_mode=evidence.structured_output_mode,
         reasoning_supported=evidence.reasoning_supported,
         zdr_eligible=evidence.zdr_eligible,
         data_collection_deny_eligible=evidence.data_collection_deny_eligible,

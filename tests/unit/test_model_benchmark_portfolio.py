@@ -13,6 +13,7 @@ import pytest
 from pydantic import ValidationError
 
 import mmaudit.benchmark.models as benchmark_models
+import mmaudit.models.openrouter as openrouter_module
 from mmaudit.benchmark.model_portfolio import (
     ModelBenchmarkPortfolio,
     load_model_benchmark_portfolio,
@@ -35,6 +36,7 @@ from mmaudit.models.candidate_benchmark import (
 )
 from mmaudit.models.generation_evidence import validate_openrouter_generation_payload
 from mmaudit.models.openrouter import strict_json_schema
+from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.qualification import (
     CandidateBenchmarkStatus,
     CandidateModel,
@@ -54,6 +56,10 @@ from mmaudit.reporting.json_report import stable_json
 from tests.identity_fixtures import (
     bind_synthetic_usage_identity,
     synthetic_strict_zdr_privacy_routing,
+)
+from tests.output_evidence_fixtures import (
+    SYNTHETIC_OUTPUT_CAPABILITY_SHA256,
+    synthetic_structured_output_routing,
 )
 
 ROOT = Path(__file__).parents[2]
@@ -88,11 +94,13 @@ def _candidate_registry(
                 approved_provider_endpoint=f"provider-{index}",
                 approved_provider_name=f"Provider {index}",
                 endpoint_snapshot_sha256=_sha(f"endpoint:{model_id}"),
+                output_capability_sha256=SYNTHETIC_OUTPUT_CAPABILITY_SHA256,
                 model_metadata_snapshot_sha256=_sha(f"metadata:{model_id}"),
                 pricing_snapshot_sha256=_sha(f"pricing:{model_id}"),
                 context_size=100_000,
                 output_limit=8_192,
                 structured_output_supported=True,
+                structured_output_mode=StructuredOutputMode.JSON_OBJECT,
                 reasoning_supported=True,
                 zdr_eligible=True,
                 data_collection_deny_eligible=True,
@@ -188,13 +196,25 @@ def _usage_record(
     schema_sha256 = benchmark_models._provider_payload_sha256(
         strict_json_schema(ModelBenchmarkResponse)
     )
-    prompt_sha256 = benchmark_models._provider_payload_sha256(
-        [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
+    output_mode = StructuredOutputMode.JSON_OBJECT
+    output_plan = openrouter_module._structured_output_request_plan(
+        mode=output_mode,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        response_model=ModelBenchmarkResponse,
+        schema_name="mmaudit_model_benchmark",
+    )
+    prompt_sha256 = openrouter_module.structured_output_prompt_sha256(
+        mode=output_mode,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        response_model=ModelBenchmarkResponse,
+        schema_name="mmaudit_model_benchmark",
     )
     response_sha256 = benchmark_models._validated_response_sha256(response)
+    endpoint_snapshot_sha256 = "1" * 64
+    request_body_sha256 = "c" * 64
+    provider_policy_sha256 = "f" * 64
     routing = synthetic_strict_zdr_privacy_routing(
         {
             "generation_id": generation_id,
@@ -207,7 +227,9 @@ def _usage_record(
             "finish_reason": "stop",
             "schema_sha256": schema_sha256,
             "router_metadata_sha256": "e" * 64,
-            "provider_policy_sha256": "f" * 64,
+            "provider_policy_sha256": provider_policy_sha256,
+            "endpoint_snapshot_sha256": endpoint_snapshot_sha256,
+            "output_capability_sha256": SYNTHETIC_OUTPUT_CAPABILITY_SHA256,
             "provider_fallbacks_allowed": False,
             "certification_request": False,
             "validation_status": "valid",
@@ -215,6 +237,30 @@ def _usage_record(
             "data_collection": "deny",
             "repair_used": False,
             "repair_request": False,
+            "structured_output_mode": output_mode.value,
+            "structured_output_request_shape_sha256": output_plan.request_shape_sha256,
+            "structured_output_require_parameters": output_plan.require_parameters,
+            "structured_output_required_provider_parameters": list(
+                output_plan.required_provider_parameters
+            ),
+            "structured_output_reasoning_request_sha256": (output_plan.reasoning_request_sha256),
+            "structured_output_response_format": output_plan.response_format["type"],
+            "structured_output_protocol_sha256": output_plan.strict_protocol_sha256,
+            "structured_output": synthetic_structured_output_routing(
+                configured_provider_endpoints=(endpoint,),
+                selected_provider_endpoint=endpoint,
+                endpoint_snapshot_sha256=endpoint_snapshot_sha256,
+                output_capability_sha256=SYNTHETIC_OUTPUT_CAPABILITY_SHA256,
+                prompt_sha256=prompt_sha256,
+                request_body_sha256=request_body_sha256,
+                provider_policy_sha256=provider_policy_sha256,
+                schema_sha256=schema_sha256,
+                original_response_sha256=response_sha256,
+                validated_response_sha256=response_sha256,
+                mode=output_mode,
+                request_shape_sha256=output_plan.request_shape_sha256,
+                strict_protocol_sha256=output_plan.strict_protocol_sha256,
+            ),
             "request_started_at": started_at.isoformat(),
             "request_ended_at": ended_at.isoformat(),
             "latency_ms": 125,
@@ -240,7 +286,7 @@ def _usage_record(
         prompt_sha256=prompt_sha256,
         response_sha256=response_sha256,
         validated_response_sha256=response_sha256,
-        request_body_sha256="c" * 64,
+        request_body_sha256=request_body_sha256,
         schema_sha256=schema_sha256,
         openrouter_generation_id=generation_id,
         configured_provider_endpoints=[endpoint],

@@ -227,11 +227,20 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   `src/mmaudit/models/endpoint_snapshots.py`,
   `src/mmaudit/models/candidate_benchmark.py`, typed model/evidence schemas,
   and focused unit/integration regressions.
-- **Status:** `IN_PROGRESS`
-- **Next action:** Paused by operator before implementation. On resume, add
-  failing regressions for strict JSON parsing and endpoint-bound negotiation,
-  then map exact endpoint capabilities into three typed output modes before
-  implementing bounded local syntax-only repair.
+- **Status:** `COMPLETE`
+- **Evidence:** Exact endpoint/model capability negotiation selects native JSON
+  Schema, JSON object, or validated text JSON; strict local decoding rejects
+  malformed, duplicated, non-finite, coercible, omitted, unexpected, truncated,
+  unbound, or capability-drifted responses without review credit. One
+  syntax-envelope-only repair is hash-bound and non-creditable. Exact output
+  mode/capability evidence survives discovery, request, usage, qualification,
+  public runtime projection, and run-manifest serialization. The broad matrix
+  passed `1096` tests; Ruff, strict mypy over `137` source files, schema
+  synchronization, and the complete suite passed, ending with `2206 passed,
+  10 skipped in 272.93s`.
+- **Remaining limitation:** JSON-object and validated-text modes are proven by
+  deterministic local fake-provider execution, not a new paid provider call.
+- **Next action:** Continue with `V3-TOKENS-001`.
 
 ## V3-TOKENS-001 — Endpoint-aware token budgets and context manifests
 

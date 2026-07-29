@@ -2574,7 +2574,8 @@ class AuditPipeline:
                         endpoint_payload=endpoint_payload,
                         require_zdr=self.config.privacy.require_zdr,
                         zdr_payload=zdr_payload,
-                        reasoning_requested=self.client.reasoning is not None,
+                        reasoning_requested=False,
+                        structured_output_required=False,
                     )
                 except EndpointSnapshotValidationError as exc:
                     raise OpenRouterError(
@@ -3250,6 +3251,8 @@ def _openrouter_qualification_routing(
             approved_provider_endpoint=model.approved_provider_endpoint,
             approved_provider_name=model.approved_provider_name,
             endpoint_snapshot_sha256=model.endpoint_snapshot_sha256,
+            output_capability_sha256=model.output_capability_sha256,
+            structured_output_mode=model.structured_output_mode,
             model_metadata_snapshot_sha256=model.model_metadata_snapshot_sha256,
             pricing_snapshot_sha256=model.pricing_snapshot_sha256,
             approved_roles=model.approved_roles,

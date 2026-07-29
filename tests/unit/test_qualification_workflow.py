@@ -9,6 +9,8 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
+import mmaudit.benchmark.models as model_benchmark_module
+import mmaudit.models.openrouter as openrouter_module
 from mmaudit.benchmark.model_portfolio import (
     ModelBenchmarkPortfolio,
     TrustedCandidateBenchmarkCampaignVerification,
@@ -30,6 +32,7 @@ from mmaudit.models.candidate_benchmark import (
     CandidateBenchmarkRunState,
     candidate_cost_ledger_snapshot,
 )
+from mmaudit.models.output_modes import supported_output_modes
 from mmaudit.models.qualification import (
     CandidateBenchmarkStatus,
     CandidateModel,
@@ -60,6 +63,7 @@ from tests.identity_fixtures import (
     bind_synthetic_usage_identity,
     reattest_synthetic_real_usage,
 )
+from tests.output_evidence_fixtures import synthetic_structured_output_routing
 from tests.qualification_support import synthetic_release_observation
 from tests.unit import test_model_benchmark as benchmark_fixtures
 from tests.unit import test_model_qualification as qualification_fixtures
@@ -103,11 +107,13 @@ def _candidate_inputs(
         approved_provider_endpoint=evidence.approved_provider_endpoint,
         approved_provider_name=evidence.provider_name,
         endpoint_snapshot_sha256=evidence.endpoint_snapshot_sha256,
+        output_capability_sha256=evidence.output_capability_sha256,
         model_metadata_snapshot_sha256=evidence.model_metadata_snapshot_sha256,
         pricing_snapshot_sha256=evidence.pricing_snapshot_sha256,
         context_size=evidence.context_size,
         output_limit=evidence.output_limit,
         structured_output_supported=evidence.structured_output_supported,
+        structured_output_mode=evidence.structured_output_mode,
         reasoning_supported=evidence.reasoning_supported,
         zdr_eligible=evidence.zdr_eligible,
         data_collection_deny_eligible=evidence.data_collection_deny_eligible,
@@ -176,10 +182,61 @@ def _as_real_report(
     payload = report.model_dump(mode="json")
     payload["execution_evidence"] = ExecutionEvidenceKind.REAL.value
     payload["results"][0]["execution_evidence"] = ExecutionEvidenceKind.REAL.value
+    benchmark_cases = {
+        case.case_id: case for case in load_model_benchmark_corpus(CORPUS_PATH).cases
+    }
     for case in payload["results"][0]["cases"]:
         case["execution_evidence"] = ExecutionEvidenceKind.REAL.value
         usage = dict(case["usage_record"])
         routing = dict(usage["routing"])
+        assert candidate.output_capability_sha256 is not None
+        assert candidate.structured_output_mode is not None
+        benchmark_case = benchmark_cases[case["case_id"]]
+        request_plan = openrouter_module._structured_output_request_plan(
+            mode=candidate.structured_output_mode,
+            system_prompt=model_benchmark_module._SYSTEM_PROMPT,
+            user_prompt=model_benchmark_module.blinded_model_benchmark_request(benchmark_case),
+            response_model=model_benchmark_module.ModelBenchmarkResponse,
+            schema_name="mmaudit_model_benchmark",
+        )
+        prompt_sha256 = canonical_sha256(
+            [
+                {"role": "system", "content": request_plan.system_prompt},
+                {"role": "user", "content": request_plan.user_prompt},
+            ]
+        )
+        request_body_sha256 = canonical_sha256(
+            {
+                "configured_provider_endpoints": [candidate.approved_provider_endpoint],
+                "model": candidate.exact_model_id,
+                "prompt_sha256": prompt_sha256,
+                "provider_policy_sha256": routing["provider_policy_sha256"],
+                "request_shape_sha256": request_plan.request_shape_sha256,
+                "schema_sha256": usage["schema_sha256"],
+            }
+        )
+        response_format = (
+            request_plan.response_format["type"]
+            if request_plan.response_format is not None
+            else None
+        )
+        usage["prompt_sha256"] = prompt_sha256
+        usage["request_body_sha256"] = request_body_sha256
+        structured_output = synthetic_structured_output_routing(
+            configured_provider_endpoints=(candidate.approved_provider_endpoint,),
+            selected_provider_endpoint=candidate.approved_provider_endpoint,
+            endpoint_snapshot_sha256=candidate.endpoint_snapshot_sha256,
+            output_capability_sha256=candidate.output_capability_sha256,
+            prompt_sha256=prompt_sha256,
+            request_body_sha256=request_body_sha256,
+            provider_policy_sha256=routing["provider_policy_sha256"],
+            schema_sha256=usage["schema_sha256"],
+            original_response_sha256=usage["response_sha256"],
+            validated_response_sha256=usage["validated_response_sha256"],
+            mode=candidate.structured_output_mode,
+            request_shape_sha256=request_plan.request_shape_sha256,
+            strict_protocol_sha256=request_plan.strict_protocol_sha256,
+        )
         routing.update(
             {
                 "selected_model": candidate.canonical_model_slug,
@@ -188,6 +245,7 @@ def _as_real_report(
                 "selected_provider_name": candidate.approved_provider_name,
                 "certification_request": True,
                 "endpoint_snapshot_sha256": candidate.endpoint_snapshot_sha256,
+                "output_capability_sha256": candidate.output_capability_sha256,
                 "endpoint_pricing_sha256": candidate.pricing_snapshot_sha256,
                 "catalog_identity_binding_sha256": canonical_sha256(
                     {
@@ -208,6 +266,28 @@ def _as_real_report(
                 "privacy_consent_sha256": None,
                 "privacy_consent_expires_at": None,
                 "privacy_endpoint_policy_class": "ZDR",
+                "structured_output_mode": candidate.structured_output_mode.value,
+                "structured_output_request_shape_sha256": (request_plan.request_shape_sha256),
+                "structured_output_require_parameters": (request_plan.require_parameters),
+                "structured_output_required_provider_parameters": list(
+                    request_plan.required_provider_parameters
+                ),
+                "structured_output_reasoning_request_sha256": (
+                    request_plan.reasoning_request_sha256
+                ),
+                "structured_output_response_format": response_format,
+                "structured_output_protocol_sha256": (request_plan.strict_protocol_sha256),
+                "structured_output_supported_modes": [
+                    mode.value
+                    for mode in supported_output_modes(
+                        structured_output["endpoint_structured_output_parameters"]
+                    )
+                ],
+                "structured_output_capability_sha256": (candidate.output_capability_sha256),
+                "structured_output_request_body_sha256": request_body_sha256,
+                "structured_output_original_response_sha256": usage["response_sha256"],
+                "structured_output_validated_response_sha256": (usage["validated_response_sha256"]),
+                "structured_output": structured_output,
             }
         )
         usage.update(

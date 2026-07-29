@@ -96,7 +96,7 @@ from mmaudit.traceability import (
     validate_traceability_evidence,
 )
 from tests.conftest import FIXTURES, model_registry_entry
-from tests.fake_openrouter import FakeOpenRouter
+from tests.fake_openrouter import FakeOpenRouter, _request_schema_name
 from tests.qualification_support import synthetic_production_qualification
 
 
@@ -1752,9 +1752,7 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
     cross_examination_requests = [
         request
         for request in fake.requests
-        if request["response_format"]["json_schema"]["name"].startswith(
-            "mmaudit_candidate_cross_examination_"
-        )
+        if _request_schema_name(request).startswith("mmaudit_candidate_cross_examination_")
     ]
     assert len(cross_examination_requests) == 2 * len(cross_examination_candidate_ids)
     for request in cross_examination_requests:
@@ -3673,18 +3671,14 @@ async def test_first_pass_contexts_exclude_peer_model_findings(
         "mmaudit_specialist_reentrancy_control_flow",
     }
     first_pass_requests = [
-        request
-        for request in fake.requests
-        if request["response_format"]["json_schema"]["name"] in first_pass_schemas
+        request for request in fake.requests if _request_schema_name(request) in first_pass_schemas
     ]
-    assert {
-        request["response_format"]["json_schema"]["name"] for request in first_pass_requests
-    } == first_pass_schemas
+    assert {_request_schema_name(request) for request in first_pass_requests} == first_pass_schemas
     assert all(canary not in request["messages"][1]["content"] for request in first_pass_requests)
     verifier_request = next(
         request
         for request in fake.requests
-        if request["response_format"]["json_schema"]["name"] == "mmaudit_verification"
+        if _request_schema_name(request) == "mmaudit_verification"
     )
     assert canary in verifier_request["messages"][1]["content"]
 

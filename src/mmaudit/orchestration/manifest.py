@@ -795,6 +795,7 @@ def _qualification_bindings(
             "model": _detail(model.exact_model_id),
             "root_lineage": model.root_lineage,
             "provider_endpoint": _detail(model.approved_provider_endpoint),
+            "structured_output_mode": model.structured_output_mode.value,
             "benchmark_case_count": str(model.benchmark_case_count),
             "evaluated_at": model.evaluated_at.isoformat(),
             "expires_at": model.expires_at.isoformat(),
@@ -805,6 +806,7 @@ def _qualification_bindings(
             "benchmark-verification": model.benchmark_verification_sha256,
             "fresh-benchmark-evidence": model.fresh_benchmark_evidence_sha256,
             "endpoint-snapshot": model.endpoint_snapshot_sha256,
+            "output-capability": model.output_capability_sha256,
             "model-metadata-snapshot": model.model_metadata_snapshot_sha256,
             "pricing-snapshot": model.pricing_snapshot_sha256,
         }

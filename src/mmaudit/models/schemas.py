@@ -20,12 +20,276 @@ from pydantic import (
 )
 
 from mmaudit.models.identity import OpenRouterIdentityStrength
+from mmaudit.models.output_modes import (
+    STRUCTURED_OUTPUT_PROTOCOL_VERSION,
+    StructuredOutputMode,
+    mode_for_supported_parameters,
+    output_mode_request_parameters,
+)
+from mmaudit.models.structured_output import StructuredOutputRepairEvidence
 
 
 class StrictModel(BaseModel):
     """Base model that rejects unknown fields in security-sensitive data."""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class StructuredOutputResponseFormat(StrEnum):
+    """Exact provider request encoding used for one structured response."""
+
+    JSON_SCHEMA = "json_schema"
+    JSON_OBJECT = "json_object"
+    OMITTED = "omitted"
+
+
+class StructuredOutputEvidence(StrictModel):
+    """Self-hashed output negotiation and validation evidence.
+
+    The record contains hashes and routing metadata only. Raw provider content is
+    deliberately excluded. A syntactically repaired response may be retained as
+    non-creditable evidence, but repair can never satisfy review credit.
+    """
+
+    schema_version: Literal["1.0"] = "1.0"
+    requested_mode: StructuredOutputMode
+    achieved_mode: StructuredOutputMode
+    configured_provider_endpoints: tuple[str, ...] = Field(max_length=100)
+    selected_provider_endpoint: str = Field(min_length=1, max_length=500)
+    endpoint_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    endpoint_structured_output_parameters: tuple[str, ...] = Field(max_length=3)
+    output_capability_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    prompt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    request_body_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    provider_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    schema_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    original_response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    decoded_response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    validated_response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    response_format: StructuredOutputResponseFormat
+    required_provider_parameters: tuple[str, ...] = Field(max_length=16)
+    provider_require_parameters: bool
+    reasoning_request_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    request_shape_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    strict_protocol_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    strict_parser: Literal["MMAUDIT_STRICT_JSON_V1"] = "MMAUDIT_STRICT_JSON_V1"
+    truncated: Literal[False] = False
+    repair_evidence: StructuredOutputRepairEvidence | None = None
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("configured_provider_endpoints")
+    @classmethod
+    def provider_endpoints_are_unique_and_safe(
+        cls,
+        value: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if (
+            not value
+            or len(value) != len(set(value))
+            or any(
+                not endpoint
+                or len(endpoint) > 500
+                or any(ord(character) < 33 or ord(character) == 127 for character in endpoint)
+                for endpoint in value
+            )
+        ):
+            raise ValueError("structured-output provider endpoints must be non-empty and unique")
+        return value
+
+    @field_validator("endpoint_structured_output_parameters")
+    @classmethod
+    def capability_parameters_are_canonical(
+        cls,
+        value: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        allowed = {"json_schema", "response_format", "structured_outputs"}
+        if value != tuple(sorted(set(value))) or not set(value).issubset(allowed):
+            raise ValueError("structured-output capability parameters are not canonical")
+        return value
+
+    @field_validator("required_provider_parameters")
+    @classmethod
+    def required_provider_parameters_are_canonical(
+        cls,
+        value: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        allowed = {"reasoning", "response_format"}
+        if value != tuple(sorted(set(value))) or not set(value).issubset(allowed):
+            raise ValueError("required provider parameters are not canonical")
+        return value
+
+    @model_validator(mode="after")
+    def negotiation_and_hashes_are_consistent(self) -> StructuredOutputEvidence:
+        if self.selected_provider_endpoint not in self.configured_provider_endpoints:
+            raise ValueError("selected structured-output endpoint was not configured")
+        if self.requested_mode is not self.achieved_mode:
+            raise ValueError("achieved structured-output mode differs from the requested mode")
+        if self.requested_mode is not mode_for_supported_parameters(
+            self.endpoint_structured_output_parameters
+        ):
+            raise ValueError("structured-output mode differs from endpoint capability evidence")
+
+        if self.requested_mode is StructuredOutputMode.NATIVE_JSON_SCHEMA:
+            expected_format = StructuredOutputResponseFormat.JSON_SCHEMA
+            protocol_required = False
+        elif self.requested_mode is StructuredOutputMode.JSON_OBJECT:
+            expected_format = StructuredOutputResponseFormat.JSON_OBJECT
+            protocol_required = True
+        else:
+            expected_format = StructuredOutputResponseFormat.OMITTED
+            protocol_required = True
+        required_parameters = set(self.required_provider_parameters)
+        expected_output_parameters = set(output_mode_request_parameters(self.requested_mode))
+        if required_parameters.intersection({"response_format"}) != expected_output_parameters or (
+            "reasoning" in required_parameters
+        ) is not (self.reasoning_request_sha256 is not None):
+            raise ValueError("structured-output request parameters differ from its emitted request")
+        if (
+            self.response_format is not expected_format
+            or self.provider_require_parameters is not bool(required_parameters)
+            or (self.strict_protocol_sha256 is not None) is not protocol_required
+        ):
+            raise ValueError("structured-output request encoding differs from its mode")
+        if self.request_shape_sha256 != structured_output_request_shape_sha256(
+            mode=self.requested_mode,
+            schema_sha256=self.schema_sha256,
+            required_provider_parameters=self.required_provider_parameters,
+            reasoning_request_sha256=self.reasoning_request_sha256,
+            strict_protocol_sha256=self.strict_protocol_sha256,
+        ):
+            raise ValueError("structured-output request-shape hash is inconsistent")
+
+        repair = self.repair_evidence
+        if repair is None:
+            if self.original_response_sha256 != self.decoded_response_sha256:
+                raise ValueError("unrepaired structured output changed before validation")
+        elif (
+            repair.original_response_sha256 != self.original_response_sha256
+            or repair.repaired_response_sha256 != self.decoded_response_sha256
+        ):
+            raise ValueError("structured-output repair evidence does not bind response hashes")
+
+        expected_evidence = _canonical_model_sha256(
+            self.model_dump(mode="json", exclude={"evidence_sha256"})
+        )
+        if self.evidence_sha256 != expected_evidence:
+            raise ValueError("structured-output evidence hash is inconsistent")
+        return self
+
+    @property
+    def repair_used(self) -> bool:
+        """Return whether local syntax-envelope repair was required."""
+
+        return self.repair_evidence is not None
+
+
+def seal_structured_output_evidence(
+    *,
+    requested_mode: StructuredOutputMode,
+    achieved_mode: StructuredOutputMode,
+    configured_provider_endpoints: tuple[str, ...],
+    selected_provider_endpoint: str,
+    endpoint_snapshot_sha256: str,
+    output_capability_sha256: str,
+    endpoint_structured_output_parameters: tuple[str, ...],
+    prompt_sha256: str,
+    request_body_sha256: str,
+    provider_policy_sha256: str,
+    schema_sha256: str,
+    original_response_sha256: str,
+    decoded_response_sha256: str,
+    validated_response_sha256: str,
+    response_format: StructuredOutputResponseFormat,
+    required_provider_parameters: tuple[str, ...],
+    provider_require_parameters: bool,
+    reasoning_request_sha256: str | None,
+    request_shape_sha256: str,
+    strict_protocol_sha256: str | None,
+    repair_evidence: StructuredOutputRepairEvidence | None,
+) -> StructuredOutputEvidence:
+    """Seal hash-only structured-output evidence after local schema validation."""
+
+    payload: dict[str, Any] = {
+        "schema_version": "1.0",
+        "requested_mode": requested_mode.value,
+        "achieved_mode": achieved_mode.value,
+        "configured_provider_endpoints": list(configured_provider_endpoints),
+        "selected_provider_endpoint": selected_provider_endpoint,
+        "endpoint_snapshot_sha256": endpoint_snapshot_sha256,
+        "endpoint_structured_output_parameters": list(endpoint_structured_output_parameters),
+        "output_capability_sha256": output_capability_sha256,
+        "prompt_sha256": prompt_sha256,
+        "request_body_sha256": request_body_sha256,
+        "provider_policy_sha256": provider_policy_sha256,
+        "schema_sha256": schema_sha256,
+        "original_response_sha256": original_response_sha256,
+        "decoded_response_sha256": decoded_response_sha256,
+        "validated_response_sha256": validated_response_sha256,
+        "response_format": response_format.value,
+        "required_provider_parameters": list(required_provider_parameters),
+        "provider_require_parameters": provider_require_parameters,
+        "reasoning_request_sha256": reasoning_request_sha256,
+        "request_shape_sha256": request_shape_sha256,
+        "strict_protocol_sha256": strict_protocol_sha256,
+        "strict_parser": "MMAUDIT_STRICT_JSON_V1",
+        "truncated": False,
+        "repair_evidence": (
+            repair_evidence.model_dump(mode="json") if repair_evidence is not None else None
+        ),
+    }
+    payload["evidence_sha256"] = _canonical_model_sha256(payload)
+    return StructuredOutputEvidence.model_validate(payload)
+
+
+def structured_output_request_shape_sha256(
+    *,
+    mode: StructuredOutputMode,
+    schema_sha256: str,
+    required_provider_parameters: tuple[str, ...],
+    reasoning_request_sha256: str | None,
+    strict_protocol_sha256: str | None,
+) -> str:
+    """Hash the exact special-parameter shape without retaining a raw schema."""
+
+    response_format = (
+        StructuredOutputResponseFormat.JSON_SCHEMA.value
+        if mode is StructuredOutputMode.NATIVE_JSON_SCHEMA
+        else (
+            StructuredOutputResponseFormat.JSON_OBJECT.value
+            if mode is StructuredOutputMode.JSON_OBJECT
+            else None
+        )
+    )
+    return _canonical_model_sha256(
+        {
+            "mode": mode.value,
+            "protocol": STRUCTURED_OUTPUT_PROTOCOL_VERSION,
+            "reasoning_request_sha256": reasoning_request_sha256,
+            "required_provider_parameters": list(required_provider_parameters),
+            "require_parameters": bool(required_provider_parameters),
+            "response_format": response_format,
+            "schema_sha256": schema_sha256,
+            "strict_protocol_sha256": strict_protocol_sha256,
+        }
+    )
+
+
+def _canonical_model_sha256(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 class Severity(StrEnum):

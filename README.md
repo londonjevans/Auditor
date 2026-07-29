@@ -132,8 +132,11 @@ analysis roles. Deep and maximum-assurance configurations add narrowly scoped sp
 assurance requires at least five independent families, all configured specialist responsibilities,
 and at least eight unique high-quality slots unless an explicit downgrade is allowed. Quality tiers
 are operator-maintained capability labels, not a claim that a changing model is permanently
-“frontier.” The verifier, falsifier, and judge should be independent from proposing roles. Validate
-existence, structured JSON support, duplication, family diversity, and current ZDR eligibility:
+“frontier.” The verifier, falsifier, and judge should be independent from proposing roles. The
+catalog list reports the strongest advertised output mode: native JSON Schema, JSON object, or
+strictly validated text JSON. Exact endpoint discovery is authoritative because catalog and endpoint
+capabilities may differ. Validate exact identity, duplication, family diversity, endpoint output
+mode, and current privacy eligibility:
 
 ```bash
 mmaudit doctor --allow-code-egress
@@ -142,10 +145,12 @@ mmaudit models check --config mmaudit.toml --refresh
 
 Automatic random routing is deliberately not used: it undermines reproducibility, independence
 accounting, provider-policy enforcement, and spend predictability. OpenRouter may select a serving
-endpoint for an exact model; `require_parameters`, `data_collection = deny`, and optionally `zdr =
-true` constrain that selection. Only fallbacks written explicitly in a role's configuration are
-attempted. Every request records requested/returned model, provider, timestamp, routing metadata,
-usage, cost, and prompt/response hashes.
+endpoint for an exact model; `data_collection = deny` and optionally `zdr = true` constrain that
+selection. `require_parameters = true` is emitted only when the exact request depends on
+endpoint-routed parameters such as `response_format` or `reasoning`; validated-text requests without
+those parameters omit it. Only fallbacks written explicitly in a role's configuration are attempted.
+Every request records requested/returned model, provider, timestamp, exact output mode and capability
+hash, routing metadata, usage, cost, and prompt/response hashes.
 
 ## Configuration
 

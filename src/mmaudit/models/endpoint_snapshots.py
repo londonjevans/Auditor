@@ -18,19 +18,19 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mmaudit.models.identifiers import is_exact_openrouter_model_id
+from mmaudit.models.output_modes import (
+    StructuredOutputMode,
+    mutually_supported_output_modes,
+    output_mode_request_parameters,
+    structured_output_parameters,
+    supported_output_modes,
+)
 
 _MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
 _ENDPOINT_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
 _PROVIDER_NAME_MAX_LENGTH = 128
 _PRICING_FIELD_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 _DECIMAL_PRICE_PATTERN = re.compile(r"(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,36})?\Z")
-_STRUCTURED_OUTPUT_PARAMETERS = frozenset(
-    {
-        "json_schema",
-        "response_format",
-        "structured_outputs",
-    }
-)
 _BASE_REQUEST_PARAMETERS = frozenset(
     {
         "max_tokens",
@@ -71,8 +71,14 @@ class OpenRouterEndpointEvidence(BaseModel):
     operational_status: str = Field(min_length=1, max_length=32)
     zdr_eligible: bool | None
     supported_parameters: tuple[str, ...] = Field(max_length=_MAX_PARAMETERS)
-    required_request_parameters: tuple[str, ...] = Field(min_length=2, max_length=4)
+    required_request_parameters: tuple[str, ...] = Field(min_length=2, max_length=32)
     structured_output_parameters: tuple[str, ...] = Field(max_length=3)
+    supported_output_modes: tuple[StructuredOutputMode, ...] = Field(
+        min_length=1,
+        max_length=3,
+    )
+    structured_output_mode: StructuredOutputMode
+    output_capability_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     context_length: int = Field(gt=0)
     max_prompt_tokens: int = Field(gt=0)
     max_prompt_tokens_source: Literal["metadata", "context_limit"]
@@ -105,11 +111,16 @@ class OpenRouterEndpointEvidence(BaseModel):
             raise ValueError("required request parameters omit the base request shape")
         if not set(self.required_request_parameters).issubset(self.supported_parameters):
             raise ValueError("endpoint does not support every emitted request parameter")
-        expected_structured = tuple(
-            sorted(_STRUCTURED_OUTPUT_PARAMETERS.intersection(self.supported_parameters))
-        )
+        expected_structured = structured_output_parameters(self.supported_parameters)
         if self.structured_output_parameters != expected_structured:
             raise ValueError("structured-output parameter evidence is inconsistent")
+        expected_modes = supported_output_modes(self.supported_parameters)
+        if self.supported_output_modes != expected_modes:
+            raise ValueError("supported output-mode evidence is inconsistent")
+        if self.structured_output_mode is not expected_modes[0]:
+            raise ValueError("negotiated endpoint output mode is inconsistent")
+        if self.output_capability_sha256 != _endpoint_output_capability_sha256(self):
+            raise ValueError("endpoint output-capability hash is inconsistent")
         if self.max_prompt_tokens > self.context_length:
             raise ValueError("endpoint prompt limit exceeds its context length")
         if self.max_completion_tokens > self.context_length:
@@ -157,6 +168,12 @@ class OpenRouterEndpointSnapshotEvidence(BaseModel):
     configured_provider_endpoints: tuple[str, ...] = Field(min_length=1, max_length=100)
     require_zdr: bool
     endpoints: tuple[OpenRouterEndpointEvidence, ...] = Field(min_length=1, max_length=100)
+    supported_output_modes: tuple[StructuredOutputMode, ...] = Field(
+        min_length=1,
+        max_length=3,
+    )
+    structured_output_mode: StructuredOutputMode
+    output_capability_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     endpoint_metadata_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     zdr_metadata_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -171,6 +188,15 @@ class OpenRouterEndpointSnapshotEvidence(BaseModel):
             raise ValueError("endpoint evidence does not exactly cover the configured policy")
         if any(item.exact_model_id != self.exact_model_id for item in self.endpoints):
             raise ValueError("endpoint evidence is not bound to the exact model")
+        expected_modes = mutually_supported_output_modes(
+            endpoint.supported_parameters for endpoint in self.endpoints
+        )
+        if self.supported_output_modes != expected_modes:
+            raise ValueError("endpoint policy output-mode evidence is inconsistent")
+        if self.structured_output_mode is not expected_modes[0]:
+            raise ValueError("negotiated endpoint policy output mode is inconsistent")
+        if self.output_capability_sha256 != _policy_output_capability_sha256(self):
+            raise ValueError("endpoint policy output-capability hash is inconsistent")
         if self.require_zdr:
             if self.zdr_metadata_sha256 is None:
                 raise ValueError("ZDR-required endpoint evidence omits its ZDR snapshot")
@@ -204,7 +230,8 @@ def validate_openrouter_endpoint_snapshot(
     require_zdr: bool,
     zdr_payload: Any | None = None,
     reasoning_requested: bool = False,
-    structured_output_required: bool = True,
+    structured_output_required: bool = False,
+    required_output_mode: StructuredOutputMode | None = None,
 ) -> OpenRouterEndpointSnapshotEvidence:
     """Validate provider snapshots and return canonical non-secret evidence.
 
@@ -226,12 +253,29 @@ def validate_openrouter_endpoint_snapshot(
         )
     raw_endpoints = _required_endpoint_list(data.get("endpoints"), "endpoint metadata")
     matched = _match_configured_endpoints(configured, raw_endpoints)
+    common_output_modes = mutually_supported_output_modes(
+        _supported_parameters(endpoint.get("supported_parameters")) for endpoint in matched
+    )
+    negotiated_output_mode = common_output_modes[0]
+    if required_output_mode is not None and required_output_mode not in common_output_modes:
+        raise EndpointSnapshotValidationError(
+            "configured endpoint does not support the required structured-output mode"
+        )
+    if (
+        required_output_mode is None
+        and structured_output_required
+        and negotiated_output_mode is StructuredOutputMode.VALIDATED_TEXT_JSON
+    ):
+        raise EndpointSnapshotValidationError(
+            "configured endpoint lacks emitted request parameter support: response_format"
+        )
+    special_output_parameters = output_mode_request_parameters(negotiated_output_mode)
     required_request_parameters = tuple(
         sorted(
             {
                 *_BASE_REQUEST_PARAMETERS,
                 *(("reasoning",) if reasoning_requested else ()),
-                *(("response_format",) if structured_output_required else ()),
+                *special_output_parameters,
             }
         )
     )
@@ -283,10 +327,6 @@ def validate_openrouter_endpoint_snapshot(
             raw_endpoint=raw_endpoint,
             required_request_parameters=required_request_parameters,
         )
-        if structured_output_required and not normalized["structured_output_parameters"]:
-            raise EndpointSnapshotValidationError(
-                "configured endpoint lacks structured-output parameter support"
-            )
         zdr_raw = zdr_matches[endpoint_id]
         zdr_hash: str | None = None
         zdr_eligible: bool | None = None if zdr_payload is None else False
@@ -319,6 +359,24 @@ def validate_openrouter_endpoint_snapshot(
         "endpoint_identities": identity_inventory,
         "configured_endpoints": endpoint_projection,
     }
+    sealed_common_output_modes = mutually_supported_output_modes(
+        endpoint.supported_parameters for endpoint in endpoint_evidence
+    )
+    if sealed_common_output_modes != common_output_modes:
+        raise EndpointSnapshotValidationError(
+            "sealed endpoint output modes differ from advertised capabilities"
+        )
+    output_capability_projection = {
+        "schema_version": _SNAPSHOT_SCHEMA_VERSION,
+        "exact_model_id": exact_model_id,
+        "provider_policy_mode": provider_policy_mode,
+        "configured_provider_endpoints": configured,
+        "endpoint_output_capability_sha256": tuple(
+            endpoint.output_capability_sha256 for endpoint in endpoint_evidence
+        ),
+        "supported_output_modes": sealed_common_output_modes,
+        "structured_output_mode": negotiated_output_mode,
+    }
     serialized: dict[str, Any] = {
         "schema_version": _SNAPSHOT_SCHEMA_VERSION,
         "exact_model_id": exact_model_id,
@@ -326,6 +384,9 @@ def validate_openrouter_endpoint_snapshot(
         "configured_provider_endpoints": configured,
         "require_zdr": require_zdr,
         "endpoints": [item.model_dump(mode="json") for item in endpoint_evidence],
+        "supported_output_modes": sealed_common_output_modes,
+        "structured_output_mode": negotiated_output_mode,
+        "output_capability_sha256": _canonical_sha256(output_capability_projection),
         "endpoint_metadata_sha256": _canonical_sha256(endpoint_metadata_projection),
         "zdr_metadata_sha256": (
             _canonical_sha256(zdr_projection) if zdr_projection is not None else None
@@ -551,7 +612,8 @@ def _normalize_endpoint(
     provider_name = _provider_display_name(raw_endpoint.get("provider_name"))
     status = _operational_status(raw_endpoint.get("status"))
     supported = _supported_parameters(raw_endpoint.get("supported_parameters"))
-    structured = tuple(sorted(_STRUCTURED_OUTPUT_PARAMETERS.intersection(supported)))
+    structured = structured_output_parameters(supported)
+    output_modes = supported_output_modes(supported)
     if not set(required_request_parameters).issubset(supported):
         missing = sorted(set(required_request_parameters) - set(supported))
         raise EndpointSnapshotValidationError(
@@ -578,7 +640,7 @@ def _normalize_endpoint(
         raise EndpointSnapshotValidationError(
             "endpoint completion limit exceeds its context length"
         )
-    return {
+    normalized = {
         "exact_model_id": exact_model_id,
         "provider_endpoint": configured_endpoint,
         "endpoint_tag": tag,
@@ -589,6 +651,8 @@ def _normalize_endpoint(
         "supported_parameters": supported,
         "required_request_parameters": required_request_parameters,
         "structured_output_parameters": structured,
+        "supported_output_modes": output_modes,
+        "structured_output_mode": output_modes[0],
         "context_length": context_length,
         "max_prompt_tokens": max_prompt_tokens,
         "max_prompt_tokens_source": max_prompt_tokens_source,
@@ -597,6 +661,10 @@ def _normalize_endpoint(
         "pricing": pricing,
         "pricing_sha256": _canonical_sha256(pricing),
     }
+    normalized["output_capability_sha256"] = _canonical_sha256(
+        _endpoint_output_capability_projection(normalized)
+    )
+    return normalized
 
 
 def _operational_status(value: Any) -> str:
@@ -716,6 +784,9 @@ def _validate_zdr_counterpart(
         "operational_status",
         "supported_parameters",
         "structured_output_parameters",
+        "supported_output_modes",
+        "structured_output_mode",
+        "output_capability_sha256",
         "context_length",
         "max_prompt_tokens",
         "max_prompt_tokens_source",
@@ -728,6 +799,60 @@ def _validate_zdr_counterpart(
         raise EndpointSnapshotValidationError(
             "per-model and ZDR endpoint metadata snapshots are inconsistent"
         )
+
+
+def _endpoint_output_capability_projection(
+    endpoint: Mapping[str, Any] | OpenRouterEndpointEvidence,
+) -> dict[str, Any]:
+    values: Mapping[str, Any]
+    if isinstance(endpoint, OpenRouterEndpointEvidence):
+        values = endpoint.model_dump(mode="python")
+    else:
+        values = endpoint
+    return {
+        "exact_model_id": values["exact_model_id"],
+        "provider_endpoint": values["provider_endpoint"],
+        "supported_parameters": values["supported_parameters"],
+        "required_request_parameters": values["required_request_parameters"],
+        "structured_output_parameters": values["structured_output_parameters"],
+        "supported_output_modes": values["supported_output_modes"],
+        "structured_output_mode": values["structured_output_mode"],
+    }
+
+
+def _endpoint_output_capability_sha256(endpoint: OpenRouterEndpointEvidence) -> str:
+    return _canonical_sha256(_endpoint_output_capability_projection(endpoint))
+
+
+def _policy_output_capability_sha256(
+    snapshot: OpenRouterEndpointSnapshotEvidence,
+) -> str:
+    return _canonical_sha256(
+        {
+            "schema_version": snapshot.schema_version,
+            "exact_model_id": snapshot.exact_model_id,
+            "provider_policy_mode": snapshot.provider_policy_mode,
+            "configured_provider_endpoints": snapshot.configured_provider_endpoints,
+            "endpoint_output_capability_sha256": tuple(
+                endpoint.output_capability_sha256 for endpoint in snapshot.endpoints
+            ),
+            "supported_output_modes": snapshot.supported_output_modes,
+            "structured_output_mode": snapshot.structured_output_mode,
+        }
+    )
+
+
+def output_capability_binding_sha256(
+    snapshot: OpenRouterEndpointSnapshotEvidence,
+) -> str:
+    """Bind negotiated output capability to the complete endpoint snapshot."""
+
+    return _canonical_sha256(
+        {
+            "endpoint_snapshot_sha256": snapshot.snapshot_sha256,
+            "output_capability_sha256": snapshot.output_capability_sha256,
+        }
+    )
 
 
 def _seal_endpoint_evidence(

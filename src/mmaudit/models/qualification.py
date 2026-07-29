@@ -43,6 +43,7 @@ from mmaudit.models.identifiers import (
     EXACT_MODEL_ID_PATTERN,
     require_exact_openrouter_model_id,
 )
+from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.release_attestation import TrustedReleaseBindingObservation
 from mmaudit.models.schemas import ExecutionEvidenceKind, StrictModel, UsageRecord
 from mmaudit.models.usage import (
@@ -216,11 +217,20 @@ class CandidateModel(StrictModel):
     approved_provider_endpoint: str = Field(pattern=_ENDPOINT_PATTERN)
     approved_provider_name: str = Field(pattern=_PROVIDER_NAME_PATTERN)
     endpoint_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
+    output_capability_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
     model_metadata_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
     pricing_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
     context_size: int = Field(ge=1)
     output_limit: int = Field(ge=1)
     structured_output_supported: bool
+    structured_output_mode: StructuredOutputMode | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     reasoning_supported: bool
     zdr_eligible: bool
     data_collection_deny_eligible: bool
@@ -337,6 +347,14 @@ class CandidateModel(StrictModel):
                 raise ValueError("pending benchmark cannot claim artifact or qualification expiry")
         elif self.benchmark_artifact_sha256 is None:
             raise ValueError("completed benchmark status requires an artifact hash")
+        if (self.structured_output_mode is None) is not (self.output_capability_sha256 is None):
+            raise ValueError(
+                "candidate output mode and capability evidence must be present together"
+            )
+        if self.benchmark_status is not CandidateBenchmarkStatus.PENDING and (
+            self.output_capability_sha256 is None or self.structured_output_mode is None
+        ):
+            raise ValueError("completed benchmark status requires exact output capability evidence")
         if (
             self.benchmark_status
             in {
@@ -488,11 +506,13 @@ def validate_candidate_registry_discovery(
             item.approved_provider_endpoint,
             item.provider_name,
             item.endpoint_snapshot_sha256,
+            item.output_capability_sha256,
             item.model_metadata_snapshot_sha256,
             item.pricing_snapshot_sha256,
             item.context_size,
             item.output_limit,
             item.structured_output_supported,
+            item.structured_output_mode,
             item.reasoning_supported,
             item.zdr_eligible,
             item.data_collection_deny_eligible,
@@ -507,11 +527,13 @@ def validate_candidate_registry_discovery(
             candidate.approved_provider_endpoint,
             candidate.approved_provider_name,
             candidate.endpoint_snapshot_sha256,
+            candidate.output_capability_sha256,
             candidate.model_metadata_snapshot_sha256,
             candidate.pricing_snapshot_sha256,
             candidate.context_size,
             candidate.output_limit,
             candidate.structured_output_supported,
+            candidate.structured_output_mode,
             candidate.reasoning_supported,
             candidate.zdr_eligible,
             candidate.data_collection_deny_eligible,
@@ -953,8 +975,10 @@ class ModelQualificationResult(StrictModel):
     approved_provider_endpoint: str = Field(pattern=_ENDPOINT_PATTERN)
     approved_provider_name: str = Field(pattern=_PROVIDER_NAME_PATTERN)
     endpoint_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
+    output_capability_sha256: str = Field(pattern=_SHA256_PATTERN)
     model_metadata_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
     pricing_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
+    structured_output_mode: StructuredOutputMode
     benchmark_report_sha256: str = Field(pattern=_SHA256_PATTERN)
     benchmark_verification_sha256: str | None = Field(
         default=None,
@@ -1063,8 +1087,10 @@ def seal_model_qualification_result(
     approved_provider_endpoint: str,
     approved_provider_name: str,
     endpoint_snapshot_sha256: str,
+    output_capability_sha256: str,
     model_metadata_snapshot_sha256: str,
     pricing_snapshot_sha256: str,
+    structured_output_mode: StructuredOutputMode,
     benchmark_report_sha256: str,
     benchmark_verification_sha256: str | None,
     disposition: QualificationDisposition,
@@ -1082,8 +1108,10 @@ def seal_model_qualification_result(
         "approved_provider_endpoint": approved_provider_endpoint,
         "approved_provider_name": approved_provider_name,
         "endpoint_snapshot_sha256": endpoint_snapshot_sha256,
+        "output_capability_sha256": output_capability_sha256,
         "model_metadata_snapshot_sha256": model_metadata_snapshot_sha256,
         "pricing_snapshot_sha256": pricing_snapshot_sha256,
+        "structured_output_mode": structured_output_mode.value,
         "benchmark_report_sha256": benchmark_report_sha256,
         "benchmark_verification_sha256": benchmark_verification_sha256,
         "disposition": disposition.value,
@@ -1209,8 +1237,10 @@ class VerifiedTierAModelQualification:
     approved_provider_endpoint: str
     approved_provider_name: str
     endpoint_snapshot_sha256: str
+    output_capability_sha256: str
     model_metadata_snapshot_sha256: str
     pricing_snapshot_sha256: str
+    structured_output_mode: StructuredOutputMode
     approved_roles: tuple[str, ...]
     qualification_disposition: QualificationDisposition
     overall_score: float
@@ -1363,8 +1393,10 @@ class VerifiedProductionQualification:
                 or re.fullmatch(_ENDPOINT_PATTERN, model.approved_provider_endpoint) is None
                 or re.fullmatch(_PROVIDER_NAME_PATTERN, model.approved_provider_name) is None
                 or re.fullmatch(_SHA256_PATTERN, model.endpoint_snapshot_sha256) is None
+                or re.fullmatch(_SHA256_PATTERN, model.output_capability_sha256) is None
                 or re.fullmatch(_SHA256_PATTERN, model.model_metadata_snapshot_sha256) is None
                 or re.fullmatch(_SHA256_PATTERN, model.pricing_snapshot_sha256) is None
+                or type(model.structured_output_mode) is not StructuredOutputMode
                 or model.approved_roles != tuple(sorted(set(model.approved_roles)))
                 or not model.approved_roles
                 or any(re.fullmatch(_ROLE_PATTERN, role) is None for role in model.approved_roles)
@@ -1416,8 +1448,10 @@ def _verified_production_qualification_payload(
                 "approved_provider_endpoint": model.approved_provider_endpoint,
                 "approved_provider_name": model.approved_provider_name,
                 "endpoint_snapshot_sha256": model.endpoint_snapshot_sha256,
+                "output_capability_sha256": model.output_capability_sha256,
                 "model_metadata_snapshot_sha256": model.model_metadata_snapshot_sha256,
                 "pricing_snapshot_sha256": model.pricing_snapshot_sha256,
+                "structured_output_mode": model.structured_output_mode.value,
                 "approved_roles": list(model.approved_roles),
                 "qualification_disposition": model.qualification_disposition.value,
                 "overall_score": model.overall_score,
@@ -1605,7 +1639,11 @@ def verify_model_qualification(
                 and review.status is LineageReviewStatus.APPROVED
                 and candidate.root_lineage is not None
                 and candidate.operational_status is CandidateOperationalStatus.AVAILABLE
-                and candidate.structured_output_supported
+                and candidate.output_capability_sha256 is not None
+                and _structured_output_reliability_passes(
+                    result=result,
+                    threshold=thresholds.get(ModelBenchmarkDimension.STRUCTURED_OUTPUT_COMPLIANCE),
+                )
                 and candidate.zdr_eligible
                 and candidate.data_collection_deny_eligible
                 and candidate.data_collection_deny_request_policy_enforced is True
@@ -1791,6 +1829,11 @@ def resolve_verified_production_qualification(
         )
         object.__setattr__(
             model,
+            "output_capability_sha256",
+            result.output_capability_sha256,
+        )
+        object.__setattr__(
+            model,
             "model_metadata_snapshot_sha256",
             result.model_metadata_snapshot_sha256,
         )
@@ -1798,6 +1841,11 @@ def resolve_verified_production_qualification(
             model,
             "pricing_snapshot_sha256",
             result.pricing_snapshot_sha256,
+        )
+        object.__setattr__(
+            model,
+            "structured_output_mode",
+            result.structured_output_mode,
         )
         object.__setattr__(model, "approved_roles", result.approved_roles)
         object.__setattr__(
@@ -2026,6 +2074,11 @@ def _verify_result_candidate_binding(
             candidate.endpoint_snapshot_sha256,
         ),
         (
+            "output capability",
+            result.output_capability_sha256,
+            candidate.output_capability_sha256,
+        ),
+        (
             "model metadata snapshot",
             result.model_metadata_snapshot_sha256,
             candidate.model_metadata_snapshot_sha256,
@@ -2034,6 +2087,11 @@ def _verify_result_candidate_binding(
             "pricing snapshot",
             result.pricing_snapshot_sha256,
             candidate.pricing_snapshot_sha256,
+        ),
+        (
+            "structured output mode",
+            result.structured_output_mode,
+            candidate.structured_output_mode,
         ),
         ("approved roles", result.approved_roles, candidate.approved_roles),
     )
@@ -2078,6 +2136,11 @@ def _verify_trusted_benchmark_binding(
     evidence: TrustedBenchmarkVerificationEvidence,
     errors: list[str],
 ) -> None:
+    if candidate.structured_output_mode is None or candidate.output_capability_sha256 is None:
+        errors.append(
+            f"candidate lacks exact output capability evidence: {candidate.exact_model_id}"
+        )
+        return
     if (
         result.benchmark_verification_sha256 != evidence.stable_measurement_sha256
         or result.benchmark_report_sha256 != evidence.benchmark_report_sha256
@@ -2108,7 +2171,11 @@ def _verify_trusted_benchmark_binding(
             or record.actual_provider_endpoint != candidate.approved_provider_endpoint
             or record.routing.get("selected_provider_name") != candidate.approved_provider_name
             or record.routing.get("endpoint_snapshot_sha256") != candidate.endpoint_snapshot_sha256
+            or record.routing.get("output_capability_sha256") != candidate.output_capability_sha256
             or record.routing.get("endpoint_pricing_sha256") != candidate.pricing_snapshot_sha256
+            or not isinstance(record.routing.get("structured_output"), dict)
+            or record.routing["structured_output"].get("requested_mode")
+            != candidate.structured_output_mode.value
         ):
             errors.append(
                 f"benchmark request lacks exact certification-grade provider evidence: "
@@ -2135,12 +2202,36 @@ def _tier_a_thresholds_pass(
     )
 
 
+def _structured_output_reliability_passes(
+    *,
+    result: ModelQualificationResult,
+    threshold: QualificationDimensionThreshold | None,
+) -> bool:
+    """Require non-empty measured schema adherence, independent of native support."""
+
+    if threshold is None:
+        return False
+    matches = tuple(
+        dimension
+        for dimension in result.dimensions
+        if dimension.dimension is ModelBenchmarkDimension.STRUCTURED_OUTPUT_COMPLIANCE
+    )
+    return (
+        len(matches) == 1
+        and matches[0].evaluated >= max(1, threshold.minimum_cases)
+        and matches[0].passed > 0
+        and matches[0].score >= threshold.minimum_score
+    )
+
+
 class SelectedProductionModel(StrictModel):
     exact_model_id: str = Field(pattern=_MODEL_PATTERN, max_length=300)
     canonical_model_slug: str = Field(pattern=_MODEL_PATTERN, max_length=300)
     root_lineage: str = Field(pattern=_LINEAGE_PATTERN)
     approved_provider_endpoint: str = Field(pattern=_ENDPOINT_PATTERN)
     approved_provider_name: str = Field(pattern=_PROVIDER_NAME_PATTERN)
+    output_capability_sha256: str = Field(pattern=_SHA256_PATTERN)
+    structured_output_mode: StructuredOutputMode
     approved_roles: tuple[str, ...] = Field(min_length=1, max_length=128)
     quality_measurement_sha256: str = Field(pattern=_SHA256_PATTERN)
     qualification_result_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -2238,6 +2329,8 @@ def seal_production_selection(
             "root_lineage": results[model_id].root_lineage,
             "approved_provider_endpoint": results[model_id].approved_provider_endpoint,
             "approved_provider_name": results[model_id].approved_provider_name,
+            "output_capability_sha256": results[model_id].output_capability_sha256,
+            "structured_output_mode": results[model_id].structured_output_mode.value,
             "approved_roles": list(results[model_id].approved_roles),
             "quality_measurement_sha256": results[model_id].quality_measurement_sha256,
             "qualification_result_sha256": results[model_id].result_sha256,
@@ -2341,6 +2434,8 @@ def verify_production_selection(
             or result.canonical_model_slug != selected.canonical_model_slug
             or result.approved_provider_endpoint != selected.approved_provider_endpoint
             or result.approved_provider_name != selected.approved_provider_name
+            or result.output_capability_sha256 != selected.output_capability_sha256
+            or result.structured_output_mode is not selected.structured_output_mode
             or result.approved_roles != selected.approved_roles
             or result.quality_measurement_sha256 != selected.quality_measurement_sha256
             or result.result_sha256 != selected.qualification_result_sha256
@@ -2733,6 +2828,11 @@ def _usage_matches_certified_selection(
         and routing.get("canonical_model") == selected_model.canonical_model_slug
         and routing.get("selected_provider_endpoint") == selected_model.approved_provider_endpoint
         and routing.get("selected_provider_name") == selected_model.approved_provider_name
+        and routing.get("output_capability_sha256") == selected_model.output_capability_sha256
+        and isinstance(routing.get("structured_output"), dict)
+        and routing["structured_output"].get("requested_mode")
+        == selected_model.structured_output_mode.value
+        and qualification_result.structured_output_mode is selected_model.structured_output_mode
         and routing.get("endpoint_snapshot_sha256") == qualification_result.endpoint_snapshot_sha256
         and routing.get("endpoint_pricing_sha256") == qualification_result.pricing_snapshot_sha256
         and routing.get("model_metadata_snapshot_sha256")

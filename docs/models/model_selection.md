@@ -58,10 +58,12 @@ The following are prohibited in qualification and release certification:
 An authenticated metadata-only discovery completed on 2026-07-27 without issuing a
 model completion. The exact-set discovery manifest is
 `b4401140169223fb4d16b89671e0ab63fb7f448aa456885b68e056dcf48f9dca`; the
-validated candidate registry is
+validated historical candidate registry is
 `c61f857cbe44206aede6608855b30c00d38e44f77f8767d7310564825d63d5e7`.
-Those hashes bind the complete metadata snapshots; the shortened endpoint hash below
-is only a human-readable cross-check.
+That registry predates exact output-mode evidence and therefore cannot enter a
+capability-adaptive benchmark campaign. A fresh discovery run must issue a new
+registry binding the negotiated mode and output-capability hash. The shortened
+endpoint hash below is only a human-readable cross-check.
 
 | Exact request model ID | Canonical slug | Approved endpoint | Provider | Endpoint hash | Qualification |
 | --- | --- | --- | --- | --- | --- |
@@ -118,11 +120,12 @@ Every qualification and release-certification request must enforce:
 
 - `provider.only` or exact `provider.order` containing the approved endpoint tag;
 - `provider.allow_fallbacks = false`;
-- `provider.require_parameters = true`;
+- `provider.require_parameters = true` when the request emits route-sensitive
+  `response_format` or `reasoning` parameters, and omission otherwise;
 - `provider.data_collection = "deny"`;
 - `provider.zdr = true` under the default `STRICT_ZDR` profile;
 - an exact non-alias model ID;
-- a complete structured-output schema;
+- an exact negotiated output mode with strict local response-schema validation;
 - bounded timeout, retries, and output tokens.
 
 Under `STRICT_ZDR`, the endpoint must appear in the contemporaneous official ZDR

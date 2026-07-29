@@ -21,6 +21,7 @@ from mmaudit.models.identity import (
     seal_openrouter_model_endpoint_identity_snapshot,
     seal_unbound_openrouter_identity,
 )
+from mmaudit.models.output_modes import StructuredOutputMode
 
 _REQUESTED = "alpha/atlas-secure"
 _CANONICAL = "alpha/atlas-secure-20260728"
@@ -56,6 +57,12 @@ def _capabilities() -> OpenRouterIdentityEndpointCapabilities:
         ),
         required_parameters=("max_tokens", "response_format", "temperature"),
         structured_output_parameters=("response_format",),
+        supported_output_modes=(
+            StructuredOutputMode.JSON_OBJECT,
+            StructuredOutputMode.VALIDATED_TEXT_JSON,
+        ),
+        structured_output_mode=StructuredOutputMode.JSON_OBJECT,
+        output_capability_sha256="d" * 64,
         reasoning_parameters=("reasoning",),
         structured_output_supported=True,
         reasoning_supported=True,
@@ -487,3 +494,141 @@ def test_endpoint_capabilities_and_pricing_are_non_vacuous_and_canonical() -> No
 
     with pytest.raises(ValidationError, match="canonical non-negative decimal"):
         OpenRouterIdentityPricingEntry(unit="prompt", usd_per_unit="0.0000030")
+
+
+def test_identity_preserves_typed_output_modes_and_rejects_mode_tampering() -> None:
+    capabilities = _capabilities()
+
+    assert capabilities.supported_output_modes == (
+        StructuredOutputMode.JSON_OBJECT,
+        StructuredOutputMode.VALIDATED_TEXT_JSON,
+    )
+    assert capabilities.structured_output_mode is StructuredOutputMode.JSON_OBJECT
+
+    values = capabilities.model_dump(mode="python")
+    values["structured_output_mode"] = StructuredOutputMode.NATIVE_JSON_SCHEMA
+    with pytest.raises(ValidationError, match="not supported"):
+        OpenRouterIdentityEndpointCapabilities.model_validate(values)
+
+
+def test_identity_accepts_equivalent_native_schema_capability_markers() -> None:
+    capability_values = _capabilities().model_dump(mode="python")
+    capability_values.update(
+        {
+            "supported_parameters": (
+                "max_tokens",
+                "reasoning",
+                "response_format",
+                "structured_outputs",
+                "temperature",
+            ),
+            "structured_output_parameters": (
+                "response_format",
+                "structured_outputs",
+            ),
+            "supported_output_modes": (
+                StructuredOutputMode.NATIVE_JSON_SCHEMA,
+                StructuredOutputMode.JSON_OBJECT,
+                StructuredOutputMode.VALIDATED_TEXT_JSON,
+            ),
+            "structured_output_mode": StructuredOutputMode.NATIVE_JSON_SCHEMA,
+        }
+    )
+    capabilities = OpenRouterIdentityEndpointCapabilities.model_validate(capability_values)
+
+    snapshot = seal_openrouter_model_endpoint_identity_snapshot(
+        requested_slug=_REQUESTED,
+        canonical_slug=_CANONICAL,
+        frozen_aliases=(_REQUESTED, _CANONICAL),
+        model_author="alpha",
+        model_context_tokens=128_000,
+        model_output_tokens=16_384,
+        model_supported_parameters=(
+            "json_schema",
+            "max_tokens",
+            "reasoning",
+            "response_format",
+            "temperature",
+        ),
+        approved_provider_endpoint=_ENDPOINT,
+        endpoint_tag=None,
+        endpoint_slug=_ENDPOINT,
+        provider_name=_PROVIDER_NAME,
+        provider_policy=_policy(),
+        endpoint_capabilities=capabilities,
+        pricing=_pricing(),
+        canonical_slug_mutable=True,
+        immutable_provider_version=None,
+        immutable_provider_version_evidence_sha256=None,
+        retrieved_at=_RETRIEVED,
+        expires_at=_EXPIRES,
+        catalog_identity_binding_sha256="1" * 64,
+        catalog_snapshot_sha256="2" * 64,
+        model_metadata_snapshot_sha256="3" * 64,
+        discovery_provenance_sha256="4" * 64,
+        discovery_evidence_sha256="5" * 64,
+        endpoint_snapshot_sha256="6" * 64,
+        pricing_snapshot_sha256="7" * 64,
+    )
+
+    assert (
+        snapshot.endpoint_capabilities.structured_output_mode
+        is StructuredOutputMode.NATIVE_JSON_SCHEMA
+    )
+
+
+def test_validated_text_identity_omits_response_format_parameter_requirement() -> None:
+    capability_values = _capabilities().model_dump(mode="python")
+    capability_values.update(
+        {
+            "supported_parameters": ("max_tokens", "reasoning", "temperature"),
+            "required_parameters": ("max_tokens", "temperature"),
+            "structured_output_parameters": (),
+            "supported_output_modes": (StructuredOutputMode.VALIDATED_TEXT_JSON,),
+            "structured_output_mode": StructuredOutputMode.VALIDATED_TEXT_JSON,
+            "structured_output_supported": False,
+        }
+    )
+    capabilities = OpenRouterIdentityEndpointCapabilities.model_validate(capability_values)
+    policy = seal_openrouter_identity_provider_policy(
+        mode="only",
+        configured_endpoints=(_ENDPOINT,),
+        allow_fallbacks=False,
+        zdr_required=True,
+        require_parameters=False,
+    )
+
+    snapshot = seal_openrouter_model_endpoint_identity_snapshot(
+        requested_slug=_REQUESTED,
+        canonical_slug=_CANONICAL,
+        frozen_aliases=(_REQUESTED, _CANONICAL),
+        model_author="alpha",
+        model_context_tokens=128_000,
+        model_output_tokens=16_384,
+        model_supported_parameters=("max_tokens", "reasoning", "temperature"),
+        approved_provider_endpoint=_ENDPOINT,
+        endpoint_tag=None,
+        endpoint_slug=_ENDPOINT,
+        provider_name=_PROVIDER_NAME,
+        provider_policy=policy,
+        endpoint_capabilities=capabilities,
+        pricing=_pricing(),
+        canonical_slug_mutable=True,
+        immutable_provider_version=None,
+        immutable_provider_version_evidence_sha256=None,
+        retrieved_at=_RETRIEVED,
+        expires_at=_EXPIRES,
+        catalog_identity_binding_sha256="1" * 64,
+        catalog_snapshot_sha256="2" * 64,
+        model_metadata_snapshot_sha256="3" * 64,
+        discovery_provenance_sha256="4" * 64,
+        discovery_evidence_sha256="5" * 64,
+        endpoint_snapshot_sha256="6" * 64,
+        pricing_snapshot_sha256="7" * 64,
+    )
+
+    assert snapshot.provider_policy.require_parameters is False
+    assert (
+        snapshot.endpoint_capabilities.structured_output_mode
+        is StructuredOutputMode.VALIDATED_TEXT_JSON
+    )

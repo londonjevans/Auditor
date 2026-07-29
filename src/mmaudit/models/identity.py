@@ -21,6 +21,17 @@ from mmaudit.models.identifiers import (
     EXACT_MODEL_ID_PATTERN,
     require_exact_openrouter_model_id,
 )
+from mmaudit.models.output_modes import (
+    REASONING_REQUEST_PARAMETER,
+    StructuredOutputMode,
+    mutually_supported_output_modes,
+    output_mode_request_parameters,
+    reasoning_capability_parameters,
+    structured_output_parameters,
+    supported_output_modes,
+    supports_provider_structured_output,
+    supports_reasoning_request,
+)
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _SAFE_ENDPOINT_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
@@ -29,6 +40,7 @@ _SAFE_PARAMETER_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _MAX_ALIASES = 256
 _MAX_PARAMETERS = 256
 _MAX_PRICING_FIELDS = 64
+_BASE_REQUEST_PARAMETERS = frozenset({"max_tokens", "temperature"})
 
 
 class OpenRouterIdentityStrength(StrEnum):
@@ -105,6 +117,12 @@ class OpenRouterIdentityEndpointCapabilities(BaseModel):
         max_length=_MAX_PARAMETERS,
     )
     structured_output_parameters: tuple[str, ...] = Field(max_length=8)
+    supported_output_modes: tuple[StructuredOutputMode, ...] = Field(
+        min_length=1,
+        max_length=3,
+    )
+    structured_output_mode: StructuredOutputMode
+    output_capability_sha256: str = Field(pattern=_SHA256_PATTERN)
     reasoning_parameters: tuple[str, ...] = Field(max_length=8)
     structured_output_supported: bool
     reasoning_supported: bool
@@ -145,10 +163,32 @@ class OpenRouterIdentityEndpointCapabilities(BaseModel):
             raise ValueError("structured-output parameters are not supported")
         if not set(self.reasoning_parameters).issubset(supported):
             raise ValueError("reasoning parameters are not supported")
-        if self.structured_output_supported is not bool(self.structured_output_parameters):
+        expected_structured = structured_output_parameters(supported)
+        if self.structured_output_parameters != expected_structured:
+            raise ValueError("structured-output parameters are inconsistent")
+        expected_modes = supported_output_modes(supported)
+        if self.supported_output_modes != expected_modes:
+            raise ValueError("supported output modes are inconsistent")
+        if self.structured_output_mode not in self.supported_output_modes:
+            raise ValueError("negotiated output mode is not supported by the endpoint")
+        required_output_parameters = set(
+            output_mode_request_parameters(self.structured_output_mode)
+        )
+        if not required_output_parameters.issubset(self.required_parameters):
+            raise ValueError("negotiated output mode is absent from required request parameters")
+        if (
+            self.structured_output_mode is StructuredOutputMode.VALIDATED_TEXT_JSON
+            and "response_format" in self.required_parameters
+        ):
+            raise ValueError("validated-text output cannot require response_format")
+        if self.structured_output_supported is not supports_provider_structured_output(
+            self.supported_parameters
+        ):
             raise ValueError("structured-output capability status is inconsistent")
-        if self.reasoning_supported is not bool(self.reasoning_parameters):
+        if self.reasoning_supported is not supports_reasoning_request(self.reasoning_parameters):
             raise ValueError("reasoning capability status is inconsistent")
+        if REASONING_REQUEST_PARAMETER in self.required_parameters and not self.reasoning_supported:
+            raise ValueError("required reasoning request lacks exact capability support")
         if self.output_tokens > self.context_tokens:
             raise ValueError("endpoint output capacity exceeds its context capacity")
         if self.data_collection_deny_evidence_source == "ZDR_ENDPOINT_SNAPSHOT":
@@ -190,7 +230,7 @@ class OpenRouterIdentityProviderPolicy(BaseModel):
     mode: Literal["only", "order"]
     configured_endpoints: tuple[str, ...] = Field(min_length=1, max_length=100)
     allow_fallbacks: bool
-    require_parameters: Literal[True]
+    require_parameters: bool
     data_collection: Literal["deny"]
     zdr_required: bool
     policy_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -320,6 +360,27 @@ class OpenRouterModelEndpointIdentitySnapshot(BaseModel):
             raise ValueError("endpoint context capacity exceeds model metadata")
         if self.endpoint_capabilities.output_tokens > self.model_output_tokens:
             raise ValueError("endpoint output capacity exceeds model metadata")
+        common_parameters = set(self.model_supported_parameters).intersection(
+            self.endpoint_capabilities.supported_parameters
+        )
+        if not set(self.endpoint_capabilities.required_parameters).issubset(common_parameters):
+            raise ValueError("required request parameters are not model/endpoint common")
+        expected_reasoning = reasoning_capability_parameters(common_parameters)
+        if self.endpoint_capabilities.reasoning_parameters != expected_reasoning:
+            raise ValueError("reasoning capability inventory is not model/endpoint common")
+        compatible_modes = mutually_supported_output_modes(
+            (
+                self.model_supported_parameters,
+                self.endpoint_capabilities.supported_parameters,
+            )
+        )
+        if self.endpoint_capabilities.structured_output_mode is not compatible_modes[0]:
+            raise ValueError("negotiated output mode is not model/endpoint compatible")
+        provider_specific_required = (
+            set(self.endpoint_capabilities.required_parameters) - _BASE_REQUEST_PARAMETERS
+        )
+        if self.provider_policy.require_parameters is not bool(provider_specific_required):
+            raise ValueError("provider parameter policy differs from the exact request shape")
         endpoint_identities = {
             item for item in (self.endpoint_tag, self.endpoint_slug) if item is not None
         }
@@ -565,6 +626,7 @@ def seal_openrouter_identity_provider_policy(
     configured_endpoints: tuple[str, ...],
     allow_fallbacks: bool,
     zdr_required: bool,
+    require_parameters: bool = True,
 ) -> OpenRouterIdentityProviderPolicy:
     """Seal a strict OpenRouter provider policy without credentials."""
 
@@ -573,7 +635,7 @@ def seal_openrouter_identity_provider_policy(
         "mode": mode,
         "configured_endpoints": configured_endpoints,
         "allow_fallbacks": allow_fallbacks,
-        "require_parameters": True,
+        "require_parameters": require_parameters,
         "data_collection": "deny",
         "zdr_required": zdr_required,
     }

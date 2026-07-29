@@ -451,6 +451,7 @@ def test_manifest_semantically_binds_runtime_model_qualification(
         "benchmark-verification": "benchmark_verification_sha256",
         "fresh-benchmark-evidence": "fresh_benchmark_evidence_sha256",
         "endpoint-snapshot": "endpoint_snapshot_sha256",
+        "output-capability": "output_capability_sha256",
         "model-metadata-snapshot": "model_metadata_snapshot_sha256",
         "pricing-snapshot": "pricing_snapshot_sha256",
     }
@@ -469,6 +470,9 @@ def test_manifest_semantically_binds_runtime_model_qualification(
         )
         assert all(binding.details["evaluated_at"] for binding in qualified_bindings)
         assert all(binding.details["expires_at"] for binding in qualified_bindings)
+        assert {binding.details["structured_output_mode"] for binding in qualified_bindings} == {
+            model.structured_output_mode.value for model in qualification.models
+        }
 
     tampered = validation.as_dict()
     tampered["qualification_artifact_sha256"] = "f" * 64

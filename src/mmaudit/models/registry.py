@@ -16,6 +16,7 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from mmaudit.config import AuditConfig, ModelQualityTier, model_lineage_index
 from mmaudit.constants import ALL_MODEL_ROLES, OPENROUTER_DEFAULT_BASE_URL
 from mmaudit.models.identifiers import require_exact_openrouter_model_id
+from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.qualification import QualificationBindings, VerifiedProductionQualification
 from mmaudit.models.schemas import AuditProfile, StrictModel
 
@@ -48,6 +49,8 @@ class ProductionModelQualificationBinding(StrictModel):
     approved_provider_endpoint: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
     approved_provider_name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9 ._:/()&+-]{0,199}$")
     endpoint_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    output_capability_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    structured_output_mode: StructuredOutputMode
     model_metadata_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     pricing_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     approved_roles: tuple[str, ...] = Field(min_length=1, max_length=128)
@@ -379,9 +382,6 @@ class ModelRegistry:
             if metadata is None:
                 errors.append(f"model does not exist: {model_id}")
                 continue
-            parameters = {str(value).lower() for value in metadata.get("supported_parameters", [])}
-            if not ({"response_format", "structured_outputs", "json_schema"} & parameters):
-                errors.append(f"model lacks structured JSON output support: {model_id}")
             lineage = lineage_by_id.get(model_id.lower())
             if lineage is None:
                 if source_egress_requested:
@@ -471,6 +471,8 @@ class ModelRegistry:
                             approved_provider_endpoint=model.approved_provider_endpoint,
                             approved_provider_name=model.approved_provider_name,
                             endpoint_snapshot_sha256=model.endpoint_snapshot_sha256,
+                            output_capability_sha256=model.output_capability_sha256,
+                            structured_output_mode=model.structured_output_mode,
                             model_metadata_snapshot_sha256=(model.model_metadata_snapshot_sha256),
                             pricing_snapshot_sha256=model.pricing_snapshot_sha256,
                             approved_roles=model.approved_roles,

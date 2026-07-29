@@ -17,6 +17,7 @@ from mmaudit.config import (
     model_lineage_index,
 )
 from mmaudit.constants import ALL_MODEL_ROLES
+from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.qualification import (
     QualificationBindings,
     QualificationDisposition,
@@ -143,6 +144,11 @@ def synthetic_production_qualification(
         )
         object.__setattr__(
             model,
+            "output_capability_sha256",
+            hashlib.sha256(f"output-capability:{model_id}".encode()).hexdigest(),
+        )
+        object.__setattr__(
+            model,
             "model_metadata_snapshot_sha256",
             hashlib.sha256(f"metadata:{model_id}".encode()).hexdigest(),
         )
@@ -150,6 +156,11 @@ def synthetic_production_qualification(
             model,
             "pricing_snapshot_sha256",
             hashlib.sha256(f"pricing:{model_id}".encode()).hexdigest(),
+        )
+        object.__setattr__(
+            model,
+            "structured_output_mode",
+            StructuredOutputMode.JSON_OBJECT,
         )
         object.__setattr__(model, "approved_roles", approved_roles)
         object.__setattr__(
@@ -267,6 +278,7 @@ def bind_usage_to_qualification(
                 "production_selection_sha256": qualification.production_selection_sha256,
                 "selection_verification_sha256": qualification.selection_verification_sha256,
                 "qualification_result_sha256": model.qualification_result_sha256,
+                "output_capability_sha256": model.output_capability_sha256,
             }
         }
     )

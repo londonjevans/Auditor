@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from mmaudit.models.openrouter import StructuredCompletion, strict_json_schema
+from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.schemas import (
     CandidateReviewBatch,
     ContextExcerpt,
@@ -41,6 +42,10 @@ from mmaudit.orchestration.model_review_evidence import (
     seal_model_surface_review_artifact as _seal_model_surface_review_artifact,
 )
 from tests.identity_fixtures import synthetic_strict_zdr_privacy_routing
+from tests.output_evidence_fixtures import (
+    SYNTHETIC_OUTPUT_CAPABILITY_SHA256,
+    synthetic_structured_output_routing,
+)
 
 _ROLE = "specialist:accounting_invariant"
 _PATH = "src/SyntheticVault.sol"
@@ -366,6 +371,12 @@ def _usage(batch: CandidateReviewBatch, *, role: str = _ROLE) -> UsageRecord:
     generation_id = "generation-surface-review"
     endpoint = "approved-provider"
     schema_sha256 = _canonical_sha256(strict_json_schema(CandidateReviewBatch))
+    prompt_sha256 = "c" * 64
+    response_sha256 = "d" * 64
+    validated_response_sha256 = _canonical_sha256(batch.model_dump(mode="json"))
+    request_body_sha256 = "e" * 64
+    endpoint_snapshot_sha256 = "f" * 64
+    provider_policy_sha256 = "b" * 64
     routing = synthetic_strict_zdr_privacy_routing(
         {
             "generation_id": generation_id,
@@ -375,12 +386,25 @@ def _usage(batch: CandidateReviewBatch, *, role: str = _ROLE) -> UsageRecord:
             "finish_reason": "stop",
             "schema_sha256": schema_sha256,
             "router_metadata_sha256": "a" * 64,
-            "provider_policy_sha256": "b" * 64,
+            "provider_policy_sha256": provider_policy_sha256,
+            "endpoint_snapshot_sha256": endpoint_snapshot_sha256,
+            "output_capability_sha256": SYNTHETIC_OUTPUT_CAPABILITY_SHA256,
             "validation_status": "valid",
             "zdr_requested": True,
             "data_collection": "deny",
             "repair_used": False,
             "repair_request": False,
+            "structured_output": synthetic_structured_output_routing(
+                configured_provider_endpoints=(endpoint,),
+                selected_provider_endpoint=endpoint,
+                endpoint_snapshot_sha256=endpoint_snapshot_sha256,
+                prompt_sha256=prompt_sha256,
+                request_body_sha256=request_body_sha256,
+                provider_policy_sha256=provider_policy_sha256,
+                schema_sha256=schema_sha256,
+                original_response_sha256=response_sha256,
+                validated_response_sha256=validated_response_sha256,
+            ),
             "request_started_at": started_at.isoformat(),
             "request_ended_at": ended_at.isoformat(),
             "latency_ms": 125,
@@ -404,10 +428,10 @@ def _usage(batch: CandidateReviewBatch, *, role: str = _ROLE) -> UsageRecord:
         reported_cost_usd=0.01,
         accounted_cost_usd=0.01,
         routing=routing,
-        prompt_sha256="c" * 64,
-        response_sha256="d" * 64,
-        validated_response_sha256=_canonical_sha256(batch.model_dump(mode="json")),
-        request_body_sha256="e" * 64,
+        prompt_sha256=prompt_sha256,
+        response_sha256=response_sha256,
+        validated_response_sha256=validated_response_sha256,
+        request_body_sha256=request_body_sha256,
         schema_sha256=schema_sha256,
         openrouter_generation_id=generation_id,
         configured_provider_endpoints=[endpoint],
@@ -429,6 +453,46 @@ def _completion(
     role: str = _ROLE,
 ) -> StructuredCompletion[CandidateReviewBatch]:
     return StructuredCompletion(value=batch, usage_record=_usage(batch, role=role))
+
+
+def _rebind_output_usage(
+    record: UsageRecord,
+    *,
+    validated_response_sha256: str | None = None,
+    schema_sha256: str | None = None,
+) -> UsageRecord:
+    structured = record.routing["structured_output"]
+    next_validated = validated_response_sha256 or record.validated_response_sha256
+    next_schema = schema_sha256 or record.schema_sha256
+    assert next_validated is not None
+    assert next_schema is not None
+    assert record.actual_provider_endpoint is not None
+    assert record.request_body_sha256 is not None
+    assert record.response_sha256 is not None
+    next_structured = synthetic_structured_output_routing(
+        configured_provider_endpoints=tuple(record.configured_provider_endpoints),
+        selected_provider_endpoint=record.actual_provider_endpoint,
+        endpoint_snapshot_sha256=structured["endpoint_snapshot_sha256"],
+        output_capability_sha256=structured["output_capability_sha256"],
+        prompt_sha256=record.prompt_sha256,
+        request_body_sha256=record.request_body_sha256,
+        provider_policy_sha256=structured["provider_policy_sha256"],
+        schema_sha256=next_schema,
+        original_response_sha256=record.response_sha256,
+        validated_response_sha256=next_validated,
+        mode=StructuredOutputMode(structured["requested_mode"]),
+    )
+    return record.model_copy(
+        update={
+            "validated_response_sha256": next_validated,
+            "schema_sha256": next_schema,
+            "routing": {
+                **record.routing,
+                "schema_sha256": next_schema,
+                "structured_output": next_structured,
+            },
+        }
+    )
 
 
 def test_seal_surface_review_artifact_binds_exact_request_response_and_source() -> None:
@@ -869,21 +933,17 @@ def test_seal_rejects_incomplete_usage_and_response_or_schema_hash_mismatch() ->
 
     wrong_response = StructuredCompletion(
         value=batch,
-        usage_record=completion.usage_record.model_copy(
-            update={"validated_response_sha256": "f" * 64}
+        usage_record=_rebind_output_usage(
+            completion.usage_record,
+            validated_response_sha256="f" * 64,
         ),
     )
     with pytest.raises(ModelReviewEvidenceError, match="response hash is inconsistent"):
         seal_model_surface_review_artifact(_context((request,)), wrong_response)
 
-    wrong_schema_usage = completion.usage_record.model_copy(
-        update={
-            "schema_sha256": "f" * 64,
-            "routing": {
-                **completion.usage_record.routing,
-                "schema_sha256": "f" * 64,
-            },
-        }
+    wrong_schema_usage = _rebind_output_usage(
+        completion.usage_record,
+        schema_sha256="f" * 64,
     )
     wrong_schema = StructuredCompletion(value=batch, usage_record=wrong_schema_usage)
     with pytest.raises(ModelReviewEvidenceError, match="schema hash is inconsistent"):

@@ -21,9 +21,15 @@ from mmaudit.models.identity import (
     seal_openrouter_identity_provider_policy,
     seal_openrouter_model_endpoint_identity_snapshot,
 )
-from mmaudit.models.schemas import ModelIdentityStrength, UsageRecord
+from mmaudit.models.output_modes import (
+    StructuredOutputMode,
+    structured_output_parameters,
+    supported_output_modes,
+)
+from mmaudit.models.schemas import ModelIdentityStrength, StructuredOutputEvidence, UsageRecord
 from mmaudit.models.usage import _attest_owned_real_usage_record
 from mmaudit.privacy import EndpointPolicyClass, PrivacyProfile, PrivacySourceClassification
+from tests.output_evidence_fixtures import synthetic_structured_output_routing
 
 _PRIVACY_ROUTING_FIELDS = frozenset(
     {
@@ -98,7 +104,12 @@ def synthetic_strict_zdr_privacy_routing(
     return completed
 
 
-def bind_synthetic_usage_identity(record: UsageRecord) -> UsageRecord:
+def bind_synthetic_usage_identity(
+    record: UsageRecord,
+    *,
+    endpoint_supported_parameters: tuple[str, ...] | None = None,
+    model_supported_parameters: tuple[str, ...] | None = None,
+) -> UsageRecord:
     """Return a self-consistent test record with explicitly synthetic binding data."""
 
     if (
@@ -174,6 +185,64 @@ def bind_synthetic_usage_identity(record: UsageRecord) -> UsageRecord:
         routing.get("discovery_evidence_sha256"),
         "synthetic discovery evidence",
     )
+    raw_structured_output = routing.get("structured_output")
+    if raw_structured_output is None:
+        legacy_output_capability_sha256 = _hash_or_default(
+            routing.get("output_capability_sha256"),
+            "synthetic output capability",
+        )
+        raw_structured_output = synthetic_structured_output_routing(
+            configured_provider_endpoints=tuple(record.configured_provider_endpoints),
+            selected_provider_endpoint=record.actual_provider_endpoint,
+            endpoint_snapshot_sha256=endpoint_snapshot_sha256,
+            output_capability_sha256=legacy_output_capability_sha256,
+            prompt_sha256=record.prompt_sha256,
+            request_body_sha256=record.request_body_sha256,
+            provider_policy_sha256=str(routing.get("provider_policy_sha256")),
+            schema_sha256=record.schema_sha256,
+            original_response_sha256=record.response_sha256,
+            validated_response_sha256=record.validated_response_sha256,
+            mode=StructuredOutputMode.JSON_OBJECT,
+        )
+        routing["structured_output"] = raw_structured_output
+    structured_output = StructuredOutputEvidence.model_validate(raw_structured_output)
+    output_mode = structured_output.achieved_mode
+    output_parameters = structured_output.endpoint_structured_output_parameters
+    output_capability_sha256 = structured_output.output_capability_sha256
+    routed_capability = routing.get("output_capability_sha256")
+    if routed_capability is not None and routed_capability != output_capability_sha256:
+        raise ValueError("synthetic output capability hash differs from structured evidence")
+    required_provider_parameters = structured_output.required_provider_parameters
+    default_supported_parameters = tuple(
+        sorted(
+            {
+                "max_tokens",
+                "temperature",
+                *output_parameters,
+                *required_provider_parameters,
+            }
+        )
+    )
+    endpoint_parameters = endpoint_supported_parameters or default_supported_parameters
+    model_parameters = model_supported_parameters or default_supported_parameters
+    if endpoint_parameters != tuple(sorted(set(endpoint_parameters))):
+        raise ValueError("synthetic endpoint parameters must be sorted and unique")
+    if model_parameters != tuple(sorted(set(model_parameters))):
+        raise ValueError("synthetic model parameters must be sorted and unique")
+    if output_mode not in supported_output_modes(endpoint_parameters) or output_mode not in (
+        supported_output_modes(model_parameters)
+    ):
+        raise ValueError("synthetic output mode is not supported by model and endpoint")
+    endpoint_output_parameters = structured_output_parameters(endpoint_parameters)
+    required_parameters = tuple(
+        sorted(
+            {
+                "max_tokens",
+                "temperature",
+                *required_provider_parameters,
+            }
+        )
+    )
     catalog_identity_binding_sha256 = _catalog_identity_binding(
         requested_slug=record.requested_model,
         canonical_slug=canonical_slug,
@@ -187,6 +256,7 @@ def bind_synthetic_usage_identity(record: UsageRecord) -> UsageRecord:
             "discovery_evidence_sha256": discovery_evidence_sha256,
             "endpoint_snapshot_sha256": endpoint_snapshot_sha256,
             "endpoint_pricing_sha256": pricing_snapshot_sha256,
+            "output_capability_sha256": output_capability_sha256,
         }
     )
     policy = seal_openrouter_identity_provider_policy(
@@ -194,17 +264,23 @@ def bind_synthetic_usage_identity(record: UsageRecord) -> UsageRecord:
         configured_endpoints=(record.actual_provider_endpoint,),
         allow_fallbacks=False,
         zdr_required=True,
+        require_parameters=bool(set(required_parameters) - {"max_tokens", "temperature"}),
     )
     capabilities = OpenRouterIdentityEndpointCapabilities(
         operational=True,
         context_tokens=200_000,
         output_tokens=20_000,
-        supported_parameters=("max_tokens", "response_format", "temperature"),
-        required_parameters=("max_tokens", "response_format", "temperature"),
-        structured_output_parameters=("response_format",),
-        reasoning_parameters=(),
-        structured_output_supported=True,
-        reasoning_supported=False,
+        supported_parameters=endpoint_parameters,
+        required_parameters=required_parameters,
+        structured_output_parameters=endpoint_output_parameters,
+        supported_output_modes=supported_output_modes(endpoint_parameters),
+        structured_output_mode=output_mode,
+        output_capability_sha256=output_capability_sha256,
+        reasoning_parameters=(
+            ("reasoning",) if "reasoning" in required_provider_parameters else ()
+        ),
+        structured_output_supported=bool(endpoint_output_parameters),
+        reasoning_supported="reasoning" in required_provider_parameters,
         zdr_eligible=True,
         data_collection_deny_eligible=True,
         data_collection_deny_request_policy_enforced=True,
@@ -219,7 +295,7 @@ def bind_synthetic_usage_identity(record: UsageRecord) -> UsageRecord:
         model_author=canonical_slug.split("/", 1)[0],
         model_context_tokens=200_000,
         model_output_tokens=20_000,
-        model_supported_parameters=("max_tokens", "response_format", "temperature"),
+        model_supported_parameters=model_parameters,
         approved_provider_endpoint=record.actual_provider_endpoint,
         endpoint_tag=record.actual_provider_endpoint,
         endpoint_slug=None,

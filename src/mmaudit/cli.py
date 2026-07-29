@@ -91,6 +91,7 @@ from mmaudit.models.endpoint_snapshots import (
 from mmaudit.models.generation_evidence import TrustedGenerationVerification
 from mmaudit.models.identifiers import is_exact_openrouter_model_id
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterError
+from mmaudit.models.output_modes import supported_output_modes
 from mmaudit.models.qualification import (
     CandidateRegistry,
     QualificationPolicy,
@@ -653,15 +654,15 @@ def models_list(
         table.add_column("ID")
         table.add_column("Name")
         table.add_column("Context", justify="right")
-        table.add_column("Structured JSON")
+        table.add_column("Catalog output mode")
         for item in metadata:
             parameters = {str(value).lower() for value in item.get("supported_parameters", [])}
-            structured = bool({"response_format", "structured_outputs", "json_schema"} & parameters)
+            output_mode = supported_output_modes(parameters)[0]
             table.add_row(
                 Text(_terminal_text(str(item.get("id", "")))),
                 Text(_terminal_text(str(item.get("name", "")))),
                 Text(_terminal_text(str(item.get("context_length", "")))),
-                Text("yes" if structured else "no"),
+                Text(output_mode.value),
             )
         Console(no_color=no_color).print(table)
 
@@ -844,6 +845,7 @@ def models_check(
                                     require_zdr=config.privacy.require_zdr,
                                     zdr_payload=zdr_payload,
                                     reasoning_requested=controls.reasoning is not None,
+                                    structured_output_required=False,
                                 )
                             )
                         except EndpointSnapshotValidationError as exc:
@@ -1035,7 +1037,8 @@ def models_benchmark(
                         endpoint_payload=endpoint_payload,
                         require_zdr=True,
                         zdr_payload=zdr_payload,
-                        reasoning_requested=controls.reasoning is not None,
+                        reasoning_requested=False,
+                        structured_output_required=False,
                     )
                     discovery_payloads.append(
                         validate_openrouter_model_discovery(

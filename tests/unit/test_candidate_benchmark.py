@@ -326,6 +326,7 @@ def _discovery_and_registry(
             endpoint_payload=endpoint_payload,
             require_zdr=config.privacy.require_zdr,
             zdr_payload=zdr_payload,
+            reasoning_requested=False,
             structured_output_required=False,
         )
         payloads.append(
@@ -412,11 +413,13 @@ def _discovery_and_registry(
                 approved_provider_endpoint=item.approved_provider_endpoint,
                 approved_provider_name=item.provider_name,
                 endpoint_snapshot_sha256=item.endpoint_snapshot_sha256,
+                output_capability_sha256=item.output_capability_sha256,
                 model_metadata_snapshot_sha256=item.model_metadata_snapshot_sha256,
                 pricing_snapshot_sha256=item.pricing_snapshot_sha256,
                 context_size=item.context_size,
                 output_limit=item.output_limit,
                 structured_output_supported=item.structured_output_supported,
+                structured_output_mode=item.structured_output_mode,
                 reasoning_supported=item.reasoning_supported,
                 zdr_eligible=item.zdr_eligible,
                 data_collection_deny_eligible=item.data_collection_deny_eligible,
@@ -488,6 +491,7 @@ def test_discovery_and_candidate_snapshot_use_the_same_configured_privacy_mode(
         endpoint_payload=endpoint_payload,
         require_zdr=config.privacy.require_zdr,
         zdr_payload=zdr_payload,
+        reasoning_requested=False,
         structured_output_required=False,
     )
     candidate_snapshot = validate_openrouter_endpoint_snapshot(

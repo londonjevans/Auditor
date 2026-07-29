@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from mmaudit.models.qualification import ModelQualificationArtifact
 from mmaudit.privacy import PrivacyRetentionConsent
 from mmaudit.release_candidate import ReleaseCandidateObservation
 from mmaudit.release_gates import ReleaseGateEvidenceBundle
@@ -22,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_ROOT = ROOT / "schemas"
 SCHEMA_BASE = "https://mmaudit.local/schemas"
 MODELS: dict[str, type[BaseModel]] = {
+    "model_qualification.schema.json": ModelQualificationArtifact,
     "privacy_retention_consent.schema.json": PrivacyRetentionConsent,
     "release_candidate_observation.schema.json": ReleaseCandidateObservation,
     "release_bound_gate_result.schema.json": BoundReleaseGateResult,
@@ -32,6 +34,9 @@ MODELS: dict[str, type[BaseModel]] = {
     "release_run_verification_binding.schema.json": ReleaseRunVerificationBinding,
     "release_static_evidence.schema.json": StaticReleaseEvidence,
 }
+TITLE_OVERRIDES = {
+    "model_qualification.schema.json": "mmaudit model qualification artifact",
+}
 
 
 def rendered_schema(filename: str, model: type[BaseModel]) -> str:
@@ -40,6 +45,8 @@ def rendered_schema(filename: str, model: type[BaseModel]) -> str:
     schema = model.model_json_schema()
     schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
     schema["$id"] = f"{SCHEMA_BASE}/{filename}"
+    if filename in TITLE_OVERRIDES:
+        schema["title"] = TITLE_OVERRIDES[filename]
     return json.dumps(schema, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
 

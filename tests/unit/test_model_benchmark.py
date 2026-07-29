@@ -10,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 import mmaudit.benchmark.models as model_benchmark_module
+import mmaudit.models.openrouter as openrouter_module
 from mmaudit.benchmark.models import (
     ModelBenchmarkClassification,
     ModelBenchmarkCorpus,
@@ -40,6 +41,7 @@ from mmaudit.models.generation_evidence import (
     validate_openrouter_generation_payload,
 )
 from mmaudit.models.openrouter import OpenRouterSchemaError, strict_json_schema
+from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     ModelRequestValidationStatus,
@@ -48,6 +50,10 @@ from mmaudit.models.schemas import (
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.privacy import EndpointPolicyClass, PrivacyProfile, PrivacySourceClassification
 from tests.conftest import model_registry_entry
+from tests.output_evidence_fixtures import (
+    SYNTHETIC_OUTPUT_CAPABILITY_SHA256,
+    synthetic_structured_output_routing,
+)
 
 ROOT = Path(__file__).parents[2]
 CORPUS_PATH = ROOT / "benchmarks" / "model_corpus" / "manifest.json"
@@ -197,14 +203,26 @@ def _mock_usage_record(
     target_slug = target.model_id.replace("/", "-")
     generation_id = f"generation-{target_slug}-{case_id}"
     endpoint = "synthetic-provider"
+    endpoint_snapshot_sha256 = "9" * 64
+    provider_policy_sha256 = "f" * 64
+    request_body_sha256 = "c" * 64
     schema_sha256 = model_benchmark_module._provider_payload_sha256(
         strict_json_schema(ModelBenchmarkResponse)
     )
-    prompt_sha256 = model_benchmark_module._provider_payload_sha256(
-        [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
+    output_mode = StructuredOutputMode.JSON_OBJECT
+    output_plan = openrouter_module._structured_output_request_plan(
+        mode=output_mode,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        response_model=ModelBenchmarkResponse,
+        schema_name="mmaudit_model_benchmark",
+    )
+    prompt_sha256 = openrouter_module.structured_output_prompt_sha256(
+        mode=output_mode,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        response_model=ModelBenchmarkResponse,
+        schema_name="mmaudit_model_benchmark",
     )
     validated_response_sha256 = model_benchmark_module._validated_response_sha256(response)
     return UsageRecord(
@@ -233,7 +251,9 @@ def _mock_usage_record(
             "finish_reason": "stop",
             "schema_sha256": schema_sha256,
             "router_metadata_sha256": "e" * 64,
-            "provider_policy_sha256": "f" * 64,
+            "provider_policy_sha256": provider_policy_sha256,
+            "endpoint_snapshot_sha256": endpoint_snapshot_sha256,
+            "output_capability_sha256": SYNTHETIC_OUTPUT_CAPABILITY_SHA256,
             "provider_fallbacks_allowed": False,
             "certification_request": False,
             "validation_status": "valid",
@@ -253,6 +273,29 @@ def _mock_usage_record(
             "privacy_endpoint_policy_class": EndpointPolicyClass.ZDR.value,
             "repair_used": False,
             "repair_request": False,
+            "structured_output_mode": output_mode.value,
+            "structured_output_request_shape_sha256": (output_plan.request_shape_sha256),
+            "structured_output_require_parameters": output_plan.require_parameters,
+            "structured_output_required_provider_parameters": list(
+                output_plan.required_provider_parameters
+            ),
+            "structured_output_reasoning_request_sha256": (output_plan.reasoning_request_sha256),
+            "structured_output_response_format": output_plan.response_format["type"],
+            "structured_output_protocol_sha256": output_plan.strict_protocol_sha256,
+            "structured_output": synthetic_structured_output_routing(
+                configured_provider_endpoints=(endpoint,),
+                selected_provider_endpoint=endpoint,
+                endpoint_snapshot_sha256=endpoint_snapshot_sha256,
+                prompt_sha256=prompt_sha256,
+                request_body_sha256=request_body_sha256,
+                provider_policy_sha256=provider_policy_sha256,
+                schema_sha256=schema_sha256,
+                original_response_sha256=validated_response_sha256,
+                validated_response_sha256=validated_response_sha256,
+                mode=output_mode,
+                request_shape_sha256=output_plan.request_shape_sha256,
+                strict_protocol_sha256=output_plan.strict_protocol_sha256,
+            ),
             "request_started_at": started_at.isoformat(),
             "request_ended_at": ended_at.isoformat(),
             "latency_ms": 125,
@@ -260,7 +303,7 @@ def _mock_usage_record(
         prompt_sha256=prompt_sha256,
         response_sha256=validated_response_sha256,
         validated_response_sha256=validated_response_sha256,
-        request_body_sha256="c" * 64,
+        request_body_sha256=request_body_sha256,
         schema_sha256=schema_sha256,
         openrouter_generation_id=generation_id,
         configured_provider_endpoints=[endpoint],
@@ -672,7 +715,25 @@ async def test_report_verification_rejects_prompt_binding_drift() -> None:
         provider=DeterministicModelBenchmarkProvider(),
     )
     drifted = report.model_dump(mode="json")
-    drifted["results"][0]["cases"][0]["usage_record"]["prompt_sha256"] = "9" * 64
+    usage = drifted["results"][0]["cases"][0]["usage_record"]
+    usage["prompt_sha256"] = "9" * 64
+    structured = usage["routing"]["structured_output"]
+    usage["routing"]["structured_output"] = synthetic_structured_output_routing(
+        configured_provider_endpoints=tuple(usage["configured_provider_endpoints"]),
+        selected_provider_endpoint=usage["actual_provider_endpoint"],
+        endpoint_snapshot_sha256=structured["endpoint_snapshot_sha256"],
+        output_capability_sha256=structured["output_capability_sha256"],
+        prompt_sha256=usage["prompt_sha256"],
+        request_body_sha256=usage["request_body_sha256"],
+        provider_policy_sha256=structured["provider_policy_sha256"],
+        schema_sha256=usage["schema_sha256"],
+        original_response_sha256=usage["response_sha256"],
+        validated_response_sha256=usage["validated_response_sha256"],
+        mode=StructuredOutputMode(structured["requested_mode"]),
+        reasoning_requested=("reasoning" in structured["required_provider_parameters"]),
+        request_shape_sha256=structured["request_shape_sha256"],
+        strict_protocol_sha256=structured["strict_protocol_sha256"],
+    )
     drifted["report_sha256"] = canonical_sha256(
         {key: value for key, value in drifted.items() if key != "report_sha256"}
     )
@@ -680,6 +741,79 @@ async def test_report_verification_rejects_prompt_binding_drift() -> None:
 
     with pytest.raises(ValueError, match="request binding drifted"):
         verify_model_benchmark_report(reloaded, corpus=corpus, require_real=False)
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        StructuredOutputMode.JSON_OBJECT,
+        StructuredOutputMode.VALIDATED_TEXT_JSON,
+    ],
+)
+@pytest.mark.asyncio
+async def test_report_verifies_protocol_augmented_non_native_prompt_binding(
+    mode: StructuredOutputMode,
+) -> None:
+    corpus = load_model_benchmark_corpus(CORPUS_PATH)
+    report = await run_model_benchmark(
+        corpus=corpus,
+        targets=[TARGET],
+        provider=DeterministicModelBenchmarkProvider(),
+    )
+    rebound = report.model_dump(mode="json")
+    cases_by_id = {case.case_id: case for case in corpus.cases}
+    for case_result in rebound["results"][0]["cases"]:
+        case = cases_by_id[case_result["case_id"]]
+        usage = case_result["usage_record"]
+        plan = openrouter_module._structured_output_request_plan(
+            mode=mode,
+            system_prompt=model_benchmark_module._SYSTEM_PROMPT,
+            user_prompt=blinded_model_benchmark_request(case),
+            response_model=ModelBenchmarkResponse,
+            schema_name="mmaudit_model_benchmark",
+        )
+        prompt_sha256 = model_benchmark_module._provider_payload_sha256(
+            [
+                {"role": "system", "content": plan.system_prompt},
+                {"role": "user", "content": plan.user_prompt},
+            ]
+        )
+        usage["prompt_sha256"] = prompt_sha256
+        usage["routing"]["structured_output_mode"] = mode.value
+        usage["routing"]["structured_output_request_shape_sha256"] = plan.request_shape_sha256
+        usage["routing"]["structured_output_require_parameters"] = plan.require_parameters
+        usage["routing"]["structured_output_required_provider_parameters"] = list(
+            plan.required_provider_parameters
+        )
+        usage["routing"]["structured_output_reasoning_request_sha256"] = (
+            plan.reasoning_request_sha256
+        )
+        usage["routing"]["structured_output_response_format"] = (
+            plan.response_format["type"] if plan.response_format is not None else None
+        )
+        usage["routing"]["structured_output_protocol_sha256"] = plan.strict_protocol_sha256
+        structured = usage["routing"]["structured_output"]
+        usage["routing"]["structured_output"] = synthetic_structured_output_routing(
+            configured_provider_endpoints=tuple(usage["configured_provider_endpoints"]),
+            selected_provider_endpoint=usage["actual_provider_endpoint"],
+            endpoint_snapshot_sha256=structured["endpoint_snapshot_sha256"],
+            output_capability_sha256=structured["output_capability_sha256"],
+            prompt_sha256=prompt_sha256,
+            request_body_sha256=usage["request_body_sha256"],
+            provider_policy_sha256=structured["provider_policy_sha256"],
+            schema_sha256=usage["schema_sha256"],
+            original_response_sha256=usage["response_sha256"],
+            validated_response_sha256=usage["validated_response_sha256"],
+            mode=mode,
+            request_shape_sha256=plan.request_shape_sha256,
+            strict_protocol_sha256=plan.strict_protocol_sha256,
+        )
+    rebound["report_sha256"] = canonical_sha256(
+        {key: value for key, value in rebound.items() if key != "report_sha256"}
+    )
+    reloaded = ModelBenchmarkReport.model_validate(rebound)
+
+    verify_model_benchmark_report(reloaded, corpus=corpus, require_real=False)
 
 
 @pytest.mark.asyncio

@@ -35,6 +35,17 @@ from mmaudit.models.identifiers import (
     EXACT_MODEL_ID_PATTERN,
     is_exact_openrouter_model_id,
 )
+from mmaudit.models.output_modes import (
+    REASONING_REQUEST_PARAMETER,
+    STRUCTURED_OUTPUT_CAPABILITY_PARAMETERS,
+    StructuredOutputMode,
+    mutually_supported_output_modes,
+    reasoning_capability_parameters,
+    supports_reasoning_request,
+)
+from mmaudit.models.output_modes import (
+    structured_output_parameters as derive_structured_output_parameters,
+)
 from mmaudit.models.schemas import ExecutionEvidenceKind
 from mmaudit.privacy import (
     EffectivePrivacyPolicyEvidence,
@@ -55,20 +66,6 @@ _RUN_MANIFEST_NAME = "model-discovery-manifest.json"
 OPENROUTER_API_IDENTITY = "https://openrouter.ai/api/v1"
 OPENROUTER_CATALOG_QUERY = "/models"
 OPENROUTER_ZDR_QUERY = "/endpoints/zdr"
-_STRUCTURED_OUTPUT_PARAMETERS = frozenset(
-    {
-        "json_schema",
-        "response_format",
-        "structured_outputs",
-    }
-)
-_REASONING_PARAMETERS = frozenset(
-    {
-        "include_reasoning",
-        "reasoning",
-        "reasoning_effort",
-    }
-)
 _REQUIRED_CATALOG_PARAMETERS = frozenset(
     {
         "max_tokens",
@@ -241,6 +238,11 @@ class OpenRouterModelDiscoveryPayload(BaseModel):
     catalog_output_limit_source: Literal["metadata", "provider_context"]
     model_supported_parameters: tuple[str, ...] = Field(max_length=_MAX_PARAMETERS)
     structured_output_parameters: tuple[str, ...] = Field(max_length=3)
+    supported_output_modes: tuple[StructuredOutputMode, ...] = Field(
+        min_length=1,
+        max_length=3,
+    )
+    structured_output_mode: StructuredOutputMode
     reasoning_parameters: tuple[str, ...] = Field(max_length=3)
     structured_output_supported: bool
     reasoning_supported: bool
@@ -261,6 +263,7 @@ class OpenRouterModelDiscoveryPayload(BaseModel):
     data_collection_deny_evidence_expires_at: datetime | None = None
     context_size: int = Field(gt=0, le=2**31 - 1)
     output_limit: int = Field(gt=0, le=2**31 - 1)
+    output_capability_sha256: str = Field(pattern=_SHA256_PATTERN)
     endpoint_record_sha256: str = Field(pattern=_SHA256_PATTERN)
     endpoint_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
     pricing_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -395,22 +398,40 @@ class OpenRouterModelDiscoveryPayload(BaseModel):
         common_parameters = set(self.model_supported_parameters).intersection(
             endpoint.supported_parameters
         )
-        expected_structured = tuple(sorted(_STRUCTURED_OUTPUT_PARAMETERS & common_parameters))
+        capability_inventories = (
+            self.model_supported_parameters,
+            endpoint.supported_parameters,
+        )
+        expected_structured = derive_structured_output_parameters(common_parameters)
         if self.structured_output_parameters != expected_structured:
             raise ValueError("structured-output capability evidence is inconsistent")
-        expected_reasoning = tuple(sorted(_REASONING_PARAMETERS & common_parameters))
+        expected_output_modes = mutually_supported_output_modes(capability_inventories)
+        if self.supported_output_modes != expected_output_modes:
+            raise ValueError("supported output-mode evidence is inconsistent")
+        if self.structured_output_mode is not expected_output_modes[0]:
+            raise ValueError("negotiated discovery output mode is inconsistent")
+        expected_reasoning = reasoning_capability_parameters(common_parameters)
         if self.reasoning_parameters != expected_reasoning:
             raise ValueError("reasoning capability evidence is inconsistent")
-        if self.reasoning_supported is not bool(expected_reasoning):
+        if self.reasoning_supported is not supports_reasoning_request(expected_reasoning):
             raise ValueError("reasoning support status is inconsistent")
-        if self.structured_output_supported is not bool(expected_structured):
+        if self.structured_output_supported is not (
+            expected_output_modes[0] is not StructuredOutputMode.VALIDATED_TEXT_JSON
+        ):
             raise ValueError("structured-output support status is inconsistent")
-        if not set(endpoint.required_request_parameters).issubset(self.model_supported_parameters):
+        non_output_required = set(endpoint.required_request_parameters).difference(
+            STRUCTURED_OUTPUT_CAPABILITY_PARAMETERS
+        )
+        if not non_output_required.issubset(self.model_supported_parameters):
             raise ValueError("catalog metadata omits a parameter required by the exact endpoint")
+        if REASONING_REQUEST_PARAMETER in endpoint.required_request_parameters:
+            raise ValueError("discovery endpoint request profile must remain capability-oriented")
 
         expected_metadata_hash = _canonical_sha256(_model_metadata_projection(self))
         if self.model_metadata_snapshot_sha256 != expected_metadata_hash:
             raise ValueError("model metadata projection hash is inconsistent")
+        if self.output_capability_sha256 != _discovery_output_capability_sha256(self):
+            raise ValueError("discovery output-capability hash is inconsistent")
         return self
 
 
@@ -601,8 +622,13 @@ def validate_openrouter_model_discovery(
         )
     endpoint = endpoint_snapshot.endpoints[0]
     common_parameters = set(model_supported_parameters).intersection(endpoint.supported_parameters)
-    structured_output_parameters = tuple(sorted(_STRUCTURED_OUTPUT_PARAMETERS & common_parameters))
-    reasoning_parameters = tuple(sorted(_REASONING_PARAMETERS & common_parameters))
+    capability_inventories = (
+        model_supported_parameters,
+        endpoint.supported_parameters,
+    )
+    structured_output_parameters = derive_structured_output_parameters(common_parameters)
+    output_modes = mutually_supported_output_modes(capability_inventories)
+    reasoning_parameters = reasoning_capability_parameters(common_parameters)
     deny_eligible: bool
     deny_request_policy_enforced: bool
     deny_evidence_source: DataCollectionDenyEvidenceSource
@@ -650,9 +676,13 @@ def validate_openrouter_model_discovery(
         "catalog_output_limit_source": output_limit_source,
         "model_supported_parameters": model_supported_parameters,
         "structured_output_parameters": structured_output_parameters,
+        "supported_output_modes": output_modes,
+        "structured_output_mode": output_modes[0],
         "reasoning_parameters": reasoning_parameters,
-        "structured_output_supported": bool(structured_output_parameters),
-        "reasoning_supported": bool(reasoning_parameters),
+        "structured_output_supported": (
+            output_modes[0] is not StructuredOutputMode.VALIDATED_TEXT_JSON
+        ),
+        "reasoning_supported": supports_reasoning_request(reasoning_parameters),
         "approved_provider_endpoint": endpoint.provider_endpoint,
         "provider_name": endpoint.provider_name,
         "endpoint_tag": endpoint.endpoint_tag,
@@ -667,6 +697,7 @@ def validate_openrouter_model_discovery(
         "data_collection_deny_evidence_expires_at": deny_evidence_expires_at,
         "context_size": endpoint.context_length,
         "output_limit": endpoint.max_completion_tokens,
+        "output_capability_sha256": "0" * 64,
         "endpoint_record_sha256": endpoint.endpoint_snapshot_sha256,
         "endpoint_snapshot_sha256": endpoint_snapshot.snapshot_sha256,
         "pricing_snapshot_sha256": endpoint.pricing_sha256,
@@ -675,6 +706,9 @@ def validate_openrouter_model_discovery(
     provisional = OpenRouterModelDiscoveryPayload.model_construct(**metadata_values)
     metadata_values["model_metadata_snapshot_sha256"] = _canonical_sha256(
         _model_metadata_projection(provisional)
+    )
+    metadata_values["output_capability_sha256"] = _canonical_sha256(
+        _discovery_output_capability_projection(metadata_values)
     )
     return OpenRouterModelDiscoveryPayload.model_validate(metadata_values)
 
@@ -1136,6 +1170,41 @@ def _model_metadata_projection(
             "max_completion_tokens_source": evidence.catalog_output_limit_source,
         },
     }
+
+
+def _discovery_output_capability_projection(
+    evidence: Mapping[str, Any] | OpenRouterModelDiscoveryPayload,
+) -> dict[str, Any]:
+    values: Mapping[str, Any]
+    if isinstance(evidence, OpenRouterModelDiscoveryPayload):
+        values = evidence.model_dump(mode="python")
+        endpoint_snapshot = evidence.endpoint_snapshot
+    else:
+        values = evidence
+        raw_snapshot = values["endpoint_snapshot"]
+        if not isinstance(raw_snapshot, OpenRouterEndpointSnapshotEvidence):
+            raise ModelDiscoveryValidationError(
+                "output capability requires validated endpoint snapshot evidence"
+            )
+        endpoint_snapshot = raw_snapshot
+    endpoint = endpoint_snapshot.endpoint(str(values["approved_provider_endpoint"]))
+    return {
+        "exact_model_id": values["exact_model_id"],
+        "approved_provider_endpoint": values["approved_provider_endpoint"],
+        "model_metadata_snapshot_sha256": values["model_metadata_snapshot_sha256"],
+        "model_supported_parameters": values["model_supported_parameters"],
+        "endpoint_snapshot_sha256": values["endpoint_snapshot_sha256"],
+        "endpoint_output_capability_sha256": endpoint.output_capability_sha256,
+        "structured_output_parameters": values["structured_output_parameters"],
+        "supported_output_modes": values["supported_output_modes"],
+        "structured_output_mode": values["structured_output_mode"],
+    }
+
+
+def _discovery_output_capability_sha256(
+    evidence: OpenRouterModelDiscoveryPayload,
+) -> str:
+    return _canonical_sha256(_discovery_output_capability_projection(evidence))
 
 
 def _select_catalog_model(

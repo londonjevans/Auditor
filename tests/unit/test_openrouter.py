@@ -54,6 +54,7 @@ from mmaudit.models.openrouter import (
     OpenRouterReasoning,
     OpenRouterRequestLimitError,
     OpenRouterSchemaError,
+    OpenRouterStructuredOutputError,
     OpenRouterTransientError,
     OpenRouterTruncatedResponseError,
     OpenRouterUnboundIdentityError,
@@ -62,7 +63,9 @@ from mmaudit.models.openrouter import (
     safe_headers,
     strict_json_schema,
 )
+from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.schemas import ExecutionEvidenceKind, UsageRecord
+from mmaudit.models.structured_output import StructuredOutputFailureCode
 from mmaudit.models.usage import (
     UsageLedger,
     _attest_owned_real_usage_record,
@@ -96,6 +99,15 @@ class OptionalAnswer(BaseModel):
     note: str | None = None
 
 
+class NumericAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    value: float
+
+
+class LooseAnswer(BaseModel):
+    answer: str
+
+
 def _qualification_routing(
     *,
     model: str = "alpha/atlas-secure",
@@ -106,6 +118,8 @@ def _qualification_routing(
     verified_at: datetime | None = None,
     expires_at: datetime | None = None,
     endpoint_snapshot_sha256: str = "6" * 64,
+    output_capability_sha256: str = "9" * 64,
+    structured_output_mode: StructuredOutputMode = StructuredOutputMode.JSON_OBJECT,
     model_metadata_snapshot_sha256: str = "7" * 64,
     pricing_snapshot_sha256: str = "8" * 64,
 ) -> OpenRouterQualificationRoutingEvidence:
@@ -118,6 +132,8 @@ def _qualification_routing(
         approved_provider_endpoint=provider,
         approved_provider_name=provider_name or provider,
         endpoint_snapshot_sha256=endpoint_snapshot_sha256,
+        output_capability_sha256=output_capability_sha256,
+        structured_output_mode=structured_output_mode,
         model_metadata_snapshot_sha256=model_metadata_snapshot_sha256,
         pricing_snapshot_sha256=pricing_snapshot_sha256,
         approved_roles=roles,
@@ -245,6 +261,9 @@ def _endpoint_snapshot(
     provider_name: str = "Approved Provider",
     pricing: dict[str, str] | None = None,
     require_zdr: bool = True,
+    supported_parameters: list[str] | None = None,
+    reasoning_requested: bool = False,
+    structured_output_required: bool = True,
 ) -> OpenRouterEndpointSnapshotEvidence:
     endpoint = {
         "tag": provider,
@@ -253,7 +272,8 @@ def _endpoint_snapshot(
         "context_length": 200_000,
         "max_prompt_tokens": 180_000,
         "max_completion_tokens": 20_000,
-        "supported_parameters": ["max_tokens", "response_format", "temperature"],
+        "supported_parameters": supported_parameters
+        or ["max_tokens", "response_format", "temperature"],
         "pricing": pricing
         or {
             "prompt": "0.000001",
@@ -268,6 +288,8 @@ def _endpoint_snapshot(
         endpoint_payload={"data": {"id": model, "endpoints": [endpoint]}},
         require_zdr=require_zdr,
         zdr_payload=({"data": [{**endpoint, "model_id": model}]} if require_zdr else None),
+        reasoning_requested=reasoning_requested,
+        structured_output_required=structured_output_required,
     )
 
 
@@ -402,11 +424,25 @@ def _model_discovery_run(
     canonical_model: str = "alpha/atlas-secure-20260727",
     provider: str = "approved-provider",
     provider_name: str = "Approved Provider",
+    model_supported_parameters: tuple[str, ...] = (
+        "max_tokens",
+        "response_format",
+        "temperature",
+    ),
+    endpoint_supported_parameters: tuple[str, ...] | None = None,
+    endpoint_reasoning_requested: bool = False,
 ) -> tuple[OpenRouterModelDiscoveryRunManifest, OpenRouterModelDiscoveryEvidence]:
     endpoint_snapshot = _endpoint_snapshot(
         model=exact_model,
         provider=provider,
         provider_name=provider_name,
+        supported_parameters=(
+            list(endpoint_supported_parameters)
+            if endpoint_supported_parameters is not None
+            else None
+        ),
+        reasoning_requested=endpoint_reasoning_requested,
+        structured_output_required=False,
     )
     catalog = {
         "data": [
@@ -418,11 +454,7 @@ def _model_discovery_run(
                     "context_length": 200_000,
                     "max_completion_tokens": 20_000,
                 },
-                "supported_parameters": [
-                    "max_tokens",
-                    "response_format",
-                    "temperature",
-                ],
+                "supported_parameters": list(model_supported_parameters),
             }
         ]
     }
@@ -615,6 +647,8 @@ def _qualification_routing_for_discovery(
         provider=evidence.approved_provider_endpoint,
         provider_name=endpoint.provider_name,
         endpoint_snapshot_sha256=evidence.endpoint_snapshot_sha256,
+        output_capability_sha256=evidence.output_capability_sha256,
+        structured_output_mode=evidence.structured_output_mode,
         model_metadata_snapshot_sha256=evidence.model_metadata_snapshot_sha256,
         pricing_snapshot_sha256=endpoint.pricing_sha256,
     )
@@ -631,6 +665,8 @@ def _qualification_routing_for_endpoint_snapshot(
         provider=endpoint.provider_endpoint,
         provider_name=provider_name or endpoint.provider_name,
         endpoint_snapshot_sha256=snapshot.snapshot_sha256,
+        output_capability_sha256=snapshot.output_capability_sha256,
+        structured_output_mode=snapshot.structured_output_mode,
         pricing_snapshot_sha256=endpoint.pricing_sha256,
     )
 
@@ -3487,6 +3523,482 @@ async def test_structured_request_and_usage(config_factory) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("supported_parameters", "structured_output_required", "expected_mode", "expected_format"),
+    [
+        (
+            [
+                "json_schema",
+                "max_tokens",
+                "response_format",
+                "structured_outputs",
+                "temperature",
+            ],
+            True,
+            "NATIVE_JSON_SCHEMA",
+            "json_schema",
+        ),
+        (
+            ["max_tokens", "response_format", "temperature"],
+            True,
+            "JSON_OBJECT",
+            "json_object",
+        ),
+        (
+            ["max_tokens", "temperature"],
+            False,
+            "VALIDATED_TEXT_JSON",
+            None,
+        ),
+    ],
+)
+async def test_exact_endpoint_capability_selects_request_output_mode(
+    config_factory,
+    supported_parameters: list[str],
+    structured_output_required: bool,
+    expected_mode: str,
+    expected_format: str | None,
+) -> None:
+    observed: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(json.loads(request.content))
+        return _completion_response(
+            '{"answer":"ok"}',
+            provider="approved-provider",
+        )
+
+    policy = OpenRouterProviderPolicy(only=("approved-provider",))
+    client, http_client, usage = _client(
+        config_factory(),
+        handler,
+        provider_policy=policy,
+    )
+    snapshot = _endpoint_snapshot(
+        supported_parameters=supported_parameters,
+        structured_output_required=structured_output_required,
+    )
+    client.register_endpoint_snapshot(evidence=snapshot)
+    try:
+        result = await client.complete(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="user",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert result.answer == "ok"
+    assert len(observed) == 1
+    body = observed[0]
+    if expected_format is None:
+        assert "response_format" not in body
+        assert "require_parameters" not in body["provider"]
+        assert "MMAUDIT_STRUCTURED_OUTPUT_PROTOCOL" in body["messages"][0]["content"]
+    else:
+        assert body["response_format"]["type"] == expected_format
+        assert body["provider"]["require_parameters"] is True
+    if expected_mode == "NATIVE_JSON_SCHEMA":
+        assert "MMAUDIT_STRUCTURED_OUTPUT_PROTOCOL" not in body["messages"][0]["content"]
+    else:
+        assert len(body["metadata"]["mmaudit_output_protocol_sha256"]) == 64
+    assert (
+        body["metadata"]["mmaudit_prompt_sha256"]
+        == hashlib.sha256(
+            json.dumps(
+                body["messages"],
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+    )
+    record = usage.records[0]
+    assert record.routing["structured_output_mode"] == expected_mode
+    assert (
+        record.routing["structured_output_capability_sha256"] == snapshot.output_capability_sha256
+    )
+    assert record.routing["structured_output_request_body_sha256"] == (record.request_body_sha256)
+    assert record.routing["structured_output_original_response_sha256"] == (record.response_sha256)
+    assert record.routing["structured_output_validated_response_sha256"] == (
+        record.validated_response_sha256
+    )
+    assert is_creditable_usage_record(record)
+
+
+@pytest.mark.asyncio
+async def test_model_endpoint_common_text_downgrade_executes_without_response_format(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    observed: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(json.loads(request.content))
+        return _completion_response(
+            '{"answer":"ok"}',
+            selected_model="alpha/atlas-secure-20260727",
+            provider="approved-provider",
+        )
+
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        model_supported_parameters=("max_tokens", "temperature"),
+    )
+    assert evidence.endpoint_snapshot.structured_output_mode is StructuredOutputMode.JSON_OBJECT
+    assert evidence.structured_output_mode is StructuredOutputMode.VALIDATED_TEXT_JSON
+    client, http_client, usage = _client(
+        config_factory(),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(only=("approved-provider",)),
+    )
+    client.register_model_discovery(evidence=evidence, manifest=manifest)
+    try:
+        result = await client.complete(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="user",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert result.answer == "ok"
+    assert len(observed) == 1
+    body = observed[0]
+    assert "response_format" not in body
+    assert "require_parameters" not in body["provider"]
+    assert "MMAUDIT_STRUCTURED_OUTPUT_PROTOCOL" in body["messages"][0]["content"]
+    assert (
+        usage.records[0].routing["structured_output_mode"]
+        == StructuredOutputMode.VALIDATED_TEXT_JSON.value
+    )
+    assert is_creditable_usage_record(usage.records[0])
+
+
+@pytest.mark.asyncio
+async def test_marker_only_discovery_executes_validated_text_without_provider_parameters(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    observed: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(json.loads(request.content))
+        return _completion_response(
+            '{"answer":"ok"}',
+            selected_model="alpha/atlas-secure-20260727",
+            provider="approved-provider",
+        )
+
+    parameters = ("max_tokens", "structured_outputs", "temperature")
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        model_supported_parameters=parameters,
+        endpoint_supported_parameters=parameters,
+    )
+    assert evidence.structured_output_mode is StructuredOutputMode.VALIDATED_TEXT_JSON
+    assert evidence.structured_output_supported is False
+    client, http_client, usage = _client(
+        config_factory(),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(only=("approved-provider",)),
+    )
+    client.register_model_discovery(evidence=evidence, manifest=manifest)
+    try:
+        result = await client.complete(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="user",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert result.answer == "ok"
+    assert len(observed) == 1
+    assert "response_format" not in observed[0]
+    assert "require_parameters" not in observed[0]["provider"]
+    assert is_creditable_usage_record(usage.records[0])
+
+
+@pytest.mark.asyncio
+async def test_capability_discovery_derives_exact_runtime_reasoning_profile(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    observed: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(json.loads(request.content))
+        return _completion_response(
+            '{"answer":"ok"}',
+            selected_model="alpha/atlas-secure-20260727",
+            provider="approved-provider",
+        )
+
+    parameters = ("max_tokens", "reasoning", "temperature")
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        model_supported_parameters=parameters,
+        endpoint_supported_parameters=parameters,
+    )
+    assert "reasoning" not in (evidence.endpoint_snapshot.endpoints[0].required_request_parameters)
+    client, http_client, usage = _client(
+        config_factory(),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(only=("approved-provider",)),
+        reasoning=OpenRouterReasoning(effort="none", exclude=True),
+    )
+    client.register_model_discovery(evidence=evidence, manifest=manifest)
+    identity = client.registered_model_identity_snapshot("alpha/atlas-secure")
+    try:
+        result = await client.complete(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="user",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert result.answer == "ok"
+    assert identity.endpoint_capabilities.required_parameters == (
+        "max_tokens",
+        "reasoning",
+        "temperature",
+    )
+    assert identity.provider_policy.require_parameters is True
+    assert len(observed) == 1
+    assert observed[0]["reasoning"] == {"effort": "none", "exclude": True}
+    assert observed[0]["provider"]["require_parameters"] is True
+    assert is_creditable_usage_record(usage.records[0])
+
+
+@pytest.mark.asyncio
+async def test_alias_only_reasoning_capability_rejects_runtime_reasoning_profile(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    parameters = ("max_tokens", "reasoning_effort", "temperature")
+    manifest, evidence = _model_discovery_run(
+        tmp_path,
+        model_supported_parameters=parameters,
+        endpoint_supported_parameters=parameters,
+    )
+    assert evidence.reasoning_parameters == ("reasoning_effort",)
+    client, http_client, usage = _client(
+        config_factory(),
+        lambda _request: _completion_response('{"answer":"must not execute"}'),
+        provider_policy=OpenRouterProviderPolicy(only=("approved-provider",)),
+        reasoning=OpenRouterReasoning(effort="none", exclude=True),
+    )
+    try:
+        with pytest.raises(
+            OpenRouterProviderPolicyError,
+            match="requested reasoning",
+        ):
+            client.register_model_discovery(evidence=evidence, manifest=manifest)
+    finally:
+        await http_client.aclose()
+
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("supported_parameters", "reasoning_requested", "expected_require_parameters"),
+    [
+        (
+            [
+                "json_schema",
+                "max_tokens",
+                "response_format",
+                "structured_outputs",
+                "temperature",
+            ],
+            False,
+            True,
+        ),
+        (
+            [
+                "json_schema",
+                "max_tokens",
+                "reasoning",
+                "response_format",
+                "structured_outputs",
+                "temperature",
+            ],
+            True,
+            True,
+        ),
+        (
+            ["max_tokens", "response_format", "temperature"],
+            False,
+            True,
+        ),
+        (
+            ["max_tokens", "reasoning", "response_format", "temperature"],
+            True,
+            True,
+        ),
+        (
+            ["max_tokens", "temperature"],
+            False,
+            False,
+        ),
+        (
+            ["max_tokens", "reasoning", "temperature"],
+            True,
+            True,
+        ),
+    ],
+)
+async def test_require_parameters_binds_all_emitted_endpoint_dependent_parameters(
+    config_factory,
+    supported_parameters: list[str],
+    reasoning_requested: bool,
+    expected_require_parameters: bool,
+) -> None:
+    observed: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(json.loads(request.content))
+        return _completion_response(
+            '{"answer":"ok"}',
+            provider="approved-provider",
+        )
+
+    client, http_client, usage = _client(
+        config_factory(),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(only=("approved-provider",)),
+        reasoning=(
+            OpenRouterReasoning(effort="none", exclude=True) if reasoning_requested else None
+        ),
+    )
+    client.register_endpoint_snapshot(
+        evidence=_endpoint_snapshot(
+            supported_parameters=supported_parameters,
+            reasoning_requested=reasoning_requested,
+            structured_output_required=False,
+        )
+    )
+    try:
+        result = await client.complete(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="user",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert result.answer == "ok"
+    assert len(observed) == 1
+    body = observed[0]
+    assert ("require_parameters" in body["provider"]) is expected_require_parameters
+    if expected_require_parameters:
+        assert body["provider"]["require_parameters"] is True
+    assert ("reasoning" in body) is reasoning_requested
+    structured = usage.records[0].routing["structured_output"]
+    assert structured["provider_require_parameters"] is expected_require_parameters
+    assert is_creditable_usage_record(usage.records[0])
+
+
+@pytest.mark.asyncio
+async def test_reasoning_request_profile_drift_fails_before_transport(
+    config_factory,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response(
+            '{"answer":"must not execute"}',
+            provider="approved-provider",
+        )
+
+    client, http_client, usage = _client(
+        config_factory(),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(only=("approved-provider",)),
+        reasoning=OpenRouterReasoning(effort="none", exclude=True),
+    )
+    client.register_endpoint_snapshot(
+        evidence=_endpoint_snapshot(
+            supported_parameters=["max_tokens", "reasoning", "temperature"],
+            reasoning_requested=False,
+            structured_output_required=False,
+        )
+    )
+    try:
+        with pytest.raises(
+            OpenRouterProviderPolicyError,
+            match="request parameter profile",
+        ):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 0
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_one_syntax_envelope_repair_is_hash_bound_and_noncreditable(
+    config_factory,
+) -> None:
+    client, http_client, usage = _client(
+        config_factory(execution={"max_json_repair_attempts": 1}),
+        lambda _request: _completion_response(
+            '```json\n{"answer":"ok"}\n```',
+        ),
+    )
+    try:
+        completion = await client.complete_with_evidence(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="user",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert completion.value.answer == "ok"
+    assert completion.usage_record is usage.records[0]
+    assert completion.usage_record.status == "repaired_noncreditable"
+    assert completion.usage_record.routing["repair_used"] is True
+    repair = completion.usage_record.routing["repair_evidence"]
+    assert repair["semantic_rewrite"] is False
+    assert repair["repair_attempt"] == 1
+    assert repair["original_response_sha256"] == completion.usage_record.response_sha256
+    assert not is_creditable_usage_record(completion.usage_record)
+
+
+@pytest.mark.asyncio
 async def test_router_metadata_supplies_provider_when_success_envelope_omits_extension(
     config_factory,
 ) -> None:
@@ -3816,8 +4328,112 @@ async def test_malformed_structured_output_is_not_repaired(config_factory) -> No
     finally:
         await http_client.aclose()
     assert calls == 1
-    assert usage.records[0].status == "failed:OpenRouterSchemaError"
+    assert usage.records[0].status == "failed:OpenRouterStructuredOutputError"
     assert usage.records[0].validation_status.value == "invalid_response"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_json_keys_are_rejected_without_review_credit(config_factory) -> None:
+    client, http_client, usage = _client(
+        config_factory(),
+        lambda _request: _completion_response('{"answer":"first","answer":"second"}'),
+    )
+    try:
+        with pytest.raises(OpenRouterSchemaError, match="invalid structured"):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert len(usage.records) == 1
+    assert usage.records[0].status != "success"
+    assert not is_creditable_usage_record(usage.records[0])
+
+
+@pytest.mark.asyncio
+async def test_nonfinite_json_number_is_rejected_without_review_credit(config_factory) -> None:
+    client, http_client, usage = _client(
+        config_factory(),
+        lambda _request: _completion_response('{"value":NaN}'),
+    )
+    try:
+        with pytest.raises(OpenRouterSchemaError, match="invalid structured"):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=NumericAnswer,
+                schema_name="numeric_answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert len(usage.records) == 1
+    assert usage.records[0].status != "success"
+    assert not is_creditable_usage_record(usage.records[0])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("supported_parameters", "structured_output_required"),
+    [
+        (
+            [
+                "json_schema",
+                "max_tokens",
+                "response_format",
+                "structured_outputs",
+                "temperature",
+            ],
+            True,
+        ),
+        (["max_tokens", "response_format", "temperature"], True),
+        (["max_tokens", "temperature"], False),
+    ],
+)
+async def test_unexpected_fields_are_rejected_without_review_credit_for_every_output_mode(
+    config_factory,
+    supported_parameters: list[str],
+    structured_output_required: bool,
+) -> None:
+    client, http_client, usage = _client(
+        config_factory(),
+        lambda _request: _completion_response(
+            '{"answer":"plausible","unexpected":"must not be discarded"}',
+            provider="approved-provider",
+        ),
+        provider_policy=OpenRouterProviderPolicy(only=("approved-provider",)),
+    )
+    client.register_endpoint_snapshot(
+        evidence=_endpoint_snapshot(
+            supported_parameters=supported_parameters,
+            structured_output_required=structured_output_required,
+        )
+    )
+    try:
+        with pytest.raises(OpenRouterStructuredOutputError) as raised:
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=LooseAnswer,
+                schema_name="loose_answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert len(usage.records) == 1
+    assert raised.value.failure_code is StructuredOutputFailureCode.SCHEMA_VALIDATION_FAILED
+    assert usage.records[0].status != "success"
+    assert not is_creditable_usage_record(usage.records[0])
 
 
 @pytest.mark.asyncio
@@ -4657,6 +5273,63 @@ async def test_certification_rejects_qualified_endpoint_snapshot_drift_before_tr
     assert usage.records == []
 
 
+@pytest.mark.parametrize("fault", ["output_capability", "output_mode"])
+@pytest.mark.asyncio
+async def test_certification_rejects_qualified_output_capability_drift_before_transport(
+    config_factory,
+    fault: str,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    snapshot = _endpoint_snapshot(provider_name="approved-provider")
+    endpoint = snapshot.endpoint("approved-provider")
+    binding = _qualification_routing(
+        endpoint_snapshot_sha256=snapshot.snapshot_sha256,
+        output_capability_sha256=(
+            "e" * 64 if fault == "output_capability" else snapshot.output_capability_sha256
+        ),
+        structured_output_mode=(
+            StructuredOutputMode.VALIDATED_TEXT_JSON
+            if fault == "output_mode"
+            else snapshot.structured_output_mode
+        ),
+        pricing_snapshot_sha256=endpoint.pricing_sha256,
+    )
+    client, http_client, usage = _client(
+        config_factory(execution={"max_json_repair_attempts": 0}),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(binding,),
+    )
+    client.register_endpoint_snapshot(evidence=snapshot)
+    try:
+        with pytest.raises(
+            OpenRouterQualificationError,
+            match="endpoint or pricing snapshot",
+        ):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 0
+    assert usage.records == []
+
+
 @pytest.mark.parametrize(
     ("endpoint_policy", "model_identity"),
     [
@@ -4700,6 +5373,8 @@ async def test_certification_pins_each_qualified_request_to_its_singleton_endpoi
     assert endpoint is not None
     binding = _qualification_routing(
         endpoint_snapshot_sha256=snapshot.snapshot_sha256,
+        output_capability_sha256=snapshot.output_capability_sha256,
+        structured_output_mode=snapshot.structured_output_mode,
         pricing_snapshot_sha256=endpoint.pricing_sha256,
     )
     client, http_client, usage = _client(
@@ -4876,6 +5551,8 @@ async def test_certification_rejects_returned_provider_name_outside_qualificatio
     binding = _qualification_routing(
         provider_name="Wrong Provider",
         endpoint_snapshot_sha256=endpoint_snapshot.snapshot_sha256,
+        output_capability_sha256=endpoint_snapshot.output_capability_sha256,
+        structured_output_mode=endpoint_snapshot.structured_output_mode,
         pricing_snapshot_sha256=endpoint.pricing_sha256,
     )
     client, http_client, usage = _client(
@@ -5039,6 +5716,77 @@ async def test_truncated_response_is_rejected_and_not_repaired(config_factory) -
     assert calls == 1
     assert usage.records[0].status == "rejected_truncated_response"
     assert usage.records[0].validation_status.value == "truncated"
+
+
+@pytest.mark.asyncio
+async def test_native_truncation_cannot_hide_behind_normalized_stop(config_factory) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        payload = _completion('{"answer":"partial"}')
+        payload["choices"][0]["finish_reason"] = "stop"
+        payload["choices"][0]["native_finish_reason"] = "max_tokens"
+        return httpx.Response(
+            200,
+            headers={"X-Generation-Id": "generation-test"},
+            json=payload,
+        )
+
+    client, http_client, usage = _client(config_factory(), handler)
+    try:
+        with pytest.raises(OpenRouterTruncatedResponseError):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 1
+    assert usage.records[0].status == "rejected_truncated_response"
+    assert usage.records[0].validation_status.value == "truncated"
+
+
+@pytest.mark.asyncio
+async def test_native_truncation_is_not_retained_behind_an_identity_mismatch(
+    config_factory,
+) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        payload = _completion(
+            '{"answer":"parseable but incomplete"}',
+            model="alpha/atlas-secure:variant",
+        )
+        payload["choices"][0]["native_finish_reason"] = "max_tokens"
+        return httpx.Response(
+            200,
+            headers={"X-Generation-Id": "generation-test"},
+            json=payload,
+        )
+
+    client, http_client, usage = _client(config_factory(), handler)
+    try:
+        with pytest.raises(OpenRouterTruncatedResponseError):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert len(usage.records) == 1
+    assert usage.records[0].status == "rejected_truncated_response"
+    assert usage.records[0].validated_response_sha256 is None
+    assert not is_creditable_usage_record(usage.records[0])
 
 
 @pytest.mark.asyncio
@@ -5299,7 +6047,7 @@ async def test_malformed_initial_response_never_produces_success_usage(config_fa
     finally:
         await http_client.aclose()
     assert calls == 1
-    assert usage.records[0].status == "failed:OpenRouterSchemaError"
+    assert usage.records[0].status == "failed:OpenRouterStructuredOutputError"
     assert usage.records[0].validation_status.value == "invalid_response"
 
 

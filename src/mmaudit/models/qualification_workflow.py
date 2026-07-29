@@ -601,6 +601,10 @@ def run_qualification_workflow(
             expiry = qualification_expires_at if tier_a else None
             verification_sha256 = evidence.verification_sha256
             failure_reasons = ()
+        if candidate.output_capability_sha256 is None or candidate.structured_output_mode is None:
+            raise ValueError(
+                f"candidate lacks output capability evidence: {candidate.exact_model_id}"
+            )
         result = seal_model_qualification_result(
             exact_model_id=model_id,
             canonical_model_slug=candidate.canonical_model_slug,
@@ -608,8 +612,10 @@ def run_qualification_workflow(
             approved_provider_endpoint=candidate.approved_provider_endpoint,
             approved_provider_name=candidate.approved_provider_name,
             endpoint_snapshot_sha256=candidate.endpoint_snapshot_sha256,
+            output_capability_sha256=candidate.output_capability_sha256,
             model_metadata_snapshot_sha256=(candidate.model_metadata_snapshot_sha256),
             pricing_snapshot_sha256=candidate.pricing_snapshot_sha256,
+            structured_output_mode=candidate.structured_output_mode,
             benchmark_report_sha256=report.report_sha256,
             benchmark_verification_sha256=verification_sha256,
             disposition=disposition,

@@ -10,8 +10,10 @@ from pydantic import ValidationError
 from mmaudit.models.endpoint_snapshots import (
     EndpointSnapshotValidationError,
     OpenRouterEndpointSnapshotEvidence,
+    output_capability_binding_sha256,
     validate_openrouter_endpoint_snapshot,
 )
+from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.orchestration.budgets import EndpointRequestCostBound
 
 
@@ -97,6 +99,16 @@ def test_valid_snapshot_exposes_exact_cost_proof_inputs() -> None:
     assert endpoint.operational is True
     assert endpoint.zdr_eligible is True
     assert endpoint.structured_output_parameters == ("response_format",)
+    assert endpoint.supported_output_modes == (
+        StructuredOutputMode.JSON_OBJECT,
+        StructuredOutputMode.VALIDATED_TEXT_JSON,
+    )
+    assert endpoint.structured_output_mode is StructuredOutputMode.JSON_OBJECT
+    assert evidence.supported_output_modes == endpoint.supported_output_modes
+    assert evidence.structured_output_mode is StructuredOutputMode.JSON_OBJECT
+    assert len(endpoint.output_capability_sha256) == 64
+    assert len(evidence.output_capability_sha256) == 64
+    assert len(output_capability_binding_sha256(evidence)) == 64
     assert endpoint.max_prompt_tokens_source == "metadata"
     assert endpoint.max_completion_tokens_source == "metadata"
     assert endpoint.pricing == {
@@ -151,6 +163,24 @@ def test_endpoint_snapshot_is_deterministic_for_semantically_identical_metadata(
     serialized = json.dumps(first.model_dump(mode="json"), sort_keys=True)
     assert "untrusted_unknown_field" not in serialized
     assert '"name": "Provider-controlled display name"' not in serialized
+
+
+def test_output_capability_binding_includes_the_complete_parent_snapshot() -> None:
+    baseline_endpoint = _endpoint()
+    repriced_endpoint = copy.deepcopy(baseline_endpoint)
+    repriced_endpoint["pricing"]["completion"] = "0.000016"
+    baseline = _validate(
+        endpoint_payload=_endpoint_payload(baseline_endpoint),
+        zdr_payload=_zdr_payload(baseline_endpoint),
+    )
+    repriced = _validate(
+        endpoint_payload=_endpoint_payload(repriced_endpoint),
+        zdr_payload=_zdr_payload(repriced_endpoint),
+    )
+
+    assert baseline.output_capability_sha256 == repriced.output_capability_sha256
+    assert baseline.snapshot_sha256 != repriced.snapshot_sha256
+    assert output_capability_binding_sha256(baseline) != output_capability_binding_sha256(repriced)
 
 
 def test_provider_policy_order_is_preserved_and_exactly_covered() -> None:
@@ -256,10 +286,31 @@ def test_structured_output_capability_can_be_discovered_without_requiring_it() -
     )
 
     assert evidence.endpoints[0].structured_output_parameters == ()
+    assert evidence.endpoints[0].supported_output_modes == (
+        StructuredOutputMode.VALIDATED_TEXT_JSON,
+    )
+    assert evidence.endpoints[0].structured_output_mode is StructuredOutputMode.VALIDATED_TEXT_JSON
+    assert evidence.supported_output_modes == (StructuredOutputMode.VALIDATED_TEXT_JSON,)
+    assert evidence.structured_output_mode is StructuredOutputMode.VALIDATED_TEXT_JSON
     assert evidence.endpoints[0].required_request_parameters == (
         "max_tokens",
         "temperature",
     )
+
+
+def test_capability_discovery_defaults_to_validated_text_when_provider_format_is_absent() -> None:
+    endpoint = _endpoint()
+    endpoint["supported_parameters"] = ["max_tokens", "reasoning", "temperature"]
+
+    evidence = validate_openrouter_endpoint_snapshot(
+        exact_model_id="alpha/atlas-secure",
+        configured_provider_endpoints=("approved-provider",),
+        provider_policy_mode="only",
+        endpoint_payload=_endpoint_payload(endpoint),
+        require_zdr=False,
+    )
+
+    assert evidence.structured_output_mode is StructuredOutputMode.VALIDATED_TEXT_JSON
 
 
 def test_structured_output_remains_required_for_native_schema_requests() -> None:
@@ -270,7 +321,109 @@ def test_structured_output_remains_required_for_native_schema_requests() -> None
         EndpointSnapshotValidationError,
         match="emitted request parameter support: response_format",
     ):
-        _validate(endpoint_payload=_endpoint_payload(endpoint))
+        validate_openrouter_endpoint_snapshot(
+            exact_model_id="alpha/atlas-secure",
+            configured_provider_endpoints=("approved-provider",),
+            provider_policy_mode="only",
+            endpoint_payload=_endpoint_payload(endpoint),
+            require_zdr=False,
+            structured_output_required=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("parameters", "expected_modes", "expected_mode"),
+    [
+        (
+            [
+                "max_tokens",
+                "response_format",
+                "structured_outputs",
+                "temperature",
+            ],
+            (
+                StructuredOutputMode.NATIVE_JSON_SCHEMA,
+                StructuredOutputMode.JSON_OBJECT,
+                StructuredOutputMode.VALIDATED_TEXT_JSON,
+            ),
+            StructuredOutputMode.NATIVE_JSON_SCHEMA,
+        ),
+        (
+            ["max_tokens", "response_format", "temperature"],
+            (
+                StructuredOutputMode.JSON_OBJECT,
+                StructuredOutputMode.VALIDATED_TEXT_JSON,
+            ),
+            StructuredOutputMode.JSON_OBJECT,
+        ),
+        (
+            ["max_tokens", "temperature"],
+            (StructuredOutputMode.VALIDATED_TEXT_JSON,),
+            StructuredOutputMode.VALIDATED_TEXT_JSON,
+        ),
+    ],
+)
+def test_exact_endpoint_preserves_typed_output_modes(
+    parameters: list[str],
+    expected_modes: tuple[StructuredOutputMode, ...],
+    expected_mode: StructuredOutputMode,
+) -> None:
+    endpoint = _endpoint()
+    endpoint["supported_parameters"] = parameters
+
+    evidence = validate_openrouter_endpoint_snapshot(
+        exact_model_id="alpha/atlas-secure",
+        configured_provider_endpoints=("approved-provider",),
+        provider_policy_mode="only",
+        endpoint_payload=_endpoint_payload(endpoint),
+        require_zdr=False,
+        structured_output_required=False,
+    )
+
+    assert evidence.endpoints[0].supported_output_modes == expected_modes
+    assert evidence.endpoints[0].structured_output_mode is expected_mode
+    assert evidence.supported_output_modes == expected_modes
+    assert evidence.structured_output_mode is expected_mode
+
+
+def test_multi_endpoint_policy_negotiates_the_strongest_common_output_mode() -> None:
+    native = _endpoint("native-provider", provider_name="Native Provider")
+    native["supported_parameters"].append("structured_outputs")
+    json_object = _endpoint("json-provider", provider_name="JSON Provider")
+
+    evidence = validate_openrouter_endpoint_snapshot(
+        exact_model_id="alpha/atlas-secure",
+        configured_provider_endpoints=("native-provider", "json-provider"),
+        provider_policy_mode="order",
+        endpoint_payload=_endpoint_payload(native, json_object),
+        require_zdr=False,
+        structured_output_required=False,
+    )
+
+    assert evidence.endpoints[0].structured_output_mode is StructuredOutputMode.NATIVE_JSON_SCHEMA
+    assert evidence.endpoints[1].structured_output_mode is StructuredOutputMode.JSON_OBJECT
+    assert evidence.supported_output_modes == (
+        StructuredOutputMode.JSON_OBJECT,
+        StructuredOutputMode.VALIDATED_TEXT_JSON,
+    )
+    assert evidence.structured_output_mode is StructuredOutputMode.JSON_OBJECT
+
+
+def test_required_native_schema_mode_rejects_json_object_only_endpoint() -> None:
+    endpoint = _endpoint()
+
+    with pytest.raises(
+        EndpointSnapshotValidationError,
+        match="required structured-output mode",
+    ):
+        validate_openrouter_endpoint_snapshot(
+            exact_model_id="alpha/atlas-secure",
+            configured_provider_endpoints=("approved-provider",),
+            provider_policy_mode="only",
+            endpoint_payload=_endpoint_payload(endpoint),
+            require_zdr=False,
+            required_output_mode=StructuredOutputMode.NATIVE_JSON_SCHEMA,
+        )
 
 
 def test_snapshot_requires_every_parameter_emitted_by_the_request() -> None:
@@ -420,4 +573,16 @@ def test_self_hash_rejects_tampered_serialized_evidence() -> None:
     payload["endpoints"][0]["pricing"]["prompt"] = "0.1"
 
     with pytest.raises(ValidationError, match="pricing hash is inconsistent"):
+        OpenRouterEndpointSnapshotEvidence.model_validate(payload)
+
+    payload = evidence.model_dump(mode="json")
+    payload["endpoints"][0]["structured_output_mode"] = (
+        StructuredOutputMode.VALIDATED_TEXT_JSON.value
+    )
+    with pytest.raises(ValidationError, match="negotiated endpoint output mode"):
+        OpenRouterEndpointSnapshotEvidence.model_validate(payload)
+
+    payload = evidence.model_dump(mode="json")
+    payload["output_capability_sha256"] = "0" * 64
+    with pytest.raises(ValidationError, match="output-capability hash"):
         OpenRouterEndpointSnapshotEvidence.model_validate(payload)

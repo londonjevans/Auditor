@@ -11,6 +11,35 @@ import httpx
 
 from tests.conftest import MODEL_IDS
 
+_OUTPUT_PROTOCOL_OPEN = "<MMAUDIT_STRUCTURED_OUTPUT_PROTOCOL>"
+_OUTPUT_PROTOCOL_CLOSE = "</MMAUDIT_STRUCTURED_OUTPUT_PROTOCOL>"
+
+
+def _request_schema_name(body: dict[str, Any]) -> str:
+    response_format = body.get("response_format")
+    if isinstance(response_format, dict):
+        json_schema = response_format.get("json_schema")
+        if isinstance(json_schema, dict) and isinstance(json_schema.get("name"), str):
+            return json_schema["name"]
+    messages = body.get("messages")
+    if not isinstance(messages, list) or not messages or not isinstance(messages[0], dict):
+        raise AssertionError("synthetic request omitted structured-output protocol")
+    system_prompt = messages[0].get("content")
+    if not isinstance(system_prompt, str):
+        raise AssertionError("synthetic request omitted system prompt")
+    try:
+        protocol_text = system_prompt.split(_OUTPUT_PROTOCOL_OPEN, 1)[1].split(
+            _OUTPUT_PROTOCOL_CLOSE,
+            1,
+        )[0]
+        protocol = json.loads(protocol_text)
+    except (IndexError, json.JSONDecodeError) as exc:
+        raise AssertionError("synthetic request has an invalid output protocol") from exc
+    schema_name = protocol.get("schema_name") if isinstance(protocol, dict) else None
+    if not isinstance(schema_name, str):
+        raise AssertionError("synthetic request output protocol omitted schema name")
+    return schema_name
+
 
 def _candidate(
     *,
@@ -609,7 +638,7 @@ class FakeOpenRouter:
         self.chat_calls += 1
         body = json.loads(request.content)
         self.requests.append(body)
-        schema_name = body["response_format"]["json_schema"]["name"]
+        schema_name = _request_schema_name(body)
         role = schema_name.removeprefix("mmaudit_").removesuffix("_findings")
 
         if self.mode == "authentication_failure":

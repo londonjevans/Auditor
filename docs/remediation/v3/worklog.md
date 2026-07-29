@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_BY_OPERATOR
+AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Capability-adaptive structured output
 CURRENT_TICKET: V3-OUTPUT-001
 LAST_COMPLETED_TICKET: V3-PRIVACY-001
-NEXT_ACTION: On operator resume, add failing V3-OUTPUT-001 regressions for strict JSON parsing and endpoint-bound output-mode negotiation before implementation.
-LAST_COMMAND: git push origin main
-LAST_RESULT: PASS; SSH origin advanced from d6a7a58 to pause checkpoint e7c7dcf on main.
+NEXT_ACTION: Review the final V3-OUTPUT-001 diff and artifact scope, refresh traceability from actual evidence, create the cohesive checkpoint commit, and push it over SSH.
+LAST_COMMAND: .venv/bin/pytest -q
+LAST_RESULT: PASS; 2206 tests passed and 10 explicit external-engine, isolation, loopback, and paid-provider prerequisites skipped in 272.93s. No provider, network, or secret access occurred.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -44,6 +44,148 @@ LAST_CHECKPOINT_COMMIT: e7c7dcfc8cb85249caea29f271fb6f75308b0311
   JSON regressions for duplicate keys and non-finite constants. No source or
   test files were changed, no provider call was made, and all audit agents were
   stopped.
+- **Resume checkpoint:** Automatic goal continuation resumed from clean
+  synchronized commit `48d9f9d1b3606d6bd1c8167793ce9675dfbcb4f1`.
+  The authoritative objective, repository instructions, queue, and worklog were
+  reread; implementation begins with negative strict-JSON and endpoint-mode
+  binding regressions. No paid provider call is authorized by this ticket.
+- **Reproduced strict-JSON defects:** Added negative regressions for duplicate
+  object keys and non-finite numeric constants. Before remediation,
+  `.venv/bin/pytest -q
+  tests/unit/test_openrouter.py::test_duplicate_json_keys_are_rejected_without_review_credit
+  tests/unit/test_openrouter.py::test_nonfinite_json_number_is_rejected_without_review_credit`
+  failed `2` tests: duplicate keys were accepted last-wins and `NaN` reached a
+  later canonical-hash exception instead of a typed fail-closed schema
+  rejection. These responses must receive no review credit.
+- **Implemented checkpoint:** Added strict JSON decoding, bounded syntax-repair
+  evidence, capability-adaptive output modes, exact endpoint capability
+  snapshots, typed structured-output evidence, review-credit joins, and
+  qualification/runtime selection bindings. The combined qualification and
+  evidence matrix passed `564` tests in `31.88s`; focused endpoint-mode tests
+  passed `170`; affected Ruff and strict mypy checks passed. Changes are
+  intentionally uncommitted because the ticket is not complete.
+- **Independent review blockers:** Before the ticket can complete, strict
+  response validation must disable Pydantic coercion; non-native benchmark
+  verification must compute the same protocol-augmented prompt hash as the
+  provider request; and `provider.require_parameters` must bind all emitted
+  endpoint-dependent parameters, including reasoning in validated-text mode.
+  Each requires a negative regression and focused validation.
+- **Pause checkpoint:** The operator requested a pause. All parallel workers
+  were stopped after reaching a filesystem-stable checkpoint. The worktree
+  contains only the in-progress V3-OUTPUT-001 implementation and tests listed
+  by `git status`; no commit or push was made, no generated runtime artifact was
+  claimed, and no paid provider call, network access, or secret access occurred.
+- **Second resume checkpoint:** Goal continuation resumed from the preserved
+  uncommitted checkpoint. The authoritative `1417`-line objective, repository
+  instructions, queue, worklog, status, diff stat, and diff check were reread.
+  Work remains limited to the three independent-review integrity blockers; no
+  paid provider call or secret access is part of this slice.
+- **Independent blocker regressions:** Strict scalar-coercion tests failed `5`
+  cases before remediation and now pass after enabling strict Pydantic
+  validation. The combined non-native prompt/request-parameter assay
+  `.venv/bin/pytest -q
+  tests/unit/test_openrouter.py::test_require_parameters_binds_all_emitted_endpoint_dependent_parameters
+  tests/unit/test_openrouter.py::test_reasoning_request_profile_drift_fails_before_transport
+  tests/unit/test_model_benchmark.py::test_report_verifies_protocol_augmented_non_native_prompt_binding`
+  failed `4` and passed `5`: validated-text plus reasoning omitted
+  `require_parameters`, reasoning-profile drift reached transport, and both
+  protocol-augmented benchmark modes were rejected against the legacy raw
+  prompt hash.
+- **Remediation validation before pause:** Strict JSON validation now preserves
+  schema-valid string enums without scalar coercion and rejects exponent
+  overflow; parser tests passed `39` and consuming-path tests passed `201`.
+  Protocol-augmented benchmark prompt binding, complete request-shape evidence,
+  endpoint-profile drift rejection, and a discovered validated-text downgrade
+  regression also pass in focused runs. Qualification fixture evidence was
+  resealed against the canonical per-mode request plan and its focused tests
+  passed `21`.
+- **Current unresolved design item:** Discovery evidence is capability-oriented,
+  but runtime reasoning must be authorized only by exact support for the
+  emitted `reasoning` request parameter. On resume, derive the runtime identity
+  and required-parameter profile from that exact capability without making
+  discovery snapshots depend on the caller's current reasoning configuration.
+  Add alias-only negative coverage before rerunning the broad matrix.
+- **Operator pause:** Work is paused at a filesystem-stable, uncommitted
+  `V3-OUTPUT-001` checkpoint. All delegated workers completed; no process,
+  provider request, cost reservation, network access, or secret access remains
+  active. The ticket is deliberately not marked complete and no checkpoint
+  commit or SSH push is claimed.
+- **Third resume checkpoint:** Automatic goal continuation resumed from
+  synchronized commit `48d9f9d1b3606d6bd1c8167793ce9675dfbcb4f1`.
+  The complete `1417`-line objective was reread and its SHA-256 reverified as
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
+  The preserved worktree passes `git diff --check`. Work resumes only on the
+  exact reasoning-capability/runtime-profile issue; no provider, network, or
+  secret access is authorized for this slice.
+- **Fourth pause checkpoint:** The exact reasoning-capability/runtime profile,
+  semantic native-marker negotiation, marker-only text fallback, redundant
+  routing-evidence joins, native truncation rejection, historical candidate
+  registry honesty, schema synchronization, and adaptive fake-provider support
+  are implemented in the preserved worktree. Focused validation passed `129`
+  tests; `git diff --check` and release-schema synchronization also passed.
+  Independent review identified one remaining fail-closed regression for
+  unexpected fields accepted by otherwise loose Pydantic response models.
+  Autorun is paused before that change. All delegated workers were stopped; no
+  provider request, cost reservation, network access, secret access, commit, or
+  push occurred at this checkpoint.
+- **Fourth resume checkpoint:** Automatic goal continuation resumed from
+  synchronized commit `48d9f9d1b3606d6bd1c8167793ce9675dfbcb4f1`.
+  The complete `1417`-line objective was reread and reverified at SHA-256
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`;
+  repository instructions, queue, worklog, status, diff, and synchronized
+  remote state were also rechecked. Work resumes with the outstanding
+  unexpected-field rejection assay. No provider, network, or secret access is
+  authorized for this ticket.
+- **Unexpected-field rejection:** Five negative regressions reproduced that a
+  permissive caller-supplied Pydantic response model silently discarded
+  unexpected top-level or nested fields in all three output modes. Local
+  validation now overrides permissive model configuration with recursive
+  `extra="forbid"` validation. The same five regressions pass, followed by a
+  `510`-test focused structured-output, capability, identity, provider, usage,
+  benchmark, and qualification matrix in `27.12s`; no rejected response is
+  creditable.
+- **Evidence and truncation hardening:** Negative regressions reproduced that
+  the sanitized production qualification projection and run manifest omitted
+  the exact structured-output mode/capability hash, and that an identity
+  mismatch could divert a response before its native truncation marker was
+  checked. Public qualification evidence and per-model manifest bindings now
+  carry both output fields; preservation rechecks native finish reason, labels
+  truncation ahead of substitution, and emits no validated-response hash for a
+  truncated response. Capability discovery now defaults to validated text
+  rather than silently requiring provider-native formatting, while an explicit
+  required mode remains fail-closed.
+- **Operator-facing honesty:** `models list` now reports the catalog-advertised
+  output mode instead of a misleading marker boolean, with exact endpoint
+  discovery documented as authoritative. README and model-selection guidance
+  now describe all three modes and conditional `provider.require_parameters`.
+  A strict mypy defect exposed by historical candidates with unavailable
+  output evidence was also narrowed fail-closed.
+- **Broad local matrix:** The exact `35`-file V3-OUTPUT unit and local pipeline
+  integration command passed `1096` tests in `136.34s`. This includes all output
+  modes, endpoint/discovery identity, usage credit, benchmark qualification,
+  assurance, report schemas, and the fake-provider pipeline. Paid-provider
+  execution remained disabled.
+- **Static and serialization gate:** `.venv/bin/ruff format .` reformatted `14`
+  affected files; the first check exposed two import-order-only findings, which
+  were safely fixed, and `.venv/bin/ruff check .` then passed. Strict mypy
+  passed over `137` source files, release-schema synchronization produced no
+  drift, and focused CLI, manifest, registry, and qualification-schema
+  validation passed `126` tests in `5.47s`.
+- **Complete local gate:** `.venv/bin/pytest -q` passed `2206` tests with `10`
+  explicit external-engine, hardened-isolation, loopback, and paid-provider
+  prerequisite skips in `272.93s`. The skipped paid-provider test remains
+  opt-in and was not converted into a pass. No provider, network, operator
+  secret, wallet, or live-chain access occurred.
+- **Independent final review:** Three read-only reviews found no remaining
+  fail-open review-credit bypass, output-capability/identity drift, vacuous
+  qualification, truncation preservation, or serialization omission after the
+  final fixes. Public production qualification and manifest evidence now expose
+  the exact output mode and capability hash; operator-facing mode and
+  `require_parameters` descriptions match the runtime plan.
+- **Ticket result:** `V3-OUTPUT-001` is `COMPLETE` as a local implementation
+  ticket. Native, JSON-object, and validated-text behavior are executed through
+  deterministic local fake-provider tests; no new paid provider execution is
+  claimed. The next queue-priority ticket is `V3-TOKENS-001`.
 
 ## 2026-07-28 — V3-SMOKE-001
 

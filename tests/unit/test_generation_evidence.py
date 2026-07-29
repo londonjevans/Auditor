@@ -47,6 +47,10 @@ from mmaudit.models.usage import (
 )
 from mmaudit.orchestration.budgets import BudgetManager
 from tests.identity_fixtures import synthetic_strict_zdr_privacy_routing
+from tests.output_evidence_fixtures import (
+    SYNTHETIC_OUTPUT_CAPABILITY_SHA256,
+    synthetic_structured_output_routing,
+)
 
 _MODEL = "alpha/atlas-secure"
 _CANONICAL_MODEL = "alpha/atlas-secure-20260727"
@@ -169,6 +173,7 @@ def _usage_record(
         "schema_sha256": "c" * 64,
         "provider_policy_sha256": "d" * 64,
         "endpoint_snapshot_sha256": "e" * 64,
+        "output_capability_sha256": SYNTHETIC_OUTPUT_CAPABILITY_SHA256,
         "endpoint_pricing_sha256": "f" * 64,
         "catalog_identity_binding_sha256": _catalog_identity_binding(),
         "catalog_snapshot_sha256": _CATALOG_SNAPSHOT_SHA256,
@@ -186,6 +191,17 @@ def _usage_record(
         "validation_status": "valid",
         "repair_used": False,
         "repair_request": False,
+        "structured_output": synthetic_structured_output_routing(
+            configured_provider_endpoints=(_PROVIDER_ENDPOINT,),
+            selected_provider_endpoint=_PROVIDER_ENDPOINT,
+            endpoint_snapshot_sha256="e" * 64,
+            prompt_sha256=sha,
+            request_body_sha256=sha,
+            provider_policy_sha256="d" * 64,
+            schema_sha256="c" * 64,
+            original_response_sha256=sha,
+            validated_response_sha256=sha,
+        ),
     }
     routing = synthetic_strict_zdr_privacy_routing(
         routing,

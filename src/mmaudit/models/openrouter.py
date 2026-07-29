@@ -13,7 +13,7 @@ import re
 import time
 import uuid
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -74,11 +74,30 @@ from mmaudit.models.identity import (
     seal_openrouter_model_endpoint_identity_snapshot,
     seal_unbound_openrouter_identity,
 )
+from mmaudit.models.output_modes import (
+    REASONING_REQUEST_PARAMETER,
+    STRUCTURED_OUTPUT_PROTOCOL_VERSION,
+    StructuredOutputMode,
+    output_mode_capability_parameters,
+    output_mode_request_parameters,
+    supports_provider_structured_output,
+    supports_reasoning_request,
+)
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     ModelIdentityStrength,
     ModelRequestValidationStatus,
+    StructuredOutputResponseFormat,
     UsageRecord,
+    seal_structured_output_evidence,
+    structured_output_request_shape_sha256,
+)
+from mmaudit.models.structured_output import (
+    StructuredOutputDecodeError,
+    StructuredOutputDecodeResult,
+    StructuredOutputFailureCode,
+    StructuredOutputRepairEvidence,
+    decode_structured_output,
 )
 from mmaudit.models.usage import (
     UsageLedger,
@@ -165,6 +184,8 @@ _QUALIFICATION_LINEAGE_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 _QUALIFICATION_ROLE_PATTERN = re.compile(r"^[a-z][a-z0-9_:.-]{0,127}$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _PREQUALIFICATION_PROVIDER_ROLES = frozenset({"model_benchmark", "real_provider_smoke"})
+_BASE_ENDPOINT_REQUEST_PARAMETERS = frozenset({"max_tokens", "temperature"})
+_ROUTE_SENSITIVE_REQUEST_PARAMETERS = frozenset({"reasoning", "response_format"})
 
 
 @dataclass(frozen=True)
@@ -193,12 +214,18 @@ class OpenRouterProviderPolicy:
     def configured_endpoints(self) -> tuple[str, ...]:
         return self.only or self.order
 
-    def as_request_payload(self, *, require_zdr: bool) -> dict[str, Any]:
+    def as_request_payload(
+        self,
+        *,
+        require_zdr: bool,
+        require_parameters: bool = True,
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "allow_fallbacks": self.allow_fallbacks,
-            "require_parameters": True,
             "data_collection": "deny",
         }
+        if require_parameters:
+            payload["require_parameters"] = True
         if require_zdr:
             payload["zdr"] = True
         if self.only:
@@ -265,6 +292,8 @@ class OpenRouterQualificationRoutingEvidence:
     approved_provider_endpoint: str
     approved_provider_name: str
     endpoint_snapshot_sha256: str
+    output_capability_sha256: str
+    structured_output_mode: StructuredOutputMode
     model_metadata_snapshot_sha256: str
     pricing_snapshot_sha256: str
     approved_roles: tuple[str, ...]
@@ -285,6 +314,8 @@ class OpenRouterQualificationRoutingEvidence:
             raise ValueError("qualification routing provider endpoint is malformed")
         if _QUALIFICATION_PROVIDER_NAME_PATTERN.fullmatch(self.approved_provider_name) is None:
             raise ValueError("qualification routing provider name is malformed")
+        if type(self.structured_output_mode) is not StructuredOutputMode:
+            raise ValueError("qualification routing structured-output mode is invalid")
         if (
             not self.approved_roles
             or self.approved_roles != tuple(sorted(set(self.approved_roles)))
@@ -306,6 +337,7 @@ class OpenRouterQualificationRoutingEvidence:
             self.selection_verification_sha256,
             self.qualification_result_sha256,
             self.endpoint_snapshot_sha256,
+            self.output_capability_sha256,
             self.model_metadata_snapshot_sha256,
             self.pricing_snapshot_sha256,
         ):
@@ -351,6 +383,8 @@ class OpenRouterQualificationRoutingEvidence:
             endpoint = endpoint_policy.endpoint(self.approved_provider_endpoint)
             if (
                 endpoint_policy.snapshot_sha256 != self.endpoint_snapshot_sha256
+                or endpoint_policy.output_capability_sha256 != self.output_capability_sha256
+                or endpoint_policy.structured_output_mode is not self.structured_output_mode
                 or endpoint is None
                 or endpoint.pricing_sha256 != self.pricing_snapshot_sha256
             ):
@@ -361,6 +395,10 @@ class OpenRouterQualificationRoutingEvidence:
             model_identity.exact_model_id != self.exact_model_id
             or model_identity.canonical_slug != self.canonical_model_slug
             or model_identity.model_metadata_snapshot_sha256 != self.model_metadata_snapshot_sha256
+            or model_identity.snapshot.endpoint_capabilities.output_capability_sha256
+            != self.output_capability_sha256
+            or model_identity.snapshot.endpoint_capabilities.structured_output_mode
+            is not self.structured_output_mode
         ):
             raise OpenRouterQualificationError(
                 "current model identity snapshot differs from qualification"
@@ -385,6 +423,8 @@ class OpenRouterQualificationRoutingEvidence:
             "mmaudit_selection_verification_sha256": self.selection_verification_sha256,
             "mmaudit_qualification_result_sha256": self.qualification_result_sha256,
             "mmaudit_qualified_endpoint_snapshot_sha256": self.endpoint_snapshot_sha256,
+            "mmaudit_qualified_output_capability_sha256": (self.output_capability_sha256),
+            "mmaudit_qualified_output_mode": self.structured_output_mode.value,
             "mmaudit_qualified_model_metadata_sha256": self.model_metadata_snapshot_sha256,
             "mmaudit_qualified_pricing_snapshot_sha256": self.pricing_snapshot_sha256,
         }
@@ -399,6 +439,8 @@ class OpenRouterQualificationRoutingEvidence:
             "qualified_provider_endpoint": self.approved_provider_endpoint,
             "qualified_provider_name": self.approved_provider_name,
             "qualified_endpoint_snapshot_sha256": self.endpoint_snapshot_sha256,
+            "qualified_output_capability_sha256": self.output_capability_sha256,
+            "qualified_structured_output_mode": self.structured_output_mode.value,
             "qualified_model_metadata_snapshot_sha256": self.model_metadata_snapshot_sha256,
             "qualified_pricing_snapshot_sha256": self.pricing_snapshot_sha256,
             "qualified_roles": list(self.approved_roles),
@@ -465,6 +507,22 @@ class StructuredCompletion[ValueT: BaseModel]:
     usage_record: UsageRecord
 
 
+@dataclass(frozen=True, slots=True)
+class _StructuredOutputRequestPlan:
+    """Exact provider request shape selected from frozen endpoint capability."""
+
+    mode: StructuredOutputMode
+    system_prompt: str
+    user_prompt: str
+    response_format: dict[str, Any] | None
+    reasoning_payload: dict[str, Any] | None
+    required_provider_parameters: tuple[str, ...]
+    require_parameters: bool
+    reasoning_request_sha256: str | None
+    strict_protocol_sha256: str | None
+    request_shape_sha256: str
+
+
 @dataclass(frozen=True)
 class _RegisteredEndpointPricing:
     provider_endpoint: str
@@ -475,6 +533,11 @@ class _RegisteredEndpointPricing:
     snapshot_sha256: str
     max_prompt_tokens: int
     max_completion_tokens: int
+    supported_parameters: tuple[str, ...]
+    required_request_parameters: tuple[str, ...]
+    structured_output_parameters: tuple[str, ...]
+    supported_output_modes: tuple[StructuredOutputMode, ...]
+    structured_output_mode: StructuredOutputMode
 
 
 @dataclass(frozen=True)
@@ -483,6 +546,10 @@ class _RegisteredEndpointPolicy:
     policy_pricing_sha256: str
     routing_max_price: tuple[tuple[str, float], ...]
     endpoints: tuple[_RegisteredEndpointPricing, ...]
+    structured_output_parameters: tuple[str, ...]
+    supported_output_modes: tuple[StructuredOutputMode, ...]
+    structured_output_mode: StructuredOutputMode
+    output_capability_sha256: str
 
     def endpoint(self, provider_identity: str) -> _RegisteredEndpointPricing | None:
         normalized = provider_identity.casefold()
@@ -536,6 +603,20 @@ class OpenRouterProviderUnavailableError(OpenRouterTransientError):
 
 class OpenRouterSchemaError(OpenRouterError):
     pass
+
+
+class OpenRouterStructuredOutputError(OpenRouterSchemaError):
+    """Typed, raw-value-free rejection from strict local response decoding."""
+
+    def __init__(
+        self,
+        *,
+        failure_code: StructuredOutputFailureCode,
+        repair_evidence: StructuredOutputRepairEvidence | None = None,
+    ) -> None:
+        self.failure_code = failure_code
+        self.repair_evidence = repair_evidence
+        super().__init__(f"model returned invalid structured data ({failure_code.value})")
 
 
 class OpenRouterTruncatedResponseError(OpenRouterSchemaError):
@@ -670,6 +751,178 @@ def strict_json_schema(response_model: type[BaseModel]) -> dict[str, Any]:
     return schema
 
 
+def _structured_output_request_plan(
+    *,
+    mode: StructuredOutputMode,
+    system_prompt: str,
+    user_prompt: str,
+    response_model: type[BaseModel],
+    schema_name: str,
+    reasoning: OpenRouterReasoning | None = None,
+) -> _StructuredOutputRequestPlan:
+    """Build one deterministic request protocol without model-authored repair."""
+
+    schema = strict_json_schema(response_model)
+    schema_sha256 = _canonical_sha256(schema)
+    response_format: dict[str, Any] | None
+    strict_protocol_sha256: str | None = None
+    effective_system_prompt = system_prompt
+    if mode is StructuredOutputMode.NATIVE_JSON_SCHEMA:
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": schema_name,
+                "strict": True,
+                "schema": schema,
+            },
+        }
+    else:
+        response_format = (
+            {"type": "json_object"} if mode is StructuredOutputMode.JSON_OBJECT else None
+        )
+        protocol = json.dumps(
+            {
+                "instruction": (
+                    "Return exactly one complete JSON object matching this schema. "
+                    "Do not add markdown, code fences, comments, or prose."
+                ),
+                "protocol": STRUCTURED_OUTPUT_PROTOCOL_VERSION,
+                "schema": schema,
+                "schema_name": schema_name,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+        strict_protocol_sha256 = hashlib.sha256(protocol.encode("utf-8")).hexdigest()
+        effective_system_prompt = (
+            f"{system_prompt}\n\n"
+            f"<MMAUDIT_STRUCTURED_OUTPUT_PROTOCOL>{protocol}"
+            "</MMAUDIT_STRUCTURED_OUTPUT_PROTOCOL>"
+        )
+    reasoning_payload = reasoning.as_request_payload() if reasoning is not None else None
+    required_provider_parameters = tuple(
+        sorted(
+            {
+                *output_mode_request_parameters(mode),
+                *(("reasoning",) if reasoning_payload is not None else ()),
+            }
+        )
+    )
+    if not set(required_provider_parameters).issubset(_ROUTE_SENSITIVE_REQUEST_PARAMETERS):
+        raise OpenRouterProviderPolicyError(
+            "structured request contains an unknown route-sensitive parameter"
+        )
+    require_parameters = bool(required_provider_parameters)
+    reasoning_request_sha256 = (
+        _canonical_sha256(reasoning_payload) if reasoning_payload is not None else None
+    )
+    request_shape_sha256 = structured_output_request_shape_sha256(
+        mode=mode,
+        schema_sha256=schema_sha256,
+        required_provider_parameters=required_provider_parameters,
+        reasoning_request_sha256=reasoning_request_sha256,
+        strict_protocol_sha256=strict_protocol_sha256,
+    )
+    return _StructuredOutputRequestPlan(
+        mode=mode,
+        system_prompt=effective_system_prompt,
+        user_prompt=user_prompt,
+        response_format=response_format,
+        reasoning_payload=reasoning_payload,
+        required_provider_parameters=required_provider_parameters,
+        require_parameters=require_parameters,
+        reasoning_request_sha256=reasoning_request_sha256,
+        strict_protocol_sha256=strict_protocol_sha256,
+        request_shape_sha256=request_shape_sha256,
+    )
+
+
+def structured_output_prompt_sha256(
+    *,
+    mode: StructuredOutputMode,
+    system_prompt: str,
+    user_prompt: str,
+    response_model: type[BaseModel],
+    schema_name: str,
+) -> str:
+    """Hash the exact provider-visible messages for one output protocol."""
+
+    plan = _structured_output_request_plan(
+        mode=mode,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        response_model=response_model,
+        schema_name=schema_name,
+    )
+    return _structured_output_prompt_sha256_from_plan(plan)
+
+
+def _structured_output_prompt_sha256_from_plan(
+    plan: _StructuredOutputRequestPlan,
+) -> str:
+    return _canonical_sha256(
+        [
+            {"role": "system", "content": plan.system_prompt},
+            {"role": "user", "content": plan.user_prompt},
+        ]
+    )
+
+
+def _require_matching_request_parameter_profile(
+    endpoint_policy: _RegisteredEndpointPolicy,
+    plan: _StructuredOutputRequestPlan,
+) -> None:
+    """Require frozen endpoint metadata to bind every emitted special parameter."""
+
+    planned = set(plan.required_provider_parameters)
+    for endpoint in endpoint_policy.endpoints:
+        frozen = set(endpoint.required_request_parameters) - _BASE_ENDPOINT_REQUEST_PARAMETERS
+        if frozen != planned or not planned.issubset(endpoint.supported_parameters):
+            raise OpenRouterProviderPolicyError(
+                "frozen endpoint request parameter profile differs from the emitted request"
+            )
+
+
+def _registered_endpoints_for_output_mode(
+    endpoints: tuple[_RegisteredEndpointPricing, ...],
+    mode: StructuredOutputMode,
+    *,
+    reasoning_requested: bool,
+) -> tuple[_RegisteredEndpointPricing, ...]:
+    """Project capability snapshots onto one exact runtime request profile."""
+
+    requested_output_parameters = set(output_mode_request_parameters(mode))
+    projected: list[_RegisteredEndpointPricing] = []
+    for endpoint in endpoints:
+        if reasoning_requested and REASONING_REQUEST_PARAMETER not in (
+            endpoint.supported_parameters
+        ):
+            raise OpenRouterProviderPolicyError(
+                "requested reasoning lacks exact endpoint parameter support"
+            )
+        required = tuple(
+            sorted(
+                (set(endpoint.required_request_parameters) - _ROUTE_SENSITIVE_REQUEST_PARAMETERS)
+                | requested_output_parameters
+                | ({REASONING_REQUEST_PARAMETER} if reasoning_requested else set())
+            )
+        )
+        if not set(required).issubset(endpoint.supported_parameters):
+            raise OpenRouterProviderPolicyError(
+                "model-selected output mode is unsupported by a configured endpoint"
+            )
+        projected.append(
+            replace(
+                endpoint,
+                required_request_parameters=required,
+                structured_output_mode=mode,
+            )
+        )
+    return tuple(projected)
+
+
 class OpenRouterClient:
     """Minimal client that never enables tools, web access, or random model routing."""
 
@@ -748,9 +1001,10 @@ class OpenRouterClient:
                 if self.effective_privacy_policy is not None
                 else ()
             )
-        if self.execution.max_json_repair_attempts:
+        if self.execution.max_json_repair_attempts and self.provider_policy.certification:
             raise OpenRouterSchemaError(
-                "model-output repair is disabled because repaired output cannot count as a review"
+                "model-output repair is disabled for certification because repaired output "
+                "cannot count as a review"
             )
         self._owns_client = http_client is None
         closed_mock_transport = _uses_closed_httpx_mock_transport(http_client)
@@ -1212,11 +1466,10 @@ class OpenRouterClient:
                     endpoint_payload=payload,
                     require_zdr=supplied_discovery.endpoint_snapshot.require_zdr,
                     zdr_payload=zdr_payload,
+                    reasoning_requested=False,
                     structured_output_required=(
-                        "response_format"
-                        in supplied_discovery.endpoint_snapshot.endpoints[
-                            0
-                        ].required_request_parameters
+                        supplied_discovery.endpoint_snapshot.structured_output_mode
+                        is not StructuredOutputMode.VALIDATED_TEXT_JSON
                     ),
                 )
                 observed_payload = validate_openrouter_model_discovery(
@@ -1701,6 +1954,7 @@ class OpenRouterClient:
             snapshot=_identity_snapshot_from_discovery(
                 evidence,
                 allow_fallbacks=self.provider_policy.allow_fallbacks,
+                reasoning_requested=self.reasoning is not None,
             ),
         )
         existing = self._model_identities.get(evidence.exact_model_id)
@@ -1709,6 +1963,28 @@ class OpenRouterClient:
                 "conflicting frozen model identity evidence cannot replace a binding"
             )
         self.register_endpoint_snapshot(evidence=evidence.endpoint_snapshot)
+        registered_endpoint_policy = self._endpoint_pricing[evidence.exact_model_id]
+        if evidence.structured_output_mode not in registered_endpoint_policy.supported_output_modes:
+            raise OpenRouterProviderPolicyError(
+                "model discovery selected an endpoint-unsupported structured-output mode"
+            )
+        self._endpoint_pricing[evidence.exact_model_id] = _RegisteredEndpointPolicy(
+            snapshot_sha256=registered_endpoint_policy.snapshot_sha256,
+            policy_pricing_sha256=registered_endpoint_policy.policy_pricing_sha256,
+            routing_max_price=registered_endpoint_policy.routing_max_price,
+            endpoints=_registered_endpoints_for_output_mode(
+                registered_endpoint_policy.endpoints,
+                evidence.structured_output_mode,
+                reasoning_requested=self.reasoning is not None,
+            ),
+            structured_output_parameters=output_mode_capability_parameters(
+                evidence.structured_output_mode,
+                registered_endpoint_policy.endpoints[0].structured_output_parameters,
+            ),
+            supported_output_modes=evidence.supported_output_modes,
+            structured_output_mode=evidence.structured_output_mode,
+            output_capability_sha256=evidence.output_capability_sha256,
+        )
         self._model_identities[evidence.exact_model_id] = identity
 
     def registered_model_identity_snapshot(
@@ -2046,6 +2322,11 @@ class OpenRouterClient:
                     snapshot_sha256=evidence.snapshot_sha256,
                     max_prompt_tokens=endpoint.max_prompt_tokens,
                     max_completion_tokens=endpoint.max_completion_tokens,
+                    supported_parameters=endpoint.supported_parameters,
+                    required_request_parameters=endpoint.required_request_parameters,
+                    structured_output_parameters=endpoint.structured_output_parameters,
+                    supported_output_modes=endpoint.supported_output_modes,
+                    structured_output_mode=endpoint.structured_output_mode,
                 )
             )
             pricing_hashes[endpoint.provider_endpoint] = endpoint.pricing_sha256
@@ -2055,6 +2336,13 @@ class OpenRouterClient:
             policy_pricing_sha256=_canonical_sha256(pricing_hashes),
             routing_max_price=tuple(routing_max_price.items()),
             endpoints=tuple(registered),
+            structured_output_parameters=output_mode_capability_parameters(
+                evidence.structured_output_mode,
+                evidence.endpoints[0].structured_output_parameters,
+            ),
+            supported_output_modes=evidence.supported_output_modes,
+            structured_output_mode=evidence.structured_output_mode,
+            output_capability_sha256=evidence.output_capability_sha256,
         )
 
     async def _request_metadata(
@@ -2226,38 +2514,59 @@ class OpenRouterClient:
         schema_name: str,
         request_metadata: Mapping[str, str] | None = None,
         provider_policy: OpenRouterProviderPolicy | None = None,
+        structured_output_mode: StructuredOutputMode | None = None,
     ) -> dict[str, Any]:
         _require_exact_model_id(model)
         effective_provider_policy = provider_policy or self.provider_policy
         effective_provider_policy = _canonical_provider_policy(effective_provider_policy)
+        endpoint_policy = self._endpoint_pricing.get(model)
+        selected_mode = structured_output_mode or (
+            endpoint_policy.structured_output_mode
+            if endpoint_policy is not None
+            else StructuredOutputMode.NATIVE_JSON_SCHEMA
+        )
+        if (
+            endpoint_policy is not None
+            and selected_mode is not endpoint_policy.structured_output_mode
+        ):
+            raise OpenRouterProviderPolicyError(
+                "requested structured-output mode differs from frozen endpoint capability"
+            )
+        request_plan = _structured_output_request_plan(
+            mode=selected_mode,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=response_model,
+            schema_name=schema_name,
+            reasoning=self.reasoning,
+        )
+        if endpoint_policy is not None:
+            _require_matching_request_parameter_profile(
+                endpoint_policy,
+                request_plan,
+            )
         body: dict[str, Any] = {
             "model": model,
             "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "system", "content": request_plan.system_prompt},
+                {"role": "user", "content": request_plan.user_prompt},
             ],
             "temperature": 0,
             "max_tokens": self.execution.max_output_tokens_per_request,
             "stream": False,
             "provider": effective_provider_policy.as_request_payload(
-                require_zdr=self.privacy.require_zdr
+                require_zdr=self.privacy.require_zdr,
+                require_parameters=request_plan.require_parameters,
             ),
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": schema_name,
-                    "strict": True,
-                    "schema": strict_json_schema(response_model),
-                },
-            },
         }
-        endpoint_policy = self._endpoint_pricing.get(model)
+        if request_plan.response_format is not None:
+            body["response_format"] = request_plan.response_format
         if endpoint_policy is not None:
             provider = body["provider"]
             assert isinstance(provider, dict)
             provider["max_price"] = dict(endpoint_policy.routing_max_price)
-        if self.reasoning is not None:
-            body["reasoning"] = self.reasoning.as_request_payload()
+        if request_plan.reasoning_payload is not None:
+            body["reasoning"] = request_plan.reasoning_payload
         if request_metadata:
             body["metadata"] = {
                 key: value
@@ -2290,6 +2599,10 @@ class OpenRouterClient:
         )
         if _is_concluded_unbound_completion(completion):
             raise OpenRouterUnboundIdentityError(completion)
+        if _is_repaired_noncreditable_completion(completion):
+            raise OpenRouterSchemaError(
+                "syntax-repaired structured output is retained without review credit"
+            )
         return completion.value
 
     async def complete_with_evidence(
@@ -2411,6 +2724,12 @@ class OpenRouterClient:
                     extra={"role": role, "status": "fallback"},
                 )
                 continue
+            if _is_repaired_noncreditable_completion(completion):
+                self.logger.warning(
+                    "Syntax-repaired response retained without review credit",
+                    extra={"role": role, "status": "repaired_noncreditable"},
+                )
+                return completion
             if _is_concluded_unbound_completion(completion):
                 self._retain_unbound_completion(completion)
                 self.logger.warning(
@@ -2472,6 +2791,10 @@ class OpenRouterClient:
         )
         if _is_concluded_unbound_completion(completion):
             raise OpenRouterUnboundIdentityError(completion)
+        if _is_repaired_noncreditable_completion(completion):
+            raise OpenRouterSchemaError(
+                "syntax-repaired structured output cannot satisfy bound completion"
+            )
         return completion
 
     async def _bind_real_completion_identity(
@@ -2615,12 +2938,21 @@ class OpenRouterClient:
                 (model,),
                 request_provider_endpoints=request_provider_policy.configured_endpoints,
             )
-        prompt_hash = _canonical_sha256(
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ]
+        endpoint_policy = self._endpoint_pricing.get(model)
+        structured_output_mode = (
+            endpoint_policy.structured_output_mode
+            if endpoint_policy is not None
+            else StructuredOutputMode.NATIVE_JSON_SCHEMA
         )
+        structured_output_plan = _structured_output_request_plan(
+            mode=structured_output_mode,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            response_model=response_model,
+            schema_name=schema_name,
+            reasoning=self.reasoning,
+        )
+        prompt_hash = _structured_output_prompt_sha256_from_plan(structured_output_plan)
         user_prompt_hash = hashlib.sha256(user_prompt.encode()).hexdigest()
         schema = strict_json_schema(response_model)
         schema_hash = _canonical_sha256(schema)
@@ -2630,12 +2962,23 @@ class OpenRouterClient:
             "mmaudit_prompt_sha256": prompt_hash,
             "mmaudit_user_prompt_sha256": user_prompt_hash,
             "mmaudit_schema_sha256": schema_hash,
+            "mmaudit_output_mode": structured_output_mode.value,
+            "mmaudit_output_request_shape_sha256": (structured_output_plan.request_shape_sha256),
+            "mmaudit_required_provider_parameters_sha256": _canonical_sha256(
+                structured_output_plan.required_provider_parameters
+            ),
         }
-        endpoint_policy = self._endpoint_pricing.get(model)
+        if structured_output_plan.strict_protocol_sha256 is not None:
+            request_metadata["mmaudit_output_protocol_sha256"] = (
+                structured_output_plan.strict_protocol_sha256
+            )
         if endpoint_policy is not None:
             request_metadata["mmaudit_endpoint_snapshot_sha256"] = endpoint_policy.snapshot_sha256
             request_metadata["mmaudit_endpoint_pricing_sha256"] = (
                 endpoint_policy.policy_pricing_sha256
+            )
+            request_metadata["mmaudit_output_capability_sha256"] = (
+                endpoint_policy.output_capability_sha256
             )
         model_identity = self._model_identities.get(model)
         if model_identity is not None:
@@ -2652,6 +2995,7 @@ class OpenRouterClient:
             schema_name=schema_name,
             request_metadata=request_metadata,
             provider_policy=request_provider_policy,
+            structured_output_mode=structured_output_mode,
         )
         self._ensure_request_size(body)
         request_body_hash = _canonical_sha256(body)
@@ -2679,6 +3023,7 @@ class OpenRouterClient:
         initial_cost: Decimal | None = None
         response_hash: str | None = None
         validated_response_hash: str | None = None
+        decoded_output: StructuredOutputDecodeResult[ResponseT] | None = None
         preserved_unbound_response: ResponseT | None = None
         raw_payload: dict[str, Any] | None = None
         response_headers: Mapping[str, str] = {}
@@ -2823,12 +3168,18 @@ class OpenRouterClient:
             if self.privacy.store_raw_responses:
                 self._store_debug(request_id, "response.json", payload)
             content = envelope.content
-            parsed: ResponseT
             try:
-                parsed = response_model.model_validate_json(content)
-                _ensure_all_fields_supplied(parsed)
-            except (ValidationError, ValueError):
-                raise OpenRouterSchemaError("model returned invalid structured data") from None
+                decoded_output = decode_structured_output(
+                    content,
+                    response_model,
+                    max_repair_attempts=self.execution.max_json_repair_attempts,
+                )
+            except StructuredOutputDecodeError as output_error:
+                raise OpenRouterStructuredOutputError(
+                    failure_code=output_error.code,
+                    repair_evidence=output_error.repair_evidence,
+                ) from None
+            parsed = decoded_output.value
             validated_response_hash = _canonical_sha256(parsed.model_dump(mode="json"))
             await finalize_active(active_actual_cost)
             ended_at = datetime.now(UTC)
@@ -2839,8 +3190,17 @@ class OpenRouterClient:
                 started_at=started_at,
                 ended_at=ended_at,
                 latency_ms=latency_ms,
-                validation_status="valid",
-                repair_used=False,
+                validation_status=(
+                    "repaired_noncreditable" if decoded_output.repair_used else "valid"
+                ),
+                repair_used=decoded_output.repair_used,
+                repair_evidence=decoded_output.repair_evidence,
+                structured_output_plan=structured_output_plan,
+                prompt_sha256=prompt_hash,
+                request_body_sha256=request_body_hash,
+                response_sha256=response_hash,
+                decoded_response_sha256=decoded_output.validated_json_sha256,
+                validated_response_sha256=validated_response_hash,
                 qualification_binding=qualification_binding,
                 provider_policy=request_provider_policy,
                 host_model_fallback_used=fallback_used,
@@ -2877,7 +3237,11 @@ class OpenRouterClient:
                 reasoning_tokens=_reasoning_tokens(initial_usage),
                 cached_tokens=_cached_tokens(initial_usage),
                 retry_count=attempts - 1,
-                validation_status=ModelRequestValidationStatus.VALID,
+                validation_status=(
+                    ModelRequestValidationStatus.INVALID_RESPONSE
+                    if decoded_output.repair_used
+                    else ModelRequestValidationStatus.VALID
+                ),
                 identity_strength=ModelIdentityStrength.UNBOUND,
                 fallback_used=(
                     fallback_used
@@ -2886,7 +3250,7 @@ class OpenRouterClient:
                     or envelope.router_metadata["strategy"] == "fallback"
                 ),
                 substitution_detected=False,
-                status="success",
+                status=("repaired_noncreditable" if decoded_output.repair_used else "success"),
                 attempts=attempts,
             )
             if usage_record.execution_evidence is ExecutionEvidenceKind.REAL:
@@ -2935,11 +3299,14 @@ class OpenRouterClient:
                     preserved_unbound_response is None
                     and validated_response_hash is None
                     and raw_content is not None
+                    and not isinstance(terminal_error, OpenRouterTruncatedResponseError)
                 ):
                     try:
-                        hash_only_response = response_model.model_validate_json(raw_content)
-                        _ensure_all_fields_supplied(hash_only_response)
-                    except (ValidationError, ValueError):
+                        hash_only_response = decode_structured_output(
+                            raw_content,
+                            response_model,
+                        ).value
+                    except StructuredOutputDecodeError:
                         pass
                     else:
                         validated_response_hash = _canonical_sha256(
@@ -2977,6 +3344,10 @@ class OpenRouterClient:
                         ended_at=ended_at,
                         latency_ms=latency_ms,
                         error=terminal_error,
+                        structured_output_plan=structured_output_plan,
+                        request_body_sha256=request_body_hash,
+                        response_sha256=response_hash,
+                        validated_response_sha256=validated_response_hash,
                         qualification_binding=qualification_binding,
                         provider_policy=request_provider_policy,
                         requested_model=model,
@@ -3172,6 +3543,13 @@ class OpenRouterClient:
         latency_ms: float,
         validation_status: str,
         repair_used: bool,
+        repair_evidence: StructuredOutputRepairEvidence | None,
+        structured_output_plan: _StructuredOutputRequestPlan,
+        prompt_sha256: str,
+        request_body_sha256: str,
+        response_sha256: str,
+        decoded_response_sha256: str,
+        validated_response_sha256: str,
         qualification_binding: OpenRouterQualificationRoutingEvidence | None,
         provider_policy: OpenRouterProviderPolicy,
         host_model_fallback_used: bool,
@@ -3190,6 +3568,61 @@ class OpenRouterClient:
             or envelope.router_attempt_count > 1
             or envelope.router_metadata["strategy"] == "fallback"
         )
+        provider_policy_sha256 = _canonical_sha256(
+            provider_policy.as_request_payload(
+                require_zdr=self.privacy.require_zdr,
+                require_parameters=structured_output_plan.require_parameters,
+            )
+        )
+        structured_output_evidence: dict[str, Any] | None = None
+        if (
+            endpoint_policy is not None
+            and endpoint_pricing is not None
+            and provider_policy.configured_endpoints
+        ):
+            effective_parameters = output_mode_capability_parameters(
+                structured_output_plan.mode,
+                endpoint_policy.structured_output_parameters,
+            )
+            if not set(effective_parameters).issubset(
+                endpoint_pricing.structured_output_parameters
+            ):
+                effective_parameters = output_mode_capability_parameters(
+                    structured_output_plan.mode,
+                    endpoint_pricing.structured_output_parameters,
+                )
+            response_format = (
+                StructuredOutputResponseFormat.JSON_SCHEMA
+                if structured_output_plan.mode is StructuredOutputMode.NATIVE_JSON_SCHEMA
+                else (
+                    StructuredOutputResponseFormat.JSON_OBJECT
+                    if structured_output_plan.mode is StructuredOutputMode.JSON_OBJECT
+                    else StructuredOutputResponseFormat.OMITTED
+                )
+            )
+            structured_output_evidence = seal_structured_output_evidence(
+                requested_mode=structured_output_plan.mode,
+                achieved_mode=structured_output_plan.mode,
+                configured_provider_endpoints=(provider_policy.configured_endpoints),
+                selected_provider_endpoint=envelope.selected_provider,
+                endpoint_snapshot_sha256=endpoint_policy.snapshot_sha256,
+                output_capability_sha256=endpoint_policy.output_capability_sha256,
+                endpoint_structured_output_parameters=effective_parameters,
+                prompt_sha256=prompt_sha256,
+                request_body_sha256=request_body_sha256,
+                provider_policy_sha256=provider_policy_sha256,
+                schema_sha256=schema_hash,
+                original_response_sha256=response_sha256,
+                decoded_response_sha256=decoded_response_sha256,
+                validated_response_sha256=validated_response_sha256,
+                response_format=response_format,
+                required_provider_parameters=(structured_output_plan.required_provider_parameters),
+                provider_require_parameters=(structured_output_plan.require_parameters),
+                reasoning_request_sha256=(structured_output_plan.reasoning_request_sha256),
+                request_shape_sha256=(structured_output_plan.request_shape_sha256),
+                strict_protocol_sha256=(structured_output_plan.strict_protocol_sha256),
+                repair_evidence=repair_evidence,
+            ).model_dump(mode="json")
         if (
             qualification_binding is not None
             and envelope.selected_provider_name != qualification_binding.approved_provider_name
@@ -3224,9 +3657,7 @@ class OpenRouterClient:
             "reasoning_tokens": _reasoning_tokens(usage),
             "cached_tokens": _cached_tokens(usage),
             "schema_sha256": schema_hash,
-            "provider_policy_sha256": _canonical_sha256(
-                provider_policy.as_request_payload(require_zdr=self.privacy.require_zdr)
-            ),
+            "provider_policy_sha256": provider_policy_sha256,
             "endpoint_snapshot_sha256": (
                 endpoint_policy.snapshot_sha256 if endpoint_policy is not None else None
             ),
@@ -3292,6 +3723,47 @@ class OpenRouterClient:
             "validation_status": validation_status,
             "repair_used": repair_used,
             "repair_request": repair_request,
+            "repair_evidence": (
+                repair_evidence.model_dump(mode="json") if repair_evidence is not None else None
+            ),
+            "structured_output_mode": structured_output_plan.mode.value,
+            "structured_output_supported_modes": (
+                [mode.value for mode in endpoint_policy.supported_output_modes]
+                if endpoint_policy is not None
+                else [StructuredOutputMode.NATIVE_JSON_SCHEMA.value]
+            ),
+            "structured_output_capability_sha256": (
+                endpoint_policy.output_capability_sha256
+                if endpoint_policy is not None
+                else _canonical_sha256(
+                    {
+                        "execution_evidence": self.execution_evidence.value,
+                        "mode": StructuredOutputMode.NATIVE_JSON_SCHEMA.value,
+                        "model": envelope.requested_model,
+                    }
+                )
+            ),
+            "structured_output_request_shape_sha256": (structured_output_plan.request_shape_sha256),
+            "structured_output_require_parameters": (structured_output_plan.require_parameters),
+            "structured_output_required_provider_parameters": list(
+                structured_output_plan.required_provider_parameters
+            ),
+            "structured_output_reasoning_request_sha256": (
+                structured_output_plan.reasoning_request_sha256
+            ),
+            "structured_output_response_format": (
+                structured_output_plan.response_format["type"]
+                if structured_output_plan.response_format is not None
+                else None
+            ),
+            "structured_output_protocol_sha256": (structured_output_plan.strict_protocol_sha256),
+            "structured_output_request_body_sha256": request_body_sha256,
+            "structured_output_original_response_sha256": response_sha256,
+            "structured_output_validated_response_sha256": (validated_response_sha256),
+            "structured_output": structured_output_evidence,
+            "output_capability_sha256": (
+                endpoint_policy.output_capability_sha256 if endpoint_policy is not None else None
+            ),
         }
         evidence.update(
             self._privacy_routing_evidence(
@@ -3312,6 +3784,10 @@ class OpenRouterClient:
         ended_at: datetime,
         latency_ms: float,
         error: Exception,
+        structured_output_plan: _StructuredOutputRequestPlan,
+        request_body_sha256: str,
+        response_sha256: str | None,
+        validated_response_sha256: str | None,
         qualification_binding: OpenRouterQualificationRoutingEvidence | None,
         provider_policy: OpenRouterProviderPolicy,
         requested_model: str,
@@ -3319,6 +3795,7 @@ class OpenRouterClient:
     ) -> dict[str, Any]:
         router_metadata = payload.get("openrouter_metadata") if isinstance(payload, dict) else None
         finish_reason = _optional_finish_reason(payload)
+        endpoint_policy = self._endpoint_pricing.get(requested_model)
         evidence: dict[str, Any] = {
             "generation_id": (_optional_string(payload.get("id")) if payload is not None else None),
             "generation_header_id": _header_value(response_headers, "x-generation-id"),
@@ -3331,7 +3808,10 @@ class OpenRouterClient:
             "finish_reason": finish_reason,
             "schema_sha256": schema_hash,
             "provider_policy_sha256": _canonical_sha256(
-                provider_policy.as_request_payload(require_zdr=self.privacy.require_zdr)
+                provider_policy.as_request_payload(
+                    require_zdr=self.privacy.require_zdr,
+                    require_parameters=structured_output_plan.require_parameters,
+                )
             ),
             "configured_provider_only": list(provider_policy.only),
             "configured_provider_order": list(provider_policy.order),
@@ -3345,6 +3825,35 @@ class OpenRouterClient:
             "validation_status": "rejected",
             "provider_error_classification": _provider_error_classification(error),
             "identity_strength": ModelIdentityStrength.UNBOUND.value,
+            "endpoint_snapshot_sha256": (
+                endpoint_policy.snapshot_sha256 if endpoint_policy is not None else None
+            ),
+            "output_capability_sha256": (
+                endpoint_policy.output_capability_sha256 if endpoint_policy is not None else None
+            ),
+            "structured_output_supported_modes": (
+                [mode.value for mode in endpoint_policy.supported_output_modes]
+                if endpoint_policy is not None
+                else [StructuredOutputMode.NATIVE_JSON_SCHEMA.value]
+            ),
+            "structured_output_mode": structured_output_plan.mode.value,
+            "structured_output_request_shape_sha256": (structured_output_plan.request_shape_sha256),
+            "structured_output_require_parameters": (structured_output_plan.require_parameters),
+            "structured_output_required_provider_parameters": list(
+                structured_output_plan.required_provider_parameters
+            ),
+            "structured_output_reasoning_request_sha256": (
+                structured_output_plan.reasoning_request_sha256
+            ),
+            "structured_output_response_format": (
+                structured_output_plan.response_format["type"]
+                if structured_output_plan.response_format is not None
+                else None
+            ),
+            "structured_output_protocol_sha256": (structured_output_plan.strict_protocol_sha256),
+            "structured_output_request_body_sha256": request_body_sha256,
+            "structured_output_original_response_sha256": response_sha256,
+            "structured_output_validated_response_sha256": (validated_response_sha256),
         }
         evidence.update(
             self._privacy_routing_evidence(
@@ -3365,6 +3874,15 @@ class OpenRouterClient:
             evidence["identity_diagnostic"] = identity_diagnostic
         if isinstance(error, OpenRouterResponseIdentityError):
             evidence["identity_binding_status"] = "response_identity_unbound"
+        if isinstance(error, OpenRouterStructuredOutputError):
+            evidence["structured_output_failure_code"] = error.failure_code.value
+            evidence["repair_used"] = error.repair_evidence is not None
+            evidence["repair_request"] = False
+            evidence["repair_evidence"] = (
+                error.repair_evidence.model_dump(mode="json")
+                if error.repair_evidence is not None
+                else None
+            )
         if qualification_binding is not None:
             evidence.update(qualification_binding.routing_evidence())
         return evidence
@@ -3415,24 +3933,42 @@ def _identity_snapshot_from_discovery(
     evidence: OpenRouterModelDiscoveryEvidence,
     *,
     allow_fallbacks: bool,
+    reasoning_requested: bool,
 ) -> OpenRouterModelEndpointIdentitySnapshot:
     endpoint = evidence.endpoint_snapshot.endpoint(evidence.approved_provider_endpoint)
+    if reasoning_requested and not supports_reasoning_request(evidence.reasoning_parameters):
+        raise OpenRouterProviderPolicyError(
+            "requested reasoning lacks exact model/endpoint parameter support"
+        )
+    required_parameters = tuple(
+        sorted(
+            (set(endpoint.required_request_parameters) - _ROUTE_SENSITIVE_REQUEST_PARAMETERS)
+            | set(output_mode_request_parameters(evidence.structured_output_mode))
+            | ({REASONING_REQUEST_PARAMETER} if reasoning_requested else set())
+        )
+    )
     provider_policy = seal_openrouter_identity_provider_policy(
         mode=evidence.endpoint_snapshot.provider_policy_mode,
         configured_endpoints=evidence.endpoint_snapshot.configured_provider_endpoints,
         allow_fallbacks=allow_fallbacks,
         zdr_required=evidence.endpoint_snapshot.require_zdr,
+        require_parameters=bool(set(required_parameters) - {"max_tokens", "temperature"}),
     )
     capabilities = OpenRouterIdentityEndpointCapabilities(
         operational=True,
         context_tokens=endpoint.context_length,
         output_tokens=endpoint.max_completion_tokens,
         supported_parameters=endpoint.supported_parameters,
-        required_parameters=endpoint.required_request_parameters,
+        required_parameters=required_parameters,
         structured_output_parameters=endpoint.structured_output_parameters,
+        supported_output_modes=endpoint.supported_output_modes,
+        structured_output_mode=evidence.structured_output_mode,
+        output_capability_sha256=evidence.output_capability_sha256,
         reasoning_parameters=evidence.reasoning_parameters,
-        structured_output_supported=bool(endpoint.structured_output_parameters),
-        reasoning_supported=bool(evidence.reasoning_parameters),
+        structured_output_supported=supports_provider_structured_output(
+            endpoint.supported_parameters
+        ),
+        reasoning_supported=supports_reasoning_request(evidence.reasoning_parameters),
         zdr_eligible=endpoint.zdr_eligible is True,
         data_collection_deny_eligible=evidence.data_collection_deny_eligible,
         data_collection_deny_request_policy_enforced=(
@@ -3869,6 +4405,17 @@ def _validate_preservable_structured_response[ValueT: BaseModel](
         if finish_reason.casefold() in _TRUNCATED_FINISH_REASONS:
             raise OpenRouterTruncatedResponseError("model response was incomplete or truncated")
         raise OpenRouterSchemaError("model response did not finish normally")
+    native_finish_reason = _optional_string(choice.get("native_finish_reason"))
+    if native_finish_reason is not None:
+        native_finish_reason = _required_safe_string(
+            native_finish_reason,
+            field="native finish reason",
+            max_length=100,
+        )
+        if native_finish_reason.casefold() in _TRUNCATED_FINISH_REASONS:
+            raise OpenRouterTruncatedResponseError(
+                "model response native finish reason indicates truncation"
+            )
     message = choice.get("message")
     if not isinstance(message, dict) or message.get("role") != "assistant":
         raise OpenRouterSchemaError("model response omitted the assistant message role")
@@ -3882,11 +4429,12 @@ def _validate_preservable_structured_response[ValueT: BaseModel](
     _validate_usage(payload.get("usage"))
     _validate_preservable_router_shape(payload.get("openrouter_metadata"))
     try:
-        parsed = response_model.model_validate_json(content)
-        _ensure_all_fields_supplied(parsed)
-    except (ValidationError, ValueError):
-        raise OpenRouterSchemaError("model returned invalid structured data") from None
-    return parsed
+        return decode_structured_output(content, response_model).value
+    except StructuredOutputDecodeError as output_error:
+        raise OpenRouterStructuredOutputError(
+            failure_code=output_error.code,
+            repair_evidence=output_error.repair_evidence,
+        ) from None
 
 
 def _validate_preservable_router_shape(value: Any) -> None:
@@ -3988,6 +4536,16 @@ def _validate_completion_envelope(
             raise OpenRouterTruncatedResponseError("model response was incomplete or truncated")
         raise OpenRouterSchemaError("model response did not finish normally")
     native_finish_reason = _optional_string(choice.get("native_finish_reason"))
+    if native_finish_reason is not None:
+        native_finish_reason = _required_safe_string(
+            native_finish_reason,
+            field="native finish reason",
+            max_length=100,
+        )
+        if native_finish_reason.casefold() in _TRUNCATED_FINISH_REASONS:
+            raise OpenRouterTruncatedResponseError(
+                "model response native finish reason indicates truncation"
+            )
 
     message = choice.get("message")
     if not isinstance(message, dict) or message.get("role") != "assistant":
@@ -4402,6 +4960,15 @@ def _is_concluded_unbound_completion(completion: StructuredCompletion[Any]) -> b
     )
 
 
+def _is_repaired_noncreditable_completion(
+    completion: StructuredCompletion[Any],
+) -> bool:
+    return (
+        completion.usage_record.status == "repaired_noncreditable"
+        and completion.usage_record.routing.get("repair_used") is True
+    )
+
+
 def _identity_failure_diagnostic(
     *,
     payload: dict[str, Any] | None,
@@ -4713,12 +5280,12 @@ def _failure_status(
     accepted = accepted_response_models or frozenset((requested_model,))
     if isinstance(error, OpenRouterResponseIdentityError):
         return "unbound_identity"
+    if isinstance(error, OpenRouterTruncatedResponseError):
+        return "rejected_truncated_response"
     if returned_model is not None and returned_model not in accepted:
         return "rejected_model_substitution"
     if isinstance(error, OpenRouterProviderPolicyError):
         return "rejected_provider_substitution"
-    if isinstance(error, OpenRouterTruncatedResponseError):
-        return "rejected_truncated_response"
     return f"failed:{type(error).__name__}"
 
 

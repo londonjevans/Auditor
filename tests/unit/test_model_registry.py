@@ -292,6 +292,23 @@ def test_nonproduction_fixture_can_explicitly_disable_qualification_gate(config_
     assert not any("verified production qualification" in error for error in errors)
 
 
+def test_catalog_registry_does_not_globally_filter_non_native_output_models(
+    config_factory,
+) -> None:
+    config = config_factory()
+    metadata = [
+        {
+            "id": model_id,
+            "supported_parameters": ["max_tokens", "temperature"],
+        }
+        for model_id in configured_model_ids(config, include_fallbacks=True)
+    ]
+
+    errors = ModelRegistry.validate(config, metadata)
+
+    assert not any("structured JSON output" in error for error in errors)
+
+
 def test_verified_production_selection_resolves_every_exact_model_and_role() -> None:
     config, qualification, observed_at = _verified_production_config_and_capability()
 
@@ -321,6 +338,12 @@ def test_verified_production_selection_resolves_every_exact_model_and_role() -> 
     }
     assert {binding.endpoint_snapshot_sha256 for binding in evidence.model_bindings} == {
         model.endpoint_snapshot_sha256 for model in qualification.models
+    }
+    assert {binding.output_capability_sha256 for binding in evidence.model_bindings} == {
+        model.output_capability_sha256 for model in qualification.models
+    }
+    assert {binding.structured_output_mode for binding in evidence.model_bindings} == {
+        model.structured_output_mode for model in qualification.models
     }
     assert {binding.model_metadata_snapshot_sha256 for binding in evidence.model_bindings} == {
         model.model_metadata_snapshot_sha256 for model in qualification.models
@@ -527,6 +550,8 @@ def test_serialized_production_qualification_validation_rejects_tampering() -> N
         ("benchmark_verification_sha256", "c" * 64),
         ("fresh_benchmark_evidence_sha256", "d" * 64),
         ("endpoint_snapshot_sha256", "e" * 64),
+        ("output_capability_sha256", "1" * 64),
+        ("structured_output_mode", "VALIDATED_TEXT_JSON"),
         ("model_metadata_snapshot_sha256", "f" * 64),
         ("pricing_snapshot_sha256", "0" * 64),
         ("benchmark_case_count", 2),
