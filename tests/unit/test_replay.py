@@ -34,6 +34,7 @@ from mmaudit.models.schemas import (
     ForkActor,
     ForkAssertion,
     ForkCallStep,
+    ForkRpcMethodCount,
     ForkRpcReadOnlyEgressEvidence,
     ForkTestType,
     FoundryInvariantHarnessSpec,
@@ -95,6 +96,7 @@ from mmaudit.orchestration.replay import (
     _load_replay_artifacts,
     _repository_differential_is_qualifying,
     _repository_differential_projection,
+    _repository_test_execution_projection,
     write_offline_replay,
 )
 from mmaudit.orchestration.verification import (
@@ -2099,11 +2101,19 @@ def test_repository_differential_projection_excludes_volatility_and_endpoints(
     volatile_clean = volatile.matrix.states[0]
     assert volatile_clean.clean_state_attestation is not None
     volatile_clean.state_source_sha256 = "6" * 64
+    volatile_clean.state_sha256 = "0" * 63 + "5"
     volatile_clean.clean_state_attestation.process_attestation_sha256 = "5" * 64
     volatile_clean.clean_state_attestation.startup_duration_seconds = 12
     volatile_clean.clean_state_attestation.termination_method = "kill"
     volatile_clean.clean_state_attestation.termination_duration_seconds = 9
     volatile_clean.clean_state_attestation.attestation_sha256 = "4" * 64
+    for attempt in volatile.matrix.attempts:
+        if attempt.state_id == volatile_clean.state_id:
+            attempt.state_sha256 = volatile_clean.state_sha256
+            assert attempt.scanner_run.fork_rpc_egress is not None
+            attempt.scanner_run.fork_rpc_egress.state_source_sha256 = (
+                volatile_clean.state_source_sha256
+            )
     volatile_attempt = volatile.matrix.attempts[0]
     volatile_copy = volatile_attempt.scanner_run.repository_suite_workspace_copy
     assert volatile_copy is not None
@@ -2127,24 +2137,56 @@ def test_repository_differential_projection_excludes_volatility_and_endpoints(
     volatile_lifecycle.attempt_root_device = 105
     volatile_lifecycle.attempt_root_inode = 106
     volatile_lifecycle.removal_duration_seconds = 4
+    volatile_lifecycle.removed_entry_count += 7
+    volatile_lifecycle.maximum_removed_depth += 2
     volatile_lifecycle.lifecycle_evidence_sha256 = "f" * 64
     volatile_egress = volatile_attempt.scanner_run.fork_rpc_egress
     assert volatile_egress is not None
     volatile_egress.selected_test_scope_snapshot_sha256s = ("e" * 64,)
     volatile_egress.bridge_snapshot_sha256 = "d" * 64
     volatile_egress.evidence_sha256 = "c" * 64
+    volatile_egress.http_request_count += 5
+    volatile_egress.permitted_rpc_call_count += 5
+    volatile_egress.origin_attempted_rpc_call_count += 3
+    volatile_egress.origin_validated_rpc_call_count += 3
+    volatile_egress.synthetic_rpc_call_count += 2
+    volatile_egress.allowed_method_counts = tuple(
+        item.model_copy(update={"count": item.count + index + 1})
+        for index, item in enumerate(volatile_egress.allowed_method_counts)
+    )
+    volatile_egress.method_log_sha256 = "0" * 63 + "2"
+    volatile_egress.state_source_sha256 = volatile_clean.state_source_sha256
     volatile_scope = volatile_attempt.scanner_run.repository_test_fork_rpc_scopes[0]
     volatile_scope.attempt_binding_sha256 = "b" * 64
     volatile_scope.selection_sha256 = "a" * 64
     volatile_scope.bridge_scope_snapshot_sha256 = "9" * 64
     volatile_scope.evidence_sha256 = "8" * 64
+    volatile_scope.http_request_count += 3
+    volatile_scope.permitted_rpc_call_count += 3
+    volatile_scope.origin_attempted_rpc_call_count += 3
+    volatile_scope.origin_validated_rpc_call_count += 3
+    volatile_scope.allowed_method_counts = tuple(
+        item.model_copy(update={"count": item.count + 3})
+        for item in volatile_scope.allowed_method_counts
+    )
+    volatile_scope.method_log_sha256 = "0" * 63 + "4"
     volatile_cleanup = volatile.matrix.state_workspace_cleanups[0]
+    volatile_cleanup.state_sha256 = volatile_clean.state_sha256
     volatile_cleanup.attempt_cleanup_sequence_lifecycle_sha256s = tuple(
         "7" * 64 for _item in volatile_cleanup.attempt_cleanup_sequence_lifecycle_sha256s
     )
     volatile_cleanup.attempt_cumulative_removal_duration_seconds = tuple(
         duration + 1 for duration in volatile_cleanup.attempt_cumulative_removal_duration_seconds
     )
+    volatile_cleanup.attempt_cumulative_removed_entry_counts = tuple(
+        count + (index * 3)
+        for index, count in enumerate(
+            volatile_cleanup.attempt_cumulative_removed_entry_counts,
+            start=1,
+        )
+    )
+    volatile_cleanup.removed_entry_count += 10
+    volatile_cleanup.maximum_removed_depth += 2
     volatile_cleanup.removal_duration_seconds += 1
     volatile_cleanup.aggregate_evidence_sha256 = "6" * 64
 
@@ -2190,7 +2232,8 @@ def test_repository_differential_projection_excludes_volatility_and_endpoints(
     assert matrix.fork_rpc_policy_sha256 in serialized
     assert matrix.repository_sha256 in serialized
     assert matrix.states[0].state_id in serialized
-    assert matrix.states[0].state_source_sha256 in serialized
+    pinned_state = next(state for state in matrix.states if state.clean_state_attestation is None)
+    assert pinned_state.state_source_sha256 in serialized
     assert str(matrix.states[0].expected_chain_id) in serialized
     observed_block_hash = matrix.states[0].observed_block_hash
     assert observed_block_hash is not None
@@ -2199,13 +2242,23 @@ def test_repository_differential_projection_excludes_volatility_and_endpoints(
     assert "clean_pass_pinned_failure" in serialized
     assert ExecutionEvidenceKind.REAL.value in serialized
     assert "repository_test_fork_rpc_scopes" in serialized
-    assert "method_log_sha256" in serialized
+    assert "method_log_sha256" not in serialized
+    assert "allowed_methods" in serialized
     assert "copy_policy_sha256" in serialized
     assert "source_inventory_sha256_before" in serialized
     assert "workspace_inventory_sha256_after_copy" in serialized
     assert "disposal_policy_sha256" in serialized
     assert "state_workspace_cleanups" in serialized
     assert '"attempt_cleanup_sequence": "reverse_attempt_order"' in serialized
+    assert "stable_state_semantics_sha256" in serialized
+    assert '"state_binding_valid": true' in serialized
+    assert "removed_entry_count" not in serialized
+    assert "maximum_removed_depth" not in serialized
+    assert '"minimum_removal_entries_satisfied": true' in serialized
+    assert '"minimum_removal_depth_satisfied": true' in serialized
+    assert '"removal_entry_bound_satisfied": true' in serialized
+    assert '"removal_depth_bound_satisfied": true' in serialized
+    assert '"removal_timeout_satisfied": true' in serialized
     assert "removal_entry_limit" in serialized
     assert "removal_depth_limit" in serialized
     assert "removal_timeout_seconds" in serialized
@@ -2218,9 +2271,17 @@ def test_repository_differential_projection_excludes_volatility_and_endpoints(
     first_scope = scoped_run.repository_test_fork_rpc_scopes[0]
     second_scope = first_scope.model_copy(deep=True)
     object.__setattr__(first_scope, "descriptor_sha256", "a" * 64)
-    object.__setattr__(first_scope, "method_log_sha256", "b" * 64)
+    object.__setattr__(
+        first_scope,
+        "allowed_method_counts",
+        (ForkRpcMethodCount(method="eth_getBalance", count=1),),
+    )
     object.__setattr__(second_scope, "descriptor_sha256", "c" * 64)
-    object.__setattr__(second_scope, "method_log_sha256", "d" * 64)
+    object.__setattr__(
+        second_scope,
+        "allowed_method_counts",
+        (ForkRpcMethodCount(method="eth_getCode", count=1),),
+    )
     scoped_run.repository_test_fork_rpc_scopes = [first_scope, second_scope]
     scoped_projection = _repository_differential_projection(descriptor_scope_drift)
     swapped_semantics = descriptor_scope_drift.model_copy(deep=True)
@@ -2228,8 +2289,16 @@ def test_repository_differential_projection_excludes_volatility_and_endpoints(
     swapped_scopes = swapped_semantics.matrix.attempts[
         0
     ].scanner_run.repository_test_fork_rpc_scopes
-    object.__setattr__(swapped_scopes[0], "method_log_sha256", "d" * 64)
-    object.__setattr__(swapped_scopes[1], "method_log_sha256", "b" * 64)
+    object.__setattr__(
+        swapped_scopes[0],
+        "allowed_method_counts",
+        (ForkRpcMethodCount(method="eth_getCode", count=1),),
+    )
+    object.__setattr__(
+        swapped_scopes[1],
+        "allowed_method_counts",
+        (ForkRpcMethodCount(method="eth_getBalance", count=1),),
+    )
     assert (
         swapped_semantics.matrix.attempts[0].scanner_run.fork_rpc_egress
         == descriptor_scope_drift.matrix.attempts[0].scanner_run.fork_rpc_egress
@@ -2273,6 +2342,166 @@ def test_repository_differential_projection_excludes_volatility_and_endpoints(
     assert aggregate_cleanup_drift.matrix is not None
     aggregate_cleanup_drift.matrix.state_workspace_cleanups[0].owned_directory_count += 1
     assert _repository_differential_projection(aggregate_cleanup_drift) != expected_projection
+
+
+def test_repository_test_execution_projection_uses_semantic_inventory_references(
+    config_factory,
+) -> None:
+    config = _config_with_repository_differential(config_factory())
+    result = _differential_result(config, "9" * 64)
+    assert result.matrix is not None
+    execution = result.matrix.attempts[0].scanner_run.repository_test_executions[0]
+    expected = execution.model_copy(deep=True)
+    observed = execution.model_copy(deep=True)
+    object.__setattr__(expected, "inventory_sha256", "1" * 64)
+    object.__setattr__(expected, "post_inventory_sha256", "2" * 64)
+    object.__setattr__(expected, "inventory_record_sha256", "3" * 64)
+    object.__setattr__(observed, "inventory_sha256", "4" * 64)
+    object.__setattr__(observed, "post_inventory_sha256", "5" * 64)
+    object.__setattr__(observed, "inventory_record_sha256", "3" * 64)
+
+    expected_projection = _repository_test_execution_projection(
+        expected,
+        stable_pre_inventory_ref="6" * 64,
+        stable_post_inventory_ref="7" * 64,
+    )
+    observed_projection = _repository_test_execution_projection(
+        observed,
+        stable_pre_inventory_ref="6" * 64,
+        stable_post_inventory_ref="7" * 64,
+    )
+
+    assert observed_projection == expected_projection
+    assert observed_projection["inventory_sha256"] == "6" * 64
+    assert observed_projection["post_inventory_sha256"] == "7" * 64
+    assert observed_projection["inventory_record_sha256"] == "3" * 64
+
+    object.__setattr__(observed, "inventory_record_sha256", "8" * 64)
+    assert (
+        _repository_test_execution_projection(
+            observed,
+            stable_pre_inventory_ref="6" * 64,
+            stable_post_inventory_ref="7" * 64,
+        )
+        != expected_projection
+    )
+
+
+@pytest.mark.parametrize(
+    "counter",
+    (
+        "denied_request_count",
+        "malformed_request_count",
+        "limit_exceeded_request_count",
+        "upstream_error_request_count",
+    ),
+)
+def test_repository_differential_projection_retains_rpc_error_accounting(
+    config_factory,
+    counter: str,
+) -> None:
+    config = _config_with_repository_differential(config_factory())
+    expected = _differential_result(config, "9" * 64)
+    drifted = expected.model_copy(deep=True)
+    assert drifted.matrix is not None
+    egress = drifted.matrix.attempts[0].scanner_run.fork_rpc_egress
+    assert egress is not None
+    object.__setattr__(egress, counter, getattr(egress, counter) + 1)
+
+    assert _repository_differential_projection(drifted) != (
+        _repository_differential_projection(expected)
+    )
+
+
+def test_repository_differential_projection_retains_security_and_result_semantics(
+    config_factory,
+) -> None:
+    config = _config_with_repository_differential(config_factory())
+    expected = _differential_result(config, "9" * 64)
+    expected_projection = _repository_differential_projection(expected)
+
+    policy_drift = expected.model_copy(deep=True)
+    assert policy_drift.matrix is not None
+    policy_egress = policy_drift.matrix.attempts[0].scanner_run.fork_rpc_egress
+    assert policy_egress is not None
+    policy_egress.policy_sha256 = "0" * 63 + "1"
+    assert _repository_differential_projection(policy_drift) != expected_projection
+
+    pinned_source_drift = expected.model_copy(deep=True)
+    assert pinned_source_drift.matrix is not None
+    pinned_state = next(
+        state
+        for state in pinned_source_drift.matrix.states
+        if state.clean_state_attestation is None
+    )
+    pinned_state.state_source_sha256 = "0" * 63 + "2"
+    assert _repository_differential_projection(pinned_source_drift) != expected_projection
+
+    result_drift = expected.model_copy(deep=True)
+    assert result_drift.matrix is not None
+    result_drift.matrix.attempts[0].scanner_run.repository_test_executions[
+        0
+    ].machine_result_sha256 = "0" * 63 + "3"
+    assert _repository_differential_projection(result_drift) != expected_projection
+
+    source_drift = expected.model_copy(deep=True)
+    assert source_drift.matrix is not None
+    source_drift.matrix.attempts[0].scanner_run.repository_test_executions[
+        0
+    ].path = "contracts/test/Other.t.sol"
+    assert _repository_differential_projection(source_drift) != expected_projection
+
+    egress_binding_drift = expected.model_copy(deep=True)
+    assert egress_binding_drift.matrix is not None
+    binding_egress = egress_binding_drift.matrix.attempts[0].scanner_run.fork_rpc_egress
+    assert binding_egress is not None
+    binding_egress.state_source_sha256 = "0" * 63 + "4"
+    assert _repository_differential_projection(egress_binding_drift) != expected_projection
+
+    cleanup_binding_drift = expected.model_copy(deep=True)
+    assert cleanup_binding_drift.matrix is not None
+    cleanup_binding_drift.matrix.state_workspace_cleanups[0].state_sha256 = "0" * 63 + "5"
+    assert _repository_differential_projection(cleanup_binding_drift) != expected_projection
+
+
+def test_repository_differential_projection_retains_cleanup_minima_and_safety_facts(
+    config_factory,
+) -> None:
+    config = _config_with_repository_differential(config_factory())
+    expected = _differential_result(config, "9" * 64)
+    expected_projection = _repository_differential_projection(expected)
+
+    for field, value in (
+        ("status", RepositorySuiteWorkspaceLifecycleStatus.DISPOSED_UNCREDITED),
+        ("removed_entry_count", 0),
+        ("maximum_removed_depth", 0),
+        ("removal_entry_limit", 1),
+        ("removal_depth_limit", 1),
+        ("removal_timeout_seconds", 1),
+        ("workspace_path_absent", False),
+        ("attempt_path_absent", False),
+        ("private_path_retained", True),
+        ("rpc_endpoint_retained", True),
+    ):
+        drifted = expected.model_copy(deep=True)
+        assert drifted.matrix is not None
+        object.__setattr__(drifted.matrix.attempts[0].workspace_lifecycle, field, value)
+        assert _repository_differential_projection(drifted) != expected_projection
+
+    for field, value in (
+        ("owned_directory_count", 2),
+        ("removal_entry_limit", 1),
+        ("removal_depth_limit", 1),
+        ("removal_timeout_seconds", 1),
+        ("all_owned_descriptors_closed", False),
+        ("all_owned_paths_absent", False),
+        ("private_path_retained", True),
+        ("rpc_endpoint_retained", True),
+    ):
+        drifted = expected.model_copy(deep=True)
+        assert drifted.matrix is not None
+        object.__setattr__(drifted.matrix.state_workspace_cleanups[0], field, value)
+        assert _repository_differential_projection(drifted) != expected_projection
 
 
 def test_repository_differential_qualification_requires_copy_and_lifecycle_evidence(

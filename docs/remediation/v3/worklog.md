@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_BY_OPERATOR
+AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Differential and multi-state fork matrix
 CURRENT_TICKET: V3-FORKDIFF-001
-LAST_COMPLETED_TICKET: V3-FLOOR-001
-NEXT_ACTION: On resume, make the differential replay projection compare stable security semantics rather than process-local RPC multiplicities and inventory self-hashes, retain the full qualifying-evidence checks, then rerun the unit and real local replay gates.
-LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_fork_matrix.py tests/integration/test_pipeline.py tests/unit/test_replay.py
-LAST_RESULT: PASS — 180 timeout-budget, pipeline, matrix, and replay regressions passed in 71.19s; inherited immutable pytest garbage directories emitted two non-fatal cleanup warnings.
+LAST_COMPLETED_TICKET: V3-FORKDIFF-001
+NEXT_ACTION: Create and publish the isolated V3-FORKDIFF checkpoint, then begin dependency-free V3-FIXTURE-001 so realistic-scale evidence is available for V3-OMISSION-001.
+LAST_COMMAND: .venv/bin/pytest -q
+LAST_RESULT: PASS — 2992 tests passed with 10 explicit external-engine, rootless-isolation, paid-provider, and opt-in real-local integration skips in 372.66s.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -250,6 +250,60 @@ LAST_CHECKPOINT_COMMIT: af2ea7a690a573c887726291fdbebe32f59e4c8d
 - **SSH publication:** Implementation checkpoint `af2ea7a` and paused-state
   checkpoint `dcb31c9` were pushed successfully at `2026-07-29T23:27:01Z` on
   `main` to `git@github.com:londonjevans/Auditor.git`.
+- **Autorun resume:** At `2026-07-29T23:29:07Z`, the complete 1,417-line product
+  objective was reread and hash-verified, repository instructions and both
+  persistent queues were reloaded, and synchronized commit `e270591` was clean.
+  Work resumed only on the recorded stable replay-projection defect. No provider,
+  secret, public RPC, wallet, signing, broadcast, or paid operation is involved.
+- **Stable projection remediation:** Read-only inventory and bridge review
+  confirmed that raw pre/post inventory self-hashes, concurrent Forge RPC call
+  multiplicities/order, clean-process source identities, and generated-tree
+  cleanup measurements are process-local observations. Replay now compares
+  normalized compiler inventory semantics, exact RPC method vocabulary and
+  validation facts, stable clean-state semantics, and bounded cleanup outcomes.
+  It retains exact policy, pinned state, error counters, binding-validity facts,
+  source/test identity, machine results, isolation, ownership, limits, closure,
+  and non-retention. The expected-red projection assay failed before the fix;
+  `.venv/bin/pytest -q tests/unit/test_replay.py` then passed `41` tests, and
+  affected Ruff, strict mypy, and `git diff --check` passed.
+- **Real default replay acceptance:** With the immutable `0.8.30` compiler copy
+  (SHA-256 `738dcdc6afddeb505ee4e4ef24f1c1fdba2b8c924e614cbbf5801a5b062dd683`),
+  the local-only command
+  `MMAUDIT_TEST_SOLC_EXECUTABLE=/private/tmp/mmaudit-trusted-solc-0.8.30/solc
+  .venv/bin/pytest -q --tb=short
+  tests/integration/test_repository_fork_differential_matrix.py` passed `1`
+  test in `20.00s`. Direct and replay matrices both completed, the scanner and
+  semantic projection matched, default replay returned `REPLAYED`, emitted
+  artifacts revalidated, deadlines held, and disposable workspaces were absent.
+  Two non-fatal warnings concerned inherited immutable pytest garbage directories
+  outside the repository. No external network or provider path was used.
+- **Focused and static gates:** The complete differential, matrix, Foundry,
+  workspace, read-only RPC, replay, reproduction, reporting, and pipeline command
+  passed `574` tests in `134.31s`; two inherited immutable-garbage cleanup
+  warnings were non-fatal. `.venv/bin/ruff format .` left all `340` files
+  unchanged, `.venv/bin/ruff check .` passed, strict `.venv/bin/mypy` passed
+  `148` source files, release-schema generation verified synchronization, and
+  `git diff --check` passed.
+- **Complete local gate:** `.venv/bin/pytest -q` passed `2992` tests with `10`
+  explicit Echidna, Medusa, Halmos, rootless-isolation, paid-provider, and
+  opt-in real-local integration prerequisite skips in `372.66s`. The separately
+  required real differential integration had already passed with its explicit
+  trusted compiler. Two inherited immutable-garbage cleanup warnings remained
+  non-fatal.
+- **Independent closure review:** Read-only adversarial review found no material
+  blocker. It confirmed that raw RPC arithmetic/self-hashes, state and cleanup
+  joins, inventory bindings, isolation, and non-retention remain independently
+  validated before semantic projection. Exact RPC multiplicity/order within one
+  unchanged approved method vocabulary is intentionally not replay drift; all
+  raw observations remain in the forensic artifact.
+- **Final scope review:** Only the intended replay implementation, fail-closed
+  regressions, queue, runtime status, traceability, and worklog are changed.
+  `git diff --check` passed, no generated runtime artifact is tracked, and the
+  changed-file credential/key scan returned no match.
+- **Ticket result:** `V3-FORKDIFF-001` is `COMPLETE`. This proves the bounded
+  local differential execution and manifest-bound replay path; it does not
+  resolve the separately blocked real Hardhat/rootless subtask or claim any
+  public-chain execution.
 - **Defensive objective:** Execute the same bounded audited-repository suite
   against a clean local state and one or more operator-pinned fork states, then
   classify only repeated fresh-workspace agreement as typed divergence while a

@@ -8,6 +8,7 @@ import tempfile
 import time
 from collections.abc import Sequence
 from enum import StrEnum
+from itertools import pairwise
 from pathlib import Path, PurePosixPath
 from typing import Literal, Protocol
 
@@ -15,6 +16,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from mmaudit.config import AuditConfig
 from mmaudit.models.schemas import (
+    REPOSITORY_SUITE_VALIDATED_WORKSPACE_REMOVAL_DEPTH_MINIMUM,
+    REPOSITORY_SUITE_VALIDATED_WORKSPACE_REMOVAL_ENTRY_MINIMUM,
     REPOSITORY_SUITE_WORKSPACE_COPY_POLICY_SHA256,
     REPOSITORY_SUITE_WORKSPACE_DISPOSAL_POLICY_SHA256,
     REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT,
@@ -23,6 +26,7 @@ from mmaudit.models.schemas import (
     CandidateFinding,
     ExecutionEvidenceKind,
     FalsificationDecision,
+    ForkRpcReadOnlyEgressEvidence,
     FoundryInvariantHarnessSpec,
     GeneratedFoundryTestSpec,
     InvariantExecutionResult,
@@ -38,6 +42,7 @@ from mmaudit.models.schemas import (
     RepositorySuiteWorkspaceCopyEvidence,
     RepositorySuiteWorkspaceLifecycleEvidence,
     RepositorySuiteWorkspaceLifecycleStatus,
+    RepositoryTestExecution,
     RepositoryTestForkRpcScopeEvidence,
     ReproductionResult,
     ReproductionState,
@@ -1664,9 +1669,9 @@ def _workspace_copy_projection(
 def _workspace_lifecycle_projection(
     evidence: RepositorySuiteWorkspaceLifecycleEvidence,
 ) -> dict[str, object]:
-    """Retain disposal policy, bounds, and non-retention without local identities."""
+    """Retain bounded disposal semantics without workspace-local measurements."""
 
-    return evidence.model_dump(
+    projection = evidence.model_dump(
         mode="json",
         exclude={
             "attempt_binding_sha256",
@@ -1675,44 +1680,191 @@ def _workspace_lifecycle_projection(
             "freshness_attestation_sha256",
             "attempt_root_device",
             "attempt_root_inode",
+            "removed_entry_count",
+            "maximum_removed_depth",
             "removal_duration_seconds",
             "lifecycle_evidence_sha256",
         },
     )
+    projection.update(
+        {
+            "minimum_removal_entries_satisfied": (
+                evidence.removed_entry_count
+                >= REPOSITORY_SUITE_VALIDATED_WORKSPACE_REMOVAL_ENTRY_MINIMUM
+            ),
+            "minimum_removal_depth_satisfied": (
+                evidence.maximum_removed_depth
+                >= REPOSITORY_SUITE_VALIDATED_WORKSPACE_REMOVAL_DEPTH_MINIMUM
+            ),
+            "removal_entry_bound_satisfied": (
+                evidence.removed_entry_count <= evidence.removal_entry_limit
+            ),
+            "removal_depth_bound_satisfied": (
+                evidence.maximum_removed_depth <= evidence.removal_depth_limit
+            ),
+            "removal_timeout_satisfied": (
+                evidence.removal_duration_seconds <= evidence.removal_timeout_seconds
+            ),
+        }
+    )
+    return projection
 
 
 def _state_workspace_cleanup_projection(
     evidence: RepositorySuiteStateWorkspaceCleanupEvidence,
+    *,
+    stable_state_semantics_sha256: str,
+    state_binding_valid: bool,
 ) -> dict[str, object]:
-    """Retain aggregate disposal semantics without attempt hashes or timings."""
+    """Retain aggregate bounded-disposal semantics without local measurements."""
 
     projection = evidence.model_dump(
         mode="json",
         exclude={
+            "state_sha256",
             "attempt_cleanup_sequence_lifecycle_sha256s",
+            "attempt_cumulative_removed_entry_counts",
             "attempt_cumulative_removal_duration_seconds",
+            "removed_entry_count",
+            "maximum_removed_depth",
             "removal_duration_seconds",
             "aggregate_evidence_sha256",
         },
     )
     projection["attempt_cleanup_sequence"] = "reverse_attempt_order"
+    cumulative_entries = evidence.attempt_cumulative_removed_entry_counts
+    cumulative_durations = evidence.attempt_cumulative_removal_duration_seconds
+    projection.update(
+        {
+            "stable_state_semantics_sha256": stable_state_semantics_sha256,
+            "state_binding_valid": state_binding_valid,
+            "attempt_cleanup_count": len(evidence.attempt_cleanup_sequence_lifecycle_sha256s),
+            "cumulative_entries_strictly_increasing": all(
+                current > previous for previous, current in pairwise(cumulative_entries)
+            ),
+            "cumulative_durations_monotonic": all(
+                current >= previous for previous, current in pairwise(cumulative_durations)
+            ),
+            "removal_covers_owned_directories": (
+                evidence.removed_entry_count >= evidence.owned_directory_count
+            ),
+            "cumulative_removal_covered": (
+                cumulative_entries[-1] + evidence.auxiliary_directory_count
+                <= evidence.removed_entry_count
+                and cumulative_durations[-1] <= evidence.removal_duration_seconds
+            ),
+            "removal_entry_bound_satisfied": (
+                evidence.removed_entry_count <= evidence.removal_entry_limit
+            ),
+            "removal_depth_bound_satisfied": (
+                evidence.maximum_removed_depth <= evidence.removal_depth_limit
+            ),
+            "removal_timeout_satisfied": (
+                evidence.removal_duration_seconds <= evidence.removal_timeout_seconds
+            ),
+        }
+    )
     return projection
 
 
 def _repository_test_fork_rpc_scope_projection(
     scope: RepositoryTestForkRpcScopeEvidence,
 ) -> dict[str, object]:
-    """Retain descriptor-scoped RPC semantics without attempt-local bindings."""
+    """Retain descriptor-scoped RPC semantics without process-local call volume."""
 
-    return scope.model_dump(
+    projection = scope.model_dump(
         mode="json",
         exclude={
             "attempt_binding_sha256",
             "selection_sha256",
             "bridge_scope_snapshot_sha256",
             "evidence_sha256",
+            "http_request_count",
+            "permitted_rpc_call_count",
+            "origin_attempted_rpc_call_count",
+            "origin_validated_rpc_call_count",
+            "synthetic_rpc_call_count",
+            "allowed_method_counts",
+            "method_log_sha256",
         },
     )
+    projection.update(_fork_rpc_volume_semantics(scope))
+    return projection
+
+
+def _fork_rpc_egress_projection(
+    evidence: ForkRpcReadOnlyEgressEvidence,
+    *,
+    stable_state_source_sha256: str,
+    state_source_binding_valid: bool,
+) -> dict[str, object]:
+    """Retain read-only boundary semantics without process-local call volume."""
+
+    projection = evidence.model_dump(
+        mode="json",
+        exclude={
+            "bridge_snapshot_sha256",
+            "evidence_sha256",
+            "selected_test_scope_snapshot_sha256s",
+            "http_request_count",
+            "permitted_rpc_call_count",
+            "origin_attempted_rpc_call_count",
+            "origin_validated_rpc_call_count",
+            "synthetic_rpc_call_count",
+            "allowed_method_counts",
+            "method_log_sha256",
+        },
+    )
+    projection["state_source_sha256"] = stable_state_source_sha256
+    projection["state_source_binding_valid"] = state_source_binding_valid
+    projection.update(_fork_rpc_volume_semantics(evidence))
+    return projection
+
+
+def _fork_rpc_volume_semantics(
+    evidence: ForkRpcReadOnlyEgressEvidence | RepositoryTestForkRpcScopeEvidence,
+) -> dict[str, object]:
+    """Normalize nondeterministic request multiplicity while retaining safety facts."""
+
+    return {
+        "http_requests_observed": evidence.http_request_count > 0,
+        "permitted_rpc_calls_observed": evidence.permitted_rpc_call_count > 0,
+        "origin_reads_observed": evidence.origin_attempted_rpc_call_count > 0,
+        "origin_reads_fully_validated": (
+            evidence.origin_attempted_rpc_call_count > 0
+            and evidence.origin_attempted_rpc_call_count == evidence.origin_validated_rpc_call_count
+        ),
+        "synthetic_rpc_calls_observed": evidence.synthetic_rpc_call_count > 0,
+        "allowed_methods": [item.method for item in evidence.allowed_method_counts],
+    }
+
+
+def _repository_test_execution_projection(
+    execution: RepositoryTestExecution,
+    *,
+    stable_pre_inventory_ref: str | None,
+    stable_post_inventory_ref: str | None,
+) -> dict[str, object]:
+    """Retain execution semantics while replacing runtime-local inventory self hashes."""
+
+    projection = execution.model_dump(
+        mode="json",
+        exclude={
+            "duration_seconds",
+            "execution_sha256",
+            "output_bytes",
+            "output_sha256",
+            "terminal_detail",
+        },
+    )
+    if (
+        execution.inventory_sha256 is not None
+        and stable_pre_inventory_ref is not None
+        and stable_post_inventory_ref is not None
+    ):
+        projection["inventory_sha256"] = stable_pre_inventory_ref
+        projection["post_inventory_sha256"] = stable_post_inventory_ref
+    return projection
 
 
 def _repository_differential_projection(
@@ -1732,6 +1884,10 @@ def _repository_differential_projection(
             "limitation_count": len(result.limitations),
         }
     states: list[dict[str, object]] = []
+    stable_state_sources: dict[str, str] = {}
+    stable_state_semantics: dict[str, str] = {}
+    raw_state_sha256s: dict[str, str] = {}
+    raw_state_sources: dict[str, str] = {}
     for state in matrix.states:
         clean_attestation = state.clean_state_attestation
         clean_projection = (
@@ -1739,40 +1895,51 @@ def _repository_differential_projection(
             if clean_attestation is not None
             else None
         )
-        states.append(
-            {
-                "state_id": state.state_id,
-                "kind": state.kind.value,
-                "state_source_sha256": (
-                    _stable_clean_state_source_sha256(clean_attestation)
-                    if clean_attestation is not None
-                    else state.state_source_sha256
-                ),
-                "expected_chain_id": state.expected_chain_id,
-                "pinned_block_number": state.pinned_block_number,
-                "observation_status": state.observation_status.value,
-                "observed_chain_id": state.observed_chain_id,
-                "observed_block_number": state.observed_block_number,
-                "observed_block_hash": state.observed_block_hash,
-                "clean_state_attestation": clean_projection,
-            }
+        stable_state_source_sha256 = (
+            _stable_clean_state_source_sha256(clean_attestation)
+            if clean_attestation is not None
+            else state.state_source_sha256
         )
+        stable_state_sources[state.state_id] = stable_state_source_sha256
+        raw_state_sha256s[state.state_id] = state.state_sha256
+        raw_state_sources[state.state_id] = state.state_source_sha256
+        state_projection: dict[str, object] = {
+            "state_id": state.state_id,
+            "kind": state.kind.value,
+            "state_source_sha256": stable_state_source_sha256,
+            "expected_chain_id": state.expected_chain_id,
+            "pinned_block_number": state.pinned_block_number,
+            "observation_status": state.observation_status.value,
+            "observed_chain_id": state.observed_chain_id,
+            "observed_block_number": state.observed_block_number,
+            "observed_block_hash": state.observed_block_hash,
+            "clean_state_attestation": clean_projection,
+        }
+        states.append(state_projection)
+        stable_state_semantics[state.state_id] = canonical_sha256(state_projection)
     attempts: list[dict[str, object]] = []
     for attempt in matrix.attempts:
         run = attempt.scanner_run
         policy = run.repository_suite_execution_policy
         egress = run.fork_rpc_egress
         workspace_copy = run.repository_suite_workspace_copy
+        stable_pre_inventory_ref = (
+            canonical_sha256(_repository_suite_inventory_projection(run.repository_suite_inventory))
+            if run.repository_suite_inventory is not None
+            else None
+        )
+        stable_post_inventory_ref = (
+            canonical_sha256(
+                _repository_suite_inventory_projection(run.repository_suite_post_inventory)
+            )
+            if run.repository_suite_post_inventory is not None
+            else None
+        )
         executions = [
-            execution.model_dump(
-                mode="json",
-                exclude={
-                    "duration_seconds",
-                    "execution_sha256",
-                    "output_bytes",
-                    "output_sha256",
-                    "terminal_detail",
-                },
+            _repository_test_execution_projection(
+                execution,
+                stable_pre_inventory_ref=stable_pre_inventory_ref,
+                stable_post_inventory_ref=stable_post_inventory_ref,
             )
             for execution in run.repository_test_executions
         ]
@@ -1822,13 +1989,12 @@ def _repository_differential_projection(
                 ),
                 "workspace_lifecycle": _workspace_lifecycle_projection(attempt.workspace_lifecycle),
                 "fork_rpc_egress": (
-                    egress.model_dump(
-                        mode="json",
-                        exclude={
-                            "bridge_snapshot_sha256",
-                            "evidence_sha256",
-                            "selected_test_scope_snapshot_sha256s",
-                        },
+                    _fork_rpc_egress_projection(
+                        egress,
+                        stable_state_source_sha256=stable_state_sources[attempt.state_id],
+                        state_source_binding_valid=(
+                            egress.state_source_sha256 == raw_state_sources[attempt.state_id]
+                        ),
                     )
                     if egress is not None
                     else None
@@ -1864,7 +2030,12 @@ def _repository_differential_projection(
         for comparison in matrix.comparisons
     ]
     state_workspace_cleanups = [
-        _state_workspace_cleanup_projection(cleanup) for cleanup in matrix.state_workspace_cleanups
+        _state_workspace_cleanup_projection(
+            cleanup,
+            stable_state_semantics_sha256=stable_state_semantics[cleanup.state_id],
+            state_binding_valid=(cleanup.state_sha256 == raw_state_sha256s[cleanup.state_id]),
+        )
+        for cleanup in matrix.state_workspace_cleanups
     ]
     return {
         "schema_version": result.schema_version,

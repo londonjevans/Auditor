@@ -553,16 +553,20 @@ are invisible to source review by construction.
 - **Files expected to change:** fork execution and result schemas, comparison logic,
   reporting, regressions.
 - **Dependencies:** `V3-FORKSUITE-001`.
-- **Status:** `IN_PROGRESS`
-- **Next action:** On operator resume, implement one deterministic bounded
-  matrix-wide timeout budget that preserves the configured per-child execution
-  policy across every state and repetition, then use it in pipeline and offline
-  replay. Rerun the conditional real local clean-Anvil-versus-pinned
-  Anvil/Foundry matrix/replay integration with the explicit trusted compiler.
-  Default replay, stable copy/lifecycle/RPC projection, aggregate state cleanup
-  evidence, manifest binding, and trust-first verification are implemented and
-  unit-validated, but the real replay remains correctly `INCOMPLETE` until this
-  timeout identity mismatch is repaired and the exact acceptance test passes.
+- **Status:** `COMPLETE`
+- **Evidence:** The matrix supports one clean state and bounded operator-pinned
+  states with repeated fresh-workspace execution, typed divergence, exact
+  seed/chain/block/policy identity, read-only scoped RPC evidence, aggregate
+  cleanup, manifest serialization, and trust-first default replay. Process-local
+  inventory self-hashes, RPC multiplicity/order, clean-process identities, and
+  cleanup measurements project to stable semantics only after their complete raw
+  evidence validates. The real local clean-Anvil-versus-pinned-Anvil/Foundry
+  integration passed direct execution and default manifest-bound replay (`1
+  passed in 20.00s`); the focused gate passed `574` tests; Ruff, strict mypy,
+  release schemas, diff checks, and the full suite passed, ending with `2992
+  passed, 10` explicit prerequisite skips.
+- **Next action:** None; continue with dependency-free `V3-FIXTURE-001`, then use
+  its realistic-scale corpus to complete `V3-OMISSION-001`.
 
 ## V3-EXECORIGIN-001 — Execution-originated candidates
 

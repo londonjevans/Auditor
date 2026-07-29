@@ -234,7 +234,10 @@
       "tickets": ["ALL"],
       "status": "IN_PROGRESS",
       "current_evidence_class": "REAL_RUNTIME",
-      "evidence": ["Baseline ticket followed reproduce, validate, trace, and checkpoint sequencing; normal tests did not enable paid calls."],
+      "evidence": [
+        "Baseline ticket followed reproduce, validate, trace, and checkpoint sequencing; normal tests did not enable paid calls.",
+        "V3-FORKDIFF-001 reproduced two distinct replay defects, added fail-closed regressions, passed a real local clean/pinned Foundry matrix and manifest-bound default replay, then passed 574 focused tests, Ruff, strict mypy, schema synchronization, diff review, and the full 2992-test suite with 10 explicit prerequisite skips."
+      ],
       "remaining_proof": "Repeat focused/full validation and exact worklog evidence for every ticket."
     },
     {
