@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
-import hashlib
 from typing import Any
 
 from mmaudit.config import PrivacyConfig, RepositoryConfig
@@ -437,7 +437,7 @@ class ContextBuilder:
 
         return min(
             self.repository_config.max_total_context_bytes,
-            self.maximum_source_tokens_per_request * 3,
+            self.maximum_source_tokens_per_request,
         )
 
     def build(
@@ -454,7 +454,10 @@ class ContextBuilder:
 
         if request_model_surface_reviews and requested_model_surfaces is not None:
             raise ContextBudgetError("model surface requests cannot be both derived and supplied")
-        token_derived_byte_ceiling = self.maximum_source_tokens_per_request * 3
+        # Without exact tokenizer evidence, one UTF-8 byte per token is the
+        # conservative source bound. The provider request planner adds its own
+        # explicit chat-envelope reserve before transport.
+        token_derived_byte_ceiling = self.maximum_source_tokens_per_request
         default_share = min(
             self.repository_config.max_total_context_bytes,
             token_derived_byte_ceiling,
@@ -800,9 +803,7 @@ def context_category_byte_counts(package: ContextPackage) -> dict[str, int]:
             package.solidity_index.model_dump(mode="json") if package.solidity_index else None
         ),
         "coverage": (
-            package.solidity_coverage.model_dump(mode="json")
-            if package.solidity_coverage
-            else None
+            package.solidity_coverage.model_dump(mode="json") if package.solidity_coverage else None
         ),
     }
     graph_payload = (
@@ -864,9 +865,7 @@ def context_category_measurements(
                 result.model_dump(mode="json") for result in package.solidity_compilations
             ],
             "symbol_index": (
-                package.solidity_index.model_dump(mode="json")
-                if package.solidity_index
-                else None
+                package.solidity_index.model_dump(mode="json") if package.solidity_index else None
             ),
             "coverage": (
                 package.solidity_coverage.model_dump(mode="json")
@@ -931,9 +930,7 @@ def context_category_measurements(
         },
         sort_keys=True,
     )
-    projection_hashes["metadata"] = hashlib.sha256(
-        metadata_projection.encode("utf-8")
-    ).hexdigest()
+    projection_hashes["metadata"] = hashlib.sha256(metadata_projection.encode("utf-8")).hexdigest()
     return {
         category: ContextCategoryMeasurement(
             content_sha256=projection_hashes[category],

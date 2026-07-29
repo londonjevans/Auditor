@@ -4462,6 +4462,191 @@ async def test_endpoint_capacity_planning_failure_is_planless_preflight(
 
 
 @pytest.mark.asyncio
+async def test_prompt_envelope_overrun_is_planless_endpoint_preflight(
+    config_factory,
+) -> None:
+    calls = 0
+    system_prompt = "system"
+    user_prompt = "synthetic local input"
+    structured_plan = openrouter_module._structured_output_request_plan(
+        mode=StructuredOutputMode.NATIVE_JSON_SCHEMA,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        response_model=Answer,
+        schema_name="answer",
+    )
+    allocations = openrouter_module._prompt_token_allocations(
+        plan=structured_plan,
+        original_system_prompt=system_prompt,
+        response_model=Answer,
+        schema_name="answer",
+        context_package=None,
+    )
+    estimated_prompt_tokens = sum(
+        allocation.estimate.estimated_tokens for allocation in allocations
+    )
+    content_byte_upper_bound = sum(
+        allocation.estimate.byte_upper_bound_tokens for allocation in allocations
+    )
+    envelope_upper_bound = openrouter_module._prompt_envelope_byte_upper_bound_tokens(
+        structured_plan
+    )
+    usable_prompt_tokens = int(Decimal(envelope_upper_bound) * Decimal("0.70"))
+    assert estimated_prompt_tokens < usable_prompt_tokens
+    assert content_byte_upper_bound < usable_prompt_tokens
+    assert envelope_upper_bound > usable_prompt_tokens
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    policy = OpenRouterProviderPolicy(only=("approved-provider",))
+    client, http_client, usage = _client(
+        config_factory(),
+        handler,
+        provider_policy=policy,
+    )
+    client.register_endpoint_snapshot(
+        evidence=_endpoint_snapshot(
+            context_length=envelope_upper_bound + 2_048,
+            max_prompt_tokens=envelope_upper_bound,
+            max_completion_tokens=2_048,
+        )
+    )
+    try:
+        with pytest.raises(OpenRouterRequestLimitError):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 0
+    assert usage.records == []
+    assert len(client.context_preflight.records) == 1
+    preflight = client.context_preflight.records[0]
+    assert preflight.request_state is ContextRequestState.PRE_FLIGHT_REJECTED
+    assert preflight.decision_source is ContextPreflightSource.TOKEN_PLANNER
+    assert preflight.reason is ContextPreflightReason.ENDPOINT_CAPACITY
+    assert preflight.request_plan is None
+    assert preflight.request_plan_sha256 is None
+    assert preflight.estimated_prompt_tokens is None
+
+
+@pytest.mark.asyncio
+async def test_plan_time_global_input_budget_failure_is_typed_planless_preflight(
+    config_factory,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    client, http_client, usage = _client(
+        config_factory(
+            token_budgets={
+                "global_input_token_budget": 1_024,
+                "global_output_token_budget": 10_000,
+            }
+        ),
+        handler,
+    )
+    try:
+        with pytest.raises(OpenRouterRequestLimitError):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="x" * 2_000,
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 0
+    assert usage.records == []
+    assert len(client.context_preflight.records) == 1
+    preflight = client.context_preflight.records[0]
+    assert preflight.request_state is ContextRequestState.PRE_FLIGHT_REJECTED
+    assert preflight.decision_source is ContextPreflightSource.TOKEN_PLANNER
+    assert preflight.reason is ContextPreflightReason.GLOBAL_TOKEN_BUDGET
+    assert preflight.request_plan is None
+    assert preflight.request_plan_sha256 is None
+    assert preflight.estimated_prompt_tokens is None
+
+
+@pytest.mark.asyncio
+async def test_context_package_omitted_from_prompt_is_typed_planless_preflight(
+    config_factory,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    package = ContextPackage(
+        role="source_audit",
+        byte_budget=10_000,
+        bytes_used=0,
+        repository_map=RepositoryMap(
+            root_name="synthetic-context-preflight",
+            languages={"Solidity": 1},
+            frameworks=[],
+            manifests=[],
+            entry_points=[],
+            api_surfaces=[],
+            auth_components=[],
+            data_layers=[],
+            network_clients=[],
+            file_handlers=[],
+            configuration_files=[],
+            sensitive_processing=[],
+            security_tests=[],
+            files=[],
+            omitted_files=[],
+        ),
+        scanner_findings=[],
+        excerpts=[],
+    )
+    client, http_client, usage = _client(config_factory(), handler)
+    try:
+        with pytest.raises(OpenRouterRequestLimitError):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="The valid context package is deliberately omitted.",
+                context_package=package,
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 0
+    assert usage.records == []
+    assert len(client.context_preflight.records) == 1
+    preflight = client.context_preflight.records[0]
+    assert preflight.request_state is ContextRequestState.PRE_FLIGHT_REJECTED
+    assert preflight.decision_source is ContextPreflightSource.TOKEN_PLANNER
+    assert preflight.reason is ContextPreflightReason.CONTEXT_PLAN_INVALID
+    assert preflight.request_plan is None
+    assert preflight.request_plan_sha256 is None
+    assert preflight.estimated_prompt_tokens is None
+
+
+@pytest.mark.asyncio
 async def test_initial_global_token_rejection_is_plan_bound_preflight(
     config_factory,
     monkeypatch: pytest.MonkeyPatch,
@@ -6761,6 +6946,12 @@ async def test_request_max_tokens_reserves_visible_output_and_reasoning(
     assert plan["required_output_tokens"] == 2_048
     assert plan["reserved_reasoning_tokens"] == 512
     assert plan["requested_completion_tokens"] == 2_560
+    assert plan["prompt_framing_reserve_tokens"] > 0
+    assert plan["prompt_byte_upper_bound_tokens"] == (
+        plan["prompt_content_byte_upper_bound_tokens"]
+        + plan["prompt_framing_reserve_tokens"]
+    )
+    assert atomic["planned_prompt_tokens"] == plan["prompt_byte_upper_bound_tokens"]
     assert atomic["planned_completion_tokens"] == 2_560
     assert atomic["request_token_plan_sha256"] == plan["plan_sha256"]
 

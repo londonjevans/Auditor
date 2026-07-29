@@ -29,12 +29,27 @@ MINIMUM_CONTEXT_UTILIZATION = Decimal("0.65")
 MAXIMUM_CONTEXT_UTILIZATION = Decimal("0.75")
 DEFAULT_CONTEXT_UTILIZATION = Decimal("0.70")
 UTF8_TOKEN_ESTIMATOR: Literal["MMAUDIT_UTF8_BYTES_DIV3_V1"] = "MMAUDIT_UTF8_BYTES_DIV3_V1"
+PROMPT_UPPER_BOUND_METHOD: Literal["MMAUDIT_UTF8_BYTES_PLUS_FRAMING_V1"] = (
+    "MMAUDIT_UTF8_BYTES_PLUS_FRAMING_V1"
+)
 
 TokenLimitSource = Literal["metadata", "context_limit"]
 
 
 class TokenPlanningError(ValueError):
     """Raised when endpoint evidence cannot support a requested token plan."""
+
+
+class EndpointTokenCapacityError(TokenPlanningError):
+    """Raised when a request cannot fit its frozen endpoint token capacities."""
+
+
+class ContextTokenPlanError(TokenPlanningError):
+    """Raised when provider-visible context or configured reserves are inconsistent."""
+
+
+class GlobalTokenBudgetPlanningError(TokenPlanningError):
+    """Raised when one request cannot fit the configured aggregate token ceiling."""
 
 
 class PromptAllocationCategory(StrEnum):
@@ -367,23 +382,23 @@ class SourceTokenBudgetEvidence(FrozenTokenEvidence):
         planned_source_tokens: int,
     ) -> Self:
         if reserved_non_source_prompt_tokens < non_source_prompt_tokens:
-            raise TokenPlanningError(
+            raise ContextTokenPlanError(
                 "reserved non-source capacity is below actual non-source allocations"
             )
         available_source = usable_prompt_tokens - reserved_non_source_prompt_tokens
         if available_source < 0:
-            raise TokenPlanningError("non-source reserves exceed usable prompt capacity")
+            raise ContextTokenPlanError("non-source reserves exceed usable prompt capacity")
         if (
             isinstance(configured_maximum_source_tokens_per_request, bool)
             or configured_maximum_source_tokens_per_request <= 0
         ):
-            raise TokenPlanningError("configured maximum source tokens must be positive")
+            raise ContextTokenPlanError("configured maximum source tokens must be positive")
         maximum_source = min(
             available_source,
             configured_maximum_source_tokens_per_request,
         )
         if planned_source_tokens > maximum_source:
-            raise TokenPlanningError("source allocation exceeds its per-request maximum")
+            raise ContextTokenPlanError("source allocation exceeds its per-request maximum")
         remaining_source = maximum_source - planned_source_tokens
         unallocated_prompt = available_source - maximum_source
         payload: dict[str, Any] = {
@@ -469,9 +484,9 @@ class GlobalTokenBudgetEvidence(FrozenTokenEvidence):
         input_after = input_tokens_reserved_before + request_input_tokens
         output_after = output_tokens_reserved_before + request_output_tokens
         if input_after > global_input_token_budget:
-            raise TokenPlanningError("request exceeds the global input token budget")
+            raise GlobalTokenBudgetPlanningError("request exceeds the global input token budget")
         if output_after > global_output_token_budget:
-            raise TokenPlanningError("request exceeds the global output token budget")
+            raise GlobalTokenBudgetPlanningError("request exceeds the global output token budget")
         input_remaining = global_input_token_budget - input_after
         output_remaining = global_output_token_budget - output_after
         payload: dict[str, Any] = {
@@ -550,6 +565,11 @@ class RequestTokenPlan(FrozenTokenEvidence):
     hard_prompt_tokens: int = Field(gt=0, le=_MAX_TOKENS)
     usable_prompt_tokens: int = Field(gt=0, le=_MAX_TOKENS)
     estimated_prompt_tokens: int = Field(ge=0, le=_MAX_TOKENS)
+    prompt_upper_bound_method: Literal["MMAUDIT_UTF8_BYTES_PLUS_FRAMING_V1"] = (
+        PROMPT_UPPER_BOUND_METHOD
+    )
+    prompt_content_byte_upper_bound_tokens: int = Field(ge=0, le=_MAX_TOKENS)
+    prompt_framing_reserve_tokens: int = Field(ge=0, le=_MAX_TOKENS)
     prompt_byte_upper_bound_tokens: int = Field(ge=0, le=_MAX_TOKENS)
     reserved_system_tokens: int = Field(ge=0, le=_MAX_TOKENS)
     reserved_schema_tokens: int = Field(ge=0, le=_MAX_TOKENS)
@@ -584,35 +604,50 @@ class RequestTokenPlan(FrozenTokenEvidence):
         expected_prompt = sum(
             allocation.estimate.estimated_tokens for allocation in self.allocations
         )
-        expected_byte_upper = sum(
+        expected_content_byte_upper = sum(
             allocation.estimate.byte_upper_bound_tokens for allocation in self.allocations
         )
         if self.estimated_prompt_tokens != expected_prompt:
             raise ValueError("prompt allocation estimate does not conserve tokens")
-        if self.prompt_byte_upper_bound_tokens != expected_byte_upper:
-            raise ValueError("prompt byte upper bound does not conserve allocations")
-        if self.estimated_prompt_tokens > self.usable_prompt_tokens:
-            raise ValueError("planned prompt exceeds the conservative usable capacity")
-        if self.estimated_prompt_tokens > limits.max_prompt_tokens:
-            raise ValueError("planned prompt exceeds the endpoint prompt limit")
-        if self.estimated_prompt_tokens + self.requested_completion_tokens > limits.context_tokens:
-            raise ValueError("planned prompt and completion exceed endpoint context")
+        if self.prompt_content_byte_upper_bound_tokens != expected_content_byte_upper:
+            raise ValueError("prompt content byte upper bound does not conserve allocations")
+        if (
+            self.prompt_content_byte_upper_bound_tokens + self.prompt_framing_reserve_tokens
+            != self.prompt_byte_upper_bound_tokens
+        ):
+            raise ValueError("prompt upper bound does not conserve content and framing")
+        if self.prompt_byte_upper_bound_tokens > self.usable_prompt_tokens:
+            raise ValueError("conservative prompt bound exceeds the usable endpoint capacity")
+        if self.prompt_byte_upper_bound_tokens > limits.max_prompt_tokens:
+            raise ValueError("conservative prompt bound exceeds the endpoint prompt limit")
+        if (
+            self.prompt_byte_upper_bound_tokens + self.requested_completion_tokens
+            > limits.context_tokens
+        ):
+            raise ValueError("conservative prompt and completion bounds exceed endpoint context")
         allocation_map = {allocation.category: allocation for allocation in self.allocations}
-        system_tokens = allocation_map[PromptAllocationCategory.SYSTEM].estimate.estimated_tokens
-        schema_tokens = allocation_map[PromptAllocationCategory.SCHEMA].estimate.estimated_tokens
+        system_tokens = allocation_map[
+            PromptAllocationCategory.SYSTEM
+        ].estimate.byte_upper_bound_tokens
+        schema_tokens = allocation_map[
+            PromptAllocationCategory.SCHEMA
+        ].estimate.byte_upper_bound_tokens
         protocol_tokens = allocation_map[
             PromptAllocationCategory.PROTOCOL
-        ].estimate.estimated_tokens
+        ].estimate.byte_upper_bound_tokens
         if self.reserved_system_tokens < system_tokens:
             raise ValueError("system token reserve is below its allocation")
         if self.reserved_schema_tokens < schema_tokens:
             raise ValueError("schema token reserve is below its allocation")
         if self.reserved_protocol_tokens < protocol_tokens:
             raise ValueError("protocol token reserve is below its allocation")
-        non_source_tokens = sum(
-            allocation.estimate.estimated_tokens
-            for allocation in self.allocations
-            if allocation.category is not PromptAllocationCategory.SOURCE
+        non_source_tokens = (
+            sum(
+                allocation.estimate.byte_upper_bound_tokens
+                for allocation in self.allocations
+                if allocation.category is not PromptAllocationCategory.SOURCE
+            )
+            + self.prompt_framing_reserve_tokens
         )
         reserved_non_source_tokens = (
             non_source_tokens
@@ -623,7 +658,9 @@ class RequestTokenPlan(FrozenTokenEvidence):
             + self.reserved_schema_tokens
             + self.reserved_protocol_tokens
         )
-        source_tokens = allocation_map[PromptAllocationCategory.SOURCE].estimate.estimated_tokens
+        source_tokens = allocation_map[
+            PromptAllocationCategory.SOURCE
+        ].estimate.byte_upper_bound_tokens
         if (
             self.source_budget.usable_prompt_tokens != self.usable_prompt_tokens
             or self.source_budget.non_source_prompt_tokens != non_source_tokens
@@ -664,56 +701,75 @@ def build_request_token_plan(
     configured_reserved_protocol_tokens: int = 0,
     maximum_source_tokens_per_request: int = 200_000,
     context_omission_sha256s: Sequence[str] = (),
+    prompt_envelope_byte_upper_bound_tokens: int,
 ) -> RequestTokenPlan:
     """Build one fail-closed request plan without peer-role allocation coupling."""
 
     if not isinstance(route_intersection, EndpointRouteIntersection):
         raise TypeError("request token plan requires a route intersection")
     if not isinstance(context_utilization, Decimal):
-        raise TypeError("context utilization must be an exact Decimal")
+        raise ContextTokenPlanError("context utilization must be an exact Decimal")
     if not MINIMUM_CONTEXT_UTILIZATION <= context_utilization <= MAXIMUM_CONTEXT_UTILIZATION:
-        raise TokenPlanningError("context utilization must be between 0.65 and 0.75")
+        raise ContextTokenPlanError("context utilization must be between 0.65 and 0.75")
     if isinstance(required_output_tokens, bool) or required_output_tokens <= 0:
-        raise TokenPlanningError("required output token reserve must be positive")
+        raise ContextTokenPlanError("required output token reserve must be positive")
     if isinstance(reserved_reasoning_tokens, bool) or reserved_reasoning_tokens < 0:
-        raise TokenPlanningError("reasoning token reserve cannot be negative")
+        raise ContextTokenPlanError("reasoning token reserve cannot be negative")
     if required_output_tokens > route_intersection.max_completion_tokens:
-        raise TokenPlanningError("required output exceeds the endpoint completion limit")
+        raise EndpointTokenCapacityError("required output exceeds the endpoint completion limit")
     requested_completion_tokens = required_output_tokens + reserved_reasoning_tokens
     if requested_completion_tokens > route_intersection.max_completion_tokens:
-        raise TokenPlanningError(
+        raise EndpointTokenCapacityError(
             "required output and reasoning exceed the endpoint completion limit"
         )
     if requested_completion_tokens >= route_intersection.context_tokens:
-        raise TokenPlanningError("completion reserves leave no endpoint prompt capacity")
+        raise EndpointTokenCapacityError("completion reserves leave no endpoint prompt capacity")
 
     canonical_allocations = _canonical_allocations(allocations)
     estimated_prompt_tokens = sum(
         allocation.estimate.estimated_tokens for allocation in canonical_allocations
     )
-    byte_upper_bound = sum(
+    content_byte_upper_bound = sum(
         allocation.estimate.byte_upper_bound_tokens for allocation in canonical_allocations
     )
+    if (
+        isinstance(prompt_envelope_byte_upper_bound_tokens, bool)
+        or not isinstance(prompt_envelope_byte_upper_bound_tokens, int)
+        or prompt_envelope_byte_upper_bound_tokens < content_byte_upper_bound
+    ):
+        raise ContextTokenPlanError(
+            "prompt envelope bound must cover every provider-visible content byte"
+        )
+    byte_upper_bound = prompt_envelope_byte_upper_bound_tokens
+    framing_reserve_tokens = byte_upper_bound - content_byte_upper_bound
     hard_prompt_tokens = min(
         route_intersection.max_prompt_tokens,
         route_intersection.context_tokens - requested_completion_tokens,
     )
     usable_prompt_tokens = _utilized_tokens(hard_prompt_tokens, context_utilization)
     if usable_prompt_tokens <= 0:
-        raise TokenPlanningError("endpoint utilization leaves no usable prompt capacity")
-    if estimated_prompt_tokens > usable_prompt_tokens:
-        raise TokenPlanningError("planned prompt exceeds the conservative usable capacity")
-    if estimated_prompt_tokens > route_intersection.max_prompt_tokens:
-        raise TokenPlanningError("planned prompt exceeds the endpoint prompt limit")
-    if estimated_prompt_tokens + requested_completion_tokens > route_intersection.context_tokens:
-        raise TokenPlanningError("planned prompt and completion exceed endpoint context")
+        raise EndpointTokenCapacityError("endpoint utilization leaves no usable prompt capacity")
+    if byte_upper_bound > usable_prompt_tokens:
+        raise EndpointTokenCapacityError(
+            "conservative prompt bound exceeds the usable endpoint capacity"
+        )
+    if byte_upper_bound > route_intersection.max_prompt_tokens:
+        raise EndpointTokenCapacityError(
+            "conservative prompt bound exceeds the endpoint prompt limit"
+        )
+    if byte_upper_bound + requested_completion_tokens > route_intersection.context_tokens:
+        raise EndpointTokenCapacityError(
+            "conservative prompt and completion bounds exceed endpoint context"
+        )
 
     allocation_map = {allocation.category: allocation for allocation in canonical_allocations}
-    source_tokens = allocation_map[PromptAllocationCategory.SOURCE].estimate.estimated_tokens
-    non_source_tokens = estimated_prompt_tokens - source_tokens
-    system_tokens = allocation_map[PromptAllocationCategory.SYSTEM].estimate.estimated_tokens
-    schema_tokens = allocation_map[PromptAllocationCategory.SCHEMA].estimate.estimated_tokens
-    protocol_tokens = allocation_map[PromptAllocationCategory.PROTOCOL].estimate.estimated_tokens
+    source_tokens = allocation_map[PromptAllocationCategory.SOURCE].estimate.byte_upper_bound_tokens
+    non_source_tokens = content_byte_upper_bound - source_tokens + framing_reserve_tokens
+    system_tokens = allocation_map[PromptAllocationCategory.SYSTEM].estimate.byte_upper_bound_tokens
+    schema_tokens = allocation_map[PromptAllocationCategory.SCHEMA].estimate.byte_upper_bound_tokens
+    protocol_tokens = allocation_map[
+        PromptAllocationCategory.PROTOCOL
+    ].estimate.byte_upper_bound_tokens
     system_reserve = _effective_reserve(
         configured_reserved_system_tokens,
         system_tokens,
@@ -768,6 +824,9 @@ def build_request_token_plan(
         "hard_prompt_tokens": hard_prompt_tokens,
         "usable_prompt_tokens": usable_prompt_tokens,
         "estimated_prompt_tokens": estimated_prompt_tokens,
+        "prompt_upper_bound_method": PROMPT_UPPER_BOUND_METHOD,
+        "prompt_content_byte_upper_bound_tokens": content_byte_upper_bound,
+        "prompt_framing_reserve_tokens": framing_reserve_tokens,
         "prompt_byte_upper_bound_tokens": byte_upper_bound,
         "reserved_system_tokens": system_reserve,
         "reserved_schema_tokens": schema_reserve,
@@ -790,6 +849,9 @@ def build_request_token_plan(
         hard_prompt_tokens=hard_prompt_tokens,
         usable_prompt_tokens=usable_prompt_tokens,
         estimated_prompt_tokens=estimated_prompt_tokens,
+        prompt_upper_bound_method=PROMPT_UPPER_BOUND_METHOD,
+        prompt_content_byte_upper_bound_tokens=content_byte_upper_bound,
+        prompt_framing_reserve_tokens=framing_reserve_tokens,
         prompt_byte_upper_bound_tokens=byte_upper_bound,
         reserved_system_tokens=system_reserve,
         reserved_schema_tokens=schema_reserve,
@@ -805,11 +867,11 @@ def _canonical_allocations(
     allocations: Sequence[PromptTokenAllocation],
 ) -> tuple[PromptTokenAllocation, ...]:
     if any(not isinstance(allocation, PromptTokenAllocation) for allocation in allocations):
-        raise TypeError("prompt allocation inventory contains invalid evidence")
+        raise ContextTokenPlanError("prompt allocation inventory contains invalid evidence")
     ordered = tuple(sorted(allocations, key=lambda allocation: allocation.category.value))
     categories = tuple(allocation.category for allocation in ordered)
     if categories != PROMPT_ALLOCATION_CATEGORIES:
-        raise TokenPlanningError(
+        raise ContextTokenPlanError(
             "prompt allocation categories must be complete, unique, and sorted"
         )
     return ordered
@@ -821,16 +883,16 @@ def _utilized_tokens(capacity: int, utilization: Decimal) -> int:
 
 def _effective_reserve(configured: int, actual: int, *, field: str) -> int:
     if isinstance(configured, bool) or not isinstance(configured, int) or configured < 0:
-        raise TokenPlanningError(f"configured {field} token reserve is invalid")
+        raise ContextTokenPlanError(f"configured {field} token reserve is invalid")
     return max(configured, actual)
 
 
 def _canonical_omission_hashes(values: Sequence[str]) -> tuple[str, ...]:
     if any(not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None for value in values):
-        raise TokenPlanningError("context omission hashes must be SHA-256 values")
+        raise ContextTokenPlanError("context omission hashes must be SHA-256 values")
     canonical = tuple(sorted(values))
     if len(canonical) != len(set(canonical)):
-        raise TokenPlanningError("context omission hashes must be unique")
+        raise ContextTokenPlanError("context omission hashes must be unique")
     return canonical
 
 
@@ -880,10 +942,14 @@ __all__ = [
     "MAXIMUM_CONTEXT_UTILIZATION",
     "MINIMUM_CONTEXT_UTILIZATION",
     "PROMPT_ALLOCATION_CATEGORIES",
+    "PROMPT_UPPER_BOUND_METHOD",
     "UTF8_TOKEN_ESTIMATOR",
+    "ContextTokenPlanError",
     "EndpointRouteIntersection",
     "EndpointRouteTokenCapacity",
+    "EndpointTokenCapacityError",
     "GlobalTokenBudgetEvidence",
+    "GlobalTokenBudgetPlanningError",
     "PromptAllocationCategory",
     "PromptTokenAllocation",
     "RequestTokenPlan",

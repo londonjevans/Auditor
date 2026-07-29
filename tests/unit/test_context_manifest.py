@@ -122,6 +122,9 @@ def _plan(
         context_omission_sha256s=(
             hashlib.sha256(b"source excerpt omitted by role budget").hexdigest(),
         ),
+        prompt_envelope_byte_upper_bound_tokens=sum(
+            allocation.estimate.byte_upper_bound_tokens for allocation in allocations
+        ),
     )
 
 
@@ -156,9 +159,9 @@ def _usage(
         provider="Synthetic",
         model_family="frontier-secure",
         timestamp=started,
-        prompt_tokens=500,
+        prompt_tokens=100,
         completion_tokens=100,
-        total_tokens=600,
+        total_tokens=200,
         reported_cost_usd=0.001,
         accounted_cost_usd=0.001,
         routing={
@@ -243,7 +246,7 @@ def test_context_manifest_is_deterministic_hash_only_and_conserved() -> None:
     assert first.totals.request_count == 2
     assert first.totals.completed_request_count == 2
     assert first.totals.mock_reported_request_count == 2
-    assert first.totals.mock_reported_prompt_tokens == 1_000
+    assert first.totals.mock_reported_prompt_tokens == 200
     assert first.totals.mock_reported_completion_tokens == 200
     assert first.totals.requested_completion_tokens == (
         first.totals.reserved_output_tokens + first.totals.reserved_reasoning_tokens
@@ -309,7 +312,7 @@ def test_truncated_provider_prompt_usage_is_preserved_without_fabricated_complet
         update={
             "execution_evidence": ExecutionEvidenceKind.REAL,
             "completion_tokens": 0,
-            "total_tokens": 500,
+            "total_tokens": 100,
             "status": "rejected",
             "validation_status": ModelRequestValidationStatus.TRUNCATED,
         }
@@ -321,10 +324,35 @@ def test_truncated_provider_prompt_usage_is_preserved_without_fabricated_complet
     assert isinstance(request, ContextRequestEvidence)
     assert request.request_state is ContextRequestState.TRUNCATED
     assert request.actual_usage.source is ActualTokenUsageSource.PROVIDER_RESPONSE
-    assert request.actual_usage.prompt_tokens == 500
+    assert request.actual_usage.prompt_tokens == 100
     assert request.actual_usage.completion_tokens == 0
-    assert manifest.totals.provider_reported_prompt_tokens == 500
+    assert manifest.totals.provider_reported_prompt_tokens == 100
     assert manifest.totals.provider_reported_completion_tokens == 0
+
+
+@pytest.mark.parametrize(
+    ("prompt_tokens", "completion_tokens", "total_tokens"),
+    [
+        pytest.param(500, 100, 600, id="existing-prompt-plan-overrun"),
+        pytest.param(100, 5_121, 5_221, id="completion-plan-overrun"),
+        pytest.param(90_000, 10_001, 100_001, id="total-endpoint-overrun"),
+    ],
+)
+def test_completed_context_manifest_rejects_actual_usage_over_plan_or_endpoint(
+    prompt_tokens: int,
+    completion_tokens: int,
+    total_tokens: int,
+) -> None:
+    usage = _usage().model_copy(
+        update={
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
+    )
+
+    with pytest.raises(ValueError, match="actual token usage exceeds"):
+        build_context_manifest(run_id="run-1", usage_records=[usage])
 
 
 def test_context_manifest_rejects_missing_or_tampered_plan() -> None:
@@ -456,6 +484,7 @@ def test_context_manifest_retains_not_sent_valid_plan() -> None:
             )
             for reason in (
                 ContextPreflightReason.ENDPOINT_CAPACITY,
+                ContextPreflightReason.GLOBAL_TOKEN_BUDGET,
                 ContextPreflightReason.ROUTE_UNAVAILABLE,
                 ContextPreflightReason.CONTEXT_PLAN_INVALID,
                 ContextPreflightReason.COST_BUDGET,
@@ -511,6 +540,7 @@ _VALID_PREFLIGHT_MATRIX = {
         )
         for reason in (
             ContextPreflightReason.ENDPOINT_CAPACITY,
+            ContextPreflightReason.GLOBAL_TOKEN_BUDGET,
             ContextPreflightReason.ROUTE_UNAVAILABLE,
             ContextPreflightReason.CONTEXT_PLAN_INVALID,
             ContextPreflightReason.COST_BUDGET,

@@ -77,11 +77,12 @@ def _plan(
     maximum_source_tokens_per_request: int = 200_000,
     context_omission_sha256s: tuple[str, ...] = (),
 ) -> RequestTokenPlan:
+    resolved_allocations = allocations or _allocations(source_tokens=63_000)
     return build_request_token_plan(
         request_id=request_id,
         role=role,
         route_intersection=route_intersection or EndpointRouteIntersection.build((_route(),)),
-        allocations=allocations or _allocations(source_tokens=190_000),
+        allocations=resolved_allocations,
         required_output_tokens=required_output_tokens,
         reserved_reasoning_tokens=reserved_reasoning_tokens,
         global_input_token_budget=global_input_token_budget,
@@ -92,6 +93,9 @@ def _plan(
         configured_reserved_protocol_tokens=configured_reserved_protocol_tokens,
         maximum_source_tokens_per_request=maximum_source_tokens_per_request,
         context_omission_sha256s=context_omission_sha256s,
+        prompt_envelope_byte_upper_bound_tokens=sum(
+            allocation.estimate.byte_upper_bound_tokens for allocation in resolved_allocations
+        ),
     )
 
 
@@ -115,7 +119,7 @@ def test_utf8_estimator_records_estimate_upper_bound_and_no_raw_text() -> None:
     )
 
 
-def test_high_capacity_route_permits_near_200k_input_and_32k_output() -> None:
+def test_high_capacity_route_preserves_32k_output_with_conservative_input_bound() -> None:
     plan = _plan()
 
     assert plan.required_output_tokens == plan.reserved_output_tokens == 32_768
@@ -123,12 +127,20 @@ def test_high_capacity_route_permits_near_200k_input_and_32k_output() -> None:
     assert plan.requested_completion_tokens == 40_960
     assert plan.hard_prompt_tokens == 259_040
     assert plan.usable_prompt_tokens == 194_280
-    assert plan.source_budget.maximum_source_tokens_per_request == 193_280
-    assert plan.source_budget.planned_source_tokens == 190_000
-    assert plan.estimated_prompt_tokens == 191_000
-    assert plan.prompt_byte_upper_bound_tokens == 573_000
-    assert plan.global_budget.request_input_tokens == 573_000
-    assert plan.estimated_prompt_tokens + plan.requested_completion_tokens <= 300_000
+    assert plan.source_budget.maximum_source_tokens_per_request == 191_280
+    assert plan.source_budget.planned_source_tokens == 189_000
+    assert plan.estimated_prompt_tokens == 64_000
+    assert plan.prompt_byte_upper_bound_tokens == 192_000
+    assert plan.global_budget.request_input_tokens == 192_000
+    assert plan.prompt_byte_upper_bound_tokens <= plan.usable_prompt_tokens
+    assert plan.prompt_byte_upper_bound_tokens + plan.requested_completion_tokens <= 300_000
+
+
+def test_prompt_byte_upper_bound_cannot_exceed_conservative_endpoint_capacity() -> None:
+    allocations = _allocations(source_tokens=190_000)
+
+    with pytest.raises(TokenPlanningError, match=r"conservative.*capacity"):
+        _plan(allocations=allocations)
 
 
 def test_mixed_routes_use_lowest_capacity_without_peer_role_division() -> None:
@@ -142,7 +154,7 @@ def test_mixed_routes_use_lowest_capacity_without_peer_role_division() -> None:
         completion_tokens=8_192,
     )
     intersection = EndpointRouteIntersection.build((high, low))
-    allocations = _allocations(source_tokens=16_000)
+    allocations = _allocations(source_tokens=4_700)
 
     plan = _plan(
         route_intersection=intersection,
@@ -156,7 +168,7 @@ def test_mixed_routes_use_lowest_capacity_without_peer_role_division() -> None:
     assert intersection.max_prompt_tokens == 24_576
     assert intersection.max_completion_tokens == 8_192
     assert plan.usable_prompt_tokens == 17_203
-    assert plan.source_budget.maximum_source_tokens_per_request == 16_203
+    assert plan.source_budget.maximum_source_tokens_per_request == 14_203
 
 
 def test_required_output_fails_instead_of_clamping_to_mixed_route() -> None:
@@ -193,7 +205,10 @@ def test_reasoning_and_output_combination_fails_closed() -> None:
 def test_prompt_plus_completion_cannot_exceed_endpoint_context() -> None:
     route = _route(context_tokens=100_000, prompt_tokens=100_000, completion_tokens=20_000)
 
-    with pytest.raises(TokenPlanningError, match="conservative usable capacity"):
+    with pytest.raises(
+        TokenPlanningError,
+        match="conservative prompt bound exceeds the usable endpoint capacity",
+    ):
         _plan(
             route_intersection=EndpointRouteIntersection.build((route,)),
             allocations=_allocations(source_tokens=89_000),
@@ -209,8 +224,17 @@ def test_context_utilization_outside_65_to_75_percent_fails() -> None:
 
 
 def test_configured_non_source_reserves_and_source_cap_are_enforced() -> None:
+    def byte_allocations(source_bytes: int) -> tuple[PromptTokenAllocation, ...]:
+        return tuple(
+            PromptTokenAllocation.from_text(
+                category,
+                "x" * (source_bytes if category is PromptAllocationCategory.SOURCE else 300),
+            )
+            for category in PROMPT_ALLOCATION_CATEGORIES
+        )
+
     plan = _plan(
-        allocations=_allocations(source_tokens=40_000),
+        allocations=byte_allocations(40_000),
         configured_reserved_system_tokens=8_192,
         configured_reserved_schema_tokens=8_192,
         configured_reserved_protocol_tokens=2_048,
@@ -220,16 +244,16 @@ def test_configured_non_source_reserves_and_source_cap_are_enforced() -> None:
     assert plan.reserved_system_tokens == 8_192
     assert plan.reserved_schema_tokens == 8_192
     assert plan.reserved_protocol_tokens == 2_048
-    assert plan.source_budget.non_source_prompt_tokens == 1_000
-    assert plan.source_budget.reserved_non_source_prompt_tokens == 19_132
+    assert plan.source_budget.non_source_prompt_tokens == 3_000
+    assert plan.source_budget.reserved_non_source_prompt_tokens == 20_532
     assert plan.source_budget.configured_maximum_source_tokens_per_request == 50_000
     assert plan.source_budget.maximum_source_tokens_per_request == 50_000
     assert plan.source_budget.remaining_source_tokens == 10_000
-    assert plan.source_budget.unallocated_prompt_tokens == 125_148
+    assert plan.source_budget.unallocated_prompt_tokens == 123_748
 
     with pytest.raises(TokenPlanningError, match="per-request maximum"):
         _plan(
-            allocations=_allocations(source_tokens=50_001),
+            allocations=byte_allocations(50_001),
             configured_reserved_system_tokens=8_192,
             configured_reserved_schema_tokens=8_192,
             configured_reserved_protocol_tokens=2_048,

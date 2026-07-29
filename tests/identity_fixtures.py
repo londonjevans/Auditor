@@ -149,6 +149,7 @@ def synthetic_token_plan_routing(
     )
     prompt_ceiling = sum(item.estimate.byte_upper_bound_tokens for item in allocations)
     completion_ceiling = max(1, record.completion_tokens)
+    hard_prompt_capacity = (prompt_ceiling * 4 + 2) // 3
     route = EndpointRouteTokenCapacity.build(
         exact_model_id=record.requested_model,
         provider_endpoint=endpoint,
@@ -156,8 +157,8 @@ def synthetic_token_plan_routing(
             completed.get("endpoint_snapshot_sha256"),
             "synthetic endpoint snapshot",
         ),
-        context_tokens=prompt_ceiling + completion_ceiling,
-        max_prompt_tokens=prompt_ceiling,
+        context_tokens=hard_prompt_capacity + completion_ceiling,
+        max_prompt_tokens=hard_prompt_capacity,
         max_prompt_tokens_source="metadata",
         max_completion_tokens=completion_ceiling,
         max_completion_tokens_source="metadata",
@@ -172,6 +173,7 @@ def synthetic_token_plan_routing(
         global_input_token_budget=max(prompt_ceiling, 1_000_000),
         global_output_token_budget=max(completion_ceiling, 100_000),
         context_utilization=Decimal("0.75"),
+        prompt_envelope_byte_upper_bound_tokens=prompt_ceiling,
     )
     atomic = AtomicTokenReservationEvidence.build(
         request_id=record.request_id,

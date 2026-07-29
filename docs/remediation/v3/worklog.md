@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Endpoint-aware token budgets and context manifests
 CURRENT_TICKET: V3-TOKENS-001
 LAST_COMPLETED_TICKET: V3-OUTPUT-001
-NEXT_ACTION: Resume V3-TOKENS-001 with the full fake-provider pipeline suite, broad token/manifest matrix, independent cross-artifact integrity review, and complete required suite; fix any failures before updating queue, traceability, and runtime status.
-LAST_COMMAND: git diff --check
-LAST_RESULT: PASS; checkpoint validation also passed 300 unit tests, 16 integration/schema/manifest tests, affected Ruff, focused strict mypy, and generated-schema synchronization.
+NEXT_ACTION: Resume V3-TOKENS-001 with the complete fake-provider pipeline suite, broad token/manifest matrix, independent closure review, and full repository gates; fix failures before updating queue, traceability, and runtime status.
+LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_token_planning.py tests/unit/test_context.py tests/unit/test_context_manifest.py tests/unit/test_usage.py tests/unit/test_openrouter.py
+LAST_RESULT: PASS; 327 tests passed in 1.47s. Affected Ruff, generated-schema synchronization, and git diff checks also passed.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 5a675a1a75925febfc2031c17fd61ae6bbcb64ae
+LAST_CHECKPOINT_COMMIT: ffb0c2ca46fd19630f58032cd5d96a60bb3e6861
 
 ## 2026-07-29 — V3-OUTPUT-001
 
@@ -328,6 +328,42 @@ LAST_CHECKPOINT_COMMIT: 5a675a1a75925febfc2031c17fd61ae6bbcb64ae
   updates have not yet run. Implementation checkpoint
   `5a675a1a75925febfc2031c17fd61ae6bbcb64ae` preserves the resumable source,
   schema, and test state without claiming ticket completion.
+- **Fourth resume checkpoint:** Automatic goal continuation resumed from clean,
+  synchronized pause commit
+  `ffb0c2ca46fd19630f58032cd5d96a60bb3e6861`. The complete authoritative
+  objective, repository rules, legacy queue/worklog state, active v3 queue
+  including the operator-appended revised sequence, current v3 worklog, Git
+  status, and upstream state were rechecked. The objective SHA-256 remains
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
+  Work resumes with the remaining local V3-TOKENS validation and independent
+  review only; no provider, network, paid call, cost reservation, or
+  operator-secret access is authorized for this slice.
+- **Independent review findings:** Three completed read-only reviews identified
+  fail-open accounting gaps in endpoint prompt-capacity estimation, actual
+  usage reconciliation, preflight failure classification, conservative source
+  allocation without an exact tokenizer, and the model-visible chat envelope.
+  Existing retry/reservation inventory and cross-artifact pipeline joins
+  otherwise remained coherent under focused deterministic probes.
+- **Local remediation checkpoint:** Endpoint capacity and atomic reservations
+  now use a frozen conservative upper bound over the complete model-visible
+  UTF-8 request envelope plus an explicit framing reserve. Context source
+  allocation uses a one-byte-per-token conservative bound without an exact
+  tokenizer. Typed planning failures retain global-budget, context-plan, route,
+  and endpoint-capacity distinctions. Completed usage evidence is rejected when
+  actual prompt, completion, or total usage exceeds its frozen plan or endpoint
+  limits. Negative regressions cover each unsafe condition.
+- **Pause validation:** `.venv/bin/python
+  scripts/generate_release_schemas.py --write` regenerated the context-manifest
+  schema. The focused token/context/manifest/usage/OpenRouter suite passed `327`
+  tests in `1.47s`; affected Ruff checks, schema synchronization, and
+  `git diff --check` passed. No provider call, network access, operator-secret
+  access, cost reservation, or spend occurred.
+- **Operator pause:** Autorun is paused at a filesystem-stable
+  `V3-TOKENS-001` checkpoint. All delegated workers and validation processes are
+  complete. The ticket remains `IN_PROGRESS`; complete fake-provider pipeline
+  validation, the broader matrix, independent closure review, full repository
+  gates, and final queue/traceability/runtime evidence remain intentionally
+  pending.
 
 ## 2026-07-28 — V3-SMOKE-001
 

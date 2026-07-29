@@ -1184,6 +1184,24 @@
           "title": "Prompt Byte Upper Bound Tokens",
           "type": "integer"
         },
+        "prompt_content_byte_upper_bound_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Prompt Content Byte Upper Bound Tokens",
+          "type": "integer"
+        },
+        "prompt_framing_reserve_tokens": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "title": "Prompt Framing Reserve Tokens",
+          "type": "integer"
+        },
+        "prompt_upper_bound_method": {
+          "const": "MMAUDIT_UTF8_BYTES_PLUS_FRAMING_V1",
+          "default": "MMAUDIT_UTF8_BYTES_PLUS_FRAMING_V1",
+          "title": "Prompt Upper Bound Method",
+          "type": "string"
+        },
         "request_id": {
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$",
           "title": "Request Id",
@@ -1268,6 +1286,8 @@
         "hard_prompt_tokens",
         "usable_prompt_tokens",
         "estimated_prompt_tokens",
+        "prompt_content_byte_upper_bound_tokens",
+        "prompt_framing_reserve_tokens",
         "prompt_byte_upper_bound_tokens",
         "reserved_system_tokens",
         "reserved_schema_tokens",

@@ -102,8 +102,11 @@ from mmaudit.models.structured_output import (
 )
 from mmaudit.models.token_planning import (
     PROMPT_ALLOCATION_CATEGORIES,
+    ContextTokenPlanError,
     EndpointRouteIntersection,
     EndpointRouteTokenCapacity,
+    EndpointTokenCapacityError,
+    GlobalTokenBudgetPlanningError,
     PromptAllocationCategory,
     PromptTokenAllocation,
     RequestTokenPlan,
@@ -206,6 +209,7 @@ _BASE_ENDPOINT_REQUEST_PARAMETERS = frozenset({"max_tokens", "temperature"})
 _ROUTE_SENSITIVE_REQUEST_PARAMETERS = frozenset({"reasoning", "response_format"})
 _LOCAL_MOCK_PROVIDER_ENDPOINT = "mmaudit-local-mock"
 _MAX_TOKEN_EVIDENCE = 2**31 - 1
+_CHAT_TEMPLATE_FRAMING_RESERVE_TOKENS = 256
 
 
 @dataclass(frozen=True)
@@ -731,6 +735,22 @@ class OpenRouterRequestLimitError(OpenRouterError):
     pass
 
 
+class _OpenRouterRoutePlanningError(OpenRouterRequestLimitError):
+    """Frozen route evidence cannot support token planning."""
+
+
+class _OpenRouterEndpointCapacityError(OpenRouterRequestLimitError):
+    """The conservative request bound cannot fit the frozen endpoint."""
+
+
+class _OpenRouterContextPlanError(OpenRouterRequestLimitError):
+    """Provider-visible prompt composition or local reserves are inconsistent."""
+
+
+class _OpenRouterGlobalTokenBudgetError(OpenRouterRequestLimitError):
+    """The request cannot fit the configured aggregate token ceiling."""
+
+
 class OpenRouterCostControlError(OpenRouterError):
     pass
 
@@ -1085,6 +1105,34 @@ def _prompt_token_allocations(
             )
         )
     return tuple(allocations)
+
+
+def _prompt_envelope_byte_upper_bound_tokens(
+    plan: _StructuredOutputRequestPlan,
+) -> int:
+    """Bound model-visible chat input without relying on a provider tokenizer.
+
+    Compact JSON deliberately overcounts ordinary message framing and escaped
+    content. The fixed reserve covers provider chat-template control tokens that
+    are not represented in the serialized model-visible envelope.
+    """
+
+    envelope: dict[str, Any] = {
+        "messages": [
+            {"role": "system", "content": plan.system_prompt},
+            {"role": "user", "content": plan.user_prompt},
+        ]
+    }
+    if plan.response_format is not None:
+        envelope["response_format"] = plan.response_format
+    if plan.reasoning_payload is not None:
+        envelope["reasoning"] = plan.reasoning_payload
+    bound = len(_compact_json(envelope).encode("utf-8")) + _CHAT_TEMPLATE_FRAMING_RESERVE_TOKENS
+    if not 0 < bound <= _MAX_TOKEN_EVIDENCE:
+        raise OpenRouterRequestLimitError(
+            "provider-visible prompt envelope exceeds the supported token evidence range"
+        )
+    return bound
 
 
 def _context_omission_sha256s(
@@ -2756,6 +2804,11 @@ class OpenRouterClient:
                 provider_policy=provider_policy,
                 requested_completion_tokens=requested_completion_tokens,
             )
+        except (OpenRouterRequestLimitError, TokenPlanningError, TypeError, ValueError):
+            raise _OpenRouterRoutePlanningError(
+                "provider request lacks a usable frozen endpoint route"
+            ) from None
+        try:
             allocations = _prompt_token_allocations(
                 plan=structured_output_plan,
                 original_system_prompt=original_system_prompt,
@@ -2763,6 +2816,11 @@ class OpenRouterClient:
                 schema_name=schema_name,
                 context_package=context_package,
             )
+        except (OpenRouterRequestLimitError, TokenPlanningError, TypeError, ValueError):
+            raise _OpenRouterContextPlanError(
+                "provider-visible prompt differs from its bounded context plan"
+            ) from None
+        try:
             return build_request_token_plan(
                 request_id=request_id,
                 role=role,
@@ -2806,10 +2864,21 @@ class OpenRouterClient:
                     else 200_000
                 ),
                 context_omission_sha256s=_context_omission_sha256s(context_package),
+                prompt_envelope_byte_upper_bound_tokens=(
+                    _prompt_envelope_byte_upper_bound_tokens(structured_output_plan)
+                ),
             )
-        except (TokenPlanningError, ValueError):
-            raise OpenRouterRequestLimitError(
+        except GlobalTokenBudgetPlanningError:
+            raise _OpenRouterGlobalTokenBudgetError(
+                "provider request cannot satisfy the configured global token budget"
+            ) from None
+        except EndpointTokenCapacityError:
+            raise _OpenRouterEndpointCapacityError(
                 "provider request cannot satisfy the endpoint-bound token plan"
+            ) from None
+        except (ContextTokenPlanError, TokenPlanningError, TypeError, ValueError):
+            raise _OpenRouterContextPlanError(
+                "provider request cannot satisfy the bounded context plan"
             ) from None
 
     async def _request_metadata(
@@ -3490,6 +3559,14 @@ class OpenRouterClient:
                 context_package=context_package,
             )
         except Exception as exc:
+            if isinstance(exc, _OpenRouterGlobalTokenBudgetError):
+                reason = ContextPreflightReason.GLOBAL_TOKEN_BUDGET
+            elif isinstance(exc, _OpenRouterContextPlanError):
+                reason = ContextPreflightReason.CONTEXT_PLAN_INVALID
+            elif isinstance(exc, _OpenRouterRoutePlanningError):
+                reason = ContextPreflightReason.ROUTE_UNAVAILABLE
+            else:
+                reason = ContextPreflightReason.ENDPOINT_CAPACITY
             self._record_context_preflight(
                 request_id=request_id,
                 logical_request_id=request_id,
@@ -3498,7 +3575,7 @@ class OpenRouterClient:
                 requested_completion_tokens=requested_completion_tokens,
                 request_plan=None,
                 decision_source=ContextPreflightSource.TOKEN_PLANNER,
-                reason=ContextPreflightReason.ENDPOINT_CAPACITY,
+                reason=reason,
                 error=exc,
             )
             raise
@@ -4178,20 +4255,20 @@ class OpenRouterClient:
             policy_prices[field] = format(normalized, "f")
         bounds: list[EndpointRequestCostBound] = []
         for registered in registered_policy.endpoints:
-            if request_token_plan.estimated_prompt_tokens > registered.max_prompt_tokens:
+            if request_token_plan.prompt_byte_upper_bound_tokens > registered.max_prompt_tokens:
                 raise UnprovenCostBoundError(
-                    "estimated prompt exceeds an endpoint prompt-token limit"
+                    "conservative prompt bound exceeds an endpoint prompt-token limit"
                 )
             if output_tokens > registered.max_completion_tokens:
                 raise UnprovenCostBoundError(
                     "planned completion exceeds an endpoint completion-token limit"
                 )
             if (
-                request_token_plan.estimated_prompt_tokens + output_tokens
+                request_token_plan.prompt_byte_upper_bound_tokens + output_tokens
                 > registered.context_length
             ):
                 raise UnprovenCostBoundError(
-                    "planned prompt and completion exceed endpoint context"
+                    "conservative prompt and completion bounds exceed endpoint context"
                 )
             bounded_pricing = {**dict(registered.pricing), **policy_prices}
             bounds.append(

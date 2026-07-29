@@ -84,7 +84,7 @@ def test_context_builder_uses_source_token_ceiling_instead_of_global_role_share(
         maximum_source_tokens_per_request=50_000,
     ).build("source_audit")
 
-    assert package.byte_budget == 150_000
+    assert package.byte_budget == 50_000
     assert package.bytes_used <= package.byte_budget
 
 
@@ -143,7 +143,6 @@ def test_context_builder_accounts_for_trusted_surface_request_manifest(
     measurements = context_category_measurements(package)
     assert set(measurements) == set(categories)
     assert {
-        category: measurement.utf8_bytes
-        for category, measurement in measurements.items()
+        category: measurement.utf8_bytes for category, measurement in measurements.items()
     } == categories
     assert all(len(measurement.content_sha256) == 64 for measurement in measurements.values())

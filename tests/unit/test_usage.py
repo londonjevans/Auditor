@@ -202,6 +202,9 @@ def _token_plan_for_record(
         global_input_token_budget=100_000,
         global_output_token_budget=10_000,
         context_utilization=Decimal("0.70"),
+        prompt_envelope_byte_upper_bound_tokens=sum(
+            allocation.estimate.byte_upper_bound_tokens for allocation in allocations
+        ),
     )
     atomic = AtomicTokenReservationEvidence.build(
         request_id=planned_request_id,

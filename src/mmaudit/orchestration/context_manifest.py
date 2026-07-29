@@ -444,6 +444,20 @@ class ContextRequestEvidence(FrozenContextEvidence):
             or self.actual_usage.completion_tokens <= 0
         ):
             raise ValueError("completed request lacks complete actual token usage")
+        if self.actual_usage.source is not ActualTokenUsageSource.UNAVAILABLE:
+            assert self.actual_usage.prompt_tokens is not None
+            assert self.actual_usage.completion_tokens is not None
+            assert self.actual_usage.total_tokens is not None
+            limits = self.request_plan.route_intersection
+            if (
+                self.actual_usage.prompt_tokens > self.request_plan.prompt_byte_upper_bound_tokens
+                or self.actual_usage.prompt_tokens > limits.max_prompt_tokens
+                or self.actual_usage.completion_tokens
+                > self.request_plan.requested_completion_tokens
+                or self.actual_usage.completion_tokens > limits.max_completion_tokens
+                or self.actual_usage.total_tokens > limits.context_tokens
+            ):
+                raise ValueError("actual token usage exceeds the endpoint-bound request plan")
         _require_self_hash(self, "evidence_sha256")
         return self
 
@@ -555,6 +569,7 @@ class ContextPreflightRequestEvidence(FrozenContextEvidence):
             permitted_rejections = {
                 ContextPreflightSource.TOKEN_PLANNER: {
                     ContextPreflightReason.ENDPOINT_CAPACITY,
+                    ContextPreflightReason.GLOBAL_TOKEN_BUDGET,
                     ContextPreflightReason.ROUTE_UNAVAILABLE,
                     ContextPreflightReason.CONTEXT_PLAN_INVALID,
                     ContextPreflightReason.COST_BUDGET,
