@@ -209,6 +209,9 @@ LAST_CHECKPOINT_COMMIT: dd5e6b159ba4f0c7c5d9c31bb2a34ff2bba2d8f4
   `dd5e6b159ba4f0c7c5d9c31bb2a34ff2bba2d8f4`
   (`Harden fork differential replay evidence`) preserves the validated
   in-progress slice. It does not mark `V3-FORKDIFF-001` complete.
+- **SSH publication:** Implementation checkpoint `dd5e6b1` and paused-state
+  checkpoint `5b2e4c1` were pushed successfully on `main` to the configured SSH
+  remote `git@github.com:londonjevans/Auditor.git`.
 - **Defensive objective:** Execute the same bounded audited-repository suite
   against a clean local state and one or more operator-pinned fork states, then
   classify only repeated fresh-workspace agreement as typed divergence while a
