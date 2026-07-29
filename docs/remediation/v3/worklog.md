@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Endpoint-aware token budgets and context manifests
 CURRENT_TICKET: V3-TOKENS-001
 LAST_COMPLETED_TICKET: V3-OUTPUT-001
-NEXT_ACTION: Resume V3-TOKENS-001 by correcting the local fake-provider budget configuration, then add successful-provider context-manifest assertions and the remaining OpenRouter token-plan regressions before broad validation.
-LAST_COMMAND: git status --short --branch; git diff --check; git diff --stat
-LAST_RESULT: PASS; filesystem-stable in-progress checkpoint with no command or worker in flight. Focused suites passed, while one fake-provider pipeline probe remains fail-closed pending test-harness budget wiring.
+NEXT_ACTION: Resume V3-TOKENS-001 with the full fake-provider pipeline suite, broad token/manifest matrix, independent cross-artifact integrity review, and complete required suite; fix any failures before updating queue, traceability, and runtime status.
+LAST_COMMAND: git diff --check
+LAST_RESULT: PASS; checkpoint validation also passed 300 unit tests, 16 integration/schema/manifest tests, affected Ruff, focused strict mypy, and generated-schema synchronization.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: b987a547dad8249fab1ee15b1a8baa1f5200831b
+LAST_CHECKPOINT_COMMIT: 5a675a1a75925febfc2031c17fd61ae6bbcb64ae
 
 ## 2026-07-29 — V3-OUTPUT-001
 
@@ -278,6 +278,56 @@ LAST_CHECKPOINT_COMMIT: b987a547dad8249fab1ee15b1a8baa1f5200831b
   operator-secret access, new spend, or ticket-completion claim occurred.
   Implementation checkpoint `b987a547dad8249fab1ee15b1a8baa1f5200831b`
   preserves the exact resumable state and the operator-appended queue scope.
+- **Third resume checkpoint:** Automatic goal continuation resumed from clean,
+  synchronized pause-state commit
+  `c7f631bfa69f525658e49537cfd542d0c93b2cc4`. The authoritative `1417`-line
+  objective was reread and reverified at SHA-256
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`;
+  repository instructions, legacy and active queue state, worklogs, Git status,
+  and upstream state were rechecked. Work resumes only on local deterministic
+  V3-TOKENS integration; no provider, network, paid call, or operator-secret
+  access is authorized for this slice.
+- **Retry and preflight evidence checkpoint:** Provider retries now retain an
+  exact ordered inventory of lock-atomic token reservations, distinguish
+  provider attempts from preflight reservation rejection, and require strict
+  request/model/role/plan/limit joins before usage or review credit. A
+  thread-safe runtime preflight ledger records hash-only typed planner and
+  budget rejection evidence without raw prompt, source, or exception content.
+  Context manifests, reports, and run-manifest reconstruction bind the complete
+  reservation and preflight inventories, including conservative
+  attempt-reserved token totals. The fake-provider integration now uses the
+  configured global/model/role token budgets and validates the emitted context
+  artifact semantically.
+- **Checkpoint validation:** `.venv/bin/pytest -q
+  tests/unit/test_usage.py tests/unit/test_openrouter.py
+  tests/unit/test_context_manifest.py` passed `300` tests in `1.15s`.
+  `.venv/bin/pytest -q
+  tests/integration/test_pipeline.py::test_successful_multi_agent_audit
+  tests/unit/test_release_schemas.py tests/unit/test_manifest.py` passed `16`
+  tests in `1.61s`. `.venv/bin/ruff check
+  src/mmaudit/models/openrouter.py src/mmaudit/models/usage.py
+  src/mmaudit/orchestration/context_manifest.py
+  src/mmaudit/orchestration/manifest.py
+  src/mmaudit/orchestration/pipeline.py tests/identity_fixtures.py
+  tests/integration/test_pipeline.py tests/unit/test_context_manifest.py
+  tests/unit/test_openrouter.py tests/unit/test_usage.py` passed.
+  `.venv/bin/mypy src/mmaudit/models/openrouter.py
+  src/mmaudit/models/usage.py
+  src/mmaudit/orchestration/context_manifest.py
+  src/mmaudit/orchestration/manifest.py
+  src/mmaudit/orchestration/pipeline.py` passed with no issues.
+  `.venv/bin/python scripts/generate_release_schemas.py --write` and
+  `.venv/bin/python scripts/generate_release_schemas.py` passed, as did
+  `git diff --check`. The generated context manifest schema is synchronized.
+- **Operator pause:** The operator requested a pause at this safe boundary.
+  All delegated workers and validation processes are complete. No provider
+  request, network access, paid call, cost reservation, or operator-secret
+  access occurred. `V3-TOKENS-001` remains deliberately `IN_PROGRESS`: the
+  complete fake-provider pipeline suite, broader validation matrix, independent
+  final cross-artifact review, full required suite, and final ticket evidence
+  updates have not yet run. Implementation checkpoint
+  `5a675a1a75925febfc2031c17fd61ae6bbcb64ae` preserves the resumable source,
+  schema, and test state without claiming ticket completion.
 
 ## 2026-07-28 — V3-SMOKE-001
 
