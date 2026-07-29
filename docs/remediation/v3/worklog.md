@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED
+AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Differential and multi-state fork matrix
 CURRENT_TICKET: V3-FORKDIFF-001
 LAST_COMPLETED_TICKET: V3-FLOOR-001
-NEXT_ACTION: Resume V3-FORKDIFF-001 with default offline-replay wiring and its stable lifecycle projection, then run the conditional real local clean-Anvil-versus-pinned Anvil/Foundry matrix integration with an explicit trusted compiler.
-LAST_COMMAND: git diff --check
-LAST_RESULT: PASS — no whitespace errors after 289 focused tests, Ruff format/check, strict mypy, and release-schema verification passed.
+NEXT_ACTION: On resume, implement and wire a deterministic matrix-wide timeout budget that preserves the configured child policy across all states and repetitions; then rerun the real local manifest-bound default replay acceptance test.
+LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_repository_fork_differential_schema.py tests/unit/test_fork_matrix.py tests/unit/test_foundry_execution_hardening.py tests/unit/test_scanner_workspace.py tests/unit/test_read_only_rpc_bridge.py tests/unit/test_replay.py tests/unit/test_reproduction.py tests/unit/test_scanners_reporting.py
+LAST_RESULT: PASS — 480 focused lifecycle, matrix, Foundry, workspace, read-only RPC, replay, reproduction, and reporting regressions passed in 50.26s after the expected-red real replay assay.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 82fe859dc9cd66c9d7e10f608d7d17c2f11b181b
+LAST_CHECKPOINT_COMMIT: 205e72df2d0c9b51faaf237c60e52994f838551a
 
 ## 2026-07-29 — V3-FORKDIFF-001
 
@@ -85,6 +85,126 @@ LAST_CHECKPOINT_COMMIT: 82fe859dc9cd66c9d7e10f608d7d17c2f11b181b
   slice was committed as `82fe859dc9cd66c9d7e10f608d7d17c2f11b181b`
   (`Bind fork workspace lifecycle evidence`). This is an in-progress
   `V3-FORKDIFF-001` checkpoint, not ticket completion.
+- **Autorun resume:** At `2026-07-29T21:55:06Z`, the complete product objective
+  was reread and hash-verified as
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
+  The queue, worklog, and synchronized clean Git state were reloaded. Work
+  resumed only on the remaining replay and local-integration acceptance
+  portions of `V3-FORKDIFF-001`; no provider request, secret access, public RPC,
+  wallet, signing, broadcast, or paid operation is involved.
+- **Replay implementation slice:** The default offline replay path now binds a
+  repository fork-matrix runner to the effective configuration, the selected
+  scanner backend, and a trusted clean-Anvil launcher. Explicit runner injection
+  retains precedence; a missing backend fails closed. The stable projection
+  retains copy/lifecycle policy, inventory, bounds, and non-retention evidence
+  while excluding attempt-local identities. Qualification requires joined,
+  validated copy and lifecycle evidence. The expected-red assays reproduced the
+  missing default adapter, volatile projection, and qualification gaps; the
+  completed focused run passed `204` fork-matrix/schema/replay tests.
+- **Explicit compiler prerequisite:** The operator-installed Solidity compiler
+  at version `0.8.30+commit.73712a01.Darwin.appleclang` has SHA-256
+  `738dcdc6afddeb505ee4e4ef24f1c1fdba2b8c924e614cbbf5801a5b062dd683`
+  but is group-writable, so the integration harness rejected it as an
+  untrusted prerequisite (`1 skipped`). A disposable canonical `0555`, single-
+  link copy under `/private/tmp` retained the identical hash and version; no
+  repository or target-controlled executable was used.
+- **Offline replay negative assay and remediation:** With that trusted copy,
+  `MMAUDIT_TEST_SOLC_EXECUTABLE=/private/tmp/mmaudit-trusted-solc-0.8.30/solc
+  .venv/bin/pytest -q --tb=short
+  tests/integration/test_offline_replay.py` first reached real isolated Forge
+  execution and failed because macOS sandbox policy emitted the invalid
+  endpoint `localhost:0` for a replay requiring no RPC. The sandbox wrapper now
+  grants no network entitlement when the RPC port is non-positive. Three
+  focused policy regressions passed, and the same real local replay command
+  then passed `1` test in `2.38s`.
+- **Child Forge trust-pin negative assay:** The first real fork-matrix attempt
+  reached both local execution states but rejected the child Forge identity
+  because the baseline stored a whitespace-normalized multiline version while
+  the child comparison used raw multiline output. Trust comparison now
+  normalizes both bounded identity strings while retaining the exact executable
+  SHA-256 requirement. The focused normalization and mismatch regressions
+  passed `2` tests in `0.40s`; the real matrix rerun remains pending.
+- **Independent review state:** Read-only review found further acceptance gaps
+  in effective-backend sharing, per-descriptor RPC-scope projection, lifecycle
+  parent identity, platform no-follow capability checks, exact validated
+  removal minima, aggregate cleanup bounds, and default-orchestrator real
+  replay. These remain `IN_PROGRESS`; none is credited as complete until its
+  negative assay, implementation, focused validation, and real local replay
+  succeed.
+- **Adversarial evidence hardening:** Copy evidence now retains the actual
+  workspace-parent device/inode and descriptor custody and joins it to the
+  lifecycle attempt root. Matrix execution fails before any lease or scanner
+  when descriptor-relative directory/no-follow capabilities are unavailable.
+  A validated disposal requires the runtime-realistic copied-workspace/root
+  minimum, and all state custodies share one aggregate removal budget. Six
+  expected-red assays reproduced the prior gaps; the completed lifecycle suite
+  passed `258` tests. Effective replay now resolves one configured hardened
+  backend and shares that exact object across all default runners, retains
+  descriptor-scoped RPC semantics in its stable projection, and normalizes
+  equivalent clean-process termination outcomes. Four expected-red replay
+  assays reproduced the prior gaps; `tests/unit/test_replay.py` passed `32`
+  tests and strict mypy passed all `143` source files.
+- **Real RPC compatibility assays:** Real Forge initialization first exposed
+  `eth_gasPrice` and then `eth_getAccountInfo` as the only denied requests. The
+  former is now returned as a fixed `1 gwei` synthetic value and is never sent
+  to the origin. The latter is accepted only with exactly two parameters,
+  rewritten to the canonical EIP-1898 pinned block hash, and its origin result
+  must contain exactly bounded hexadecimal `balance`, `code`, and `nonce`
+  fields. The bridge policy version and hash bind both semantics; Forge also
+  receives the same fixed gas price in its recorded command. Focused bridge
+  regressions passed `11` tests, including malformed account-result rejection.
+  No transaction-capable method, credential, endpoint, raw payload, or target
+  path was retained.
+- **Real matrix execution:** With the trusted compiler copy, the final command
+  `MMAUDIT_TEST_SOLC_EXECUTABLE=/private/tmp/mmaudit-trusted-solc-0.8.30/solc
+  .venv/bin/pytest -q --tb=short
+  tests/integration/test_repository_fork_differential_matrix.py` passed `1`
+  real local integration in `10.14s`. It executed the one selected synthetic
+  repository test twice in a fresh workspace against a clean local chain and
+  twice against a separately launched pinned local chain, produced a typed
+  `DIVERGED` comparison, validated all read-only per-test RPC scopes and copy/
+  lifecycle joins, serialized and revalidated the result/privacy evidence, and
+  proved all matrix attempt directories absent. The pinned setup had no
+  accounts and no mining; no wallet, key, signing, broadcast, public RPC, or
+  deployed third-party contract was used. Production default offline replay of
+  this frozen artifact remains the final integration acceptance item.
+- **Aggregate lifecycle and replay hardening:** Each state now emits a sealed
+  shared-budget cleanup record joined to its reverse attempt-removal sequence,
+  cumulative entry/time accounting, exact owned-directory count, descriptor
+  closure, path absence, and non-retention. Matrix construction and replay
+  qualification reject missing, resealed, over-limit, or cross-state evidence.
+  The combined lifecycle/schema/matrix/Foundry/scanner/replay gate passed `262`
+  tests in `4.90s`; the two focused serialization-warning regressions then
+  passed `2` tests. Ruff, strict mypy, release-schema verification, and scoped
+  diff checks passed. Replay verification and bounded artifact loading now
+  precede backend resolution or default runner construction; stale evidence
+  cannot trigger backend/container probing. The complete replay unit suite
+  passed `33` tests.
+- **Real default-replay negative acceptance:** The manifest-bound conditional
+  local integration was rerun twice after the aggregate schema stabilized.
+  Both runs executed the direct four-attempt matrix and matched the baseline
+  scanner, then correctly refused to claim replay completion. The diagnostic
+  run reported the differential component as `blocked`, expected `complete`,
+  observed `inconclusive`, while the scanner component was `matched`; the
+  command ended with `1 failed in 19.84s`. Inspection isolated the remaining
+  defect: pipeline and replay allocate one configured suite timeout to the
+  entire multi-state matrix, while each child receives the diminishing
+  remainder and consequently emits a different execution-policy identity from
+  the baseline. No gate or identity comparison was weakened.
+- **Operator pause:** At `2026-07-29T22:52:49Z`, all already-started lifecycle,
+  replay-trust-order, and integration-diagnostic work stopped at a coherent
+  checkpoint. `V3-FORKDIFF-001` remains `IN_PROGRESS`; the conditional real
+  replay test is intentionally expected-red until the matrix-wide timeout
+  budget is implemented. No child agent, test process, local listener, provider
+  call, secret access, public RPC, wallet, signing, broadcast, paid operation,
+  or budget reservation remains active.
+- **Final pause gate:** Ruff formatting completed with one integration-test
+  reformat; scoped Ruff checks passed; strict mypy passed `148` source files;
+  release schemas and `git diff --check` passed; and the final focused suite
+  passed `480` tests in `50.26s`. Pytest reported only cleanup warnings for
+  inherited immutable garbage directories outside the repository. The
+  conditional real replay acceptance remains the separately recorded
+  expected-red result and received no completion credit.
 - **Defensive objective:** Execute the same bounded audited-repository suite
   against a clean local state and one or more operator-pinned fork states, then
   classify only repeated fresh-workspace agreement as typed divergence while a

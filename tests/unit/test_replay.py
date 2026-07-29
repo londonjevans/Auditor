@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import socket
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
@@ -19,6 +20,8 @@ from mmaudit.config import (
     AuditRunOptions,
     RepositoryCleanForkMatrixStateConfig,
     RepositoryPinnedForkMatrixStateConfig,
+    ReproductionConfig,
+    SmartContractsConfig,
     audit_config_overrides,
 )
 from mmaudit.constants import ExitCode
@@ -56,11 +59,13 @@ from mmaudit.models.schemas import (
     RepositorySuiteFramework,
     RepositorySuiteSelection,
     RepositorySuiteStateAttempt,
+    RepositorySuiteStateWorkspaceCleanupEvidence,
     RepositorySuiteTestComparison,
     RepositorySuiteTestDescriptor,
     RepositorySuiteTestStateConsensus,
     RepositorySuiteWorkspaceCopyEvidence,
     RepositorySuiteWorkspaceLifecycleEvidence,
+    RepositorySuiteWorkspaceLifecycleStatus,
     RepositoryTestExecution,
     RepositoryTestExecutionStatus,
     RepositoryTestForkRpcScopeEvidence,
@@ -88,6 +93,7 @@ from mmaudit.orchestration.replay import (
     ReplayComponentKind,
     ReplayComponentStatus,
     _load_replay_artifacts,
+    _repository_differential_is_qualifying,
     _repository_differential_projection,
     write_offline_replay,
 )
@@ -98,6 +104,7 @@ from mmaudit.orchestration.verification import (
 )
 from mmaudit.reporting.json_report import write_json
 from mmaudit.scanners.base import scanner_workspace_sha256
+from mmaudit.scanners.fork_matrix import ForkMatrixDependencies
 from tests.unit.test_repository_fork_differential_schema import (
     _matrix as _repository_differential_matrix,
 )
@@ -141,9 +148,11 @@ class _ForkAwareScannerRunner:
         runs: list[ScannerRun],
         *,
         before_return: Callable[[], None] | None = None,
+        backend: object | None = None,
     ) -> None:
         self.runs = runs
         self.before_return = before_return
+        self.backend = backend
         self.allow_fork_probing: list[bool] = []
         self.expected_repository_sha256: list[str | None] = []
         self.repository_exclusion_root: list[Path | None] = []
@@ -170,8 +179,14 @@ class _ForkAwareScannerRunner:
 
 
 class _LocalInvariantRunner:
-    def __init__(self, result: InvariantExecutionResult) -> None:
+    def __init__(
+        self,
+        result: InvariantExecutionResult,
+        *,
+        backend: object | None = None,
+    ) -> None:
         self.result = result
+        self.backend = backend
         self.calls = 0
 
     def run(
@@ -190,8 +205,14 @@ class _LocalInvariantRunner:
 
 
 class _LocalReproductionRunner:
-    def __init__(self, result: ReproductionResult) -> None:
+    def __init__(
+        self,
+        result: ReproductionResult,
+        *,
+        backend: object | None = None,
+    ) -> None:
         self.result = result
+        self.backend = backend
         self.calls = 0
 
     def run(
@@ -243,6 +264,73 @@ class _LocalDifferentialRunner:
         self.exclusion_roots.append(repository_exclusion_root)
         if self.error is not None:
             raise self.error
+        return self.result
+
+
+class _LocalIsolationBackend:
+    name = "synthetic-isolation"
+
+    def wrap(
+        self,
+        command: list[str],
+        *,
+        workspace: Path,
+        private_dir: Path,
+        rpc_port: int,
+    ) -> list[str]:
+        del workspace, private_dir, rpc_port
+        return command
+
+
+class _DefaultDifferentialRunnerFactory:
+    def __init__(
+        self,
+        result: RepositorySuiteDifferentialRun,
+        expected_backend: _LocalIsolationBackend,
+        expected_clean_state_provider: object,
+    ) -> None:
+        self.result = result
+        self.expected_backend = expected_backend
+        self.expected_clean_state_provider = expected_clean_state_provider
+        self.constructed_smart_contracts: list[SmartContractsConfig] = []
+        self.constructed_reproduction: list[ReproductionConfig] = []
+        self.calls = 0
+
+    def __call__(
+        self,
+        smart_contracts: SmartContractsConfig,
+        reproduction: ReproductionConfig,
+        *,
+        dependencies: ForkMatrixDependencies,
+    ) -> _DefaultDifferentialRunnerFactory:
+        assert dependencies.clean_state_provider is self.expected_clean_state_provider
+        self.constructed_smart_contracts.append(smart_contracts)
+        self.constructed_reproduction.append(reproduction)
+        return self
+
+    def run(
+        self,
+        repository_root: Path,
+        private_dir: Path,
+        *,
+        projects: Sequence[SolidityProjectMetadata],
+        repository_sha256: str,
+        repository_exclusion_root: Path,
+        backend: object,
+        baseline_run: ScannerRun,
+        absolute_deadline: float,
+    ) -> RepositorySuiteDifferentialRun:
+        del (
+            repository_root,
+            private_dir,
+            projects,
+            repository_sha256,
+            repository_exclusion_root,
+            baseline_run,
+        )
+        assert absolute_deadline > 0
+        assert backend is self.expected_backend
+        self.calls += 1
         return self.result
 
 
@@ -417,6 +505,20 @@ def _config_with_repository_differential(config: AuditConfig) -> AuditConfig:
     )
 
 
+def _rootless_repository_differential_config(config: AuditConfig) -> AuditConfig:
+    configured = _config_with_repository_differential(config)
+    reproduction = configured.reproduction.model_copy(
+        update={
+            "isolation_backend": "rootless-container",
+            "rootless_container_image": ("registry.invalid/mmaudit-replay@sha256:" + ("a" * 64)),
+            "rootless_container_runtime": "podman",
+        }
+    )
+    return AuditConfig.model_validate(
+        configured.model_copy(update={"reproduction": reproduction}).model_dump(mode="python")
+    )
+
+
 def _rebind_differential_repository(
     matrix: RepositorySuiteDifferentialMatrix,
     repository_sha256: str,
@@ -507,6 +609,9 @@ def _rebind_differential_repository(
                 "source_inventory_sha256_after": repository_sha256,
                 "workspace_inventory_sha256_after_copy": repository_sha256,
                 "workspace_inventory_sha256_after_execution": repository_sha256,
+                "workspace_parent_device": (prior_attempt.workspace_lifecycle.attempt_root_device),
+                "workspace_parent_inode": (prior_attempt.workspace_lifecycle.attempt_root_inode),
+                "workspace_parent_descriptor_custody_validated": True,
             }
         )
         scopes: list[RepositoryTestForkRpcScopeEvidence] = []
@@ -647,6 +752,44 @@ def _rebind_differential_repository(
         )
         for prior in matrix.comparisons
     )
+    state_workspace_cleanups: list[RepositorySuiteStateWorkspaceCleanupEvidence] = []
+    for prior_cleanup in matrix.state_workspace_cleanups:
+        cleanup_order = tuple(
+            reversed(
+                tuple(attempt for attempt in attempts if attempt.state_id == prior_cleanup.state_id)
+            )
+        )
+        cumulative_entries: list[int] = []
+        cumulative_durations: list[float] = []
+        entry_total = 0
+        duration_total = 0.0
+        for attempt in cleanup_order:
+            lifecycle = attempt.workspace_lifecycle
+            entry_total += lifecycle.removed_entry_count
+            duration_total = math.fsum((duration_total, lifecycle.removal_duration_seconds))
+            cumulative_entries.append(entry_total)
+            cumulative_durations.append(duration_total)
+        state_workspace_cleanups.append(
+            RepositorySuiteStateWorkspaceCleanupEvidence.sealed(
+                **{
+                    **prior_cleanup.model_dump(
+                        mode="python",
+                        exclude={
+                            "aggregate_evidence_sha256",
+                            "attempt_cleanup_sequence_lifecycle_sha256s",
+                            "attempt_cumulative_removed_entry_counts",
+                            "attempt_cumulative_removal_duration_seconds",
+                        },
+                    ),
+                    "attempt_cleanup_sequence_lifecycle_sha256s": tuple(
+                        attempt.workspace_lifecycle.lifecycle_evidence_sha256
+                        for attempt in cleanup_order
+                    ),
+                    "attempt_cumulative_removed_entry_counts": tuple(cumulative_entries),
+                    "attempt_cumulative_removal_duration_seconds": tuple(cumulative_durations),
+                }
+            )
+        )
     first_policy = attempts[0].scanner_run.repository_suite_execution_policy
     assert first_policy is not None
     return RepositorySuiteDifferentialMatrix.sealed(
@@ -661,6 +804,7 @@ def _rebind_differential_repository(
                     "execution_configuration_sha256",
                     "states",
                     "attempts",
+                    "state_workspace_cleanups",
                     "state_consensuses",
                     "comparisons",
                 },
@@ -675,6 +819,7 @@ def _rebind_differential_repository(
             ),
             "states": matrix.states,
             "attempts": tuple(attempts),
+            "state_workspace_cleanups": tuple(state_workspace_cleanups),
             "state_consensuses": consensuses,
             "comparisons": comparisons,
         }
@@ -1324,19 +1469,34 @@ async def test_repository_differential_replays_as_a_separate_offline_component(
     def deny_network(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("offline differential replay attempted network access")
 
+    def deny_default_runner(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("explicit differential runner did not retain precedence")
+
+    def deny_default_isolation(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("fully injected replay attempted default isolation resolution")
+
     monkeypatch.setattr(socket, "create_connection", deny_network)
     monkeypatch.setattr(socket.socket, "connect", deny_network)
     monkeypatch.setattr(
         "mmaudit.models.openrouter.OpenRouterClient.__init__",
         deny_network,
     )
-    replay = await OfflineReplayOrchestrator(
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.RepositoryForkMatrixRunner",
+        deny_default_runner,
+    )
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.default_isolation_backend",
+        deny_default_isolation,
+    )
+    orchestrator = OfflineReplayOrchestrator(
         config,
         scanner_runner=scanner,
         invariant_runner=invariant,
         reproduction_runner=reproduction,
         differential_runner=differential,
-    ).replay(
+    )
+    replay = await orchestrator.replay(
         manifest_path=manifest_path,
         run_dir=run_dir,
         repository_root=repository,
@@ -1353,6 +1513,10 @@ async def test_repository_differential_replays_as_a_separate_offline_component(
     assert component.execution_evidence is ExecutionEvidenceKind.REAL
     assert differential.calls == 1
     assert differential.baseline_runs == [baseline]
+    assert orchestrator.scanner_runner is scanner
+    assert orchestrator.invariant_runner is invariant
+    assert orchestrator.reproduction_runner is reproduction
+    assert orchestrator.differential_runner is differential
     assert differential.repository_sha256s == [
         expected.matrix.repository_sha256 if expected.matrix is not None else ""
     ]
@@ -1368,12 +1532,155 @@ async def test_repository_differential_replays_as_a_separate_offline_component(
 
 
 @pytest.mark.asyncio
-async def test_configured_repository_differential_without_runner_is_incomplete(
+async def test_rootless_configured_replay_fails_closed_when_exact_backend_is_unavailable(
     tmp_path: Path,
     config_factory,
     candidate_factory,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = _config_with_repository_differential(config_factory())
+    config = _rootless_repository_differential_config(config_factory())
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    repository, run_dir, manifest_path = _write_replay_run(
+        tmp_path,
+        config,
+        candidate,
+        with_repository_differential=True,
+    )
+    resolutions: list[tuple[str, str | None, str]] = []
+
+    def unavailable_backend(
+        configured: str,
+        *,
+        rootless_container_image: str | None = None,
+        rootless_container_runtime: str = "auto",
+    ) -> None:
+        resolutions.append((configured, rootless_container_image, rootless_container_runtime))
+        return None
+
+    def deny_runner_construction(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("runner construction followed failed isolation resolution")
+
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.default_isolation_backend",
+        unavailable_backend,
+    )
+    monkeypatch.setattr("mmaudit.orchestration.replay.ScannerRunner", deny_runner_construction)
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.FoundryInvariantRunner",
+        deny_runner_construction,
+    )
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.ForkReproductionRunner",
+        deny_runner_construction,
+    )
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.RepositoryForkMatrixRunner",
+        deny_runner_construction,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="configured hardened isolation backend is unavailable",
+    ):
+        await OfflineReplayOrchestrator(config).replay(
+            manifest_path=manifest_path,
+            run_dir=run_dir,
+            repository_root=repository,
+            work_dir=tmp_path / "missing-rootless-backend-work",
+        )
+
+    assert resolutions == [
+        (
+            "rootless-container",
+            "registry.invalid/mmaudit-replay@sha256:" + ("a" * 64),
+            "podman",
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stale_manifest_refuses_backend_resolution_and_default_runner_construction(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _rootless_repository_differential_config(config_factory())
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    repository, run_dir, manifest_path = _write_replay_run(
+        tmp_path,
+        config,
+        candidate,
+        with_repository_differential=True,
+    )
+    manifest = RunEvidenceManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+    payload = manifest.model_dump(mode="json")
+    artifacts = payload["artifacts"]
+    assert isinstance(artifacts, list)
+    scanner_binding = next(
+        binding
+        for binding in artifacts
+        if isinstance(binding, dict) and binding.get("path") == "scanner-results.json"
+    )
+    scanner_binding["sha256"] = "0" * 64
+    _reseal_manifest_payload(manifest_path, payload)
+    calls: list[str] = []
+
+    def deny_backend_resolution(*_args: object, **_kwargs: object) -> None:
+        calls.append("backend")
+        raise AssertionError("stale manifest reached isolation backend resolution")
+
+    def deny_runner_construction(*_args: object, **_kwargs: object) -> None:
+        calls.append("runner")
+        raise AssertionError("stale manifest reached default runner construction")
+
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.default_isolation_backend",
+        deny_backend_resolution,
+    )
+    monkeypatch.setattr("mmaudit.orchestration.replay.ScannerRunner", deny_runner_construction)
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.FoundryInvariantRunner",
+        deny_runner_construction,
+    )
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.ForkReproductionRunner",
+        deny_runner_construction,
+    )
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.RepositoryForkMatrixRunner",
+        deny_runner_construction,
+    )
+
+    with pytest.raises(ValueError, match="refused stale"):
+        await OfflineReplayOrchestrator(config).replay(
+            manifest_path=manifest_path,
+            run_dir=run_dir,
+            repository_root=repository,
+            work_dir=tmp_path / "stale-manifest-work",
+        )
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_rootless_configured_replay_shares_one_exact_backend_across_default_runners(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _rootless_repository_differential_config(config_factory())
     candidate = candidate_factory(
         candidate_id="candidate-replay",
         path="src/Vault.sol",
@@ -1389,16 +1696,168 @@ async def test_configured_repository_differential_without_runner_is_incomplete(
     expected = RepositorySuiteDifferentialRun.model_validate_json(
         (run_dir / "repository-suite-differential.json").read_text(encoding="utf-8")
     )
-    replay = await OfflineReplayOrchestrator(
-        config,
-        scanner_runner=_ForkAwareScannerRunner([_differential_baseline(expected)]),
-        invariant_runner=_LocalInvariantRunner(_invariant_result()),
-        reproduction_runner=_LocalReproductionRunner(_reproduction_result()),
-    ).replay(
+    backend = _LocalIsolationBackend()
+    baseline = _differential_baseline(expected)
+    clean_state_provider = object()
+    differential_factory = _DefaultDifferentialRunnerFactory(
+        expected,
+        backend,
+        clean_state_provider,
+    )
+    resolutions: list[tuple[str, str | None, str]] = []
+    constructed: dict[str, object] = {}
+
+    def resolve_backend(
+        configured: str,
+        *,
+        rootless_container_image: str | None = None,
+        rootless_container_runtime: str = "auto",
+    ) -> _LocalIsolationBackend:
+        resolutions.append((configured, rootless_container_image, rootless_container_runtime))
+        return backend
+
+    def scanner_factory(
+        configured: AuditConfig,
+        *,
+        backend: object,
+    ) -> _ForkAwareScannerRunner:
+        assert configured.stable_hash() == config.stable_hash()
+        constructed["scanner"] = backend
+        return _ForkAwareScannerRunner([baseline], backend=backend)
+
+    def invariant_factory(
+        reproduction: ReproductionConfig,
+        smart_contracts: SmartContractsConfig,
+        *,
+        backend: object,
+    ) -> _LocalInvariantRunner:
+        assert reproduction == config.reproduction
+        assert smart_contracts == config.smart_contracts
+        constructed["invariant"] = backend
+        return _LocalInvariantRunner(_invariant_result(), backend=backend)
+
+    def reproduction_factory(
+        reproduction: ReproductionConfig,
+        smart_contracts: SmartContractsConfig,
+        *,
+        backend: object,
+    ) -> _LocalReproductionRunner:
+        assert reproduction == config.reproduction
+        assert smart_contracts == config.smart_contracts
+        constructed["reproduction"] = backend
+        return _LocalReproductionRunner(_reproduction_result(), backend=backend)
+
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.default_isolation_backend",
+        resolve_backend,
+    )
+    monkeypatch.setattr("mmaudit.orchestration.replay.ScannerRunner", scanner_factory)
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.FoundryInvariantRunner",
+        invariant_factory,
+    )
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.ForkReproductionRunner",
+        reproduction_factory,
+    )
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.RepositoryForkMatrixRunner",
+        differential_factory,
+    )
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.TrustedCleanAnvilLauncher",
+        lambda: clean_state_provider,
+    )
+
+    orchestrator = OfflineReplayOrchestrator(config)
+    replay = await orchestrator.replay(
         manifest_path=manifest_path,
         run_dir=run_dir,
         repository_root=repository,
-        work_dir=tmp_path / "missing-runner-work",
+        work_dir=tmp_path / "shared-rootless-backend-work",
+    )
+
+    assert replay.status is OfflineReplayStatus.REPLAYED
+    assert resolutions == [
+        (
+            "rootless-container",
+            "registry.invalid/mmaudit-replay@sha256:" + ("a" * 64),
+            "podman",
+        )
+    ]
+    assert constructed == {
+        "scanner": backend,
+        "invariant": backend,
+        "reproduction": backend,
+    }
+    assert getattr(orchestrator.scanner_runner, "backend", None) is backend
+    assert getattr(orchestrator.invariant_runner, "backend", None) is backend
+    assert getattr(orchestrator.reproduction_runner, "backend", None) is backend
+    assert getattr(orchestrator.differential_runner, "backend", None) is backend
+    assert differential_factory.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_profile_overridden_replay_builds_default_backend_bound_differential_runner(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_config = _config_with_repository_differential(config_factory())
+    cli_overrides = audit_config_overrides({"profile": AuditProfile.DEEP.value})
+    effective_config = cli_overrides.apply(base_config)
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    repository, run_dir, manifest_path = _write_replay_run(
+        tmp_path,
+        effective_config,
+        candidate,
+        file_config=base_config,
+        cli_overrides=cli_overrides,
+        with_repository_differential=True,
+    )
+    expected = RepositorySuiteDifferentialRun.model_validate_json(
+        (run_dir / "repository-suite-differential.json").read_text(encoding="utf-8")
+    )
+    backend = _LocalIsolationBackend()
+    scanner = _ForkAwareScannerRunner(
+        [_differential_baseline(expected)],
+        backend=backend,
+    )
+    clean_state_provider = object()
+    factory = _DefaultDifferentialRunnerFactory(
+        expected,
+        backend,
+        clean_state_provider,
+    )
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.RepositoryForkMatrixRunner",
+        factory,
+    )
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.TrustedCleanAnvilLauncher",
+        lambda: clean_state_provider,
+    )
+    monkeypatch.setattr(
+        "mmaudit.orchestration.replay.default_isolation_backend",
+        lambda *_args, **_kwargs: backend,
+    )
+    orchestrator = OfflineReplayOrchestrator(
+        scanner_runner=scanner,
+        invariant_runner=_LocalInvariantRunner(_invariant_result()),
+        reproduction_runner=_LocalReproductionRunner(_reproduction_result()),
+    )
+
+    replay = await orchestrator.replay(
+        manifest_path=manifest_path,
+        run_dir=run_dir,
+        repository_root=repository,
+        work_dir=tmp_path / "default-differential-work",
     )
 
     component = next(
@@ -1406,11 +1865,14 @@ async def test_configured_repository_differential_without_runner_is_incomplete(
         for item in replay.components
         if item.kind is ReplayComponentKind.REPOSITORY_SUITE_DIFFERENTIAL
     )
-    assert replay.status is OfflineReplayStatus.INCOMPLETE
-    assert component.status is ReplayComponentStatus.BLOCKED
-    assert component.executed is False
-    assert ReplayComponentKind.REPOSITORY_SUITE_DIFFERENTIAL in replay.missing_kinds
-    assert "runner" in component.limitations[0]
+    assert replay.status is OfflineReplayStatus.REPLAYED
+    assert component.status is ReplayComponentStatus.MATCHED
+    assert factory.calls == 1
+    assert len(factory.constructed_smart_contracts) == 1
+    assert factory.constructed_smart_contracts == [effective_config.smart_contracts]
+    assert factory.constructed_reproduction == [effective_config.reproduction]
+    assert orchestrator.config is not None
+    assert orchestrator.config.stable_hash() == effective_config.stable_hash()
 
 
 @pytest.mark.asyncio
@@ -1537,6 +1999,57 @@ def test_repository_differential_projection_excludes_volatility_and_endpoints(
     ]
     volatile.matrix.attempts[0].scanner_run.raw_output_path = "/private/replay-nonce/output.json"
     volatile.matrix.attempts[0].scanner_run.repository_test_executions[0].duration_seconds = 55
+    volatile_clean = volatile.matrix.states[0]
+    assert volatile_clean.clean_state_attestation is not None
+    volatile_clean.state_source_sha256 = "6" * 64
+    volatile_clean.clean_state_attestation.process_attestation_sha256 = "5" * 64
+    volatile_clean.clean_state_attestation.startup_duration_seconds = 12
+    volatile_clean.clean_state_attestation.termination_method = "kill"
+    volatile_clean.clean_state_attestation.termination_duration_seconds = 9
+    volatile_clean.clean_state_attestation.attestation_sha256 = "4" * 64
+    volatile_attempt = volatile.matrix.attempts[0]
+    volatile_copy = volatile_attempt.scanner_run.repository_suite_workspace_copy
+    assert volatile_copy is not None
+    volatile_copy.attempt_binding_sha256 = "3" * 64
+    volatile_copy.source_root_device_before = 101
+    volatile_copy.source_root_device_after = 101
+    volatile_copy.source_root_inode_before = 102
+    volatile_copy.source_root_inode_after = 102
+    volatile_copy.workspace_root_device_before = 103
+    volatile_copy.workspace_root_device_after = 103
+    volatile_copy.workspace_root_inode_before = 104
+    volatile_copy.workspace_root_inode_after = 104
+    volatile_copy.workspace_parent_device = 105
+    volatile_copy.workspace_parent_inode = 106
+    volatile_copy.copy_evidence_sha256 = "2" * 64
+    volatile_lifecycle = volatile_attempt.workspace_lifecycle
+    volatile_lifecycle.attempt_binding_sha256 = "3" * 64
+    volatile_lifecycle.workspace_copy_evidence_sha256 = "2" * 64
+    volatile_lifecycle.scanner_execution_observation_sha256 = "1" * 64
+    volatile_lifecycle.freshness_attestation_sha256 = "0" * 63 + "1"
+    volatile_lifecycle.attempt_root_device = 105
+    volatile_lifecycle.attempt_root_inode = 106
+    volatile_lifecycle.removal_duration_seconds = 4
+    volatile_lifecycle.lifecycle_evidence_sha256 = "f" * 64
+    volatile_egress = volatile_attempt.scanner_run.fork_rpc_egress
+    assert volatile_egress is not None
+    volatile_egress.selected_test_scope_snapshot_sha256s = ("e" * 64,)
+    volatile_egress.bridge_snapshot_sha256 = "d" * 64
+    volatile_egress.evidence_sha256 = "c" * 64
+    volatile_scope = volatile_attempt.scanner_run.repository_test_fork_rpc_scopes[0]
+    volatile_scope.attempt_binding_sha256 = "b" * 64
+    volatile_scope.selection_sha256 = "a" * 64
+    volatile_scope.bridge_scope_snapshot_sha256 = "9" * 64
+    volatile_scope.evidence_sha256 = "8" * 64
+    volatile_cleanup = volatile.matrix.state_workspace_cleanups[0]
+    volatile_cleanup.attempt_cleanup_sequence_lifecycle_sha256s = tuple(
+        "7" * 64 for _item in volatile_cleanup.attempt_cleanup_sequence_lifecycle_sha256s
+    )
+    volatile_cleanup.attempt_cumulative_removal_duration_seconds = tuple(
+        duration + 1 for duration in volatile_cleanup.attempt_cumulative_removal_duration_seconds
+    )
+    volatile_cleanup.removal_duration_seconds += 1
+    volatile_cleanup.aggregate_evidence_sha256 = "6" * 64
 
     expected_projection = _repository_differential_projection(expected)
     observed_projection = _repository_differential_projection(volatile)
@@ -1553,6 +2066,26 @@ def test_repository_differential_projection_excludes_volatility_and_endpoints(
     assert "duration_seconds" not in serialized
     assert "workspace_identity_sha256" not in serialized
     assert "workspace_freshness_attestation_sha256" not in serialized
+    assert "attempt_binding_sha256" not in serialized
+    assert "source_root_device" not in serialized
+    assert "source_root_inode" not in serialized
+    assert "workspace_root_device" not in serialized
+    assert "workspace_root_inode" not in serialized
+    assert "workspace_parent_device" not in serialized
+    assert "workspace_parent_inode" not in serialized
+    assert "attempt_root_device" not in serialized
+    assert "attempt_root_inode" not in serialized
+    assert "copy_evidence_sha256" not in serialized
+    assert "lifecycle_evidence_sha256" not in serialized
+    assert "scanner_execution_observation_sha256" not in serialized
+    assert "freshness_attestation_sha256" not in serialized
+    assert "process_attestation_sha256" not in serialized
+    assert "termination_method" not in serialized
+    assert "selected_test_scope_snapshot_sha256s" not in serialized
+    assert "bridge_scope_snapshot_sha256" not in serialized
+    assert "attempt_cleanup_sequence_lifecycle_sha256s" not in serialized
+    assert "attempt_cumulative_removal_duration_seconds" not in serialized
+    assert "aggregate_evidence_sha256" not in serialized
     assert "attempt_sha256" not in serialized
     assert expected.configuration_sha256 in serialized
     assert matrix.fuzz_seed in serialized
@@ -1568,11 +2101,145 @@ def test_repository_differential_projection_excludes_volatility_and_endpoints(
     assert matrix.descriptor_sha256s[0] in serialized
     assert "clean_pass_pinned_failure" in serialized
     assert ExecutionEvidenceKind.REAL.value in serialized
+    assert "repository_test_fork_rpc_scopes" in serialized
+    assert "method_log_sha256" in serialized
+    assert "copy_policy_sha256" in serialized
+    assert "source_inventory_sha256_before" in serialized
+    assert "workspace_inventory_sha256_after_copy" in serialized
+    assert "disposal_policy_sha256" in serialized
+    assert "state_workspace_cleanups" in serialized
+    assert '"attempt_cleanup_sequence": "reverse_attempt_order"' in serialized
+    assert "removal_entry_limit" in serialized
+    assert "removal_depth_limit" in serialized
+    assert "removal_timeout_seconds" in serialized
+    assert '"private_path_retained": false' in serialized
+    assert '"rpc_endpoint_retained": false' in serialized
+
+    descriptor_scope_drift = expected.model_copy(deep=True)
+    assert descriptor_scope_drift.matrix is not None
+    scoped_run = descriptor_scope_drift.matrix.attempts[0].scanner_run
+    first_scope = scoped_run.repository_test_fork_rpc_scopes[0]
+    second_scope = first_scope.model_copy(deep=True)
+    object.__setattr__(first_scope, "descriptor_sha256", "a" * 64)
+    object.__setattr__(first_scope, "method_log_sha256", "b" * 64)
+    object.__setattr__(second_scope, "descriptor_sha256", "c" * 64)
+    object.__setattr__(second_scope, "method_log_sha256", "d" * 64)
+    scoped_run.repository_test_fork_rpc_scopes = [first_scope, second_scope]
+    scoped_projection = _repository_differential_projection(descriptor_scope_drift)
+    swapped_semantics = descriptor_scope_drift.model_copy(deep=True)
+    assert swapped_semantics.matrix is not None
+    swapped_scopes = swapped_semantics.matrix.attempts[
+        0
+    ].scanner_run.repository_test_fork_rpc_scopes
+    object.__setattr__(swapped_scopes[0], "method_log_sha256", "d" * 64)
+    object.__setattr__(swapped_scopes[1], "method_log_sha256", "b" * 64)
+    assert (
+        swapped_semantics.matrix.attempts[0].scanner_run.fork_rpc_egress
+        == descriptor_scope_drift.matrix.attempts[0].scanner_run.fork_rpc_egress
+    )
+    assert _repository_differential_projection(swapped_semantics) != scoped_projection
 
     identity_drift = expected.model_copy(deep=True)
     assert identity_drift.matrix is not None
     identity_drift.matrix.fuzz_seed = "0x" + ("0" * 63) + "2"
     assert _repository_differential_projection(identity_drift) != expected_projection
+
+    copy_drift = expected.model_copy(deep=True)
+    assert copy_drift.matrix is not None
+    copy_evidence = copy_drift.matrix.attempts[0].scanner_run.repository_suite_workspace_copy
+    assert copy_evidence is not None
+    copy_evidence.source_inventory_sha256_before = "0" * 63 + "1"
+    assert _repository_differential_projection(copy_drift) != expected_projection
+
+    disposal_policy_drift = expected.model_copy(deep=True)
+    assert disposal_policy_drift.matrix is not None
+    disposal_policy_drift.matrix.attempts[0].workspace_lifecycle.disposal_policy_sha256 = (
+        "0" * 63 + "1"
+    )
+    assert _repository_differential_projection(disposal_policy_drift) != expected_projection
+
+    disposal_bounds_drift = expected.model_copy(deep=True)
+    assert disposal_bounds_drift.matrix is not None
+    disposal_bounds_drift.matrix.attempts[0].workspace_lifecycle.removal_entry_limit -= 1
+    assert _repository_differential_projection(disposal_bounds_drift) != expected_projection
+
+    retention_drift = expected.model_copy(deep=True)
+    assert retention_drift.matrix is not None
+    object.__setattr__(
+        retention_drift.matrix.attempts[0].workspace_lifecycle,
+        "private_path_retained",
+        True,
+    )
+    assert _repository_differential_projection(retention_drift) != expected_projection
+
+    aggregate_cleanup_drift = expected.model_copy(deep=True)
+    assert aggregate_cleanup_drift.matrix is not None
+    aggregate_cleanup_drift.matrix.state_workspace_cleanups[0].owned_directory_count += 1
+    assert _repository_differential_projection(aggregate_cleanup_drift) != expected_projection
+
+
+def test_repository_differential_qualification_requires_copy_and_lifecycle_evidence(
+    config_factory,
+) -> None:
+    config = _config_with_repository_differential(config_factory())
+    expected = _differential_result(config, "9" * 64)
+
+    missing_copy = expected.model_copy(deep=True)
+    assert missing_copy.matrix is not None
+    missing_copy.matrix.attempts[0].scanner_run.repository_suite_workspace_copy = None
+    assert not _repository_differential_is_qualifying(
+        missing_copy,
+        config=config,
+        repository_sha256="9" * 64,
+    )
+
+    uncredited_lifecycle = expected.model_copy(deep=True)
+    assert uncredited_lifecycle.matrix is not None
+    uncredited_lifecycle.matrix.attempts[
+        0
+    ].workspace_lifecycle.status = RepositorySuiteWorkspaceLifecycleStatus.DISPOSED_UNCREDITED
+    assert not _repository_differential_is_qualifying(
+        uncredited_lifecycle,
+        config=config,
+        repository_sha256="9" * 64,
+    )
+
+    parent_identity_mismatch = expected.model_copy(deep=True)
+    assert parent_identity_mismatch.matrix is not None
+    mismatched_copy = parent_identity_mismatch.matrix.attempts[
+        0
+    ].scanner_run.repository_suite_workspace_copy
+    assert mismatched_copy is not None
+    mismatched_copy.workspace_parent_inode += 1
+    assert not _repository_differential_is_qualifying(
+        parent_identity_mismatch,
+        config=config,
+        repository_sha256="9" * 64,
+    )
+
+    missing_state_cleanup = expected.model_copy(deep=True)
+    assert missing_state_cleanup.matrix is not None
+    missing_state_cleanup.matrix.state_workspace_cleanups = (
+        missing_state_cleanup.matrix.state_workspace_cleanups[1:]
+    )
+    assert not _repository_differential_is_qualifying(
+        missing_state_cleanup,
+        config=config,
+        repository_sha256="9" * 64,
+    )
+
+    retained_state_cleanup = expected.model_copy(deep=True)
+    assert retained_state_cleanup.matrix is not None
+    object.__setattr__(
+        retained_state_cleanup.matrix.state_workspace_cleanups[0],
+        "private_path_retained",
+        True,
+    )
+    assert not _repository_differential_is_qualifying(
+        retained_state_cleanup,
+        config=config,
+        repository_sha256="9" * 64,
+    )
 
 
 def _rewrite_manifest_as_legacy(manifest_path: Path) -> None:

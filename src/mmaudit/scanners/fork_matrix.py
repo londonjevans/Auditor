@@ -50,6 +50,7 @@ from mmaudit.models.schemas import (
     RepositorySuiteDifferentialRun,
     RepositorySuiteExecutionStateEvidence,
     RepositorySuiteStateAttempt,
+    RepositorySuiteStateWorkspaceCleanupEvidence,
     RepositorySuiteTestComparison,
     RepositorySuiteTestStateConsensus,
     RepositorySuiteWorkspaceLifecycleEvidence,
@@ -83,7 +84,18 @@ _ATTEMPT_CLEANUP_RESERVE_SECONDS = (
     + _SCHEDULING_SLACK_SECONDS
 )
 _URI_PATTERN = re.compile(r"(?i)\b(?:file|https?|wss?)://[^\s\"'<>]+")
-_DIRECTORY_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+
+def _directory_open_flags() -> int:
+    """Return required descriptor-custody flags or fail before any execution."""
+
+    directory = getattr(os, "O_DIRECTORY", None)
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if not isinstance(directory, int) or directory == 0:
+        raise _MatrixEvidenceError("Descriptor-relative directory custody is unavailable.")
+    if not isinstance(no_follow, int) or no_follow == 0:
+        raise _MatrixEvidenceError("No-follow directory custody is unavailable.")
+    return os.O_RDONLY | directory | no_follow | int(getattr(os, "O_CLOEXEC", 0))
 
 
 class _MatrixEvidenceError(Exception):
@@ -169,9 +181,27 @@ class _DirectoryDisposalObservation:
     maximum_removed_depth: int
     removal_timeout_seconds: float
     removal_duration_seconds: float
+    aggregate_removed_entry_count: int
+    aggregate_removal_duration_seconds: float
     attempt_descriptor_closed: bool
     workspace_path_absent: bool
     attempt_path_absent: bool
+
+
+@dataclass(frozen=True)
+class _StateDisposalObservation:
+    """One shared-budget observation over every directory owned by a state."""
+
+    ordered_disposals: tuple[_DirectoryDisposalObservation, ...]
+    owned_directory_count: int
+    removal_entry_limit: int
+    removed_entry_count: int
+    removal_depth_limit: int
+    maximum_removed_depth: int
+    removal_timeout_seconds: float
+    removal_duration_seconds: float
+    all_owned_descriptors_closed: bool
+    all_owned_paths_absent: bool
 
 
 @dataclass
@@ -223,7 +253,7 @@ class _DirectoryCustody:
         try:
             os.mkdir(name, mode=0o700, dir_fd=self.descriptor)
             created_metadata = os.stat(name, dir_fd=self.descriptor, follow_symlinks=False)
-            child_descriptor = os.open(name, _DIRECTORY_OPEN_FLAGS, dir_fd=self.descriptor)
+            child_descriptor = os.open(name, _directory_open_flags(), dir_fd=self.descriptor)
             descriptor_stat = os.fstat(child_descriptor)
             if not _same_entry_identity(created_metadata, descriptor_stat):
                 raise _MatrixEvidenceError("A private workspace child changed while it was opened.")
@@ -253,7 +283,11 @@ class _DirectoryCustody:
                 raise
             raise _MatrixEvidenceError("A private workspace child could not be created.") from exc
 
-    def remove_owned_tree(self) -> _DirectoryDisposalObservation:
+    def remove_owned_tree(
+        self,
+        *,
+        budget: _DirectoryRemovalBudget | None = None,
+    ) -> _DirectoryDisposalObservation:
         """Remove exactly this direct child without following any nested link."""
 
         if (
@@ -263,23 +297,26 @@ class _DirectoryCustody:
             or self.disposal_observation is not None
         ):
             raise _MatrixEvidenceError("A workspace without exclusive child custody was removed.")
-        budget = _DirectoryRemovalBudget.start()
+        removal_budget = budget or _DirectoryRemovalBudget.start()
+        started_at = removal_budget.checkpoint()
+        removed_before = removal_budget.removed_entry_count
         removal_error: BaseException | None = None
         closed_cleanly = False
+        maximum_removed_depth = 0
         try:
             self.parent.assert_stable()
             self.assert_stable()
-            _remove_custodied_contents(
+            maximum_removed_depth = _remove_custodied_contents(
                 self.descriptor,
                 root_device=self.device,
                 depth=0,
-                budget=budget,
+                budget=removal_budget,
             )
             self.parent.assert_stable()
             self.assert_stable()
-            budget.consume_entry(depth=0)
+            removal_budget.consume_entry(depth=0)
             os.rmdir(self.name, dir_fd=self.parent.descriptor)
-            budget.checkpoint()
+            removal_budget.checkpoint()
             try:
                 os.stat(
                     self.name,
@@ -302,17 +339,19 @@ class _DirectoryCustody:
             ) from removal_error
         if not closed_cleanly:
             raise _MatrixEvidenceError("A removed workspace descriptor did not close cleanly.")
-        finished_at = budget.checkpoint()
-        duration = finished_at - budget.started_at
+        finished_at = removal_budget.checkpoint()
+        duration = finished_at - started_at
         observation = _DirectoryDisposalObservation(
             attempt_root_device=self.device,
             attempt_root_inode=self.inode,
-            removal_entry_limit=budget.entry_limit,
-            removed_entry_count=budget.removed_entry_count,
+            removal_entry_limit=removal_budget.entry_limit,
+            removed_entry_count=(removal_budget.removed_entry_count - removed_before),
             removal_depth_limit=REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT,
-            maximum_removed_depth=budget.maximum_removed_depth,
+            maximum_removed_depth=maximum_removed_depth,
             removal_timeout_seconds=REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS,
             removal_duration_seconds=duration,
+            aggregate_removed_entry_count=removal_budget.removed_entry_count,
+            aggregate_removal_duration_seconds=(finished_at - removal_budget.started_at),
             attempt_descriptor_closed=True,
             workspace_path_absent=True,
             attempt_path_absent=True,
@@ -365,7 +404,7 @@ def _remove_custodied_contents(
     root_device: int,
     depth: int,
     budget: _DirectoryRemovalBudget,
-) -> None:
+) -> int:
     """Bounded descriptor-relative deletion that never follows a symlink."""
 
     if depth > REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT:
@@ -382,8 +421,10 @@ def _remove_custodied_contents(
             names.sort()
     except OSError as exc:
         raise _MatrixEvidenceError("A workspace directory could not be enumerated.") from exc
+    maximum_removed_depth = depth
     for name in names:
         budget.consume_entry(depth=depth + 1)
+        maximum_removed_depth = max(maximum_removed_depth, depth + 1)
         try:
             before = os.stat(
                 name,
@@ -399,7 +440,7 @@ def _remove_custodied_contents(
             try:
                 child_descriptor = os.open(
                     name,
-                    _DIRECTORY_OPEN_FLAGS,
+                    _directory_open_flags(),
                     dir_fd=directory_descriptor,
                 )
                 opened = os.fstat(child_descriptor)
@@ -407,12 +448,13 @@ def _remove_custodied_contents(
                     raise _MatrixEvidenceError(
                         "A workspace directory changed while cleanup opened it."
                     )
-                _remove_custodied_contents(
+                child_maximum_depth = _remove_custodied_contents(
                     child_descriptor,
                     root_device=root_device,
                     depth=depth + 1,
                     budget=budget,
                 )
+                maximum_removed_depth = max(maximum_removed_depth, child_maximum_depth)
                 opened_after = os.fstat(child_descriptor)
                 named_after = os.stat(
                     name,
@@ -448,6 +490,7 @@ def _remove_custodied_contents(
             budget.checkpoint()
         except OSError as exc:
             raise _MatrixEvidenceError("A workspace leaf could not be removed safely.") from exc
+    return maximum_removed_depth
 
 
 def _path_is_within(path: Path, parent: Path) -> bool:
@@ -507,7 +550,7 @@ def _open_private_root(
 
     parent = _validate_existing_canonical_directory(private.parent)
     try:
-        parent_descriptor = os.open(parent, _DIRECTORY_OPEN_FLAGS)
+        parent_descriptor = os.open(parent, _directory_open_flags())
     except OSError as exc:
         raise _MatrixEvidenceError("The private workspace parent could not be opened.") from exc
     try:
@@ -520,7 +563,11 @@ def _open_private_root(
                 raise _MatrixEvidenceError("The private workspace was not a direct directory.")
         else:
             os.mkdir(private.name, mode=0o700, dir_fd=parent_descriptor)
-        descriptor = os.open(private.name, _DIRECTORY_OPEN_FLAGS, dir_fd=parent_descriptor)
+        descriptor = os.open(
+            private.name,
+            _directory_open_flags(),
+            dir_fd=parent_descriptor,
+        )
     except OSError as exc:
         raise _MatrixEvidenceError("The private workspace could not be opened safely.") from exc
     finally:
@@ -730,6 +777,7 @@ class _RawState:
     observation_status: RepositoryExecutionStateObservationStatus
     observation_detail: str | None
     clean_attestation: RepositoryCleanStateAttestationEvidence | None = None
+    workspace_cleanup: _StateDisposalObservation | None = None
 
 
 @dataclass
@@ -741,6 +789,7 @@ class _StateLifecycle:
         tuple[int, int],
         _DirectoryDisposalObservation,
     ] = field(default_factory=dict)
+    aggregate_disposal: _StateDisposalObservation | None = None
 
 
 def _canonical_sha256(value: object) -> str:
@@ -1023,6 +1072,10 @@ class RepositoryForkMatrixRunner:
         )
         if baseline_error is not None:
             return failed(baseline_error)
+        try:
+            _directory_open_flags()
+        except _MatrixEvidenceError as exc:
+            return failed(str(exc))
         if self.dependencies.clean_state_provider is None:
             return failed("The trusted internal clean-state launcher was unavailable.")
         if (
@@ -1221,6 +1274,64 @@ class RepositoryForkMatrixRunner:
         attempts_tuple = tuple(
             sorted(attempts, key=lambda item: (item.state_id, item.attempt_index))
         )
+        state_workspace_cleanups: list[RepositorySuiteStateWorkspaceCleanupEvidence] = []
+        for raw_state in sorted(raw_states, key=lambda item: item.config.state_id):
+            state = states_by_id[raw_state.config.state_id]
+            aggregate = raw_state.workspace_cleanup
+            if aggregate is None:
+                return failed("A differential state lacked aggregate workspace disposal.")
+            state_attempts = tuple(
+                attempt for attempt in attempts_tuple if attempt.state_id == state.state_id
+            )
+            lifecycles_by_root = {
+                (
+                    attempt.workspace_lifecycle.attempt_root_device,
+                    attempt.workspace_lifecycle.attempt_root_inode,
+                ): attempt.workspace_lifecycle
+                for attempt in state_attempts
+            }
+            cleanup_sequence: list[str] = []
+            cumulative_entries: list[int] = []
+            cumulative_durations: list[float] = []
+            for disposal in aggregate.ordered_disposals:
+                matched_lifecycle = lifecycles_by_root.get(
+                    (disposal.attempt_root_device, disposal.attempt_root_inode)
+                )
+                if matched_lifecycle is None:
+                    continue
+                cleanup_sequence.append(matched_lifecycle.lifecycle_evidence_sha256)
+                cumulative_entries.append(disposal.aggregate_removed_entry_count)
+                cumulative_durations.append(disposal.aggregate_removal_duration_seconds)
+            try:
+                state_workspace_cleanups.append(
+                    RepositorySuiteStateWorkspaceCleanupEvidence.sealed(
+                        state_id=state.state_id,
+                        state_sha256=state.state_sha256,
+                        disposal_policy_sha256=(REPOSITORY_SUITE_WORKSPACE_DISPOSAL_POLICY_SHA256),
+                        attempt_cleanup_sequence_lifecycle_sha256s=tuple(cleanup_sequence),
+                        attempt_cumulative_removed_entry_counts=tuple(cumulative_entries),
+                        attempt_cumulative_removal_duration_seconds=tuple(cumulative_durations),
+                        owned_directory_count=aggregate.owned_directory_count,
+                        auxiliary_directory_count=(
+                            aggregate.owned_directory_count - len(state_attempts)
+                        ),
+                        removal_entry_limit=aggregate.removal_entry_limit,
+                        removed_entry_count=aggregate.removed_entry_count,
+                        removal_depth_limit=aggregate.removal_depth_limit,
+                        maximum_removed_depth=aggregate.maximum_removed_depth,
+                        removal_timeout_seconds=aggregate.removal_timeout_seconds,
+                        removal_duration_seconds=aggregate.removal_duration_seconds,
+                        all_owned_descriptors_closed=(aggregate.all_owned_descriptors_closed),
+                        all_owned_paths_absent=aggregate.all_owned_paths_absent,
+                        private_path_retained=False,
+                        rpc_endpoint_retained=False,
+                    )
+                )
+            except (TypeError, ValueError):
+                return failed(
+                    "A differential state aggregate workspace lifecycle failed validation."
+                )
+        state_workspace_cleanup_tuple = tuple(state_workspace_cleanups)
         matrix_shell = RepositorySuiteDifferentialMatrix.model_construct(
             repository_sha256=repository_sha256,
             selection_sha256=selection.selection_sha256,
@@ -1232,6 +1343,7 @@ class RepositoryForkMatrixRunner:
             fork_rpc_policy_sha256=fork_rpc_policy_sha256,
             states=states,
             attempts=attempts_tuple,
+            state_workspace_cleanups=state_workspace_cleanup_tuple,
             state_consensuses=(),
             comparisons=(),
             safety_claim=False,
@@ -1322,6 +1434,7 @@ class RepositoryForkMatrixRunner:
                 fork_rpc_policy_sha256=fork_rpc_policy_sha256,
                 states=states,
                 attempts=attempts_tuple,
+                state_workspace_cleanups=state_workspace_cleanup_tuple,
                 state_consensuses=consensus_tuple,
                 comparisons=comparisons_tuple,
                 safety_claim=False,
@@ -1421,6 +1534,11 @@ class RepositoryForkMatrixRunner:
                 raise _MatrixEvidenceError(
                     "A differential attempt lacked verified workspace disposal."
                 )
+        result.workspace_cleanup = lifecycle.aggregate_disposal
+        if result.workspace_cleanup is None:
+            raise _MatrixEvidenceError(
+                "A differential state lacked shared-budget workspace disposal evidence."
+            )
         return result
 
     @staticmethod
@@ -1430,21 +1548,61 @@ class RepositoryForkMatrixRunner:
         absolute_deadline: float,
     ) -> BaseException | None:
         cleanup_error: BaseException | None = None
+        owned_directory_count = len(lifecycle.directories)
+        ordered_disposals: list[_DirectoryDisposalObservation] = []
         if lifecycle.clean_lease is not None and not lifecycle.clean_stop_attempted:
             lifecycle.clean_stop_attempted = True
             try:
                 lifecycle.clean_lease.stop(absolute_deadline)
             except BaseException as exc:
                 cleanup_error = exc
-        for custody in reversed(lifecycle.directories):
+        removal_budget: _DirectoryRemovalBudget | None = None
+        if lifecycle.directories:
             try:
-                observation = custody.remove_owned_tree()
+                removal_budget = _DirectoryRemovalBudget.start()
+            except BaseException as exc:
+                if cleanup_error is None:
+                    cleanup_error = exc
+        for custody in reversed(lifecycle.directories):
+            if removal_budget is None:
+                if not custody.closed:
+                    custody.close()
+                continue
+            try:
+                observation = custody.remove_owned_tree(budget=removal_budget)
                 lifecycle.disposal_observations[(custody.device, custody.inode)] = observation
+                ordered_disposals.append(observation)
             except BaseException as exc:
                 if cleanup_error is None:
                     cleanup_error = exc
                 if not custody.closed:
                     custody.close()
+        if (
+            cleanup_error is None
+            and removal_budget is not None
+            and len(ordered_disposals) == owned_directory_count
+        ):
+            try:
+                finished_at = removal_budget.checkpoint()
+                lifecycle.aggregate_disposal = _StateDisposalObservation(
+                    ordered_disposals=tuple(ordered_disposals),
+                    owned_directory_count=owned_directory_count,
+                    removal_entry_limit=removal_budget.entry_limit,
+                    removed_entry_count=removal_budget.removed_entry_count,
+                    removal_depth_limit=REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT,
+                    maximum_removed_depth=removal_budget.maximum_removed_depth,
+                    removal_timeout_seconds=(REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS),
+                    removal_duration_seconds=(finished_at - removal_budget.started_at),
+                    all_owned_descriptors_closed=all(
+                        observation.attempt_descriptor_closed for observation in ordered_disposals
+                    ),
+                    all_owned_paths_absent=all(
+                        observation.attempt_path_absent and observation.workspace_path_absent
+                        for observation in ordered_disposals
+                    ),
+                )
+            except BaseException as exc:
+                cleanup_error = exc
         lifecycle.directories.clear()
         return cleanup_error
 

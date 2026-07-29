@@ -246,6 +246,7 @@ def test_workspace_copy_custody_proves_stable_copy_without_claiming_removal(
     assert observation.audited_inventory_symlink_free
     assert observation.source_descriptor_custody_validated
     assert observation.workspace_descriptor_custody_validated
+    assert observation.workspace_parent_descriptor_custody_validated
     assert observation.copy_matches_source
     assert observation.source_identity_stable
     assert observation.workspace_identity_stable
@@ -260,6 +261,9 @@ def test_workspace_copy_custody_proves_stable_copy_without_claiming_removal(
     assert observation.source_root_inode_before == observation.source_root_inode_after
     assert observation.workspace_root_device_before == observation.workspace_root_device_after
     assert observation.workspace_root_inode_before == observation.workspace_root_inode_after
+    parent_stat = private_dir.stat()
+    assert observation.workspace_parent_device == parent_stat.st_dev
+    assert observation.workspace_parent_inode == parent_stat.st_ino
     assert workspace.is_dir()
 
 
@@ -358,7 +362,7 @@ def test_workspace_copy_custody_detects_inventory_drift_and_closes_descriptors(
     assert custody.closed
 
 
-def test_workspace_copy_custody_closes_both_descriptors_when_one_close_reports_error(
+def test_workspace_copy_custody_closes_all_descriptors_when_one_close_reports_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -374,6 +378,7 @@ def test_workspace_copy_custody_closes_both_descriptors_when_one_close_reports_e
     )
     source_fd = custody._source_fd
     workspace_fd = custody._workspace_fd
+    workspace_parent_fd = custody._workspace_parent_fd
     real_close = os.close
 
     def close_then_report_error(descriptor: int) -> None:
@@ -391,6 +396,8 @@ def test_workspace_copy_custody_closes_both_descriptors_when_one_close_reports_e
         os.fstat(source_fd)
     with pytest.raises(OSError):
         os.fstat(workspace_fd)
+    with pytest.raises(OSError):
+        os.fstat(workspace_parent_fd)
 
 
 def test_foundry_run_closes_workspace_custody_after_unexpected_base_exception(
@@ -421,7 +428,13 @@ def test_foundry_run_closes_workspace_custody_after_unexpected_base_exception(
             supplied_private_dir / "workspace",
             supplied_private_dir,
         )
-        captured_descriptors.extend((custody._source_fd, custody._workspace_fd))
+        captured_descriptors.extend(
+            (
+                custody._source_fd,
+                custody._workspace_fd,
+                custody._workspace_parent_fd,
+            )
+        )
         workspace_custody_guard.append(custody)
         raise KeyboardInterrupt
 
@@ -430,7 +443,7 @@ def test_foundry_run_closes_workspace_custody_after_unexpected_base_exception(
     with pytest.raises(KeyboardInterrupt):
         scanner.run(repository, private_dir, 10.0)
 
-    assert len(captured_descriptors) == 2
+    assert len(captured_descriptors) == 3
     for descriptor in captured_descriptors:
         with pytest.raises(OSError):
             os.fstat(descriptor)
@@ -662,6 +675,7 @@ def test_foundry_command_uses_exact_literal_path_and_anchored_test_name() -> Non
     path_pattern = command[command.index("--match-path") + 1]
     test_pattern = command[command.index("--match-test") + 1]
     assert path_pattern == descriptor.path
+    assert command[command.index("--gas-price") + 1] == "1000000000"
     assert re.fullmatch(test_pattern, f"{descriptor.test_name}()")
     assert re.fullmatch(test_pattern, f"{descriptor.test_name}Neighbor()") is None
 

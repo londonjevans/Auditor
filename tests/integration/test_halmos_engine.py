@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -14,6 +16,8 @@ from mmaudit.solidity.formal import FormalRunner, HalmosAdapter
 from mmaudit.solidity.reproduction import default_isolation_backend
 from tests.unit.test_echidna import FIXTURE, _inputs
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
 
 def _semantic_version(output: str) -> str:
     match = re.search(r"(?<![0-9.])([0-9]+\.[0-9]+\.[0-9]+)(?![0-9.])", output)
@@ -22,22 +26,41 @@ def _semantic_version(output: str) -> str:
     return match.group(1)
 
 
+def _explicit_test_tool(environment_name: str, label: str) -> Path:
+    raw = os.environ.get(environment_name, "")
+    if not raw:
+        pytest.skip(f"real {label} integration requires {environment_name}")
+    executable = Path(raw)
+    try:
+        metadata = executable.lstat()
+        resolved = executable.resolve(strict=True)
+    except OSError:
+        pytest.skip(f"the explicit {label} integration executable is unavailable")
+    if (
+        not executable.is_absolute()
+        or resolved != executable
+        or executable.is_symlink()
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or metadata.st_uid not in {0, os.geteuid()}
+        or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        or not metadata.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        or resolved.is_relative_to(REPOSITORY_ROOT)
+    ):
+        pytest.skip(f"the explicit {label} integration executable is not trusted")
+    return executable
+
+
 def test_real_halmos_translated_fixture_captures_bounded_counterexample(
     tmp_path: Path,
     config_factory,
 ) -> None:
-    raw_executable = shutil.which("halmos")
-    raw_solver = shutil.which("z3")
-    if raw_executable is None:
-        pytest.skip("halmos is not installed")
-    if raw_solver is None:
-        pytest.skip("the fixed local Z3 dependency is not installed")
+    executable = _explicit_test_tool("MMAUDIT_TEST_HALMOS_EXECUTABLE", "Halmos")
+    solver = _explicit_test_tool("MMAUDIT_TEST_Z3_EXECUTABLE", "Z3")
     backend = default_isolation_backend("auto")
     if backend is None:
         pytest.skip("no hardened isolation backend is available")
 
-    executable = Path(raw_executable).resolve(strict=True)
-    solver = Path(raw_solver).resolve(strict=True)
     halmos_version = _semantic_version(
         subprocess.run(
             [str(executable), "--version"],

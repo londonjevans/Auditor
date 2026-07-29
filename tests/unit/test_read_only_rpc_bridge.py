@@ -16,6 +16,7 @@ import pytest
 
 from mmaudit.scanners import read_only_rpc as read_only_rpc_module
 from mmaudit.scanners.read_only_rpc import (
+    DETERMINISTIC_FORK_GAS_PRICE_WEI,
     ReadOnlyRpcBridge,
     ReadOnlyRpcBridgeError,
     ReadOnlyRpcTestScopeSnapshot,
@@ -131,6 +132,8 @@ def _responses_for(payload: object, state: _OriginState) -> object:
             result = {"number": hex(state.block_number), "hash": state.block_hash}
         elif method == "eth_getBalance":
             result = "0x1"
+        elif method == "eth_getAccountInfo":
+            result = {"balance": "0x1", "code": "0x", "nonce": "0x0"}
         elif method in {
             "eth_getBlockTransactionCountByHash",
             "eth_getBlockTransactionCountByNumber",
@@ -448,6 +451,27 @@ def test_bridge_denies_transaction_signing_and_node_mutation_names(
     assert snapshot.denied_request_count == len(denied_methods)
     assert snapshot.permitted_rpc_call_count == 0
     assert "synthetic-request-canary" not in json.dumps(snapshot.to_dict(), sort_keys=True)
+
+
+def test_bridge_returns_fixed_gas_price_without_contacting_origin(
+    local_origin: tuple[str, _OriginState],
+) -> None:
+    origin, state = local_origin
+    bridge = _bridge(origin)
+
+    with bridge:
+        response = _post(bridge.endpoint, _request("eth_gasPrice", []))
+
+    assert response.status_code == 200
+    assert response.json()["result"] == hex(DETERMINISTIC_FORK_GAS_PRICE_WEI)
+    assert _ordinary_origin_requests(state) == []
+    snapshot = bridge.snapshot()
+    assert snapshot.status == "enforced"
+    assert snapshot.permitted_rpc_call_count == 1
+    assert snapshot.origin_attempted_rpc_call_count == 0
+    assert snapshot.origin_validated_rpc_call_count == 0
+    assert snapshot.synthetic_rpc_call_count == 1
+    assert snapshot.allowed_method_counts == (("eth_gasPrice", 1),)
 
 
 def test_bridge_enforces_body_batch_depth_and_aggregate_call_limits(
@@ -950,6 +974,7 @@ def test_bridge_postflight_rejects_origin_identity_drift_and_cannot_seal(
     ("method", "params", "block_parameter_index"),
     [
         ("eth_call", [{"to": _ACCOUNT, "data": "0x"}, "latest"], 1),
+        ("eth_getAccountInfo", [_ACCOUNT, "latest"], 1),
         ("eth_getBalance", [_ACCOUNT, "latest"], 1),
         ("eth_getCode", [_ACCOUNT, "latest"], 1),
         ("eth_getStorageAt", [_ACCOUNT, "0x0", "latest"], 2),
@@ -1012,6 +1037,40 @@ def test_bridge_accepts_only_exact_canonical_eip_1898_reference(
     assert accepted.status_code == 200
     assert rejected.status_code == 403
     assert len(_ordinary_origin_requests(state)) == 1
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"balance": "1", "code": "0x", "nonce": "0x0"},
+        {"balance": "0x1", "code": "not-hex", "nonce": "0x0"},
+        {"balance": "0x1", "code": "0x", "nonce": "0"},
+        {"balance": "0x1", "code": "0x", "nonce": "0x0", "extra": "0x0"},
+    ],
+)
+def test_bridge_rejects_malformed_account_info_result(
+    local_origin: tuple[str, _OriginState],
+    result: object,
+) -> None:
+    origin, state = local_origin
+    state.response_body = json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": result},
+        separators=(",", ":"),
+    ).encode()
+    bridge = _bridge(origin)
+
+    with bridge:
+        response = _post(
+            bridge.endpoint,
+            _request("eth_getAccountInfo", [_ACCOUNT, "latest"]),
+        )
+
+    assert response.status_code == 502
+    snapshot = bridge.snapshot()
+    assert snapshot.status == "violation"
+    assert snapshot.origin_attempted_rpc_call_count == 1
+    assert snapshot.origin_validated_rpc_call_count == 0
+    assert snapshot.upstream_error_request_count == 1
 
 
 @pytest.mark.parametrize(

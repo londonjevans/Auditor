@@ -149,11 +149,14 @@ class ScannerWorkspaceCopyObservation:
     workspace_root_inode_before: int
     workspace_root_device_after: int
     workspace_root_inode_after: int
+    workspace_parent_device: int
+    workspace_parent_inode: int
     workspace_created_exclusively: bool = True
     workspace_direct_child: bool = True
     audited_inventory_symlink_free: bool = True
     source_descriptor_custody_validated: bool = True
     workspace_descriptor_custody_validated: bool = True
+    workspace_parent_descriptor_custody_validated: bool = True
     copy_matches_source: bool = True
     source_identity_stable: bool = True
     workspace_identity_stable: bool = True
@@ -166,9 +169,12 @@ class ScannerWorkspaceCopyCustody:
 
     _source_root: Path
     _workspace_root: Path
+    _workspace_parent_root: Path
     _source_private_dir: Path
     _source_fd: int
     _workspace_fd: int
+    _workspace_parent_fd: int
+    _workspace_parent_identity: _WorkspaceIdentity
     _source_before: _ScannerWorkspaceInventory
     _workspace_after_copy: _ScannerWorkspaceInventory
     _closed: bool = False
@@ -210,6 +216,17 @@ class ScannerWorkspaceCopyCustody:
                 self._workspace_after_copy.root_identity,
                 label="workspace",
             )
+            _require_retained_workspace_root(
+                self._workspace_parent_root,
+                self._workspace_parent_fd,
+                self._workspace_parent_identity,
+                label="workspace parent",
+            )
+            _require_retained_workspace_child(
+                self._workspace_parent_fd,
+                self._workspace_root.name,
+                self._workspace_after_copy.root_identity,
+            )
             source_after = _build_scanner_workspace_inventory_from_descriptor(
                 self._source_root,
                 self._source_fd,
@@ -232,6 +249,17 @@ class ScannerWorkspaceCopyCustody:
                 self._workspace_after_copy.root_identity,
                 label="workspace",
             )
+            _require_retained_workspace_root(
+                self._workspace_parent_root,
+                self._workspace_parent_fd,
+                self._workspace_parent_identity,
+                label="workspace parent",
+            )
+            _require_retained_workspace_child(
+                self._workspace_parent_fd,
+                self._workspace_root.name,
+                self._workspace_after_copy.root_identity,
+            )
             if not _workspace_inventory_identity_stable(self._source_before, source_after):
                 raise ValueError("scanner workspace source inventory changed during execution")
             if not _workspace_inventory_identity_stable(
@@ -252,6 +280,8 @@ class ScannerWorkspaceCopyCustody:
                 workspace_root_inode_before=self._workspace_after_copy.root_identity.inode,
                 workspace_root_device_after=workspace_after.root_identity.device,
                 workspace_root_inode_after=workspace_after.root_identity.inode,
+                workspace_parent_device=self._workspace_parent_identity.device,
+                workspace_parent_inode=self._workspace_parent_identity.inode,
             )
         except BaseException as exc:
             primary_error = exc
@@ -271,9 +301,11 @@ class ScannerWorkspaceCopyCustody:
         self._closed = True
         workspace_fd = self._workspace_fd
         source_fd = self._source_fd
+        workspace_parent_fd = self._workspace_parent_fd
         self._workspace_fd = -1
         self._source_fd = -1
-        _close_workspace_descriptors(workspace_fd, source_fd)
+        self._workspace_parent_fd = -1
+        _close_workspace_descriptors(workspace_fd, source_fd, workspace_parent_fd)
 
 
 class ScannerIsolationBackend(Protocol):
@@ -697,11 +729,14 @@ def scanner_trust_pin_error(
         return "scanner trust policy requires paired version and SHA-256 pins"
     if executable_sha256 != expected_sha256:
         return "scanner executable SHA-256 does not match the configured trust pin"
+    normalized_expected_version = " ".join(expected_version.split())
+    normalized_version = " ".join(version.split()) if version is not None else None
     if (
-        version is None
+        normalized_version is None
+        or not normalized_expected_version
         or re.search(
-            rf"(?<![0-9.]){re.escape(expected_version)}(?![0-9.])",
-            version,
+            rf"(?<![0-9.]){re.escape(normalized_expected_version)}(?![0-9.])",
+            normalized_version,
         )
         is None
     ):
@@ -726,6 +761,7 @@ def copy_scanner_workspace_with_custody(
     source_root, source_identity = _openable_workspace_root(root)
     source_fd = _open_workspace_directory(source_root)
     workspace_fd = -1
+    workspace_parent_fd = -1
     primary_error: BaseException | None = None
     try:
         _require_workspace_identity(os.fstat(source_fd), source_identity)
@@ -734,7 +770,13 @@ def copy_scanner_workspace_with_custody(
             source_fd,
             private_dir,
         )
-        workspace_root, workspace_fd = _create_exclusive_workspace_root(workspace)
+        (
+            workspace_root,
+            workspace_fd,
+            workspace_parent_root,
+            workspace_parent_fd,
+            workspace_parent_identity,
+        ) = _create_exclusive_workspace_root(workspace)
         _copy_scanner_workspace_inventory_with_descriptors(
             source_inventory,
             source_fd,
@@ -762,21 +804,25 @@ def copy_scanner_workspace_with_custody(
         custody = ScannerWorkspaceCopyCustody(
             _source_root=source_root,
             _workspace_root=workspace_root,
+            _workspace_parent_root=workspace_parent_root,
             _source_private_dir=private_dir,
             _source_fd=source_fd,
             _workspace_fd=workspace_fd,
+            _workspace_parent_fd=workspace_parent_fd,
+            _workspace_parent_identity=workspace_parent_identity,
             _source_before=source_inventory,
             _workspace_after_copy=workspace_inventory,
         )
         source_fd = -1
         workspace_fd = -1
+        workspace_parent_fd = -1
         return custody
     except BaseException as exc:
         primary_error = exc
         raise
     finally:
         try:
-            _close_workspace_descriptors(workspace_fd, source_fd)
+            _close_workspace_descriptors(workspace_fd, source_fd, workspace_parent_fd)
         except OSError:
             if primary_error is None:
                 raise
@@ -1250,7 +1296,9 @@ def _open_workspace_relative_directory_by_identity(
         raise
 
 
-def _create_exclusive_workspace_root(workspace: Path) -> tuple[Path, int]:
+def _create_exclusive_workspace_root(
+    workspace: Path,
+) -> tuple[Path, int, Path, int, _WorkspaceIdentity]:
     requested_parent = workspace.parent.absolute()
     parent_root, parent_identity = _openable_workspace_root(requested_parent)
     if requested_parent != parent_root or workspace.name in {"", ".", ".."}:
@@ -1258,6 +1306,7 @@ def _create_exclusive_workspace_root(workspace: Path) -> tuple[Path, int]:
     parent_fd = _open_workspace_directory(parent_root)
     workspace_fd = -1
     created_identity: _WorkspaceIdentity | None = None
+    retain_parent_descriptor = False
     try:
         _require_workspace_identity(os.fstat(parent_fd), parent_identity)
         try:
@@ -1279,7 +1328,15 @@ def _create_exclusive_workspace_root(workspace: Path) -> tuple[Path, int]:
             os.stat(workspace.name, dir_fd=parent_fd, follow_symlinks=False),
             identity,
         )
-        return parent_root / workspace.name, workspace_fd
+        parent_identity_after_creation = _WorkspaceIdentity.from_stat(os.fstat(parent_fd))
+        retain_parent_descriptor = True
+        return (
+            parent_root / workspace.name,
+            workspace_fd,
+            parent_root,
+            parent_fd,
+            parent_identity_after_creation,
+        )
     except BaseException:
         if workspace_fd >= 0:
             os.close(workspace_fd)
@@ -1296,7 +1353,8 @@ def _create_exclusive_workspace_root(workspace: Path) -> tuple[Path, int]:
                 pass
         raise
     finally:
-        os.close(parent_fd)
+        if not retain_parent_descriptor:
+            os.close(parent_fd)
 
 
 def _require_retained_workspace_root(
@@ -1320,6 +1378,28 @@ def _require_retained_workspace_root(
         and stat.S_IMODE(named_metadata.st_mode) == stat.S_IMODE(expected.mode)
     ):
         raise ValueError(f"scanner workspace {label} root identity changed")
+
+
+def _require_retained_workspace_child(
+    parent_descriptor: int,
+    child_name: str,
+    expected: _WorkspaceIdentity,
+) -> None:
+    try:
+        metadata = os.stat(
+            child_name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+    except OSError as exc:
+        raise ValueError("scanner workspace is no longer its custodied parent's child") from exc
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_dev != expected.device
+        or metadata.st_ino != expected.inode
+        or stat.S_IMODE(metadata.st_mode) != stat.S_IMODE(expected.mode)
+    ):
+        raise ValueError("scanner workspace is no longer its custodied parent's child")
 
 
 def _workspace_copy_matches(

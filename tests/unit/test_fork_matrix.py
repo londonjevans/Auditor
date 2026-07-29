@@ -652,6 +652,7 @@ class _Scanner:
         workspace = private_dir / "workspace"
         workspace.mkdir(mode=0o700)
         source_stat = root.stat()
+        workspace_parent_stat = private_dir.stat()
         workspace_stat = workspace.stat()
         workspace_copy = RepositorySuiteWorkspaceCopyEvidence.sealed(
             attempt_binding_sha256=self._attempt_binding_sha256,
@@ -670,6 +671,8 @@ class _Scanner:
             workspace_root_inode_before=workspace_stat.st_ino,
             workspace_root_device_after=workspace_stat.st_dev,
             workspace_root_inode_after=workspace_stat.st_ino,
+            workspace_parent_device=workspace_parent_stat.st_dev,
+            workspace_parent_inode=workspace_parent_stat.st_ino,
         )
         if self._harness.scanner_private_callback is not None:
             self._harness.scanner_private_callback(private_dir)
@@ -1148,6 +1151,19 @@ def test_runner_emits_repeated_real_divergence_without_top_level_child_runs(
     assert len({path for path in harness.attempt_directories}) == 4
     assert all(not path.exists() for path in harness.attempt_directories)
     assert all(lease.stopped for lease in harness.clean_provider.leases)
+    for cleanup in result.matrix.state_workspace_cleanups:
+        state_attempts = tuple(
+            attempt for attempt in result.matrix.attempts if attempt.state_id == cleanup.state_id
+        )
+        cleanup_order = tuple(reversed(state_attempts))
+        assert cleanup.attempt_cleanup_sequence_lifecycle_sha256s == tuple(
+            attempt.workspace_lifecycle.lifecycle_evidence_sha256 for attempt in cleanup_order
+        )
+        assert cleanup.attempt_cumulative_removed_entry_counts[-1] == sum(
+            attempt.workspace_lifecycle.removed_entry_count for attempt in cleanup_order
+        )
+        assert cleanup.removed_entry_count <= cleanup.removal_entry_limit
+        assert cleanup.removal_duration_seconds <= cleanup.removal_timeout_seconds
     serialized = result.model_dump_json()
     for prohibited in ("http://", "127.0.0.1", str(tmp_path)):
         assert prohibited not in serialized
@@ -1286,6 +1302,77 @@ def test_runner_cleanup_time_ceiling_prevents_complete(
     assert result.matrix is None
 
 
+def test_state_cleanup_shares_one_aggregate_deadline_across_custodies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_budget_ids: list[int] = []
+    cleanup_times = iter((0.0, 3.0, 6.0))
+
+    @dataclass
+    class _SyntheticCustody:
+        device: int
+        inode: int
+        closed: bool = False
+
+        def remove_owned_tree(
+            self,
+            *,
+            budget: fork_matrix_module._DirectoryRemovalBudget,
+        ) -> fork_matrix_module._DirectoryDisposalObservation:
+            observed_budget_ids.append(id(budget))
+            budget.checkpoint()
+            self.closed = True
+            return fork_matrix_module._DirectoryDisposalObservation(
+                attempt_root_device=self.device,
+                attempt_root_inode=self.inode,
+                removal_entry_limit=budget.entry_limit,
+                removed_entry_count=1,
+                removal_depth_limit=(
+                    fork_matrix_module.REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT
+                ),
+                maximum_removed_depth=0,
+                removal_timeout_seconds=(
+                    fork_matrix_module.REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS
+                ),
+                removal_duration_seconds=0.0,
+                aggregate_removed_entry_count=budget.removed_entry_count,
+                aggregate_removal_duration_seconds=(
+                    budget.last_observed_at - budget.started_at
+                    if budget.last_observed_at is not None
+                    else 0.0
+                ),
+                attempt_descriptor_closed=True,
+                workspace_path_absent=True,
+                attempt_path_absent=True,
+            )
+
+        def close(self) -> bool:
+            self.closed = True
+            return True
+
+    monkeypatch.setattr(
+        fork_matrix_module,
+        "_bounded_monotonic",
+        lambda: next(cleanup_times),
+    )
+    lifecycle = fork_matrix_module._StateLifecycle(
+        directories=[
+            cast(fork_matrix_module._DirectoryCustody, _SyntheticCustody(1, 2)),
+            cast(fork_matrix_module._DirectoryCustody, _SyntheticCustody(3, 4)),
+        ]
+    )
+
+    cleanup_error = RepositoryForkMatrixRunner._cleanup_state_lifecycle(
+        lifecycle,
+        absolute_deadline=100.0,
+    )
+
+    assert isinstance(cleanup_error, fork_matrix_module._MatrixEvidenceError)
+    assert len(observed_budget_ids) == 2
+    assert len(set(observed_budget_ids)) == 1
+    assert lifecycle.directories == []
+
+
 def test_runner_close_failure_does_not_abort_later_owned_cleanup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1317,6 +1404,24 @@ def test_runner_close_failure_does_not_abort_later_owned_cleanup(
     assert result.matrix is None
     assert len(harness.attempt_directories) == 2
     assert all(not path.exists() for path in harness.attempt_directories)
+
+
+@pytest.mark.parametrize("missing_capability", ["O_DIRECTORY", "O_NOFOLLOW"])
+def test_runner_fails_before_custody_or_execution_without_required_open_capability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    missing_capability: str,
+) -> None:
+    harness = _Harness()
+    monkeypatch.delattr(fork_matrix_module.os, missing_capability)
+
+    result = harness.run(tmp_path)
+
+    assert result.status is RepositoryDifferentialRunStatus.FAILED
+    assert result.matrix is None
+    assert harness.clean_provider.leases == []
+    assert harness.scanner_invocations == {}
+    assert harness.attempt_directories == []
 
 
 @pytest.mark.parametrize("failure_point", ["open", "fstat"])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import tempfile
 import time
 from collections.abc import Sequence
@@ -14,6 +15,11 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from mmaudit.config import AuditConfig
 from mmaudit.models.schemas import (
+    REPOSITORY_SUITE_WORKSPACE_COPY_POLICY_SHA256,
+    REPOSITORY_SUITE_WORKSPACE_DISPOSAL_POLICY_SHA256,
+    REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT,
+    REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT,
+    REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS,
     CandidateFinding,
     ExecutionEvidenceKind,
     FalsificationDecision,
@@ -22,10 +28,17 @@ from mmaudit.models.schemas import (
     InvariantExecutionResult,
     InvariantExecutionStatus,
     InvariantSuite,
+    RepositoryCleanStateAttestationEvidence,
     RepositoryDifferentialRunStatus,
     RepositoryForkEgressStatus,
+    RepositorySuiteDifferentialMatrix,
     RepositorySuiteDifferentialRun,
     RepositorySuiteInventoryEvidence,
+    RepositorySuiteStateWorkspaceCleanupEvidence,
+    RepositorySuiteWorkspaceCopyEvidence,
+    RepositorySuiteWorkspaceLifecycleEvidence,
+    RepositorySuiteWorkspaceLifecycleStatus,
+    RepositoryTestForkRpcScopeEvidence,
     ReproductionResult,
     ReproductionState,
     ScannerRun,
@@ -46,10 +59,18 @@ from mmaudit.orchestration.verification import (
 from mmaudit.reporting.json_report import stable_json
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_name
-from mmaudit.scanners.base import scanner_workspace_sha256
+from mmaudit.scanners.base import ScannerIsolationBackend, scanner_workspace_sha256
+from mmaudit.scanners.clean_chain import TrustedCleanAnvilLauncher
+from mmaudit.scanners.fork_matrix import (
+    ForkMatrixDependencies,
+    RepositoryForkMatrixRunner,
+)
 from mmaudit.scanners.runner import ScannerRunner
 from mmaudit.solidity.invariant_execution import FoundryInvariantRunner
-from mmaudit.solidity.reproduction import ForkReproductionRunner
+from mmaudit.solidity.reproduction import (
+    ForkReproductionRunner,
+    default_isolation_backend,
+)
 
 _MAX_ARTIFACT_BYTES = 100_000_000
 _MAX_REPLAY_BYTES = 100_000_000
@@ -253,6 +274,62 @@ class RepositoryDifferentialReplayRunner(Protocol):
     ) -> RepositorySuiteDifferentialRun | None: ...
 
 
+class _BackendBoundRepositoryDifferentialReplayRunner:
+    """Bind replay to the exact isolation backend already selected for scanners."""
+
+    def __init__(
+        self,
+        runner: RepositoryForkMatrixRunner,
+        backend: ScannerIsolationBackend,
+    ) -> None:
+        self.runner = runner
+        self.backend = backend
+
+    def run(
+        self,
+        repository_root: Path,
+        private_dir: Path,
+        *,
+        projects: Sequence[SolidityProjectMetadata],
+        repository_sha256: str,
+        repository_exclusion_root: Path,
+        baseline_run: ScannerRun,
+        absolute_deadline: float,
+    ) -> RepositorySuiteDifferentialRun | None:
+        return self.runner.run(
+            repository_root,
+            private_dir,
+            projects=projects,
+            repository_sha256=repository_sha256,
+            repository_exclusion_root=repository_exclusion_root,
+            backend=self.backend,
+            baseline_run=baseline_run,
+            absolute_deadline=absolute_deadline,
+        )
+
+
+def _configured_replay_isolation_backend(config: AuditConfig) -> ScannerIsolationBackend:
+    """Resolve the effective configured backend exactly once or refuse replay."""
+
+    backend = default_isolation_backend(
+        config.reproduction.isolation_backend,
+        rootless_container_image=config.reproduction.rootless_container_image,
+        rootless_container_runtime=config.reproduction.rootless_container_runtime,
+    )
+    if backend is None:
+        raise ValueError("configured hardened isolation backend is unavailable for offline replay")
+    try:
+        name = backend.name
+        wrap = backend.wrap
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "configured hardened isolation backend is invalid for offline replay"
+        ) from exc
+    if not isinstance(name, str) or not name or not callable(wrap):
+        raise ValueError("configured hardened isolation backend is invalid for offline replay")
+    return backend
+
+
 def _repository_suite_replay_identity(
     repository: Path,
     expected: Sequence[ScannerRun],
@@ -388,6 +465,7 @@ class OfflineReplayOrchestrator:
         self.invariant_runner: InvariantReplayRunner | None = invariant_runner
         self.reproduction_runner: ReproductionReplayRunner | None = reproduction_runner
         self.differential_runner: RepositoryDifferentialReplayRunner | None = differential_runner
+        self._differential_runner_limitation: str | None = None
 
     async def replay(
         self,
@@ -402,15 +480,6 @@ class OfflineReplayOrchestrator:
         manifest = load_run_evidence_manifest(manifest_path)
         effective_config, verification_file_config = self._resolve_effective_config(manifest)
         self.config = effective_config
-        self.scanner_runner = self._injected_scanner_runner or ScannerRunner(effective_config)
-        self.invariant_runner = self._injected_invariant_runner or FoundryInvariantRunner(
-            effective_config.reproduction,
-            effective_config.smart_contracts,
-        )
-        self.reproduction_runner = self._injected_reproduction_runner or ForkReproductionRunner(
-            effective_config.reproduction,
-            effective_config.smart_contracts,
-        )
         verification = verify_run_evidence(
             manifest_path=manifest_path,
             run_dir=run_dir,
@@ -424,6 +493,53 @@ class OfflineReplayOrchestrator:
         repository = _safe_directory(repository_root, "repository")
         work_parent = _safe_work_directory(work_dir)
         artifacts = _load_replay_artifacts(root, config=effective_config)
+
+        scanner_required = bool(artifacts.scanners.runs)
+        invariant_required = bool(artifacts.harnesses.harnesses)
+        reproduction_required = bool(artifacts.reproductions.test_specifications)
+        differential_required = artifacts.differential is not None
+        default_backend_required = (
+            (self._injected_scanner_runner is None and scanner_required)
+            or (self._injected_invariant_runner is None and invariant_required)
+            or (self._injected_reproduction_runner is None and reproduction_required)
+            or (self._injected_differential_runner is None and differential_required)
+        )
+        shared_backend = (
+            _configured_replay_isolation_backend(effective_config)
+            if default_backend_required
+            else None
+        )
+        self.scanner_runner = self._injected_scanner_runner
+        if self.scanner_runner is None and scanner_required:
+            if shared_backend is None:
+                raise RuntimeError("offline replay lacks its resolved isolation backend")
+            self.scanner_runner = ScannerRunner(
+                effective_config,
+                backend=shared_backend,
+            )
+        self.invariant_runner = self._injected_invariant_runner
+        if self.invariant_runner is None and invariant_required:
+            if shared_backend is None:
+                raise RuntimeError("offline replay lacks its resolved isolation backend")
+            self.invariant_runner = FoundryInvariantRunner(
+                effective_config.reproduction,
+                effective_config.smart_contracts,
+                backend=shared_backend,
+            )
+        self.reproduction_runner = self._injected_reproduction_runner
+        if self.reproduction_runner is None and reproduction_required:
+            if shared_backend is None:
+                raise RuntimeError("offline replay lacks its resolved isolation backend")
+            self.reproduction_runner = ForkReproductionRunner(
+                effective_config.reproduction,
+                effective_config.smart_contracts,
+                backend=shared_backend,
+            )
+        self._configure_differential_runner(
+            effective_config,
+            backend=shared_backend,
+            default_required=differential_required,
+        )
 
         components: list[OfflineReplayComponent] = []
         observed_scanner_runs: list[ScannerRun] = []
@@ -537,6 +653,47 @@ class OfflineReplayOrchestrator:
             )
         return resolve_run_evidence_config(manifest), None
 
+    def _configure_differential_runner(
+        self,
+        config: AuditConfig,
+        *,
+        backend: ScannerIsolationBackend | None,
+        default_required: bool,
+    ) -> None:
+        """Construct the trusted default only for an effective configured matrix."""
+
+        self.differential_runner = self._injected_differential_runner
+        self._differential_runner_limitation = None
+        if (
+            self.differential_runner is not None
+            or not default_required
+            or not config.smart_contracts.repository_suite.fork_matrix_states
+        ):
+            return
+        if backend is None:
+            self._differential_runner_limitation = (
+                "trusted local repository differential replay lacks the exact configured "
+                "isolation backend"
+            )
+            return
+        try:
+            matrix_runner = RepositoryForkMatrixRunner(
+                config.smart_contracts,
+                config.reproduction,
+                dependencies=ForkMatrixDependencies(
+                    clean_state_provider=TrustedCleanAnvilLauncher(),
+                ),
+            )
+        except (OSError, RuntimeError, TypeError, ValueError):
+            self._differential_runner_limitation = (
+                "trusted local repository differential replay runner construction failed safely"
+            )
+            return
+        self.differential_runner = _BackendBoundRepositoryDifferentialReplayRunner(
+            matrix_runner,
+            backend,
+        )
+
     async def _replay_scanners(
         self,
         *,
@@ -546,6 +703,8 @@ class OfflineReplayOrchestrator:
         expected: list[ScannerRun],
         observed_runs: list[ScannerRun] | None = None,
     ) -> list[OfflineReplayComponent]:
+        if not expected:
+            return []
         assert self.scanner_runner is not None
         expected_by_name = {item.scanner: item for item in expected}
         try:
@@ -709,7 +868,10 @@ class OfflineReplayOrchestrator:
                     identifier=identifier,
                     expected_state=expected_state,
                     expected_projection=expected_projection,
-                    limitation="trusted local repository differential runner is unavailable",
+                    limitation=(
+                        self._differential_runner_limitation
+                        or "trusted local repository differential runner is unavailable"
+                    ),
                 )
             ]
         try:
@@ -835,6 +997,8 @@ class OfflineReplayOrchestrator:
         harnesses: list[FoundryInvariantHarnessSpec],
         expected_results: list[InvariantExecutionResult],
     ) -> list[OfflineReplayComponent]:
+        if not harnesses:
+            return []
         assert self.invariant_runner is not None
         invariants = {
             invariant.id: invariant for invariant in (suite.invariants if suite is not None else [])
@@ -928,6 +1092,8 @@ class OfflineReplayOrchestrator:
         specifications: list[GeneratedFoundryTestSpec],
         expected_results: list[ReproductionResult],
     ) -> list[OfflineReplayComponent]:
+        if not specifications:
+            return []
         assert self.reproduction_runner is not None
         candidates_by_id = {item.candidate_id: item for item in candidates}
         expected = {(item.candidate_id, item.test_name): item for item in expected_results}
@@ -1436,6 +1602,114 @@ def _configured_differential_projection(
     }
 
 
+def _clean_state_attestation_projection(
+    attestation: RepositoryCleanStateAttestationEvidence,
+) -> dict[str, object]:
+    """Retain reusable clean-state facts without process- or timing-local identity."""
+
+    return attestation.model_dump(
+        mode="json",
+        exclude={
+            "attestation_sha256",
+            "process_attestation_sha256",
+            "startup_duration_seconds",
+            "termination_method",
+            "termination_duration_seconds",
+        },
+    )
+
+
+def _stable_clean_state_source_sha256(
+    attestation: RepositoryCleanStateAttestationEvidence,
+) -> str:
+    """Bind replay to stable clean-state semantics rather than one process instance."""
+
+    return canonical_sha256(
+        {
+            "domain": "mmaudit.repository-clean-state-replay.v1",
+            "attestation": _clean_state_attestation_projection(attestation),
+        }
+    )
+
+
+def _workspace_copy_projection(
+    evidence: RepositorySuiteWorkspaceCopyEvidence,
+) -> dict[str, object]:
+    """Project source-copy evidence without attempt-local descriptors or self hashes."""
+
+    return evidence.model_dump(
+        mode="json",
+        exclude={
+            "attempt_binding_sha256",
+            "source_root_device_before",
+            "source_root_inode_before",
+            "source_root_device_after",
+            "source_root_inode_after",
+            "workspace_root_device_before",
+            "workspace_root_inode_before",
+            "workspace_root_device_after",
+            "workspace_root_inode_after",
+            "workspace_parent_device",
+            "workspace_parent_inode",
+            "copy_evidence_sha256",
+        },
+    )
+
+
+def _workspace_lifecycle_projection(
+    evidence: RepositorySuiteWorkspaceLifecycleEvidence,
+) -> dict[str, object]:
+    """Retain disposal policy, bounds, and non-retention without local identities."""
+
+    return evidence.model_dump(
+        mode="json",
+        exclude={
+            "attempt_binding_sha256",
+            "workspace_copy_evidence_sha256",
+            "scanner_execution_observation_sha256",
+            "freshness_attestation_sha256",
+            "attempt_root_device",
+            "attempt_root_inode",
+            "removal_duration_seconds",
+            "lifecycle_evidence_sha256",
+        },
+    )
+
+
+def _state_workspace_cleanup_projection(
+    evidence: RepositorySuiteStateWorkspaceCleanupEvidence,
+) -> dict[str, object]:
+    """Retain aggregate disposal semantics without attempt hashes or timings."""
+
+    projection = evidence.model_dump(
+        mode="json",
+        exclude={
+            "attempt_cleanup_sequence_lifecycle_sha256s",
+            "attempt_cumulative_removal_duration_seconds",
+            "removal_duration_seconds",
+            "aggregate_evidence_sha256",
+        },
+    )
+    projection["attempt_cleanup_sequence"] = "reverse_attempt_order"
+    return projection
+
+
+def _repository_test_fork_rpc_scope_projection(
+    scope: RepositoryTestForkRpcScopeEvidence,
+) -> dict[str, object]:
+    """Retain descriptor-scoped RPC semantics without attempt-local bindings."""
+
+    return scope.model_dump(
+        mode="json",
+        exclude={
+            "attempt_binding_sha256",
+            "selection_sha256",
+            "bridge_scope_snapshot_sha256",
+            "evidence_sha256",
+        },
+    )
+
+
 def _repository_differential_projection(
     result: RepositorySuiteDifferentialRun,
 ) -> dict[str, object]:
@@ -1455,30 +1729,27 @@ def _repository_differential_projection(
     states: list[dict[str, object]] = []
     for state in matrix.states:
         clean_attestation = state.clean_state_attestation
+        clean_projection = (
+            _clean_state_attestation_projection(clean_attestation)
+            if clean_attestation is not None
+            else None
+        )
         states.append(
             {
                 "state_id": state.state_id,
                 "kind": state.kind.value,
-                "state_source_sha256": state.state_source_sha256,
+                "state_source_sha256": (
+                    _stable_clean_state_source_sha256(clean_attestation)
+                    if clean_attestation is not None
+                    else state.state_source_sha256
+                ),
                 "expected_chain_id": state.expected_chain_id,
                 "pinned_block_number": state.pinned_block_number,
                 "observation_status": state.observation_status.value,
                 "observed_chain_id": state.observed_chain_id,
                 "observed_block_number": state.observed_block_number,
                 "observed_block_hash": state.observed_block_hash,
-                "clean_state_attestation": (
-                    clean_attestation.model_dump(
-                        mode="json",
-                        exclude={
-                            "attestation_sha256",
-                            "process_attestation_sha256",
-                            "startup_duration_seconds",
-                            "termination_duration_seconds",
-                        },
-                    )
-                    if clean_attestation is not None
-                    else None
-                ),
+                "clean_state_attestation": clean_projection,
             }
         )
     attempts: list[dict[str, object]] = []
@@ -1486,6 +1757,7 @@ def _repository_differential_projection(
         run = attempt.scanner_run
         policy = run.repository_suite_execution_policy
         egress = run.fork_rpc_egress
+        workspace_copy = run.repository_suite_workspace_copy
         executions = [
             execution.model_dump(
                 mode="json",
@@ -1538,14 +1810,28 @@ def _repository_differential_projection(
                 "execution_policy": (
                     policy.model_dump(mode="json") if policy is not None else None
                 ),
+                "workspace_copy": (
+                    _workspace_copy_projection(workspace_copy)
+                    if workspace_copy is not None
+                    else None
+                ),
+                "workspace_lifecycle": _workspace_lifecycle_projection(attempt.workspace_lifecycle),
                 "fork_rpc_egress": (
                     egress.model_dump(
                         mode="json",
-                        exclude={"bridge_snapshot_sha256", "evidence_sha256"},
+                        exclude={
+                            "bridge_snapshot_sha256",
+                            "evidence_sha256",
+                            "selected_test_scope_snapshot_sha256s",
+                        },
                     )
                     if egress is not None
                     else None
                 ),
+                "repository_test_fork_rpc_scopes": [
+                    _repository_test_fork_rpc_scope_projection(scope)
+                    for scope in run.repository_test_fork_rpc_scopes
+                ],
                 "test_executions": executions,
             }
         )
@@ -1572,6 +1858,9 @@ def _repository_differential_projection(
         }
         for comparison in matrix.comparisons
     ]
+    state_workspace_cleanups = [
+        _state_workspace_cleanup_projection(cleanup) for cleanup in matrix.state_workspace_cleanups
+    ]
     return {
         "schema_version": result.schema_version,
         "status": result.status.value,
@@ -1590,11 +1879,88 @@ def _repository_differential_projection(
             "fork_rpc_policy_sha256": matrix.fork_rpc_policy_sha256,
             "states": states,
             "attempts": attempts,
+            "state_workspace_cleanups": state_workspace_cleanups,
             "state_consensuses": consensuses,
             "comparisons": comparisons,
             "safety_claim": matrix.safety_claim,
         },
     }
+
+
+def _state_workspace_cleanups_are_qualifying(
+    matrix: RepositorySuiteDifferentialMatrix,
+) -> bool:
+    """Recheck aggregate state cleanup joins, bounds, and non-retention."""
+
+    try:
+        state_ids = tuple(state.state_id for state in matrix.states)
+        if tuple(cleanup.state_id for cleanup in matrix.state_workspace_cleanups) != state_ids:
+            return False
+        states_by_id = {state.state_id: state for state in matrix.states}
+        for cleanup in matrix.state_workspace_cleanups:
+            state = states_by_id[cleanup.state_id]
+            state_attempts = tuple(
+                attempt for attempt in matrix.attempts if attempt.state_id == cleanup.state_id
+            )
+            cleanup_order = tuple(reversed(state_attempts))
+            expected_sequence = tuple(
+                attempt.workspace_lifecycle.lifecycle_evidence_sha256 for attempt in cleanup_order
+            )
+            cumulative_entries: list[int] = []
+            cumulative_durations: list[float] = []
+            entry_total = 0
+            duration_total = 0.0
+            for attempt in cleanup_order:
+                lifecycle = attempt.workspace_lifecycle
+                entry_total += lifecycle.removed_entry_count
+                duration_total = math.fsum((duration_total, lifecycle.removal_duration_seconds))
+                cumulative_entries.append(entry_total)
+                cumulative_durations.append(duration_total)
+            auxiliary_count = 1 if state.kind.value == "clean_local" else 0
+            if (
+                not cleanup_order
+                or cleanup.state_sha256 != state.state_sha256
+                or cleanup.disposal_policy_sha256
+                != REPOSITORY_SUITE_WORKSPACE_DISPOSAL_POLICY_SHA256
+                or cleanup.attempt_cleanup_sequence_lifecycle_sha256s != expected_sequence
+                or cleanup.attempt_cumulative_removed_entry_counts != tuple(cumulative_entries)
+                or len(cleanup.attempt_cumulative_removal_duration_seconds)
+                != len(cumulative_durations)
+                or any(
+                    observed + 1e-9 < minimum
+                    for observed, minimum in zip(
+                        cleanup.attempt_cumulative_removal_duration_seconds,
+                        cumulative_durations,
+                        strict=True,
+                    )
+                )
+                or cleanup.auxiliary_directory_count != auxiliary_count
+                or cleanup.owned_directory_count != len(cleanup_order) + auxiliary_count
+                or cleanup.removal_entry_limit != REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT
+                or cleanup.removal_depth_limit != REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT
+                or cleanup.removal_timeout_seconds
+                != REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS
+                or cleanup.removed_entry_count < cumulative_entries[-1] + auxiliary_count
+                or (auxiliary_count == 0 and cleanup.removed_entry_count != cumulative_entries[-1])
+                or cleanup.removed_entry_count > cleanup.removal_entry_limit
+                or cleanup.maximum_removed_depth
+                < max(
+                    attempt.workspace_lifecycle.maximum_removed_depth for attempt in cleanup_order
+                )
+                or cleanup.maximum_removed_depth > cleanup.removal_depth_limit
+                or cleanup.removal_duration_seconds
+                < cleanup.attempt_cumulative_removal_duration_seconds[-1]
+                or cleanup.removal_duration_seconds > cleanup.removal_timeout_seconds
+                or not cleanup.all_owned_descriptors_closed
+                or not cleanup.all_owned_paths_absent
+                or cleanup.private_path_retained
+                or cleanup.rpc_endpoint_retained
+                or cleanup.aggregate_evidence_sha256 != cleanup.expected_aggregate_evidence_sha256()
+            ):
+                return False
+    except (IndexError, KeyError, TypeError, ValueError):
+        return False
+    return True
 
 
 def _repository_differential_is_qualifying(
@@ -1617,9 +1983,14 @@ def _repository_differential_is_qualifying(
         or any(state.observation_status.value != "observed" for state in matrix.states)
     ):
         return False
+    if not _state_workspace_cleanups_are_qualifying(matrix):
+        return False
     for attempt in matrix.attempts:
         run = attempt.scanner_run
         egress = run.fork_rpc_egress
+        selection = run.repository_suite_selection
+        workspace_copy = run.repository_suite_workspace_copy
+        lifecycle = attempt.workspace_lifecycle
         if (
             run.status is not ScannerStatus.SUCCESS
             or run.execution_evidence is not ExecutionEvidenceKind.REAL
@@ -1636,7 +2007,98 @@ def _repository_differential_is_qualifying(
             or egress.credentials_forwarded
             or egress.raw_payloads_retained
             or egress.rpc_endpoint_recorded
+            or selection is None
+            or selection.selection_sha256 != matrix.selection_sha256
+            or selection.repository_sha256 != matrix.repository_sha256
+            or attempt.workspace_kind != "fresh_disposable_copy"
+            or attempt.workspace_disposal_policy_sha256
+            != REPOSITORY_SUITE_WORKSPACE_DISPOSAL_POLICY_SHA256
+            or workspace_copy is None
+            or workspace_copy.copy_policy_sha256 != REPOSITORY_SUITE_WORKSPACE_COPY_POLICY_SHA256
+            or workspace_copy.attempt_binding_sha256 != attempt.workspace_identity_sha256
+            or workspace_copy.selection_sha256 != matrix.selection_sha256
+            or workspace_copy.repository_sha256 != matrix.repository_sha256
+            or not workspace_copy.workspace_created_exclusively
+            or not workspace_copy.workspace_direct_child
+            or not workspace_copy.audited_inventory_symlink_free
+            or not workspace_copy.source_descriptor_custody_validated
+            or not workspace_copy.workspace_descriptor_custody_validated
+            or not workspace_copy.workspace_parent_descriptor_custody_validated
+            or not workspace_copy.copy_matches_source
+            or not workspace_copy.source_identity_stable
+            or not workspace_copy.workspace_identity_stable
+            or workspace_copy.workspace_removed
+            or any(
+                inventory_sha256 != matrix.repository_sha256
+                for inventory_sha256 in (
+                    workspace_copy.source_inventory_sha256_before,
+                    workspace_copy.source_inventory_sha256_after,
+                    workspace_copy.workspace_inventory_sha256_after_copy,
+                    workspace_copy.workspace_inventory_sha256_after_execution,
+                )
+            )
+            or (
+                workspace_copy.source_root_device_before,
+                workspace_copy.source_root_inode_before,
+            )
+            != (
+                workspace_copy.source_root_device_after,
+                workspace_copy.source_root_inode_after,
+            )
+            or (
+                workspace_copy.workspace_root_device_before,
+                workspace_copy.workspace_root_inode_before,
+            )
+            != (
+                workspace_copy.workspace_root_device_after,
+                workspace_copy.workspace_root_inode_after,
+            )
+            or lifecycle.status is not RepositorySuiteWorkspaceLifecycleStatus.VALIDATED
+            or lifecycle.attempt_binding_sha256 != attempt.workspace_identity_sha256
+            or lifecycle.selection_sha256 != matrix.selection_sha256
+            or lifecycle.repository_sha256 != matrix.repository_sha256
+            or (
+                workspace_copy.workspace_parent_device,
+                workspace_copy.workspace_parent_inode,
+            )
+            != (
+                lifecycle.attempt_root_device,
+                lifecycle.attempt_root_inode,
+            )
+            or lifecycle.workspace_copy_evidence_sha256 != workspace_copy.copy_evidence_sha256
+            or lifecycle.scanner_execution_observation_sha256 != run.execution_observation_sha256
+            or lifecycle.freshness_attestation_sha256
+            != attempt.workspace_freshness_attestation_sha256
+            or lifecycle.disposal_policy_sha256 != REPOSITORY_SUITE_WORKSPACE_DISPOSAL_POLICY_SHA256
+            or not lifecycle.attempt_root_created_exclusively
+            or not lifecycle.attempt_root_direct_child
+            or lifecycle.removal_entry_limit != REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT
+            or lifecycle.removal_depth_limit != REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT
+            or lifecycle.removal_timeout_seconds
+            != REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS
+            or lifecycle.removed_entry_count > lifecycle.removal_entry_limit
+            or lifecycle.maximum_removed_depth > lifecycle.removal_depth_limit
+            or lifecycle.removal_duration_seconds > lifecycle.removal_timeout_seconds
+            or not lifecycle.attempt_descriptor_closed
+            or not lifecycle.workspace_path_absent
+            or not lifecycle.attempt_path_absent
+            or lifecycle.private_path_retained
+            or lifecycle.rpc_endpoint_retained
+            or run.execution_observation_sha256 is None
         ):
+            return False
+        try:
+            if (
+                workspace_copy.copy_evidence_sha256
+                != workspace_copy.expected_copy_evidence_sha256()
+                or lifecycle.freshness_attestation_sha256
+                != lifecycle.expected_freshness_attestation_sha256()
+                or lifecycle.lifecycle_evidence_sha256
+                != lifecycle.expected_lifecycle_evidence_sha256()
+                or run.execution_observation_sha256 != run.expected_execution_observation_sha256()
+            ):
+                return False
+        except (TypeError, ValueError):
             return False
     return True
 

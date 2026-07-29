@@ -25,7 +25,8 @@ from urllib.parse import urlparse
 
 from mmaudit.scanners.fork_rpc import ForkRpcBindingError, local_fork_rpc_port
 
-_POLICY_VERSION = "MMAUDIT_READ_ONLY_RPC_BRIDGE_V2"
+_POLICY_VERSION = "MMAUDIT_READ_ONLY_RPC_BRIDGE_V3"
+DETERMINISTIC_FORK_GAS_PRICE_WEI = 1_000_000_000
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _BLOCK_HASH_PATTERN = re.compile(r"^0x[0-9a-f]{64}$")
 _BLOCK_TAG_PATTERN = re.compile(r"^0x(?:0|[1-9a-f][0-9a-f]*)$")
@@ -67,6 +68,8 @@ _METHOD_ARITY: dict[str, tuple[int, int]] = {
     "eth_blockNumber": (0, 0),
     "eth_call": (1, 2),
     "eth_chainId": (0, 0),
+    "eth_gasPrice": (0, 0),
+    "eth_getAccountInfo": (2, 2),
     "eth_getBalance": (2, 2),
     "eth_getBlockByHash": (2, 2),
     "eth_getBlockByNumber": (2, 2),
@@ -86,9 +89,17 @@ _METHOD_ARITY: dict[str, tuple[int, int]] = {
     "net_version": (0, 0),
 }
 _ALLOWED_METHODS = frozenset(_METHOD_ARITY)
-_SYNTHETIC_METHODS = frozenset({"eth_blockNumber", "eth_chainId", "net_version"})
+_SYNTHETIC_METHODS = frozenset(
+    {
+        "eth_blockNumber",
+        "eth_chainId",
+        "eth_gasPrice",
+        "net_version",
+    }
+)
 _EIP_1898_PARAM_INDEX: dict[str, int] = {
     "eth_call": 1,
+    "eth_getAccountInfo": 1,
     "eth_getBalance": 1,
     "eth_getCode": 1,
     "eth_getStorageAt": 2,
@@ -840,6 +851,7 @@ class ReadOnlyRpcBridge:
                 "version": _POLICY_VERSION,
                 "allowed_methods": sorted(_ALLOWED_METHODS),
                 "synthetic_methods": sorted(_SYNTHETIC_METHODS),
+                "synthetic_gas_price_wei": DETERMINISTIC_FORK_GAS_PRICE_WEI,
                 "eip_1898_methods": sorted(_EIP_1898_PARAM_INDEX),
                 "number_to_hash_methods": dict(sorted(_NUMBER_TO_HASH_METHOD.items())),
                 "max_identity_response_body_bytes": _MAX_IDENTITY_RESPONSE_BODY_BYTES,
@@ -1677,6 +1689,8 @@ class ReadOnlyRpcBridge:
             synthetic_result = hex(self._expected_chain_id)
         elif method == "eth_blockNumber":
             synthetic_result = self._pinned_block_tag
+        elif method == "eth_gasPrice":
+            synthetic_result = hex(DETERMINISTIC_FORK_GAS_PRICE_WEI)
         elif method == "net_version":
             synthetic_result = str(self._expected_chain_id)
         return _PreparedCall(
@@ -2121,6 +2135,16 @@ def _validate_origin_result(
         return
     if call.method == "eth_getStorageAt":
         if not isinstance(value, str) or re.fullmatch(r"0x[0-9a-f]{64}", value) is None:
+            raise _BridgeRejection(_RejectionKind.UPSTREAM)
+        return
+    if call.method == "eth_getAccountInfo":
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"balance", "code", "nonce"}
+            or not _is_rpc_quantity(value.get("balance"))
+            or not _is_hex_bytes(value.get("code"))
+            or not _is_rpc_quantity(value.get("nonce"))
+        ):
             raise _BridgeRejection(_RejectionKind.UPSTREAM)
         return
     if call.method in {"eth_getBlockByHash", "eth_getBlockByNumber"}:

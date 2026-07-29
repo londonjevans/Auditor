@@ -63,6 +63,7 @@ from mmaudit.reporting.sarif import generate_sarif
 from mmaudit.scanners.base import (
     ScannerAdapter,
     sanitized_scanner_environment,
+    scanner_trust_pin_error,
     scanner_workspace_sha256,
 )
 from mmaudit.scanners.codeql import CodeQLScanner
@@ -1120,6 +1121,21 @@ def test_scanner_trust_pin_mismatch_blocks_target_execution(tmp_path: Path) -> N
     assert result.status is ScannerStatus.FAILED
     assert "trust pin" in (result.error or "")
     assert not marker.exists()
+
+
+def test_scanner_trust_pin_normalizes_multiline_version_output() -> None:
+    version = "forge Version: 1.3.2-stable\nCommit SHA: synthetic\nBuild Timestamp: synthetic"
+    expected = "forge Version: 1.3.2-stable Commit SHA: synthetic Build Timestamp: synthetic"
+
+    assert (
+        scanner_trust_pin_error(
+            version=version,
+            executable_sha256="a" * 64,
+            expected_version=expected,
+            expected_sha256="a" * 64,
+        )
+        is None
+    )
 
 
 def test_injected_scanner_backend_cannot_self_assert_real(tmp_path: Path) -> None:

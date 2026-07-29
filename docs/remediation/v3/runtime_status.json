@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-07-29T21:50:25Z",
-  "candidate_commit": "82fe859dc9cd66c9d7e10f608d7d17c2f11b181b",
-  "autorun_status": "PAUSED",
+  "updated_at": "2026-07-29T22:55:04Z",
+  "candidate_commit": "205e72df2d0c9b51faaf237c60e52994f838551a",
+  "autorun_status": "PAUSED_BY_OPERATOR",
   "current_milestone": "differential_multi_state_fork_matrix",
   "current_ticket": "V3-FORKDIFF-001",
-  "last_checkpoint_commit": "82fe859dc9cd66c9d7e10f608d7d17c2f11b181b",
+  "last_checkpoint_commit": "205e72df2d0c9b51faaf237c60e52994f838551a",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,

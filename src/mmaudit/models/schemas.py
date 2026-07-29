@@ -10,6 +10,7 @@ import unicodedata
 from collections.abc import Sequence
 from datetime import datetime
 from enum import StrEnum
+from itertools import pairwise
 from typing import Any, Literal
 
 from pydantic import (
@@ -298,12 +299,14 @@ def _canonical_model_sha256(value: Any) -> str:
 
 REPOSITORY_SUITE_WORKSPACE_COPY_POLICY_SHA256 = _canonical_model_sha256(
     {
-        "domain": "mmaudit.repository-suite-workspace-copy-policy.v2",
+        "domain": "mmaudit.repository-suite-workspace-copy-policy.v3",
         "bounded_no_follow_inventory": True,
         "direct_child_workspace": True,
         "exclusive_creation": True,
         "source_descriptor_custody": True,
         "workspace_descriptor_custody": True,
+        "workspace_parent_descriptor_custody": True,
+        "workspace_parent_attempt_identity_join": True,
         "pre_post_root_identity_validation": True,
         "pre_post_inventory_validation": True,
     }
@@ -311,13 +314,22 @@ REPOSITORY_SUITE_WORKSPACE_COPY_POLICY_SHA256 = _canonical_model_sha256(
 REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT = 250_000
 REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT = 128
 REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS = 5.0
+REPOSITORY_SUITE_VALIDATED_WORKSPACE_REMOVAL_ENTRY_MINIMUM = 2
+REPOSITORY_SUITE_VALIDATED_WORKSPACE_REMOVAL_DEPTH_MINIMUM = 1
 REPOSITORY_SUITE_WORKSPACE_DISPOSAL_POLICY_SHA256 = _canonical_model_sha256(
     {
-        "domain": "mmaudit.repository-suite-workspace-disposal-policy.v2",
+        "domain": "mmaudit.repository-suite-workspace-disposal-policy.v3",
         "descriptor_relative_no_follow_removal": True,
+        "aggregate_lifecycle_budget": True,
         "entry_limit": REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT,
         "depth_limit": REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT,
         "monotonic_timeout_seconds": REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS,
+        "validated_minimum_removed_entries": (
+            REPOSITORY_SUITE_VALIDATED_WORKSPACE_REMOVAL_ENTRY_MINIMUM
+        ),
+        "validated_minimum_removed_depth": (
+            REPOSITORY_SUITE_VALIDATED_WORKSPACE_REMOVAL_DEPTH_MINIMUM
+        ),
         "exact_root_identity_required": True,
         "descriptor_close_required": True,
         "workspace_absence_required": True,
@@ -3734,6 +3746,8 @@ _TRUSTED_READ_ONLY_FORK_RPC_METHODS = frozenset(
         "eth_blockNumber",
         "eth_call",
         "eth_chainId",
+        "eth_gasPrice",
+        "eth_getAccountInfo",
         "eth_getBalance",
         "eth_getBlockByHash",
         "eth_getBlockByNumber",
@@ -4551,11 +4565,14 @@ class RepositorySuiteWorkspaceCopyEvidence(StrictModel):
     workspace_root_inode_before: int = Field(ge=1)
     workspace_root_device_after: int = Field(ge=0)
     workspace_root_inode_after: int = Field(ge=1)
+    workspace_parent_device: int = Field(ge=0)
+    workspace_parent_inode: int = Field(ge=1)
     workspace_created_exclusively: Literal[True] = True
     workspace_direct_child: Literal[True] = True
     audited_inventory_symlink_free: Literal[True] = True
     source_descriptor_custody_validated: Literal[True] = True
     workspace_descriptor_custody_validated: Literal[True] = True
+    workspace_parent_descriptor_custody_validated: Literal[True] = True
     copy_matches_source: Literal[True] = True
     source_identity_stable: Literal[True] = True
     workspace_identity_stable: Literal[True] = True
@@ -4577,6 +4594,8 @@ class RepositorySuiteWorkspaceCopyEvidence(StrictModel):
             "workspace_root_inode_before",
             "workspace_root_device_after",
             "workspace_root_inode_after",
+            "workspace_parent_device",
+            "workspace_parent_inode",
         )
         if any(
             isinstance(values.get(name), bool) or not isinstance(values.get(name), int)
@@ -4601,6 +4620,8 @@ class RepositorySuiteWorkspaceCopyEvidence(StrictModel):
         "workspace_root_inode_before",
         "workspace_root_device_after",
         "workspace_root_inode_after",
+        "workspace_parent_device",
+        "workspace_parent_inode",
         mode="before",
     )
     @classmethod
@@ -4616,7 +4637,7 @@ class RepositorySuiteWorkspaceCopyEvidence(StrictModel):
         if self.attempt_binding_sha256 == "0" * 64:
             raise ValueError("workspace copy requires a nonzero attempt binding")
         if self.copy_policy_sha256 != REPOSITORY_SUITE_WORKSPACE_COPY_POLICY_SHA256:
-            raise ValueError("workspace copy policy hash differs from the exact v2 policy")
+            raise ValueError("workspace copy policy hash differs from the exact v3 policy")
         inventories = (
             self.source_inventory_sha256_before,
             self.source_inventory_sha256_after,
@@ -4772,7 +4793,7 @@ class RepositorySuiteWorkspaceLifecycleEvidence(StrictModel):
         if self.attempt_binding_sha256 == "0" * 64:
             raise ValueError("workspace lifecycle requires a nonzero attempt binding")
         if self.disposal_policy_sha256 != REPOSITORY_SUITE_WORKSPACE_DISPOSAL_POLICY_SHA256:
-            raise ValueError("workspace disposal policy hash differs from the exact v2 policy")
+            raise ValueError("workspace disposal policy hash differs from the exact v3 policy")
         if self.removed_entry_count > self.removal_entry_limit:
             raise ValueError("workspace removal exceeded its entry limit")
         if self.maximum_removed_depth > self.removal_depth_limit:
@@ -4784,12 +4805,20 @@ class RepositorySuiteWorkspaceLifecycleEvidence(StrictModel):
             or self.removal_depth_limit != REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT
             or self.removal_timeout_seconds != REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS
         ):
-            raise ValueError("workspace removal bounds differ from the exact v2 policy")
+            raise ValueError("workspace removal bounds differ from the exact v3 policy")
         if self.status is RepositorySuiteWorkspaceLifecycleStatus.VALIDATED and (
             self.workspace_copy_evidence_sha256 is None
             or self.scanner_execution_observation_sha256 is None
         ):
             raise ValueError("validated lifecycle requires copy and scanner observation bindings")
+        if self.status is RepositorySuiteWorkspaceLifecycleStatus.VALIDATED and (
+            self.removed_entry_count < REPOSITORY_SUITE_VALIDATED_WORKSPACE_REMOVAL_ENTRY_MINIMUM
+            or self.maximum_removed_depth
+            < REPOSITORY_SUITE_VALIDATED_WORKSPACE_REMOVAL_DEPTH_MINIMUM
+        ):
+            raise ValueError(
+                "validated lifecycle removal lacks the attempt root and copied workspace minimum"
+            )
         if self.freshness_attestation_sha256 != (self.expected_freshness_attestation_sha256()):
             raise ValueError("workspace lifecycle freshness attestation does not match")
         if self.lifecycle_evidence_sha256 != self.expected_lifecycle_evidence_sha256():
@@ -5535,6 +5564,17 @@ class RepositorySuiteStateAttempt(StrictModel):
         selection = self.scanner_run.repository_suite_selection
         workspace_copy = self.scanner_run.repository_suite_workspace_copy
         scanner_observation_sha256 = self.scanner_run.execution_observation_sha256
+        if workspace_copy is not None and (
+            workspace_copy.workspace_parent_device,
+            workspace_copy.workspace_parent_inode,
+        ) != (
+            lifecycle.attempt_root_device,
+            lifecycle.attempt_root_inode,
+        ):
+            raise ValueError(
+                "state attempt workspace lifecycle lacks full cross-layer joins: "
+                "copy-parent identity differs"
+            )
         if lifecycle.status is RepositorySuiteWorkspaceLifecycleStatus.VALIDATED:
             if (
                 self.scanner_run.status is not ScannerStatus.SUCCESS
@@ -5750,6 +5790,164 @@ class RepositorySuiteTestComparison(StrictModel):
         return _canonical_model_sha256(payload)
 
 
+class RepositorySuiteStateWorkspaceCleanupEvidence(StrictModel):
+    """Sealed proof that one state's owned directories shared one removal budget."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    state_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
+    state_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    disposal_policy_sha256: str = Field(
+        REPOSITORY_SUITE_WORKSPACE_DISPOSAL_POLICY_SHA256,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    attempt_cleanup_sequence_lifecycle_sha256s: tuple[str, ...] = Field(
+        min_length=2,
+        max_length=10,
+    )
+    attempt_cumulative_removed_entry_counts: tuple[int, ...] = Field(
+        min_length=2,
+        max_length=10,
+    )
+    attempt_cumulative_removal_duration_seconds: tuple[float, ...] = Field(
+        min_length=2,
+        max_length=10,
+    )
+    owned_directory_count: int = Field(ge=2, le=11)
+    auxiliary_directory_count: int = Field(ge=0, le=1)
+    removal_entry_limit: int = Field(ge=1, le=REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT)
+    removed_entry_count: int = Field(
+        ge=1,
+        le=REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT,
+    )
+    removal_depth_limit: int = Field(ge=1, le=REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT)
+    maximum_removed_depth: int = Field(ge=0, le=REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT)
+    removal_timeout_seconds: float = Field(
+        gt=0,
+        le=REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS,
+    )
+    removal_duration_seconds: float = Field(
+        ge=0,
+        le=REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS,
+    )
+    all_owned_descriptors_closed: Literal[True] = True
+    all_owned_paths_absent: Literal[True] = True
+    private_path_retained: Literal[False] = False
+    rpc_endpoint_retained: Literal[False] = False
+    aggregate_evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> RepositorySuiteStateWorkspaceCleanupEvidence:
+        """Validate and self-hash one shared per-state disposal budget."""
+
+        if "aggregate_evidence_sha256" in values:
+            raise ValueError(
+                "aggregate_evidence_sha256 is derived and cannot be supplied to sealed()"
+            )
+        provisional = cls.model_construct(**values, aggregate_evidence_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"aggregate_evidence_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "aggregate_evidence_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator(
+        "owned_directory_count",
+        "auxiliary_directory_count",
+        "removal_entry_limit",
+        "removed_entry_count",
+        "removal_depth_limit",
+        "maximum_removed_depth",
+        mode="before",
+    )
+    @classmethod
+    def aggregate_integers_are_exact(cls, value: object) -> object:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("state workspace cleanup counters require exact integers")
+        return value
+
+    @field_validator("attempt_cumulative_removed_entry_counts", mode="before")
+    @classmethod
+    def cumulative_entry_counts_are_exact(cls, value: object) -> object:
+        if not isinstance(value, (list, tuple)) or any(
+            isinstance(item, bool) or not isinstance(item, int) for item in value
+        ):
+            raise ValueError("state workspace cleanup cumulative entries require exact integers")
+        return value
+
+    @field_validator(
+        "attempt_cumulative_removal_duration_seconds",
+        mode="before",
+    )
+    @classmethod
+    def cumulative_durations_are_finite(cls, value: object) -> object:
+        if not isinstance(value, (list, tuple)) or any(
+            isinstance(item, bool)
+            or not isinstance(item, (int, float))
+            or not math.isfinite(float(item))
+            for item in value
+        ):
+            raise ValueError("state workspace cleanup durations require finite numbers")
+        return value
+
+    @field_validator(
+        "removal_timeout_seconds",
+        "removal_duration_seconds",
+        mode="before",
+    )
+    @classmethod
+    def aggregate_durations_are_finite(cls, value: object) -> object:
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+        ):
+            raise ValueError("state workspace cleanup durations require finite numbers")
+        return value
+
+    @model_validator(mode="after")
+    def shared_budget_sequence_bounds_and_hash_are_consistent(
+        self,
+    ) -> RepositorySuiteStateWorkspaceCleanupEvidence:
+        sequence_count = len(self.attempt_cleanup_sequence_lifecycle_sha256s)
+        if sequence_count != len(
+            self.attempt_cumulative_removed_entry_counts
+        ) or sequence_count != len(self.attempt_cumulative_removal_duration_seconds):
+            raise ValueError("state workspace cleanup sequence and cumulative counters differ")
+        if len(set(self.attempt_cleanup_sequence_lifecycle_sha256s)) != sequence_count:
+            raise ValueError("state workspace cleanup attempt lifecycle sequence is not unique")
+        if self.owned_directory_count != sequence_count + self.auxiliary_directory_count:
+            raise ValueError("state workspace cleanup owned-directory count is inconsistent")
+        if self.disposal_policy_sha256 != REPOSITORY_SUITE_WORKSPACE_DISPOSAL_POLICY_SHA256:
+            raise ValueError("state workspace cleanup policy differs from the exact v3 policy")
+        if (
+            self.removal_entry_limit != REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT
+            or self.removal_depth_limit != REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT
+            or self.removal_timeout_seconds != REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS
+        ):
+            raise ValueError("state workspace cleanup bounds differ from the exact v3 policy")
+        cumulative_entries = self.attempt_cumulative_removed_entry_counts
+        if any(current <= previous for previous, current in pairwise(cumulative_entries)):
+            raise ValueError("state workspace cleanup cumulative entries are not increasing")
+        cumulative_durations = self.attempt_cumulative_removal_duration_seconds
+        if any(current < previous for previous, current in pairwise(cumulative_durations)):
+            raise ValueError("state workspace cleanup cumulative durations regressed")
+        if (
+            cumulative_entries[-1] + self.auxiliary_directory_count > self.removed_entry_count
+            or cumulative_durations[-1] > self.removal_duration_seconds
+            or self.owned_directory_count > self.removed_entry_count
+        ):
+            raise ValueError("state workspace cleanup aggregate is below its cumulative evidence")
+        if self.aggregate_evidence_sha256 != self.expected_aggregate_evidence_sha256():
+            raise ValueError("state workspace cleanup evidence hash does not match its fields")
+        return self
+
+    def expected_aggregate_evidence_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"aggregate_evidence_sha256"})
+        return _canonical_model_sha256(payload)
+
+
 class RepositorySuiteDifferentialMatrix(StrictModel):
     """Canonical repeated-state matrix kept separate from qualifying scanner runs."""
 
@@ -5769,6 +5967,10 @@ class RepositorySuiteDifferentialMatrix(StrictModel):
     attempts: tuple[RepositorySuiteStateAttempt, ...] = Field(
         min_length=4,
         max_length=80,
+    )
+    state_workspace_cleanups: tuple[RepositorySuiteStateWorkspaceCleanupEvidence, ...] = Field(
+        min_length=2,
+        max_length=8,
     )
     state_consensuses: tuple[RepositorySuiteTestStateConsensus, ...] = Field(
         min_length=2,
@@ -5938,6 +6140,60 @@ class RepositorySuiteDifferentialMatrix(StrictModel):
             if attempt.state_id in states_by_id
         ) or any(attempt.state_id not in states_by_id for attempt in self.attempts):
             raise ValueError("matrix attempt state identity is unknown or inconsistent")
+        cleanup_state_ids = tuple(cleanup.state_id for cleanup in self.state_workspace_cleanups)
+        if cleanup_state_ids != state_ids:
+            raise ValueError("matrix state workspace cleanups must canonically cover every state")
+        cleanups_by_state = {cleanup.state_id: cleanup for cleanup in self.state_workspace_cleanups}
+        for state_id, state in states_by_id.items():
+            cleanup = cleanups_by_state[state_id]
+            state_attempts = tuple(
+                attempt for attempt in self.attempts if attempt.state_id == state_id
+            )
+            cleanup_order = tuple(reversed(state_attempts))
+            expected_lifecycle_sequence = tuple(
+                attempt.workspace_lifecycle.lifecycle_evidence_sha256 for attempt in cleanup_order
+            )
+            cumulative_entries: list[int] = []
+            entry_total = 0
+            minimum_cumulative_duration = 0.0
+            for index, attempt in enumerate(cleanup_order):
+                lifecycle = attempt.workspace_lifecycle
+                entry_total += lifecycle.removed_entry_count
+                cumulative_entries.append(entry_total)
+                minimum_cumulative_duration = math.fsum(
+                    (
+                        minimum_cumulative_duration,
+                        lifecycle.removal_duration_seconds,
+                    )
+                )
+                if (
+                    cleanup.attempt_cumulative_removal_duration_seconds[index] + 1e-9
+                    < minimum_cumulative_duration
+                ):
+                    raise ValueError(
+                        "matrix state cleanup cumulative duration omits an attempt removal"
+                    )
+            expected_auxiliary_count = (
+                1 if state.kind is RepositoryExecutionStateKind.CLEAN_LOCAL else 0
+            )
+            if (
+                cleanup.state_sha256 != state.state_sha256
+                or cleanup.attempt_cleanup_sequence_lifecycle_sha256s != expected_lifecycle_sequence
+                or cleanup.attempt_cumulative_removed_entry_counts != tuple(cumulative_entries)
+                or cleanup.auxiliary_directory_count != expected_auxiliary_count
+                or cleanup.owned_directory_count != len(state_attempts) + expected_auxiliary_count
+                or cleanup.maximum_removed_depth
+                < max(
+                    attempt.workspace_lifecycle.maximum_removed_depth for attempt in state_attempts
+                )
+                or (
+                    expected_auxiliary_count == 0
+                    and cleanup.removed_entry_count != cumulative_entries[-1]
+                )
+            ):
+                raise ValueError(
+                    "matrix state workspace cleanup lacks exact runtime-to-attempt joins"
+                )
         consensus_keys = tuple(
             (consensus.state_id, consensus.descriptor_sha256)
             for consensus in self.state_consensuses

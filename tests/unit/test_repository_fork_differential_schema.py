@@ -43,6 +43,7 @@ from mmaudit.models.schemas import (
     RepositorySuiteFramework,
     RepositorySuiteSelection,
     RepositorySuiteStateAttempt,
+    RepositorySuiteStateWorkspaceCleanupEvidence,
     RepositorySuiteTestComparison,
     RepositorySuiteTestDescriptor,
     RepositorySuiteTestStateConsensus,
@@ -151,11 +152,14 @@ def _workspace_copy_evidence(
         workspace_root_inode_before=30 + identity_offset,
         workspace_root_device_after=20 + identity_offset,
         workspace_root_inode_after=30 + identity_offset,
+        workspace_parent_device=40 + identity_offset,
+        workspace_parent_inode=50 + identity_offset,
         workspace_created_exclusively=True,
         workspace_direct_child=True,
         audited_inventory_symlink_free=True,
         source_descriptor_custody_validated=True,
         workspace_descriptor_custody_validated=True,
+        workspace_parent_descriptor_custody_validated=True,
         copy_matches_source=True,
         source_identity_stable=True,
         workspace_identity_stable=True,
@@ -199,7 +203,7 @@ def _workspace_lifecycle_evidence(
         attempt_root_created_exclusively=True,
         attempt_root_direct_child=True,
         removal_entry_limit=REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT,
-        removed_entry_count=7 if run is not None else 0,
+        removed_entry_count=7 if run is not None else 1,
         removal_depth_limit=REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT,
         maximum_removed_depth=3 if run is not None else 0,
         removal_timeout_seconds=REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS,
@@ -252,6 +256,55 @@ def _state_attempt_with_lifecycle(
         ),
         scanner_run=run,
     )
+
+
+def _state_workspace_cleanups(
+    states: tuple[RepositorySuiteExecutionStateEvidence, ...],
+    attempts: tuple[RepositorySuiteStateAttempt, ...],
+) -> tuple[RepositorySuiteStateWorkspaceCleanupEvidence, ...]:
+    cleanups: list[RepositorySuiteStateWorkspaceCleanupEvidence] = []
+    for state in states:
+        cleanup_order = tuple(
+            reversed(tuple(attempt for attempt in attempts if attempt.state_id == state.state_id))
+        )
+        cumulative_entries: list[int] = []
+        cumulative_durations: list[float] = []
+        entry_total = 0
+        duration_total = 0.0
+        for attempt in cleanup_order:
+            entry_total += attempt.workspace_lifecycle.removed_entry_count
+            duration_total += attempt.workspace_lifecycle.removal_duration_seconds
+            cumulative_entries.append(entry_total)
+            cumulative_durations.append(duration_total)
+        auxiliary_count = 1 if state.kind is RepositoryExecutionStateKind.CLEAN_LOCAL else 0
+        cleanups.append(
+            RepositorySuiteStateWorkspaceCleanupEvidence.sealed(
+                state_id=state.state_id,
+                state_sha256=state.state_sha256,
+                disposal_policy_sha256=(REPOSITORY_SUITE_WORKSPACE_DISPOSAL_POLICY_SHA256),
+                attempt_cleanup_sequence_lifecycle_sha256s=tuple(
+                    attempt.workspace_lifecycle.lifecycle_evidence_sha256
+                    for attempt in cleanup_order
+                ),
+                attempt_cumulative_removed_entry_counts=tuple(cumulative_entries),
+                attempt_cumulative_removal_duration_seconds=tuple(cumulative_durations),
+                owned_directory_count=len(cleanup_order) + auxiliary_count,
+                auxiliary_directory_count=auxiliary_count,
+                removal_entry_limit=REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT,
+                removed_entry_count=entry_total + auxiliary_count,
+                removal_depth_limit=REPOSITORY_SUITE_WORKSPACE_REMOVAL_DEPTH_LIMIT,
+                maximum_removed_depth=max(
+                    attempt.workspace_lifecycle.maximum_removed_depth for attempt in cleanup_order
+                ),
+                removal_timeout_seconds=(REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS),
+                removal_duration_seconds=duration_total + (0.01 * auxiliary_count),
+                all_owned_descriptors_closed=True,
+                all_owned_paths_absent=True,
+                private_path_retained=False,
+                rpc_endpoint_retained=False,
+            )
+        )
+    return tuple(cleanups)
 
 
 def _clean_attestation() -> RepositoryCleanStateAttestationEvidence:
@@ -778,6 +831,13 @@ def _matrix(
     execution_configuration_sha256 = (
         RepositorySuiteDifferentialMatrix.execution_configuration_sha256_for_policy(policy)
     )
+    sorted_states = tuple(sorted((clean, pinned), key=lambda state: state.state_id))
+    sorted_attempts = tuple(
+        sorted(
+            (*clean_attempts, *pinned_attempts),
+            key=lambda attempt: (attempt.state_id, attempt.attempt_index),
+        )
+    )
     return RepositorySuiteDifferentialMatrix.sealed(
         repository_sha256=selection.repository_sha256,
         selection_sha256=selection.selection_sha256,
@@ -787,12 +847,11 @@ def _matrix(
         fuzz_seed=SEED,
         execution_configuration_sha256=execution_configuration_sha256,
         fork_rpc_policy_sha256=HASH_E,
-        states=tuple(sorted((clean, pinned), key=lambda state: state.state_id)),
-        attempts=tuple(
-            sorted(
-                (*clean_attempts, *pinned_attempts),
-                key=lambda attempt: (attempt.state_id, attempt.attempt_index),
-            )
+        states=sorted_states,
+        attempts=sorted_attempts,
+        state_workspace_cleanups=_state_workspace_cleanups(
+            sorted_states,
+            sorted_attempts,
         ),
         state_consensuses=tuple(
             sorted(
@@ -810,11 +869,93 @@ def test_repeated_real_isolated_state_divergence_round_trips_and_is_self_hashed(
     restored = RepositorySuiteDifferentialMatrix.model_validate_json(matrix.model_dump_json())
 
     assert restored == matrix
+    assert len(matrix.state_workspace_cleanups) == len(matrix.states)
     assert restored.comparisons[0].classification is RepositoryDifferentialClassification.DIVERGED
     assert (
         restored.comparisons[0].direction is RepositoryDivergenceDirection.CLEAN_PASS_PINNED_FAILURE
     )
     assert restored.matrix_sha256 == restored.expected_matrix_sha256()
+
+
+def test_state_workspace_cleanup_rejects_aggregate_entry_and_time_overruns() -> None:
+    matrix = _matrix()
+    cleanup = matrix.state_workspace_cleanups[0]
+
+    with pytest.raises(ValidationError, match="below its cumulative evidence"):
+        RepositorySuiteStateWorkspaceCleanupEvidence.sealed(
+            **cleanup.model_dump(
+                mode="python",
+                exclude={
+                    "aggregate_evidence_sha256",
+                    "attempt_cumulative_removed_entry_counts",
+                    "removed_entry_count",
+                },
+            ),
+            attempt_cumulative_removed_entry_counts=(
+                cleanup.attempt_cumulative_removed_entry_counts[0],
+                REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT,
+            ),
+            removed_entry_count=REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT,
+        )
+    with pytest.raises(ValidationError, match="below its cumulative evidence"):
+        RepositorySuiteStateWorkspaceCleanupEvidence.sealed(
+            **cleanup.model_dump(
+                mode="python",
+                exclude={
+                    "aggregate_evidence_sha256",
+                    "attempt_cumulative_removal_duration_seconds",
+                    "removal_duration_seconds",
+                },
+            ),
+            attempt_cumulative_removal_duration_seconds=(
+                cleanup.attempt_cumulative_removal_duration_seconds[0],
+                REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS + 0.01,
+            ),
+            removal_duration_seconds=(REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS),
+        )
+
+
+@pytest.mark.parametrize("tamper_kind", ["sequence", "cumulative_entries"])
+def test_matrix_rejects_resealed_state_cleanup_sequence_or_cumulative_join(
+    tamper_kind: str,
+) -> None:
+    matrix = _matrix()
+    target = matrix.state_workspace_cleanups[0]
+    updates: dict[str, object]
+    if tamper_kind == "sequence":
+        updates = {
+            "attempt_cleanup_sequence_lifecycle_sha256s": tuple(
+                reversed(target.attempt_cleanup_sequence_lifecycle_sha256s)
+            )
+        }
+    else:
+        first, last = target.attempt_cumulative_removed_entry_counts
+        updates = {
+            "attempt_cumulative_removed_entry_counts": (first + 1, last),
+        }
+    tampered = RepositorySuiteStateWorkspaceCleanupEvidence.sealed(
+        **target.model_dump(
+            mode="python",
+            exclude={"aggregate_evidence_sha256", *updates},
+        ),
+        **updates,
+    )
+    cleanups = (tampered, *matrix.state_workspace_cleanups[1:])
+    tampered_matrix = matrix.model_copy(update={"state_workspace_cleanups": cleanups})
+    payload = tampered_matrix.model_dump(
+        mode="json",
+        exclude={"matrix_sha256"},
+    )
+
+    with pytest.raises(ValidationError, match="runtime-to-attempt joins"):
+        RepositorySuiteDifferentialMatrix.model_validate(
+            {
+                **payload,
+                "matrix_sha256": (
+                    RepositorySuiteDifferentialMatrix.calculate_matrix_sha256(payload)
+                ),
+            }
+        )
 
 
 def test_single_qualifying_observation_cannot_claim_conclusive_state() -> None:
@@ -858,6 +999,10 @@ def test_single_qualifying_observation_cannot_claim_conclusive_state() -> None:
     payload["attempts"] = [
         attempt.model_dump(mode="json")
         for attempt in sorted(attempts, key=lambda item: (item.state_id, item.attempt_index))
+    ]
+    payload["state_workspace_cleanups"] = [
+        cleanup.model_dump(mode="json")
+        for cleanup in _state_workspace_cleanups(matrix.states, tuple(attempts))
     ]
 
     with pytest.raises(ValidationError, match="inconclusive"):
@@ -1833,6 +1978,7 @@ def _two_descriptor_matrix(
         fork_rpc_policy_sha256=HASH_E,
         states=states,
         attempts=attempts,
+        state_workspace_cleanups=_state_workspace_cleanups(states, attempts),
         state_consensuses=(),
         comparisons=(),
         matrix_sha256=HASH_A,
@@ -1902,6 +2048,7 @@ def _two_descriptor_matrix(
         fork_rpc_policy_sha256=HASH_E,
         states=states,
         attempts=attempts,
+        state_workspace_cleanups=_state_workspace_cleanups(states, attempts),
         state_consensuses=sorted_consensuses,
         comparisons=tuple(comparisons),
     )
@@ -2552,11 +2699,14 @@ def test_workspace_copy_evidence_requires_stable_bound_inventories_and_root_iden
         workspace_root_inode_before=22,
         workspace_root_device_after=21,
         workspace_root_inode_after=22,
+        workspace_parent_device=31,
+        workspace_parent_inode=32,
         workspace_created_exclusively=True,
         workspace_direct_child=True,
         audited_inventory_symlink_free=True,
         source_descriptor_custody_validated=True,
         workspace_descriptor_custody_validated=True,
+        workspace_parent_descriptor_custody_validated=True,
         copy_matches_source=True,
         source_identity_stable=True,
         workspace_identity_stable=True,
@@ -2670,6 +2820,87 @@ def test_workspace_lifecycle_evidence_requires_actual_bounded_removal_and_nonret
                 exclude={"lifecycle_evidence_sha256", "disposal_policy_sha256"},
             ),
             disposal_policy_sha256=HASH_E,
+        )
+    with pytest.raises(ValidationError, match="validated lifecycle removal"):
+        RepositorySuiteWorkspaceLifecycleEvidence.sealed(
+            **lifecycle.model_dump(
+                mode="python",
+                exclude={
+                    "lifecycle_evidence_sha256",
+                    "removed_entry_count",
+                },
+            ),
+            removed_entry_count=1,
+        )
+    with pytest.raises(ValidationError, match="validated lifecycle removal"):
+        RepositorySuiteWorkspaceLifecycleEvidence.sealed(
+            **lifecycle.model_dump(
+                mode="python",
+                exclude={
+                    "lifecycle_evidence_sha256",
+                    "maximum_removed_depth",
+                },
+            ),
+            maximum_removed_depth=0,
+        )
+
+
+def test_state_attempt_rejects_sibling_workspace_copy_parent_identity() -> None:
+    matrix = _matrix()
+    target = matrix.attempts[0]
+    copy = target.scanner_run.repository_suite_workspace_copy
+    assert copy is not None
+    sibling_copy = RepositorySuiteWorkspaceCopyEvidence.sealed(
+        **copy.model_dump(
+            mode="python",
+            exclude={
+                "copy_evidence_sha256",
+                "workspace_parent_device",
+                "workspace_parent_inode",
+            },
+        ),
+        workspace_parent_device=copy.workspace_parent_device,
+        workspace_parent_inode=copy.workspace_parent_inode + 1,
+    )
+    provisional_run = target.scanner_run.model_copy(
+        update={
+            "repository_suite_workspace_copy": sibling_copy,
+            "execution_observation_sha256": None,
+        }
+    )
+    sibling_run = ScannerRun.model_validate(
+        {
+            **provisional_run.model_dump(mode="json"),
+            "execution_observation_sha256": (
+                provisional_run.expected_execution_observation_sha256()
+            ),
+        }
+    )
+    lifecycle = RepositorySuiteWorkspaceLifecycleEvidence.sealed(
+        **target.workspace_lifecycle.model_dump(
+            mode="python",
+            exclude={
+                "lifecycle_evidence_sha256",
+                "workspace_copy_evidence_sha256",
+                "scanner_execution_observation_sha256",
+            },
+        ),
+        workspace_copy_evidence_sha256=sibling_copy.copy_evidence_sha256,
+        scanner_execution_observation_sha256=sibling_run.execution_observation_sha256,
+    )
+
+    with pytest.raises(ValidationError, match="cross-layer joins"):
+        RepositorySuiteStateAttempt.sealed(
+            **target.model_dump(
+                mode="python",
+                exclude={
+                    "attempt_sha256",
+                    "scanner_run",
+                    "workspace_lifecycle",
+                },
+            ),
+            scanner_run=sibling_run,
+            workspace_lifecycle=lifecycle,
         )
 
 
@@ -2819,12 +3050,17 @@ def test_rehashed_uncredited_workspace_lifecycle_cannot_keep_consensus_credit() 
                     "matrix_sha256",
                     "attempts",
                     "states",
+                    "state_workspace_cleanups",
                     "state_consensuses",
                     "comparisons",
                 },
             ),
             states=matrix.states,
             attempts=attempts,
+            state_workspace_cleanups=_state_workspace_cleanups(
+                matrix.states,
+                attempts,
+            ),
             state_consensuses=consensuses,
             comparisons=matrix.comparisons,
         )
@@ -3063,6 +3299,7 @@ def test_matrix_rejects_unscoped_residual_read_masking_duplicate_scope_credit() 
         for descriptor in descriptors
     )
 
+    states = tuple(sorted((clean, pinned), key=lambda state: state.state_id))
     with pytest.raises(ValidationError, match="state_read_unproven"):
         RepositorySuiteDifferentialMatrix.sealed(
             repository_sha256=selection.repository_sha256,
@@ -3079,8 +3316,12 @@ def test_matrix_rejects_unscoped_residual_read_masking_duplicate_scope_credit() 
                 )
             ),
             fork_rpc_policy_sha256=HASH_E,
-            states=tuple(sorted((clean, pinned), key=lambda state: state.state_id)),
+            states=states,
             attempts=sorted_attempts,
+            state_workspace_cleanups=_state_workspace_cleanups(
+                states,
+                sorted_attempts,
+            ),
             state_consensuses=consensuses,
             comparisons=comparisons,
         )
@@ -3157,6 +3398,9 @@ def test_rehashed_persisted_matrix_cannot_keep_conclusive_credit_after_scope_rem
     )
     payload = matrix.model_dump(mode="json")
     payload["attempts"] = [item.model_dump(mode="json") for item in attempts]
+    payload["state_workspace_cleanups"] = [
+        item.model_dump(mode="json") for item in _state_workspace_cleanups(matrix.states, attempts)
+    ]
     payload["state_consensuses"] = [item.model_dump(mode="json") for item in consensuses]
     payload["comparisons"] = [item.model_dump(mode="json") for item in comparisons]
     payload["matrix_sha256"] = RepositorySuiteDifferentialMatrix.calculate_matrix_sha256(payload)

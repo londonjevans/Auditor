@@ -89,11 +89,14 @@ class MacOSSandboxBackend:
         private_dir: Path,
         rpc_port: int,
     ) -> list[str]:
+        network_rule = (
+            f'(allow network-outbound (remote tcp "localhost:{rpc_port}"))' if rpc_port > 0 else ""
+        )
         return self._wrap(
             command,
             workspace=workspace,
             private_dir=private_dir,
-            network_rule=f'(allow network-outbound (remote tcp "localhost:{rpc_port}"))',
+            network_rule=network_rule,
         )
 
     def wrap_allowing_network(

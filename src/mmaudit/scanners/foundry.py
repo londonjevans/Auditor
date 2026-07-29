@@ -85,7 +85,10 @@ from mmaudit.scanners.foundry_inventory_runner import (
     FoundryInventoryUnavailableError,
     run_foundry_test_inventory,
 )
-from mmaudit.scanners.read_only_rpc import ReadOnlyRpcTestScopeSnapshot
+from mmaudit.scanners.read_only_rpc import (
+    DETERMINISTIC_FORK_GAS_PRICE_WEI,
+    ReadOnlyRpcTestScopeSnapshot,
+)
 from mmaudit.scanners.repository_suite import (
     RepositorySuiteSelectionError,
     select_foundry_repository_suite,
@@ -1576,6 +1579,8 @@ def _display_foundry_test_command(
         str(fuzz_runs),
         "--fuzz-seed",
         fuzz_seed,
+        "--gas-price",
+        str(DETERMINISTIC_FORK_GAS_PRICE_WEI),
         "--threads",
         "1",
         "--no-storage-caching",
@@ -3295,11 +3300,16 @@ def _sealed_workspace_copy_evidence(
         workspace_root_inode_before=observation.workspace_root_inode_before,
         workspace_root_device_after=observation.workspace_root_device_after,
         workspace_root_inode_after=observation.workspace_root_inode_after,
+        workspace_parent_device=observation.workspace_parent_device,
+        workspace_parent_inode=observation.workspace_parent_inode,
         workspace_created_exclusively=observation.workspace_created_exclusively,
         workspace_direct_child=observation.workspace_direct_child,
         audited_inventory_symlink_free=observation.audited_inventory_symlink_free,
         source_descriptor_custody_validated=(observation.source_descriptor_custody_validated),
         workspace_descriptor_custody_validated=(observation.workspace_descriptor_custody_validated),
+        workspace_parent_descriptor_custody_validated=(
+            observation.workspace_parent_descriptor_custody_validated
+        ),
         copy_matches_source=observation.copy_matches_source,
         source_identity_stable=observation.source_identity_stable,
         workspace_identity_stable=observation.workspace_identity_stable,

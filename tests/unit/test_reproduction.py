@@ -346,6 +346,25 @@ def test_macos_inventory_policy_grants_no_network_entitlement(tmp_path: Path) ->
     assert f'(literal "{compiler}")' in policy
 
 
+def test_macos_policy_grants_no_network_entitlement_without_rpc(tmp_path: Path) -> None:
+    private = tmp_path / "private"
+    workspace = private / "workspace"
+    workspace.mkdir(parents=True)
+    backend = MacOSSandboxBackend(executable="/usr/bin/sandbox-exec")
+
+    command = backend.wrap(
+        ["/usr/local/bin/forge", "test"],
+        workspace=workspace,
+        private_dir=private,
+        rpc_port=0,
+    )
+
+    policy = (private / "sandbox.sb").read_text(encoding="utf-8")
+    assert command[:2] == ["/usr/bin/sandbox-exec", "-f"]
+    assert "(allow network" not in policy
+    assert "localhost:0" not in policy
+
+
 def test_bubblewrap_denies_network_and_mounts_only_private_workspace(
     tmp_path: Path,
 ) -> None:
