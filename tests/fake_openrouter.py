@@ -593,6 +593,9 @@ class FakeOpenRouter:
     first_pass_canary: str | None = None
     requests: list[dict[str, Any]] = field(default_factory=list)
     extra_model_ids: list[str] = field(default_factory=list)
+    context_length: int = 200_000
+    max_prompt_tokens: int = 180_000
+    max_completion_tokens: int = 20_000
     chat_calls: int = 0
 
     def handler(self, request: httpx.Request) -> httpx.Response:
@@ -604,7 +607,7 @@ class FakeOpenRouter:
                         {
                             "id": model,
                             "name": model,
-                            "context_length": 200_000,
+                            "context_length": self.context_length,
                             "supported_parameters": ["response_format", "structured_outputs"],
                         }
                         for model in [*MODEL_IDS.values(), *self.extra_model_ids]
@@ -944,16 +947,15 @@ class FakeOpenRouter:
             raise AssertionError(f"unexpected schema {schema_name}")
         return self._completion(body, json.dumps(content, sort_keys=True))
 
-    @staticmethod
-    def _endpoint_record(model: str) -> dict[str, Any]:
+    def _endpoint_record(self, model: str) -> dict[str, Any]:
         return {
             "model_id": model,
             "tag": "synthetic-provider",
             "provider_name": "Synthetic Provider",
             "status": 0,
-            "context_length": 200_000,
-            "max_prompt_tokens": 180_000,
-            "max_completion_tokens": 20_000,
+            "context_length": self.context_length,
+            "max_prompt_tokens": self.max_prompt_tokens,
+            "max_completion_tokens": self.max_completion_tokens,
             "supported_parameters": ["max_tokens", "response_format", "temperature"],
             "pricing": {
                 "prompt": "0.0000001",

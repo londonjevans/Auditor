@@ -253,10 +253,23 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Files expected to change:** Context construction and orchestration budget
   models, endpoint-derived request planning, typed run/context evidence, and
   focused unit/local integration regressions.
-- **Status:** `IN_PROGRESS`
-- **Next action:** Map the current fixed byte-pool allocation, endpoint limit
-  evidence, prompt construction, and context-manifest serialization; reproduce
-  the equal-role allocation defect before implementation.
+- **Status:** `COMPLETE`
+- **Evidence:** Frozen exact-route endpoint metadata now drives conservative
+  65–75% usable-input planning, explicit 32,768-token maximum-assurance output
+  and workflow floors, source/framework/graph/scanner/invariant/workflow/output
+  allocations, typed omissions, hash-only diagnostic preflight evidence, and
+  planned-versus-provider token reconciliation. Dynamic verifier, judge,
+  cross-examination, reproduction, falsification, and report-quality workflows
+  are prepared and exact-bound before context allocation; JSON escaping and
+  context capacity are iteratively validated before transport. Independent
+  closure review found no material blocker. Ruff, strict mypy over 139 source
+  files, schema synchronization, and the complete local suite passed, ending
+  with `2367 passed, 10 skipped in 329.08s` on the final post-closure tree.
+- **Remaining limitation:** This ticket proves local deterministic and
+  fake-provider execution only. Indivisible oversized logical blocks remain
+  typed omissions and make a requested-surface context fail before transport
+  pending semantic sharding. No new paid provider call or real audit is claimed.
+- **Next action:** None; continue with promoted `V3-FLOOR-001`.
 
 ## V3-SHARD-001 — Deterministic coherent semantic shards
 
@@ -316,7 +329,9 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Acceptance criteria:** Zero scanners plus zero completed model roles is non-zero
   exit and never a completed no-findings report; infeasible surface gates fail or
   downgrade before spend.
-- **Dependencies:** `V3-CONSENSUS-001`.
+- **Dependencies:** `V3-TOKENS-001` under the operator-authored revised
+  sequencing; the original `V3-CONSENSUS-001` ordering is superseded for this
+  minimum-floor defect.
 - **Status:** `QUEUED`
 
 ## V3-REPORT-001 — Client report and forensic evidence bundle

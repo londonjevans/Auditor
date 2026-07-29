@@ -102,6 +102,7 @@ from mmaudit.models.structured_output import (
 )
 from mmaudit.models.token_planning import (
     PROMPT_ALLOCATION_CATEGORIES,
+    ContextOmissionItem,
     ContextTokenPlanError,
     EndpointRouteIntersection,
     EndpointRouteTokenCapacity,
@@ -111,6 +112,7 @@ from mmaudit.models.token_planning import (
     PromptTokenAllocation,
     RequestTokenPlan,
     TokenPlanningError,
+    build_output_token_allocations,
     build_request_token_plan,
 )
 from mmaudit.models.usage import (
@@ -127,6 +129,7 @@ from mmaudit.orchestration.budgets import (
     UnprovenCostBoundError,
 )
 from mmaudit.orchestration.context_manifest import (
+    ContextPlanningSnapshot,
     ContextPreflightLedger,
     ContextPreflightReason,
     ContextPreflightRequestEvidence,
@@ -210,6 +213,7 @@ _ROUTE_SENSITIVE_REQUEST_PARAMETERS = frozenset({"reasoning", "response_format"}
 _LOCAL_MOCK_PROVIDER_ENDPOINT = "mmaudit-local-mock"
 _MAX_TOKEN_EVIDENCE = 2**31 - 1
 _CHAT_TEMPLATE_FRAMING_RESERVE_TOKENS = 256
+_CONTEXT_PREVIEW_ENVELOPE_RESERVE_TOKENS = 16_384
 
 
 @dataclass(frozen=True)
@@ -1135,19 +1139,12 @@ def _prompt_envelope_byte_upper_bound_tokens(
     return bound
 
 
-def _context_omission_sha256s(
+def _context_omissions(
     context_package: ContextPackage | None,
-) -> tuple[str, ...]:
+) -> tuple[ContextOmissionItem, ...]:
     if context_package is None:
         return ()
-    return tuple(
-        sorted(
-            {
-                hashlib.sha256(omission.encode("utf-8")).hexdigest()
-                for omission in context_package.omissions
-            }
-        )
-    )
+    return tuple(context_package.omissions)
 
 
 def _validate_provider_token_usage(
@@ -2764,6 +2761,195 @@ class OpenRouterClient:
             )
         return EndpointRouteIntersection.build(routes)
 
+    def context_package_byte_budget(
+        self,
+        models: Sequence[str],
+        *,
+        workflow_byte_upper_bound_tokens: int | None = None,
+        workflow_prompt: str | None = None,
+        context_json_escape_overhead_tokens: int = 0,
+    ) -> int:
+        """Return a conservative endpoint-aware serialized-context allowance.
+
+        This preview reserves configured system, schema, protocol, and workflow
+        space plus deterministic JSON/chat-envelope headroom. When the exact
+        workflow prompt is available, its provider-visible JSON-string encoding
+        replaces the raw UTF-8 preview; a supplied raw bound must match that
+        prompt. Callers may also deduct the exact JSON-string escape overhead
+        measured for the rendered context package. Raw-bound-only calls remain
+        supported for compatibility. The exact final request is still measured
+        and validated by ``_request_token_plan``; preview evidence can never
+        authorize transport on its own.
+        """
+
+        canonical_models = tuple(models)
+        if not canonical_models or len(canonical_models) != len(set(canonical_models)):
+            raise OpenRouterRequestLimitError(
+                "context budget preview requires unique configured model IDs"
+            )
+        if isinstance(workflow_byte_upper_bound_tokens, bool) or (
+            workflow_byte_upper_bound_tokens is not None
+            and (
+                not isinstance(workflow_byte_upper_bound_tokens, int)
+                or workflow_byte_upper_bound_tokens < 0
+            )
+        ):
+            raise OpenRouterRequestLimitError("context budget preview workflow bound is invalid")
+        if workflow_prompt is not None and not isinstance(workflow_prompt, str):
+            raise OpenRouterRequestLimitError("context budget preview workflow prompt is invalid")
+        if isinstance(context_json_escape_overhead_tokens, bool) or not isinstance(
+            context_json_escape_overhead_tokens,
+            int,
+        ):
+            raise OpenRouterRequestLimitError(
+                "context budget preview context JSON escape overhead tokens are invalid"
+            )
+        if context_json_escape_overhead_tokens < 0:
+            raise OpenRouterRequestLimitError(
+                "context budget preview context JSON escape overhead tokens are invalid"
+            )
+        effective_workflow_bound = workflow_byte_upper_bound_tokens or 0
+        if workflow_prompt is not None:
+            raw_workflow_bound = len(workflow_prompt.encode("utf-8"))
+            if (
+                workflow_byte_upper_bound_tokens is not None
+                and workflow_byte_upper_bound_tokens != raw_workflow_bound
+            ):
+                raise OpenRouterRequestLimitError(
+                    "context budget preview raw workflow bound does not match prompt"
+                )
+            effective_workflow_bound = len(_compact_json(workflow_prompt).encode("utf-8"))
+        required_output_tokens = self._required_output_tokens()
+        requested_completion_tokens = required_output_tokens + self._reserved_reasoning_tokens(
+            required_output_tokens
+        )
+        utilization = Decimal(
+            str(
+                self.token_budgets.usable_input_fraction if self.token_budgets is not None else 0.70
+            )
+        )
+        budgets: list[int] = []
+        for model in canonical_models:
+            qualification_binding = self._qualification_routing.get(model)
+            provider_policy = (
+                qualification_binding.request_provider_policy()
+                if qualification_binding is not None and self.provider_policy.certification
+                else self.provider_policy
+            )
+            route = self._route_token_intersection(
+                model=model,
+                provider_policy=_canonical_provider_policy(provider_policy),
+                requested_completion_tokens=requested_completion_tokens,
+            )
+            hard_prompt_tokens = min(
+                route.max_prompt_tokens,
+                route.context_tokens - requested_completion_tokens,
+            )
+            usable_prompt_tokens = int(Decimal(hard_prompt_tokens) * utilization)
+            configured_system_reserve = (
+                self.token_budgets.reserved_system_tokens if self.token_budgets is not None else 0
+            )
+            configured_schema_reserve = (
+                self.token_budgets.reserved_schema_tokens if self.token_budgets is not None else 0
+            )
+            configured_protocol_reserve = (
+                self.token_budgets.reserved_protocol_tokens if self.token_budgets is not None else 0
+            )
+            configured_workflow_reserve = (
+                self.token_budgets.reserved_workflow_tokens if self.token_budgets is not None else 0
+            )
+            effective_workflow_reserve = max(
+                configured_workflow_reserve,
+                effective_workflow_bound,
+            )
+            configured_reserve = (
+                configured_system_reserve
+                + configured_schema_reserve
+                + configured_protocol_reserve
+                + effective_workflow_reserve
+            )
+            package_budget = (
+                usable_prompt_tokens
+                - configured_reserve
+                - _CONTEXT_PREVIEW_ENVELOPE_RESERVE_TOKENS
+                - context_json_escape_overhead_tokens
+            )
+            if package_budget <= 0:
+                raise OpenRouterRequestLimitError(
+                    "endpoint reserves leave no serialized context-package capacity"
+                )
+            budgets.append(package_budget)
+        return min(budgets)
+
+    def _diagnostic_planning_snapshot(
+        self,
+        *,
+        request_id: str,
+        role: str,
+        model: str,
+        reason: ContextPreflightReason,
+        provider_policy: OpenRouterProviderPolicy,
+        structured_output_plan: _StructuredOutputRequestPlan | None,
+        original_system_prompt: str,
+        response_model: type[BaseModel],
+        schema_name: str,
+        context_package: ContextPackage | None,
+    ) -> ContextPlanningSnapshot:
+        """Retain independently measurable facts after full-plan rejection."""
+
+        required_output_tokens = self._required_output_tokens()
+        reserved_reasoning_tokens = self._reserved_reasoning_tokens(required_output_tokens)
+        requested_completion_tokens = required_output_tokens + reserved_reasoning_tokens
+        requested_surface_count = (
+            len(context_package.requested_model_surfaces) if context_package is not None else 0
+        )
+        try:
+            route_intersection = self._route_token_intersection(
+                model=model,
+                provider_policy=provider_policy,
+                requested_completion_tokens=requested_completion_tokens,
+            )
+        except (OpenRouterError, TokenPlanningError, TypeError, ValueError):
+            route_intersection = None
+        try:
+            output_allocations = build_output_token_allocations(
+                required_output_tokens=required_output_tokens,
+                requested_surface_count=requested_surface_count,
+            )
+        except (TokenPlanningError, TypeError, ValueError):
+            output_allocations = None
+        allocations: tuple[PromptTokenAllocation, ...] | None = None
+        envelope_bound: int | None = None
+        if structured_output_plan is not None:
+            try:
+                allocations = _prompt_token_allocations(
+                    plan=structured_output_plan,
+                    original_system_prompt=original_system_prompt,
+                    response_model=response_model,
+                    schema_name=schema_name,
+                    context_package=context_package,
+                )
+            except (OpenRouterError, TokenPlanningError, TypeError, ValueError):
+                allocations = None
+            try:
+                envelope_bound = _prompt_envelope_byte_upper_bound_tokens(structured_output_plan)
+            except (OpenRouterError, TokenPlanningError, TypeError, ValueError):
+                envelope_bound = None
+        return ContextPlanningSnapshot.build(
+            request_id=request_id,
+            role=role,
+            requested_model=model,
+            reason=reason,
+            route_intersection=route_intersection,
+            allocations=allocations,
+            output_allocations=output_allocations,
+            requested_surface_count=requested_surface_count,
+            required_output_tokens=required_output_tokens,
+            reserved_reasoning_tokens=reserved_reasoning_tokens,
+            prompt_envelope_byte_upper_bound_tokens=envelope_bound,
+            context_omissions=_context_omissions(context_package),
+        )
+
     def _request_token_plan(
         self,
         *,
@@ -2858,12 +3044,22 @@ class OpenRouterClient:
                     if self.token_budgets is not None
                     else 0
                 ),
+                configured_reserved_workflow_tokens=(
+                    self.token_budgets.reserved_workflow_tokens
+                    if self.token_budgets is not None
+                    else 0
+                ),
                 maximum_source_tokens_per_request=(
                     self.token_budgets.maximum_source_tokens_per_request
                     if self.token_budgets is not None
                     else 200_000
                 ),
-                context_omission_sha256s=_context_omission_sha256s(context_package),
+                requested_surface_count=(
+                    len(context_package.requested_model_surfaces)
+                    if context_package is not None
+                    else 0
+                ),
+                context_omissions=_context_omissions(context_package),
                 prompt_envelope_byte_upper_bound_tokens=(
                     _prompt_envelope_byte_upper_bound_tokens(structured_output_plan)
                 ),
@@ -3507,6 +3703,8 @@ class OpenRouterClient:
         requested_completion_tokens = required_output_tokens + self._reserved_reasoning_tokens(
             required_output_tokens
         )
+        request_provider_policy = _canonical_provider_policy(self.provider_policy)
+        structured_output_plan: _StructuredOutputRequestPlan | None = None
         try:
             request_provider_policy = (
                 qualification_binding.request_provider_policy()
@@ -3534,6 +3732,19 @@ class OpenRouterClient:
                 reasoning=self.reasoning,
             )
         except Exception as exc:
+            reason = ContextPreflightReason.ROUTE_UNAVAILABLE
+            planning_snapshot = self._diagnostic_planning_snapshot(
+                request_id=request_id,
+                role=role,
+                model=model,
+                reason=reason,
+                provider_policy=request_provider_policy,
+                structured_output_plan=structured_output_plan,
+                original_system_prompt=system_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                context_package=context_package,
+            )
             self._record_context_preflight(
                 request_id=request_id,
                 logical_request_id=request_id,
@@ -3541,8 +3752,9 @@ class OpenRouterClient:
                 model=model,
                 requested_completion_tokens=requested_completion_tokens,
                 request_plan=None,
+                planning_snapshot=planning_snapshot,
                 decision_source=ContextPreflightSource.TOKEN_PLANNER,
-                reason=ContextPreflightReason.ROUTE_UNAVAILABLE,
+                reason=reason,
                 error=exc,
             )
             raise
@@ -3567,6 +3779,18 @@ class OpenRouterClient:
                 reason = ContextPreflightReason.ROUTE_UNAVAILABLE
             else:
                 reason = ContextPreflightReason.ENDPOINT_CAPACITY
+            planning_snapshot = self._diagnostic_planning_snapshot(
+                request_id=request_id,
+                role=role,
+                model=model,
+                reason=reason,
+                provider_policy=request_provider_policy,
+                structured_output_plan=structured_output_plan,
+                original_system_prompt=system_prompt,
+                response_model=response_model,
+                schema_name=schema_name,
+                context_package=context_package,
+            )
             self._record_context_preflight(
                 request_id=request_id,
                 logical_request_id=request_id,
@@ -3574,6 +3798,7 @@ class OpenRouterClient:
                 model=model,
                 requested_completion_tokens=requested_completion_tokens,
                 request_plan=None,
+                planning_snapshot=planning_snapshot,
                 decision_source=ContextPreflightSource.TOKEN_PLANNER,
                 reason=reason,
                 error=exc,
@@ -4155,6 +4380,7 @@ class OpenRouterClient:
         model: str,
         requested_completion_tokens: int,
         request_plan: RequestTokenPlan | None,
+        planning_snapshot: ContextPlanningSnapshot | None = None,
         decision_source: ContextPreflightSource,
         reason: ContextPreflightReason,
         error: Exception,
@@ -4172,6 +4398,9 @@ class OpenRouterClient:
             "reason": reason.value,
             "error_class": type(error).__name__,
             "request_plan_sha256": request_plan.plan_sha256 if request_plan is not None else None,
+            "planning_snapshot_sha256": (
+                planning_snapshot.snapshot_sha256 if planning_snapshot is not None else None
+            ),
             "endpoint_snapshot_sha256": (
                 endpoint_policy.snapshot_sha256 if endpoint_policy is not None else None
             ),
@@ -4182,6 +4411,8 @@ class OpenRouterClient:
         }
         if request_plan is not None:
             evidence_hashes.add(request_plan.plan_sha256)
+        if planning_snapshot is not None:
+            evidence_hashes.add(planning_snapshot.snapshot_sha256)
         self.context_preflight.add(
             ContextPreflightRequestEvidence.build(
                 request_id=request_id,
@@ -4193,10 +4424,17 @@ class OpenRouterClient:
                 reason=reason,
                 decision_evidence_sha256s=tuple(sorted(evidence_hashes)),
                 estimated_prompt_tokens=(
-                    request_plan.estimated_prompt_tokens if request_plan is not None else None
+                    request_plan.estimated_prompt_tokens
+                    if request_plan is not None
+                    else (
+                        planning_snapshot.estimated_prompt_tokens
+                        if planning_snapshot is not None
+                        else None
+                    )
                 ),
                 requested_completion_tokens=requested_completion_tokens,
                 request_plan=request_plan,
+                planning_snapshot=planning_snapshot,
             )
         )
 

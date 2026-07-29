@@ -197,7 +197,7 @@ def _token_plan_for_record(
         role=planned_role,
         route_intersection=EndpointRouteIntersection.build((route,)),
         allocations=allocations,
-        required_output_tokens=100,
+        required_output_tokens=512,
         reserved_reasoning_tokens=reserved_reasoning_tokens,
         global_input_token_budget=100_000,
         global_output_token_budget=10_000,

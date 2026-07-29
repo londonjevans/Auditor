@@ -27,6 +27,7 @@ from mmaudit.models.output_modes import (
     output_mode_request_parameters,
 )
 from mmaudit.models.structured_output import StructuredOutputRepairEvidence
+from mmaudit.models.token_planning import ContextOmissionItem
 
 
 class StrictModel(BaseModel):
@@ -4893,7 +4894,7 @@ class ContextPackage(StrictModel):
     economic_simulations: list[EconomicSimulationPlan] = Field(default_factory=list)
     formal_runs: list[FormalToolRun] = Field(default_factory=list)
     solidity_coverage: SolidityCoverage | None = None
-    omissions: list[str] = Field(default_factory=list)
+    omissions: list[ContextOmissionItem] = Field(default_factory=list, max_length=4_096)
 
     @field_validator("requested_model_surfaces")
     @classmethod
@@ -4904,6 +4905,25 @@ class ContextPackage(StrictModel):
         surface_ids = [request.surface_id for request in value]
         if surface_ids != sorted(set(surface_ids)):
             raise ValueError("requested model surfaces must be unique and sorted by surface ID")
+        return value
+
+    @field_validator("omissions")
+    @classmethod
+    def omissions_are_typed_unique_and_canonical(
+        cls,
+        value: list[ContextOmissionItem],
+    ) -> list[ContextOmissionItem]:
+        canonical = sorted(
+            value,
+            key=lambda item: (
+                item.category.value,
+                item.reason.value,
+                item.omitted_item_sha256,
+            ),
+        )
+        hashes = [item.omitted_item_sha256 for item in canonical]
+        if value != canonical or len(hashes) != len(set(hashes)):
+            raise ValueError("context-package omissions must be unique and canonically sorted")
         return value
 
 

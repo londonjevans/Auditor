@@ -21,8 +21,15 @@ from mmaudit.models.schemas import (
     UsageRecord,
 )
 from mmaudit.models.token_planning import (
+    OUTPUT_ALLOCATION_CATEGORIES,
     PROMPT_ALLOCATION_CATEGORIES,
+    ContextOmissionCategory,
+    ContextOmissionItem,
+    ContextOmissionReason,
+    EndpointRouteIntersection,
+    OutputTokenAllocation,
     PromptAllocationCategory,
+    PromptTokenAllocation,
     RequestTokenPlan,
 )
 from mmaudit.orchestration.budgets import AtomicTokenReservationEvidence
@@ -67,30 +74,6 @@ class ActualTokenUsageSource(StrEnum):
     UNAVAILABLE = "UNAVAILABLE"
 
 
-class ContextOmissionCategory(StrEnum):
-    """Typed omission scope without retaining source names or text."""
-
-    CONTEXT_PACKAGE = "context_package"
-    FRAMEWORK = PromptAllocationCategory.FRAMEWORK.value
-    GRAPH = PromptAllocationCategory.GRAPH.value
-    INVARIANT = PromptAllocationCategory.INVARIANT.value
-    METADATA = PromptAllocationCategory.METADATA.value
-    PRIOR_AUDIT = PromptAllocationCategory.PRIOR_AUDIT.value
-    PROTOCOL = PromptAllocationCategory.PROTOCOL.value
-    SCANNER = PromptAllocationCategory.SCANNER.value
-    SCHEMA = PromptAllocationCategory.SCHEMA.value
-    SOURCE = PromptAllocationCategory.SOURCE.value
-    SYSTEM = PromptAllocationCategory.SYSTEM.value
-    WORKFLOW = PromptAllocationCategory.WORKFLOW.value
-
-
-class ContextOmissionReason(StrEnum):
-    """Host-defined non-operational reason for withholding context."""
-
-    BLIND_DISCOVERY_WITHHELD = "BLIND_DISCOVERY_WITHHELD"
-    CONTEXT_BUDGET_EXCLUDED = "CONTEXT_BUDGET_EXCLUDED"
-
-
 class ContextOmissionProvenance(StrEnum):
     """Origin of one omission inventory."""
 
@@ -121,6 +104,221 @@ class ContextPreflightSource(StrEnum):
     TOKEN_PLANNER = "TOKEN_PLANNER"
     BUDGET_MANAGER = "BUDGET_MANAGER"
     ORCHESTRATOR = "ORCHESTRATOR"
+
+
+class ContextPlanningComponentState(StrEnum):
+    """Whether one diagnostic planning component was measured before rejection."""
+
+    MEASURED = "MEASURED"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+class ContextPlanningSnapshot(FrozenContextEvidence):
+    """Self-hashed diagnostic facts retained when no valid request plan exists."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    request_id: str = Field(pattern=_REQUEST_ID_PATTERN)
+    role: str = Field(pattern=_ROLE_PATTERN)
+    requested_model: str = Field(pattern=_MODEL_ID_PATTERN)
+    reason: ContextPreflightReason
+    route_state: ContextPlanningComponentState
+    route_intersection: EndpointRouteIntersection | None = None
+    prompt_state: ContextPlanningComponentState
+    allocations: tuple[PromptTokenAllocation, ...] | None = None
+    output_state: ContextPlanningComponentState
+    output_allocations: tuple[OutputTokenAllocation, ...] | None = None
+    requested_surface_count: int = Field(ge=0, le=10_000)
+    required_output_tokens: int = Field(gt=0)
+    reserved_reasoning_tokens: int = Field(ge=0)
+    requested_completion_tokens: int = Field(gt=0)
+    estimated_prompt_tokens: int | None = Field(default=None, ge=0)
+    prompt_content_byte_upper_bound_tokens: int | None = Field(default=None, ge=0)
+    prompt_envelope_byte_upper_bound_tokens: int | None = Field(default=None, ge=0)
+    context_omissions: tuple[ContextOmissionItem, ...] = Field(
+        default=(),
+        max_length=_MAX_OMISSIONS_PER_REQUEST,
+    )
+    context_omission_sha256s: tuple[str, ...] = Field(
+        default=(),
+        max_length=_MAX_OMISSIONS_PER_REQUEST,
+    )
+    review_credit: Literal[False] = False
+    atomic_reservation_created: Literal[False] = False
+    provider_request_sent: Literal[False] = False
+    snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        request_id: str,
+        role: str,
+        requested_model: str,
+        reason: ContextPreflightReason,
+        route_intersection: EndpointRouteIntersection | None,
+        allocations: Sequence[PromptTokenAllocation] | None,
+        output_allocations: Sequence[OutputTokenAllocation] | None,
+        requested_surface_count: int,
+        required_output_tokens: int,
+        reserved_reasoning_tokens: int,
+        prompt_envelope_byte_upper_bound_tokens: int | None,
+        context_omissions: Sequence[ContextOmissionItem] = (),
+    ) -> Self:
+        canonical_allocations = (
+            tuple(sorted(allocations, key=lambda item: item.category.value))
+            if allocations is not None
+            else None
+        )
+        canonical_output_allocations = (
+            tuple(sorted(output_allocations, key=lambda item: item.category.value))
+            if output_allocations is not None
+            else None
+        )
+        estimated_prompt_tokens = (
+            sum(item.estimate.estimated_tokens for item in canonical_allocations)
+            if canonical_allocations is not None
+            else None
+        )
+        prompt_content_byte_upper_bound_tokens = (
+            sum(item.estimate.byte_upper_bound_tokens for item in canonical_allocations)
+            if canonical_allocations is not None
+            else None
+        )
+        canonical_omissions = tuple(
+            sorted(
+                context_omissions,
+                key=lambda item: (
+                    item.category.value,
+                    item.reason.value,
+                    item.omitted_item_sha256,
+                ),
+            )
+        )
+        omission_hashes = tuple(sorted(item.omitted_item_sha256 for item in canonical_omissions))
+        requested_completion_tokens = required_output_tokens + reserved_reasoning_tokens
+        payload: dict[str, Any] = {
+            "schema_version": "1.0",
+            "request_id": request_id,
+            "role": role,
+            "requested_model": requested_model,
+            "reason": reason,
+            "route_state": (
+                ContextPlanningComponentState.MEASURED
+                if route_intersection is not None
+                else ContextPlanningComponentState.UNAVAILABLE
+            ),
+            "route_intersection": route_intersection,
+            "prompt_state": (
+                ContextPlanningComponentState.MEASURED
+                if canonical_allocations is not None
+                else ContextPlanningComponentState.UNAVAILABLE
+            ),
+            "allocations": canonical_allocations,
+            "output_state": (
+                ContextPlanningComponentState.MEASURED
+                if canonical_output_allocations is not None
+                else ContextPlanningComponentState.UNAVAILABLE
+            ),
+            "output_allocations": canonical_output_allocations,
+            "requested_surface_count": requested_surface_count,
+            "required_output_tokens": required_output_tokens,
+            "reserved_reasoning_tokens": reserved_reasoning_tokens,
+            "requested_completion_tokens": requested_completion_tokens,
+            "estimated_prompt_tokens": estimated_prompt_tokens,
+            "prompt_content_byte_upper_bound_tokens": (prompt_content_byte_upper_bound_tokens),
+            "prompt_envelope_byte_upper_bound_tokens": (prompt_envelope_byte_upper_bound_tokens),
+            "context_omissions": canonical_omissions,
+            "context_omission_sha256s": omission_hashes,
+            "review_credit": False,
+            "atomic_reservation_created": False,
+            "provider_request_sent": False,
+        }
+        return cls(
+            **payload,
+            snapshot_sha256=_canonical_sha256(payload),
+        )
+
+    @model_validator(mode="after")
+    def diagnostic_components_are_honest_and_self_hashed(
+        self,
+    ) -> ContextPlanningSnapshot:
+        if (self.route_state is ContextPlanningComponentState.MEASURED) != (
+            self.route_intersection is not None
+        ):
+            raise ValueError("planning route state differs from its evidence")
+        if self.route_intersection is not None and (
+            self.requested_model not in self.route_intersection.exact_model_ids
+        ):
+            raise ValueError("planning route evidence differs from the requested model")
+        if (self.prompt_state is ContextPlanningComponentState.MEASURED) != (
+            self.allocations is not None
+        ):
+            raise ValueError("planning prompt state differs from its evidence")
+        if self.allocations is None:
+            if (
+                self.estimated_prompt_tokens is not None
+                or self.prompt_content_byte_upper_bound_tokens is not None
+            ):
+                raise ValueError("unavailable prompt planning cannot retain derived totals")
+        else:
+            if tuple(item.category for item in self.allocations) != (PROMPT_ALLOCATION_CATEGORIES):
+                raise ValueError("planning prompt allocation inventory is incomplete")
+            if self.estimated_prompt_tokens != sum(
+                item.estimate.estimated_tokens for item in self.allocations
+            ) or self.prompt_content_byte_upper_bound_tokens != sum(
+                item.estimate.byte_upper_bound_tokens for item in self.allocations
+            ):
+                raise ValueError("planning prompt totals do not conserve allocations")
+            if (
+                self.prompt_envelope_byte_upper_bound_tokens is not None
+                and self.prompt_envelope_byte_upper_bound_tokens
+                < self.prompt_content_byte_upper_bound_tokens
+            ):
+                raise ValueError("planning prompt envelope omits measured content")
+        if (self.output_state is ContextPlanningComponentState.MEASURED) != (
+            self.output_allocations is not None
+        ):
+            raise ValueError("planning output state differs from its evidence")
+        if self.output_allocations is not None:
+            if tuple(item.category for item in self.output_allocations) != (
+                OUTPUT_ALLOCATION_CATEGORIES
+            ):
+                raise ValueError("planning output allocation inventory is incomplete")
+            if (
+                sum(item.reserved_tokens for item in self.output_allocations)
+                != self.required_output_tokens
+            ):
+                raise ValueError("planning output allocations do not conserve tokens")
+            coverage = next(
+                item for item in self.output_allocations if item.category.value == "coverage"
+            )
+            if coverage.requested_surface_count != self.requested_surface_count:
+                raise ValueError("planning output surface demand is inconsistent")
+        if self.requested_completion_tokens != (
+            self.required_output_tokens + self.reserved_reasoning_tokens
+        ):
+            raise ValueError("planning completion demand is inconsistent")
+        canonical_omissions = tuple(
+            sorted(
+                self.context_omissions,
+                key=lambda item: (
+                    item.category.value,
+                    item.reason.value,
+                    item.omitted_item_sha256,
+                ),
+            )
+        )
+        omission_hashes = tuple(sorted(item.omitted_item_sha256 for item in self.context_omissions))
+        if self.context_omissions != canonical_omissions:
+            raise ValueError("planning omissions must be canonically sorted")
+        if (
+            len(omission_hashes) != len(set(omission_hashes))
+            or self.context_omission_sha256s != omission_hashes
+            or any(_SHA256_RE.fullmatch(value) is None for value in omission_hashes)
+        ):
+            raise ValueError("planning omission hashes must be unique and sorted")
+        _require_self_hash(self, "snapshot_sha256")
+        return self
 
 
 class ContextOmissionEvidence(FrozenContextEvidence):
@@ -185,12 +383,18 @@ class ContextOmissionEvidence(FrozenContextEvidence):
                 or self.omitted_item_sha256s
             ):
                 raise ValueError("blind-discovery omission evidence is inconsistent")
-        elif (
-            self.category is not ContextOmissionCategory.CONTEXT_PACKAGE
-            or self.provenance is not ContextOmissionProvenance.HASHED_CONTEXT_PACKAGE
-            or not self.omitted_item_sha256s
-        ):
-            raise ValueError("context-package omission evidence is inconsistent")
+        else:
+            if (
+                self.provenance is not ContextOmissionProvenance.HASHED_CONTEXT_PACKAGE
+                or not self.omitted_item_sha256s
+            ):
+                raise ValueError("context-package omission evidence is inconsistent")
+            for item_sha256 in self.omitted_item_sha256s:
+                ContextOmissionItem.build(
+                    category=self.category,
+                    reason=self.reason,
+                    omitted_item_sha256=item_sha256,
+                )
         _require_self_hash(self, "evidence_sha256")
         return self
 
@@ -292,7 +496,7 @@ class ContextRequestEvidence(FrozenContextEvidence):
     atomic_token_reservation_sha256: str = Field(pattern=_SHA256_PATTERN)
     omissions: tuple[ContextOmissionEvidence, ...] = Field(
         min_length=1,
-        max_length=2,
+        max_length=32,
     )
     actual_usage: ActualTokenUsageEvidence
     evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -305,7 +509,6 @@ class ContextRequestEvidence(FrozenContextEvidence):
         token_reservation_sha256s = tuple(
             evidence.evidence_sha256 for evidence in token_reservations
         )
-        omission_hashes = plan.context_omission_sha256s
         omissions = [
             ContextOmissionEvidence.build(
                 category=ContextOmissionCategory.PRIOR_AUDIT,
@@ -313,11 +516,19 @@ class ContextRequestEvidence(FrozenContextEvidence):
                 provenance=ContextOmissionProvenance.BLIND_DISCOVERY_POLICY,
             )
         ]
-        if omission_hashes:
+        grouped_omissions: dict[
+            tuple[ContextOmissionCategory, ContextOmissionReason],
+            list[str],
+        ] = {}
+        for item in plan.context_omissions:
+            grouped_omissions.setdefault((item.category, item.reason), []).append(
+                item.omitted_item_sha256
+            )
+        for (category, reason), omission_hashes in grouped_omissions.items():
             omissions.append(
                 ContextOmissionEvidence.build(
-                    category=ContextOmissionCategory.CONTEXT_PACKAGE,
-                    reason=ContextOmissionReason.CONTEXT_BUDGET_EXCLUDED,
+                    category=category,
+                    reason=reason,
                     provenance=ContextOmissionProvenance.HASHED_CONTEXT_PACKAGE,
                     omitted_item_sha256s=omission_hashes,
                 )
@@ -436,6 +647,30 @@ class ContextRequestEvidence(FrozenContextEvidence):
             for omission in self.omissions
         ):
             raise ValueError("context request lacks explicit blind prior-audit evidence")
+        observed_context_omissions = tuple(
+            sorted(
+                (
+                    omission.category,
+                    omission.reason,
+                    item_sha256,
+                )
+                for omission in self.omissions
+                if omission.provenance is ContextOmissionProvenance.HASHED_CONTEXT_PACKAGE
+                for item_sha256 in omission.omitted_item_sha256s
+            )
+        )
+        expected_context_omissions = tuple(
+            sorted(
+                (
+                    item.category,
+                    item.reason,
+                    item.omitted_item_sha256,
+                )
+                for item in self.request_plan.context_omissions
+            )
+        )
+        if observed_context_omissions != expected_context_omissions:
+            raise ValueError("context omission evidence differs from its request plan")
         if self.request_state is ContextRequestState.COMPLETED and (
             self.actual_usage.source is ActualTokenUsageSource.UNAVAILABLE
             or self.actual_usage.prompt_tokens is None
@@ -480,6 +715,11 @@ class ContextPreflightRequestEvidence(FrozenContextEvidence):
     decision_evidence_sha256s: tuple[str, ...] = Field(min_length=1, max_length=100)
     request_plan: RequestTokenPlan | None = None
     request_plan_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+    planning_snapshot: ContextPlanningSnapshot | None = None
+    planning_snapshot_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+    )
     estimated_prompt_tokens: int | None = Field(default=None, ge=0)
     requested_completion_tokens: int = Field(gt=0)
     evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -502,6 +742,7 @@ class ContextPreflightRequestEvidence(FrozenContextEvidence):
         estimated_prompt_tokens: int | None,
         requested_completion_tokens: int,
         request_plan: RequestTokenPlan | None = None,
+        planning_snapshot: ContextPlanningSnapshot | None = None,
     ) -> Self:
         evidence_hashes = tuple(sorted(decision_evidence_sha256s))
         resolved_logical_request_id = logical_request_id or request_id
@@ -518,6 +759,10 @@ class ContextPreflightRequestEvidence(FrozenContextEvidence):
             "decision_evidence_sha256s": evidence_hashes,
             "request_plan": request_plan,
             "request_plan_sha256": (request_plan.plan_sha256 if request_plan is not None else None),
+            "planning_snapshot": planning_snapshot,
+            "planning_snapshot_sha256": (
+                planning_snapshot.snapshot_sha256 if planning_snapshot is not None else None
+            ),
             "estimated_prompt_tokens": estimated_prompt_tokens,
             "requested_completion_tokens": requested_completion_tokens,
         }
@@ -534,6 +779,8 @@ class ContextPreflightRequestEvidence(FrozenContextEvidence):
             decision_evidence_sha256s=evidence_hashes,
             request_plan=request_plan,
             request_plan_sha256=payload["request_plan_sha256"],
+            planning_snapshot=planning_snapshot,
+            planning_snapshot_sha256=payload["planning_snapshot_sha256"],
             estimated_prompt_tokens=estimated_prompt_tokens,
             requested_completion_tokens=requested_completion_tokens,
             evidence_sha256=_canonical_sha256(payload),
@@ -549,6 +796,10 @@ class ContextPreflightRequestEvidence(FrozenContextEvidence):
             raise ValueError("preflight decision evidence hashes must be unique and sorted")
         if (self.request_plan is None) != (self.request_plan_sha256 is None):
             raise ValueError("preflight request plan and plan hash must appear together")
+        if (self.planning_snapshot is None) != (self.planning_snapshot_sha256 is None):
+            raise ValueError("preflight planning snapshot and snapshot hash must appear together")
+        if self.request_plan is not None and self.planning_snapshot is not None:
+            raise ValueError("preflight evidence cannot carry both a plan and diagnostic snapshot")
         if self.request_plan is not None and (
             self.request_plan.request_id != self.logical_request_id
             or self.request_plan.role != self.role
@@ -558,6 +809,18 @@ class ContextPreflightRequestEvidence(FrozenContextEvidence):
             or self.request_plan.requested_completion_tokens != self.requested_completion_tokens
         ):
             raise ValueError("preflight evidence differs from its request token plan")
+        if self.planning_snapshot is not None and (
+            self.planning_snapshot.request_id != self.logical_request_id
+            or self.planning_snapshot.role != self.role
+            or self.planning_snapshot.requested_model != self.requested_model
+            or self.planning_snapshot.reason is not self.reason
+            or self.planning_snapshot.snapshot_sha256 != self.planning_snapshot_sha256
+            or self.planning_snapshot.estimated_prompt_tokens != self.estimated_prompt_tokens
+            or self.planning_snapshot.requested_completion_tokens
+            != self.requested_completion_tokens
+            or self.planning_snapshot.snapshot_sha256 not in self.decision_evidence_sha256s
+        ):
+            raise ValueError("preflight evidence differs from its planning snapshot")
         if self.request_state is ContextRequestState.NOT_SENT:
             if (
                 self.decision_source is not ContextPreflightSource.ORCHESTRATOR
@@ -582,6 +845,19 @@ class ContextPreflightRequestEvidence(FrozenContextEvidence):
             }
             if self.reason not in permitted_rejections.get(self.decision_source, set()):
                 raise ValueError("preflight rejection source and reason are inconsistent")
+            if (
+                self.decision_source is ContextPreflightSource.TOKEN_PLANNER
+                and self.request_plan is None
+                and self.planning_snapshot is None
+            ):
+                raise ValueError(
+                    "planless token-planner rejection requires diagnostic planning evidence"
+                )
+            if (
+                self.decision_source is ContextPreflightSource.BUDGET_MANAGER
+                and self.request_plan is None
+            ):
+                raise ValueError("budget-manager rejection requires a valid request plan")
         _require_self_hash(self, "evidence_sha256")
         return self
 

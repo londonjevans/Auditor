@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+from collections.abc import Mapping
+from dataclasses import dataclass
 
 from mmaudit.agents.base import load_prompt
 from mmaudit.agents.specialists import SPECIALIST_ROLE_REGISTRY
@@ -18,6 +21,98 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.orchestration.context import render_context
 from mmaudit.solidity.reproduction import capability_policy_error
+
+
+def _prepared_workflow(
+    payload: Mapping[str, object],
+    *,
+    opening_tag: str,
+    closing_tag: str,
+) -> tuple[str, int, str]:
+    payload_json = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    workflow_prompt = "\n".join((opening_tag, payload_json, closing_tag, ""))
+    encoded = workflow_prompt.encode("utf-8")
+    return workflow_prompt, len(encoded), hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_prepared_workflow(
+    *,
+    workflow_prompt: str,
+    workflow_byte_upper_bound_tokens: int,
+    workflow_sha256: str,
+    label: str,
+) -> None:
+    encoded = workflow_prompt.encode("utf-8")
+    if workflow_byte_upper_bound_tokens != len(encoded):
+        raise ValueError(f"prepared {label} workflow byte bound is inconsistent")
+    if workflow_sha256 != hashlib.sha256(encoded).hexdigest():
+        raise ValueError(f"prepared {label} workflow hash is inconsistent")
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedExploitTestInput:
+    """Exact exploit-planning workflow material prepared before context allocation."""
+
+    workflow_prompt: str
+    workflow_byte_upper_bound_tokens: int
+    workflow_sha256: str
+
+    @classmethod
+    def build(cls, payload: Mapping[str, object]) -> PreparedExploitTestInput:
+        workflow_prompt, byte_bound, workflow_sha256 = _prepared_workflow(
+            payload,
+            opening_tag="<REPRODUCTION_INPUT_JSON>",
+            closing_tag="</REPRODUCTION_INPUT_JSON>",
+        )
+        return cls(
+            workflow_prompt=workflow_prompt,
+            workflow_byte_upper_bound_tokens=byte_bound,
+            workflow_sha256=workflow_sha256,
+        )
+
+    def __post_init__(self) -> None:
+        _validate_prepared_workflow(
+            workflow_prompt=self.workflow_prompt,
+            workflow_byte_upper_bound_tokens=self.workflow_byte_upper_bound_tokens,
+            workflow_sha256=self.workflow_sha256,
+            label="exploit-test",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedFalsificationInput:
+    """Exact falsification workflow material prepared before context allocation."""
+
+    workflow_prompt: str
+    workflow_byte_upper_bound_tokens: int
+    workflow_sha256: str
+
+    @classmethod
+    def build(cls, payload: Mapping[str, object]) -> PreparedFalsificationInput:
+        workflow_prompt, byte_bound, workflow_sha256 = _prepared_workflow(
+            payload,
+            opening_tag="<FALSIFICATION_INPUT_JSON>",
+            closing_tag="</FALSIFICATION_INPUT_JSON>",
+        )
+        return cls(
+            workflow_prompt=workflow_prompt,
+            workflow_byte_upper_bound_tokens=byte_bound,
+            workflow_sha256=workflow_sha256,
+        )
+
+    def __post_init__(self) -> None:
+        _validate_prepared_workflow(
+            workflow_prompt=self.workflow_prompt,
+            workflow_byte_upper_bound_tokens=self.workflow_byte_upper_bound_tokens,
+            workflow_sha256=self.workflow_sha256,
+            label="falsification",
+        )
 
 
 class ExploitTestPlannerAgent:
@@ -36,21 +131,12 @@ class ExploitTestPlannerAgent:
         self.investigator_role = investigator_role
         self.planner_role = planner_role
 
-    async def run(
+    def prepare_input(
         self,
         candidates: list[CandidateFinding],
-        context: ContextPackage,
-    ) -> GeneratedFoundryTestBatch:
-        if not candidates:
-            return GeneratedFoundryTestBatch(tests=[])
-        configured_role = self.planner_role or (
-            "exploit_reproduction_planner"
-            if "exploit_reproduction_planner" in self.config.models.specialists
-            else self.investigator_role.removeprefix("specialist:")
-        )
-        definition = SPECIALIST_ROLE_REGISTRY[self.planner_role or "exploit_reproduction_planner"]
-        configured = self.config.models.role(configured_role)
-        role = f"specialist:{configured_role}:exploit_test"
+    ) -> PreparedExploitTestInput:
+        """Prepare the exact non-context exploit-planning workflow."""
+
         payload = {
             "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
             "available_targets": sorted(self.config.reproduction.targets),
@@ -92,6 +178,31 @@ class ExploitTestPlannerAgent:
                 "max_assertions_per_test": 40,
             },
         }
+        return PreparedExploitTestInput.build(payload)
+
+    async def run(
+        self,
+        candidates: list[CandidateFinding],
+        context: ContextPackage,
+        *,
+        prepared_input: PreparedExploitTestInput | None = None,
+    ) -> GeneratedFoundryTestBatch:
+        expected_input = self.prepare_input(candidates)
+        if prepared_input is not None and prepared_input != expected_input:
+            raise OpenRouterSchemaError(
+                "prepared exploit-test workflow differs from submitted planning evidence"
+            )
+        if not candidates:
+            return GeneratedFoundryTestBatch(tests=[])
+        effective_input = prepared_input or expected_input
+        configured_role = self.planner_role or (
+            "exploit_reproduction_planner"
+            if "exploit_reproduction_planner" in self.config.models.specialists
+            else self.investigator_role.removeprefix("specialist:")
+        )
+        definition = SPECIALIST_ROLE_REGISTRY[self.planner_role or "exploit_reproduction_planner"]
+        configured = self.config.models.role(configured_role)
+        role = f"specialist:{configured_role}:exploit_test"
         response = await self.client.complete(
             role=role,
             models=[configured.primary, *configured.fallbacks],
@@ -104,14 +215,7 @@ class ExploitTestPlannerAgent:
                     "</ROLE_CONTRACT_JSON>",
                 )
             ),
-            user_prompt="\n".join(
-                (
-                    "<REPRODUCTION_INPUT_JSON>",
-                    json.dumps(payload, sort_keys=True),
-                    "</REPRODUCTION_INPUT_JSON>",
-                    render_context(context),
-                )
-            ),
+            user_prompt=effective_input.workflow_prompt + render_context(context),
             context_package=context,
             response_model=GeneratedFoundryTestBatch,
             schema_name=definition.effective_schema_name(),
@@ -150,6 +254,22 @@ class FalsifierAgent:
         self.config = config
         self.client = client
 
+    @staticmethod
+    def prepare_input(
+        *,
+        candidates: list[CandidateFinding],
+        tests: list[GeneratedFoundryTestSpec],
+        results: list[ReproductionResult],
+    ) -> PreparedFalsificationInput:
+        """Prepare the exact non-context falsification workflow."""
+
+        payload = {
+            "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
+            "test_specifications": [test.model_dump(mode="json") for test in tests],
+            "execution_results": [result.model_dump(mode="json") for result in results],
+        }
+        return PreparedFalsificationInput.build(payload)
+
     async def run(
         self,
         *,
@@ -157,17 +277,23 @@ class FalsifierAgent:
         tests: list[GeneratedFoundryTestSpec],
         results: list[ReproductionResult],
         context: ContextPackage,
+        prepared_input: PreparedFalsificationInput | None = None,
     ) -> FalsificationBatch:
+        expected_input = self.prepare_input(
+            candidates=candidates,
+            tests=tests,
+            results=results,
+        )
+        if prepared_input is not None and prepared_input != expected_input:
+            raise OpenRouterSchemaError(
+                "prepared falsification workflow differs from submitted evidence"
+            )
+        effective_input = prepared_input or expected_input
         configured_role = (
             "falsifier" if "falsifier" in self.config.models.specialists else "verifier"
         )
         definition = SPECIALIST_ROLE_REGISTRY["falsifier"]
         verifier = self.config.models.role(configured_role)
-        payload = {
-            "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
-            "test_specifications": [test.model_dump(mode="json") for test in tests],
-            "execution_results": [result.model_dump(mode="json") for result in results],
-        }
         response = await self.client.complete(
             role=("specialist:falsifier" if configured_role == "falsifier" else "falsifier"),
             models=[verifier.primary, *verifier.fallbacks],
@@ -180,14 +306,7 @@ class FalsifierAgent:
                     "</ROLE_CONTRACT_JSON>",
                 )
             ),
-            user_prompt="\n".join(
-                (
-                    "<FALSIFICATION_INPUT_JSON>",
-                    json.dumps(payload, sort_keys=True),
-                    "</FALSIFICATION_INPUT_JSON>",
-                    render_context(context),
-                )
-            ),
+            user_prompt=effective_input.workflow_prompt + render_context(context),
             context_package=context,
             response_model=FalsificationBatch,
             schema_name=definition.effective_schema_name(),

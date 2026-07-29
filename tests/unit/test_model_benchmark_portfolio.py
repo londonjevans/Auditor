@@ -56,6 +56,7 @@ from mmaudit.reporting.json_report import stable_json
 from tests.identity_fixtures import (
     bind_synthetic_usage_identity,
     synthetic_strict_zdr_privacy_routing,
+    synthetic_token_plan_routing,
 )
 from tests.output_evidence_fixtures import (
     SYNTHETIC_OUTPUT_CAPABILITY_SHA256,
@@ -267,7 +268,7 @@ def _usage_record(
         },
         source_label=f"model-benchmark-portfolio:{target.model_id}:{case_id}",
     )
-    return UsageRecord(
+    record = UsageRecord(
         request_id=f"request-{target_slug}-{case_id}",
         role="model_benchmark",
         execution_evidence=execution_evidence,
@@ -299,6 +300,9 @@ def _usage_record(
         validation_status=ModelRequestValidationStatus.VALID,
         status="success",
         attempts=1,
+    )
+    return record.model_copy(
+        update={"routing": synthetic_token_plan_routing(record, record.routing)}
     )
 
 
@@ -761,7 +765,28 @@ def test_writer_rejects_cross_report_request_replay(
     first_request_id = inputs.reports[0].results[0].cases[0].usage_record
     assert first_request_id is not None
     replayed = inputs.reports[1].model_dump(mode="json", exclude={"report_sha256"})
-    replayed["results"][0]["cases"][0]["usage_record"]["request_id"] = first_request_id.request_id
+    replayed_usage = UsageRecord.model_validate(replayed["results"][0]["cases"][0]["usage_record"])
+    replayed_routing = dict(replayed_usage.routing)
+    for field in (
+        "request_token_plan",
+        "request_token_plan_sha256",
+        "atomic_token_reservations",
+        "atomic_token_reservation_sha256s",
+        "atomic_token_reservation",
+        "atomic_token_reservation_sha256",
+    ):
+        replayed_routing.pop(field, None)
+    replayed_routing["canonical_model"] = replayed_usage.requested_model
+    replayed_routing["selected_provider_name"] = "Synthetic"
+    replayed_usage = bind_synthetic_usage_identity(
+        replayed_usage.model_copy(
+            update={
+                "request_id": first_request_id.request_id,
+                "routing": replayed_routing,
+            }
+        )
+    )
+    replayed["results"][0]["cases"][0]["usage_record"] = replayed_usage.model_dump(mode="json")
     replayed["report_sha256"] = canonical_sha256(replayed)
 
     with pytest.raises(ValueError, match="replays a request ID"):

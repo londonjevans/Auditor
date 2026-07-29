@@ -8,8 +8,12 @@ from pydantic import ValidationError
 
 from mmaudit.models.token_planning import (
     PROMPT_ALLOCATION_CATEGORIES,
+    ContextOmissionCategory,
+    ContextOmissionItem,
+    ContextOmissionReason,
     EndpointRouteIntersection,
     EndpointRouteTokenCapacity,
+    EndpointTokenCapacityError,
     PromptAllocationCategory,
     PromptTokenAllocation,
     RequestTokenPlan,
@@ -17,6 +21,7 @@ from mmaudit.models.token_planning import (
     Utf8TokenEstimate,
     build_request_token_plan,
 )
+from mmaudit.orchestration.manifest import canonical_sha256
 
 
 def _route(
@@ -75,7 +80,7 @@ def _plan(
     configured_reserved_schema_tokens: int = 0,
     configured_reserved_protocol_tokens: int = 0,
     maximum_source_tokens_per_request: int = 200_000,
-    context_omission_sha256s: tuple[str, ...] = (),
+    context_omissions: tuple[ContextOmissionItem, ...] = (),
 ) -> RequestTokenPlan:
     resolved_allocations = allocations or _allocations(source_tokens=63_000)
     return build_request_token_plan(
@@ -92,9 +97,36 @@ def _plan(
         configured_reserved_schema_tokens=configured_reserved_schema_tokens,
         configured_reserved_protocol_tokens=configured_reserved_protocol_tokens,
         maximum_source_tokens_per_request=maximum_source_tokens_per_request,
-        context_omission_sha256s=context_omission_sha256s,
+        context_omissions=context_omissions,
         prompt_envelope_byte_upper_bound_tokens=sum(
             allocation.estimate.byte_upper_bound_tokens for allocation in resolved_allocations
+        ),
+    )
+
+
+def _surface_plan(
+    *,
+    requested_surface_count: int,
+    required_output_tokens: int,
+    route_intersection: EndpointRouteIntersection | None = None,
+) -> RequestTokenPlan:
+    """Build a plan that must prove output feasibility for explicit review surfaces."""
+
+    allocations = _allocations(source_tokens=1_000)
+    return build_request_token_plan(
+        request_id="surface-output-request",
+        role="source_audit",
+        route_intersection=route_intersection or EndpointRouteIntersection.build((_route(),)),
+        allocations=allocations,
+        requested_surface_count=requested_surface_count,
+        required_output_tokens=required_output_tokens,
+        reserved_reasoning_tokens=1_024,
+        global_input_token_budget=1_000_000,
+        global_output_token_budget=200_000,
+        context_utilization=Decimal("0.75"),
+        maximum_source_tokens_per_request=200_000,
+        prompt_envelope_byte_upper_bound_tokens=sum(
+            allocation.estimate.byte_upper_bound_tokens for allocation in allocations
         ),
     )
 
@@ -127,13 +159,82 @@ def test_high_capacity_route_preserves_32k_output_with_conservative_input_bound(
     assert plan.requested_completion_tokens == 40_960
     assert plan.hard_prompt_tokens == 259_040
     assert plan.usable_prompt_tokens == 194_280
-    assert plan.source_budget.maximum_source_tokens_per_request == 191_280
-    assert plan.source_budget.planned_source_tokens == 189_000
+    assert plan.source_budget.maximum_source_tokens_per_request == 63_760
+    assert plan.source_budget.maximum_source_byte_upper_bound_tokens == 191_280
+    assert plan.source_budget.planned_source_tokens == 63_000
     assert plan.estimated_prompt_tokens == 64_000
     assert plan.prompt_byte_upper_bound_tokens == 192_000
     assert plan.global_budget.request_input_tokens == 192_000
     assert plan.prompt_byte_upper_bound_tokens <= plan.usable_prompt_tokens
     assert plan.prompt_byte_upper_bound_tokens + plan.requested_completion_tokens <= 300_000
+
+
+def test_high_capacity_route_accepts_approximately_200k_estimated_input_tokens() -> None:
+    allocations = _allocations(source_tokens=195_000, non_source_tokens_each=500)
+    route = _route(
+        context_tokens=1_000_000,
+        prompt_tokens=900_000,
+        completion_tokens=64_000,
+    )
+
+    plan = _plan(
+        route_intersection=EndpointRouteIntersection.build((route,)),
+        allocations=allocations,
+        maximum_source_tokens_per_request=200_000,
+    )
+
+    source = next(
+        allocation
+        for allocation in plan.allocations
+        if allocation.category is PromptAllocationCategory.SOURCE
+    )
+    assert source.estimate.estimated_tokens == 195_000
+    assert plan.estimated_prompt_tokens == 200_000
+    assert plan.source_budget.planned_source_tokens == 195_000
+    assert plan.prompt_byte_upper_bound_tokens == 600_000
+    assert plan.prompt_byte_upper_bound_tokens <= plan.usable_prompt_tokens
+
+
+def test_output_allocation_evidence_conserves_visible_output_and_surface_coverage() -> None:
+    plan = _surface_plan(
+        requested_surface_count=4,
+        required_output_tokens=32_768,
+    )
+
+    allocations = {allocation.category: allocation for allocation in plan.output_allocations}
+    assert tuple(sorted(allocations)) == ("coverage", "findings", "summary")
+    assert sum(allocation.reserved_tokens for allocation in allocations.values()) == (
+        plan.reserved_output_tokens
+    )
+    assert all(allocation.reserved_tokens > 0 for allocation in allocations.values())
+    assert all(
+        allocation.reserved_tokens >= allocation.minimum_reserved_tokens
+        for allocation in allocations.values()
+    )
+    assert allocations["findings"].minimum_reserved_tokens >= 256
+    assert allocations["summary"].minimum_reserved_tokens >= 128
+
+    coverage = allocations["coverage"]
+    assert coverage.requested_surface_count == 4
+    assert coverage.minimum_tokens_per_surface > 0
+    assert coverage.reserved_tokens >= (
+        coverage.requested_surface_count * coverage.minimum_tokens_per_surface
+    )
+
+
+def test_surface_output_allocation_rejects_an_infeasible_requested_surface_count() -> None:
+    route = _route(
+        context_tokens=100_000,
+        prompt_tokens=90_000,
+        completion_tokens=8_192,
+    )
+
+    with pytest.raises(TokenPlanningError, match=r"(surface.*output|output.*surface)"):
+        _surface_plan(
+            requested_surface_count=10_000,
+            required_output_tokens=4_096,
+            route_intersection=EndpointRouteIntersection.build((route,)),
+        )
 
 
 def test_prompt_byte_upper_bound_cannot_exceed_conservative_endpoint_capacity() -> None:
@@ -168,7 +269,8 @@ def test_mixed_routes_use_lowest_capacity_without_peer_role_division() -> None:
     assert intersection.max_prompt_tokens == 24_576
     assert intersection.max_completion_tokens == 8_192
     assert plan.usable_prompt_tokens == 17_203
-    assert plan.source_budget.maximum_source_tokens_per_request == 14_203
+    assert plan.source_budget.maximum_source_tokens_per_request == 4_735
+    assert plan.source_budget.maximum_source_byte_upper_bound_tokens == 14_203
 
 
 def test_required_output_fails_instead_of_clamping_to_mixed_route() -> None:
@@ -248,12 +350,15 @@ def test_configured_non_source_reserves_and_source_cap_are_enforced() -> None:
     assert plan.source_budget.reserved_non_source_prompt_tokens == 20_532
     assert plan.source_budget.configured_maximum_source_tokens_per_request == 50_000
     assert plan.source_budget.maximum_source_tokens_per_request == 50_000
-    assert plan.source_budget.remaining_source_tokens == 10_000
-    assert plan.source_budget.unallocated_prompt_tokens == 123_748
+    assert plan.source_budget.planned_source_tokens == 13_334
+    assert plan.source_budget.remaining_source_tokens == 36_666
+    assert plan.source_budget.planned_source_byte_upper_bound_tokens == 40_000
+    assert plan.source_budget.remaining_source_byte_upper_bound_tokens == 110_000
+    assert plan.source_budget.unallocated_prompt_tokens == 23_748
 
     with pytest.raises(TokenPlanningError, match="per-request maximum"):
         _plan(
-            allocations=byte_allocations(50_001),
+            allocations=byte_allocations(150_001),
             configured_reserved_system_tokens=8_192,
             configured_reserved_schema_tokens=8_192,
             configured_reserved_protocol_tokens=2_048,
@@ -275,13 +380,43 @@ def test_route_intersection_rejects_multiple_exact_models() -> None:
         )
 
 
-def test_context_omission_hashes_are_canonical_and_self_bound() -> None:
-    plan = _plan(context_omission_sha256s=("b" * 64, "a" * 64))
+def test_context_omissions_are_typed_canonical_and_self_bound() -> None:
+    omissions = (
+        ContextOmissionItem.build(
+            category=ContextOmissionCategory.SOURCE,
+            reason=ContextOmissionReason.SOURCE_BUDGET_EXCLUDED,
+            omitted_item_sha256="b" * 64,
+        ),
+        ContextOmissionItem.build(
+            category=ContextOmissionCategory.GRAPH,
+            reason=ContextOmissionReason.METADATA_BUDGET_EXCLUDED,
+            omitted_item_sha256="a" * 64,
+        ),
+    )
+    plan = _plan(context_omissions=omissions)
 
     assert plan.context_omission_sha256s == ("a" * 64, "b" * 64)
+    assert tuple(item.category for item in plan.context_omissions) == (
+        ContextOmissionCategory.GRAPH,
+        ContextOmissionCategory.SOURCE,
+    )
 
-    with pytest.raises(TokenPlanningError, match="unique"):
-        _plan(context_omission_sha256s=("a" * 64, "a" * 64))
+    duplicate = ContextOmissionItem.build(
+        category=ContextOmissionCategory.SOURCE,
+        reason=ContextOmissionReason.SOURCE_BUDGET_EXCLUDED,
+        omitted_item_sha256="a" * 64,
+    )
+    with pytest.raises(TokenPlanningError, match="duplicate"):
+        _plan(context_omissions=(duplicate, duplicate))
+
+
+def test_context_omission_reason_must_match_category() -> None:
+    with pytest.raises(ValidationError, match="category differs"):
+        ContextOmissionItem.build(
+            category=ContextOmissionCategory.SCANNER,
+            reason=ContextOmissionReason.SOURCE_BUDGET_EXCLUDED,
+            omitted_item_sha256="a" * 64,
+        )
 
 
 def test_global_input_and_output_budgets_fail_closed() -> None:
@@ -385,3 +520,56 @@ def test_context_derived_limits_must_equal_context_capacity() -> None:
             max_completion_tokens=20_000,
             max_completion_tokens_source="metadata",
         )
+
+
+def test_request_planning_rejects_unproven_completion_capacity() -> None:
+    route = EndpointRouteTokenCapacity.build(
+        exact_model_id="alpha/frontier-secure",
+        provider_endpoint="approved-provider",
+        endpoint_snapshot_sha256="a" * 64,
+        context_tokens=100_000,
+        max_prompt_tokens=90_000,
+        max_prompt_tokens_source="metadata",
+        max_completion_tokens=100_000,
+        max_completion_tokens_source="context_limit",
+    )
+
+    with pytest.raises(
+        EndpointTokenCapacityError,
+        match="explicit metadata limit",
+    ):
+        _plan(
+            route_intersection=EndpointRouteIntersection.build((route,)),
+            required_output_tokens=4_096,
+        )
+
+
+def test_persisted_request_plan_rejects_unproven_completion_capacity() -> None:
+    valid_route = _route(
+        context_tokens=300_000,
+        prompt_tokens=280_000,
+        completion_tokens=300_000,
+    )
+    plan = _plan(
+        route_intersection=EndpointRouteIntersection.build((valid_route,)),
+        required_output_tokens=4_096,
+    )
+    unproven_route = EndpointRouteTokenCapacity.build(
+        exact_model_id=valid_route.exact_model_id,
+        provider_endpoint=valid_route.provider_endpoint,
+        endpoint_snapshot_sha256=valid_route.endpoint_snapshot_sha256,
+        context_tokens=valid_route.context_tokens,
+        max_prompt_tokens=valid_route.max_prompt_tokens,
+        max_prompt_tokens_source=valid_route.max_prompt_tokens_source,
+        max_completion_tokens=valid_route.max_completion_tokens,
+        max_completion_tokens_source="context_limit",
+    )
+    unproven_intersection = EndpointRouteIntersection.build((unproven_route,))
+    hash_payload = plan.model_dump(mode="json", exclude={"plan_sha256"})
+    hash_payload["route_intersection"] = unproven_intersection.model_dump(mode="json")
+    tampered = plan.model_dump(mode="python")
+    tampered["route_intersection"] = unproven_intersection
+    tampered["plan_sha256"] = canonical_sha256(hash_payload)
+
+    with pytest.raises(ValidationError, match="explicit metadata completion limit"):
+        RequestTokenPlan.model_validate(tampered)

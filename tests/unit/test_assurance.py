@@ -119,7 +119,10 @@ from mmaudit.traceability import (
     TraceabilityRequirement,
     build_traceability_matrix,
 )
-from tests.identity_fixtures import bind_synthetic_usage_identity
+from tests.identity_fixtures import (
+    bind_synthetic_usage_identity,
+    rebind_synthetic_token_plan,
+)
 from tests.output_evidence_fixtures import synthetic_structured_output_routing
 from tests.qualification_support import (
     bind_usage_to_qualification as _bind_base_usage_to_qualification,
@@ -199,7 +202,9 @@ def _with_output_evidence(
             mode=mode,
         ),
     }
-    return bind_synthetic_usage_identity(record.model_copy(update={"routing": routing}))
+    return bind_synthetic_usage_identity(
+        rebind_synthetic_token_plan(record.model_copy(update={"routing": routing}))
+    )
 
 
 def _specialists(*, families: int = 8) -> dict[str, dict[str, object]]:

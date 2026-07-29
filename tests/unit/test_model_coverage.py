@@ -37,6 +37,11 @@ from mmaudit.models.schemas import (
     SoliditySymbolIndex,
     UsageRecord,
 )
+from mmaudit.models.token_planning import (
+    ContextOmissionCategory,
+    ContextOmissionItem,
+    ContextOmissionReason,
+)
 from mmaudit.orchestration.context import render_context
 from mmaudit.orchestration.model_coverage import (
     build_model_review_coverage,
@@ -770,7 +775,17 @@ def test_post_hoc_context_substitution_cannot_authorize_coverage(
         context=original_context,
     )
     substituted_context = original_context.model_copy(
-        update={"omissions": ["post-hoc context differs from the provider request"]}
+        update={
+            "omissions": [
+                ContextOmissionItem.build(
+                    category=ContextOmissionCategory.CONTEXT_PACKAGE,
+                    reason=ContextOmissionReason.CONTEXT_BUDGET_EXCLUDED,
+                    omitted_item_sha256=hashlib.sha256(
+                        b"post-hoc context differs from the provider request"
+                    ).hexdigest(),
+                )
+            ]
+        }
     )
 
     coverage = build_model_review_coverage(

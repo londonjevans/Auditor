@@ -23,6 +23,9 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.models.token_planning import (
     PROMPT_ALLOCATION_CATEGORIES,
+    ContextOmissionCategory,
+    ContextOmissionItem,
+    ContextOmissionReason,
     EndpointRouteIntersection,
     EndpointRouteTokenCapacity,
     PromptAllocationCategory,
@@ -35,7 +38,7 @@ from mmaudit.orchestration.context_manifest import (
     ActualTokenUsageSource,
     ContextManifest,
     ContextManifestError,
-    ContextOmissionReason,
+    ContextPlanningSnapshot,
     ContextPreflightLedger,
     ContextPreflightReason,
     ContextPreflightRequestEvidence,
@@ -119,12 +122,40 @@ def _plan(
         global_input_token_budget=1_000_000,
         global_output_token_budget=100_000,
         context_utilization=Decimal("0.70"),
-        context_omission_sha256s=(
-            hashlib.sha256(b"source excerpt omitted by role budget").hexdigest(),
+        context_omissions=(
+            ContextOmissionItem.build(
+                category=ContextOmissionCategory.SOURCE,
+                reason=ContextOmissionReason.SOURCE_BUDGET_EXCLUDED,
+                omitted_item_sha256=hashlib.sha256(
+                    b"source excerpt omitted by role budget"
+                ).hexdigest(),
+            ),
         ),
         prompt_envelope_byte_upper_bound_tokens=sum(
             allocation.estimate.byte_upper_bound_tokens for allocation in allocations
         ),
+    )
+
+
+def _planning_snapshot(
+    *,
+    request_id: str,
+    reason: ContextPreflightReason,
+) -> ContextPlanningSnapshot:
+    plan = _plan(request_id=request_id)
+    return ContextPlanningSnapshot.build(
+        request_id=request_id,
+        role=plan.role,
+        requested_model="alpha/frontier-secure",
+        reason=reason,
+        route_intersection=plan.route_intersection,
+        allocations=plan.allocations,
+        output_allocations=plan.output_allocations,
+        requested_surface_count=plan.requested_surface_count,
+        required_output_tokens=plan.required_output_tokens,
+        reserved_reasoning_tokens=plan.reserved_reasoning_tokens,
+        prompt_envelope_byte_upper_bound_tokens=(plan.prompt_byte_upper_bound_tokens),
+        context_omissions=plan.context_omissions,
     )
 
 
@@ -270,6 +301,15 @@ def test_context_manifest_is_deterministic_hash_only_and_conserved() -> None:
         for request in provider_requests
     )
     assert all(
+        any(
+            omission.category is ContextOmissionCategory.SOURCE
+            and omission.reason is ContextOmissionReason.SOURCE_BUDGET_EXCLUDED
+            and omission.omitted_item_count == 1
+            for omission in request.omissions
+        )
+        for request in provider_requests
+    )
+    assert all(
         omission.token_estimation_state is OmissionTokenEstimationState.NOT_ESTIMATED
         and omission.estimated_tokens is None
         for request in provider_requests
@@ -401,6 +441,10 @@ def test_context_manifest_rejects_duplicate_request_ids() -> None:
 
 
 def test_context_manifest_retains_typed_preflight_rejection_without_fabricated_usage() -> None:
+    snapshot = _planning_snapshot(
+        request_id="request-preflight-1",
+        reason=ContextPreflightReason.ENDPOINT_CAPACITY,
+    )
     rejection = ContextPreflightRequestEvidence.build(
         request_id="request-preflight-1",
         role="source_audit",
@@ -408,9 +452,10 @@ def test_context_manifest_retains_typed_preflight_rejection_without_fabricated_u
         request_state=ContextRequestState.PRE_FLIGHT_REJECTED,
         decision_source=ContextPreflightSource.TOKEN_PLANNER,
         reason=ContextPreflightReason.ENDPOINT_CAPACITY,
-        decision_evidence_sha256s=("9" * 64,),
-        estimated_prompt_tokens=90_001,
-        requested_completion_tokens=20_000,
+        decision_evidence_sha256s=("9" * 64, snapshot.snapshot_sha256),
+        estimated_prompt_tokens=snapshot.estimated_prompt_tokens,
+        requested_completion_tokens=snapshot.requested_completion_tokens,
+        planning_snapshot=snapshot,
     )
 
     manifest = build_context_manifest(
@@ -426,6 +471,9 @@ def test_context_manifest_retains_typed_preflight_rejection_without_fabricated_u
     assert manifest.totals.not_sent_request_count == 0
     assert manifest.totals.unavailable_actual_usage_count == 1
     assert manifest.totals.provider_reported_prompt_tokens == 0
+    assert manifest.totals.reserved_output_tokens == 0
+    assert manifest.totals.provider_attempt_count == 0
+    assert manifest.totals.atomic_reservation_count == 0
     assert all(category.request_count == 0 for category in manifest.totals.categories)
     validate_context_manifest_against_usage(
         manifest,
@@ -438,6 +486,84 @@ def test_context_manifest_retains_typed_preflight_rejection_without_fabricated_u
             manifest,
             run_id="run-1",
             usage_records=[],
+        )
+
+
+def test_partial_planning_snapshot_is_complete_self_hashed_and_diagnostic_only() -> None:
+    snapshot = _planning_snapshot(
+        request_id="request-partial-plan",
+        reason=ContextPreflightReason.ENDPOINT_CAPACITY,
+    )
+
+    assert snapshot.route_intersection is not None
+    assert snapshot.allocations is not None
+    assert tuple(item.category for item in snapshot.allocations) == (PROMPT_ALLOCATION_CATEGORIES)
+    assert snapshot.output_allocations is not None
+    assert sum(item.reserved_tokens for item in snapshot.output_allocations) == (
+        snapshot.required_output_tokens
+    )
+    assert snapshot.estimated_prompt_tokens == sum(
+        item.estimate.estimated_tokens for item in snapshot.allocations
+    )
+    assert snapshot.prompt_content_byte_upper_bound_tokens == sum(
+        item.estimate.byte_upper_bound_tokens for item in snapshot.allocations
+    )
+    assert snapshot.context_omissions
+    assert snapshot.context_omission_sha256s == tuple(
+        sorted(item.omitted_item_sha256 for item in snapshot.context_omissions)
+    )
+    assert not snapshot.review_credit
+    assert not snapshot.atomic_reservation_created
+    assert not snapshot.provider_request_sent
+    assert ContextPlanningSnapshot.model_validate_json(snapshot.model_dump_json()) == snapshot
+
+
+def test_partial_planning_snapshot_rejects_hash_or_component_drift() -> None:
+    snapshot = _planning_snapshot(
+        request_id="request-partial-drift",
+        reason=ContextPreflightReason.ENDPOINT_CAPACITY,
+    )
+    tampered = snapshot.model_copy(
+        update={"estimated_prompt_tokens": snapshot.estimated_prompt_tokens + 1}
+    )
+
+    with pytest.raises(ValidationError, match=r"totals|hash"):
+        ContextPlanningSnapshot.model_validate_json(tampered.model_dump_json())
+
+
+def test_context_preflight_rejects_planless_token_planner_without_snapshot() -> None:
+    with pytest.raises(ValidationError, match="diagnostic planning evidence"):
+        ContextPreflightRequestEvidence.build(
+            request_id="request-planless-no-snapshot",
+            role="source_audit",
+            requested_model="alpha/frontier-secure",
+            request_state=ContextRequestState.PRE_FLIGHT_REJECTED,
+            decision_source=ContextPreflightSource.TOKEN_PLANNER,
+            reason=ContextPreflightReason.ENDPOINT_CAPACITY,
+            decision_evidence_sha256s=("9" * 64,),
+            estimated_prompt_tokens=None,
+            requested_completion_tokens=2_048,
+        )
+
+
+def test_context_preflight_rejects_snapshot_identity_or_reason_drift() -> None:
+    snapshot = _planning_snapshot(
+        request_id="request-snapshot-drift",
+        reason=ContextPreflightReason.ENDPOINT_CAPACITY,
+    )
+
+    with pytest.raises(ValidationError, match="planning snapshot"):
+        ContextPreflightRequestEvidence.build(
+            request_id=snapshot.request_id,
+            role=snapshot.role,
+            requested_model="other/frontier-secure",
+            request_state=ContextRequestState.PRE_FLIGHT_REJECTED,
+            decision_source=ContextPreflightSource.TOKEN_PLANNER,
+            reason=snapshot.reason,
+            decision_evidence_sha256s=(snapshot.snapshot_sha256,),
+            estimated_prompt_tokens=snapshot.estimated_prompt_tokens,
+            requested_completion_tokens=snapshot.requested_completion_tokens,
+            planning_snapshot=snapshot,
         )
 
 
@@ -509,16 +635,46 @@ def test_context_preflight_state_source_reason_matrix_accepts_only_valid_pairs(
     source: ContextPreflightSource,
     reason: ContextPreflightReason,
 ) -> None:
+    request_id = f"valid-{source.value.lower()}-{reason.value.lower()}"
+    request_plan = (
+        _plan(request_id=request_id) if source is ContextPreflightSource.BUDGET_MANAGER else None
+    )
+    planning_snapshot = (
+        _planning_snapshot(request_id=request_id, reason=reason)
+        if source is ContextPreflightSource.TOKEN_PLANNER
+        else None
+    )
+    bound_evidence_sha256 = (
+        request_plan.plan_sha256
+        if request_plan is not None
+        else (planning_snapshot.snapshot_sha256 if planning_snapshot is not None else "a" * 64)
+    )
+    estimated_prompt_tokens = (
+        request_plan.estimated_prompt_tokens
+        if request_plan is not None
+        else (planning_snapshot.estimated_prompt_tokens if planning_snapshot is not None else None)
+    )
+    requested_completion_tokens = (
+        request_plan.requested_completion_tokens
+        if request_plan is not None
+        else (
+            planning_snapshot.requested_completion_tokens
+            if planning_snapshot is not None
+            else 1_024
+        )
+    )
     evidence = ContextPreflightRequestEvidence.build(
-        request_id=f"valid-{source.value.lower()}-{reason.value.lower()}",
+        request_id=request_id,
         role="source_audit",
         requested_model="alpha/frontier-secure",
         request_state=state,
         decision_source=source,
         reason=reason,
-        decision_evidence_sha256s=("a" * 64,),
-        estimated_prompt_tokens=None,
-        requested_completion_tokens=1_024,
+        decision_evidence_sha256s=(bound_evidence_sha256,),
+        estimated_prompt_tokens=estimated_prompt_tokens,
+        requested_completion_tokens=requested_completion_tokens,
+        request_plan=request_plan,
+        planning_snapshot=planning_snapshot,
     )
 
     assert evidence.request_state is state
@@ -595,20 +751,30 @@ def test_context_preflight_state_source_reason_matrix_rejects_invalid_pairs(
 
 def test_context_preflight_ledger_is_thread_safe_sorted_and_duplicate_closed() -> None:
     ledger = ContextPreflightLedger()
-    records = [
-        ContextPreflightRequestEvidence.build(
-            request_id=f"request-{index:03d}",
-            role="source_audit",
-            requested_model="alpha/frontier-secure",
-            request_state=ContextRequestState.PRE_FLIGHT_REJECTED,
-            decision_source=ContextPreflightSource.TOKEN_PLANNER,
+    records = []
+    for index in reversed(range(64)):
+        request_id = f"request-{index:03d}"
+        snapshot = _planning_snapshot(
+            request_id=request_id,
             reason=ContextPreflightReason.ENDPOINT_CAPACITY,
-            decision_evidence_sha256s=(hashlib.sha256(str(index).encode()).hexdigest(),),
-            estimated_prompt_tokens=None,
-            requested_completion_tokens=1_024,
         )
-        for index in reversed(range(64))
-    ]
+        records.append(
+            ContextPreflightRequestEvidence.build(
+                request_id=request_id,
+                role="source_audit",
+                requested_model="alpha/frontier-secure",
+                request_state=ContextRequestState.PRE_FLIGHT_REJECTED,
+                decision_source=ContextPreflightSource.TOKEN_PLANNER,
+                reason=ContextPreflightReason.ENDPOINT_CAPACITY,
+                decision_evidence_sha256s=(
+                    hashlib.sha256(str(index).encode()).hexdigest(),
+                    snapshot.snapshot_sha256,
+                ),
+                estimated_prompt_tokens=snapshot.estimated_prompt_tokens,
+                requested_completion_tokens=snapshot.requested_completion_tokens,
+                planning_snapshot=snapshot,
+            )
+        )
 
     with ThreadPoolExecutor(max_workers=8) as executor:
         list(executor.map(ledger.add, records))

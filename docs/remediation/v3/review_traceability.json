@@ -105,10 +105,16 @@
       "id": "H",
       "title": "Model-aware token budgets",
       "tickets": ["V3-TOKENS-001"],
-      "status": "QUEUED",
+      "status": "COMPLETE",
       "current_evidence_class": "LOCAL_IMPLEMENTATION",
-      "evidence": ["Current context builder divides a fixed global byte pool."],
-      "remaining_proof": "Endpoint-limit-aware token planning and a reconciled context manifest."
+      "evidence": [
+        "Frozen exact-model endpoint routes drive conservative usable-input, explicit output/reasoning, source, framework, graph, scanner, invariant, protocol, schema, system, workflow, and global/model/role budget evidence.",
+        "Dynamic verifier, judge, candidate cross-examination, exploit-planning, falsification, and report-quality workflows are canonically prepared and exact-bound before context allocation; evidence drift is rejected before transport.",
+        "Provider-visible workflow JSON escaping and exact rendered-context escape overhead are included in bounded iterative preview; nonconvergence and final request-plan mismatch fail closed.",
+        "The hash-only context manifest binds request plans, diagnostic preflight snapshots, atomic reservations, actual provider or explicit mock token provenance, output allocations, typed omissions, and report/run-manifest serialization.",
+        "Independent final review found no material closure blocker; Ruff, strict mypy over 139 source files, release-schema synchronization, and the complete final post-closure local suite passed with 2367 tests and 10 explicit external-prerequisite skips."
+      ],
+      "remaining_proof": "Local deterministic and fake-provider execution only; no additional paid-provider run or real audit is claimed. Oversized indivisible logical blocks remain typed omissions and make requested-surface context construction fail before transport pending semantic sharding."
     },
     {
       "id": "I",

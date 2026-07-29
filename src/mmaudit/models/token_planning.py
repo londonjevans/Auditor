@@ -68,15 +68,114 @@ class PromptAllocationCategory(StrEnum):
     WORKFLOW = "workflow"
 
 
+class ContextOmissionCategory(StrEnum):
+    """Typed omitted-content category without raw source or path material."""
+
+    CONTEXT_PACKAGE = "context_package"
+    FRAMEWORK = PromptAllocationCategory.FRAMEWORK.value
+    GRAPH = PromptAllocationCategory.GRAPH.value
+    INVARIANT = PromptAllocationCategory.INVARIANT.value
+    METADATA = PromptAllocationCategory.METADATA.value
+    PRIOR_AUDIT = PromptAllocationCategory.PRIOR_AUDIT.value
+    PROTOCOL = PromptAllocationCategory.PROTOCOL.value
+    SCANNER = PromptAllocationCategory.SCANNER.value
+    SCHEMA = PromptAllocationCategory.SCHEMA.value
+    SOURCE = PromptAllocationCategory.SOURCE.value
+    SYSTEM = PromptAllocationCategory.SYSTEM.value
+    WORKFLOW = PromptAllocationCategory.WORKFLOW.value
+
+
+class ContextOmissionReason(StrEnum):
+    """Host-defined reason one category or item was not included."""
+
+    BLIND_DISCOVERY_WITHHELD = "BLIND_DISCOVERY_WITHHELD"
+    CONTEXT_BUDGET_EXCLUDED = "CONTEXT_BUDGET_EXCLUDED"
+    LOGICAL_BLOCK_EXCEEDS_LIMIT = "LOGICAL_BLOCK_EXCEEDS_LIMIT"
+    METADATA_BUDGET_EXCLUDED = "METADATA_BUDGET_EXCLUDED"
+    REVIEW_CONTRACT_WITHHELD = "REVIEW_CONTRACT_WITHHELD"
+    SERIALIZED_BUDGET_EXCLUDED = "SERIALIZED_BUDGET_EXCLUDED"
+    SOURCE_BUDGET_EXCLUDED = "SOURCE_BUDGET_EXCLUDED"
+
+
+class OutputAllocationCategory(StrEnum):
+    """Visible-output partitions required for a substantive review response."""
+
+    COVERAGE = "coverage"
+    FINDINGS = "findings"
+    SUMMARY = "summary"
+
+
 PROMPT_ALLOCATION_CATEGORIES = tuple(
     sorted(PromptAllocationCategory, key=lambda category: category.value)
 )
+OUTPUT_ALLOCATION_CATEGORIES = tuple(
+    sorted(OutputAllocationCategory, key=lambda category: category.value)
+)
+MINIMUM_COVERAGE_TOKENS_PER_SURFACE = 64
+MINIMUM_FINDING_OUTPUT_TOKENS = 256
+MINIMUM_SUMMARY_OUTPUT_TOKENS = 128
 
 
 class FrozenTokenEvidence(BaseModel):
     """Strict immutable base for public token-planning evidence."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+
+class ContextOmissionItem(FrozenTokenEvidence):
+    """One category- and reason-bound omitted item represented only by hashes."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    category: ContextOmissionCategory
+    reason: ContextOmissionReason
+    omitted_item_sha256: str = Field(pattern=_SHA256_PATTERN)
+    evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        category: ContextOmissionCategory,
+        reason: ContextOmissionReason,
+        omitted_item_sha256: str,
+    ) -> Self:
+        payload: dict[str, Any] = {
+            "schema_version": "1.0",
+            "category": category,
+            "reason": reason,
+            "omitted_item_sha256": omitted_item_sha256,
+        }
+        return cls(
+            schema_version="1.0",
+            category=category,
+            reason=reason,
+            omitted_item_sha256=omitted_item_sha256,
+            evidence_sha256=_canonical_sha256(payload),
+        )
+
+    @model_validator(mode="after")
+    def omission_is_typed_and_self_hashed(self) -> ContextOmissionItem:
+        permitted_categories = {
+            ContextOmissionReason.BLIND_DISCOVERY_WITHHELD: {ContextOmissionCategory.PRIOR_AUDIT},
+            ContextOmissionReason.CONTEXT_BUDGET_EXCLUDED: {
+                ContextOmissionCategory.CONTEXT_PACKAGE
+            },
+            ContextOmissionReason.LOGICAL_BLOCK_EXCEEDS_LIMIT: {ContextOmissionCategory.SOURCE},
+            ContextOmissionReason.METADATA_BUDGET_EXCLUDED: {
+                ContextOmissionCategory.FRAMEWORK,
+                ContextOmissionCategory.GRAPH,
+                ContextOmissionCategory.INVARIANT,
+                ContextOmissionCategory.METADATA,
+                ContextOmissionCategory.SCANNER,
+            },
+            ContextOmissionReason.REVIEW_CONTRACT_WITHHELD: {ContextOmissionCategory.METADATA},
+            ContextOmissionReason.SERIALIZED_BUDGET_EXCLUDED: {ContextOmissionCategory.SOURCE},
+            ContextOmissionReason.SOURCE_BUDGET_EXCLUDED: {ContextOmissionCategory.SOURCE},
+        }
+        if self.category not in permitted_categories[self.reason]:
+            raise ValueError("context omission category differs from its reason")
+        _require_self_hash(self, "evidence_sha256")
+        return self
 
 
 class Utf8TokenEstimate(FrozenTokenEvidence):
@@ -198,6 +297,79 @@ class PromptTokenAllocation(FrozenTokenEvidence):
 
     @model_validator(mode="after")
     def allocation_is_self_bound(self) -> PromptTokenAllocation:
+        _require_self_hash(self, "allocation_sha256")
+        return self
+
+
+class OutputTokenAllocation(FrozenTokenEvidence):
+    """One self-hashed visible-output reservation without response content."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    category: OutputAllocationCategory
+    reserved_tokens: int = Field(gt=0, le=_MAX_TOKENS)
+    minimum_reserved_tokens: int = Field(gt=0, le=_MAX_TOKENS)
+    requested_surface_count: int = Field(ge=0, le=10_000)
+    minimum_tokens_per_surface: int = Field(ge=0, le=_MAX_TOKENS)
+    allocation_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        category: OutputAllocationCategory,
+        reserved_tokens: int,
+        minimum_reserved_tokens: int,
+        requested_surface_count: int = 0,
+        minimum_tokens_per_surface: int = 0,
+    ) -> Self:
+        payload: dict[str, Any] = {
+            "schema_version": "1.0",
+            "category": category,
+            "reserved_tokens": reserved_tokens,
+            "minimum_reserved_tokens": minimum_reserved_tokens,
+            "requested_surface_count": requested_surface_count,
+            "minimum_tokens_per_surface": minimum_tokens_per_surface,
+        }
+        return cls(
+            schema_version="1.0",
+            category=category,
+            reserved_tokens=reserved_tokens,
+            minimum_reserved_tokens=minimum_reserved_tokens,
+            requested_surface_count=requested_surface_count,
+            minimum_tokens_per_surface=minimum_tokens_per_surface,
+            allocation_sha256=_canonical_sha256(payload),
+        )
+
+    @model_validator(mode="after")
+    def allocation_is_feasible_and_self_bound(self) -> OutputTokenAllocation:
+        if self.reserved_tokens < self.minimum_reserved_tokens:
+            raise ValueError("output reservation is below its typed minimum")
+        if self.category is OutputAllocationCategory.COVERAGE:
+            if self.requested_surface_count and not self.minimum_tokens_per_surface:
+                raise ValueError("surface coverage output requires a per-surface minimum")
+            if (
+                self.reserved_tokens
+                < self.requested_surface_count * self.minimum_tokens_per_surface
+            ):
+                raise ValueError("surface coverage output reservation is infeasible")
+            expected_minimum = max(
+                1,
+                self.requested_surface_count * self.minimum_tokens_per_surface,
+            )
+            if self.minimum_reserved_tokens != expected_minimum:
+                raise ValueError("surface coverage typed minimum is inconsistent")
+        elif self.requested_surface_count or self.minimum_tokens_per_surface:
+            raise ValueError("only coverage output may carry surface feasibility evidence")
+        elif (
+            self.category is OutputAllocationCategory.FINDINGS
+            and self.minimum_reserved_tokens < MINIMUM_FINDING_OUTPUT_TOKENS
+        ):
+            raise ValueError("finding output minimum is below the defensive floor")
+        elif (
+            self.category is OutputAllocationCategory.SUMMARY
+            and self.minimum_reserved_tokens < MINIMUM_SUMMARY_OUTPUT_TOKENS
+        ):
+            raise ValueError("summary output minimum is below the defensive floor")
         _require_self_hash(self, "allocation_sha256")
         return self
 
@@ -366,8 +538,11 @@ class SourceTokenBudgetEvidence(FrozenTokenEvidence):
     reserved_non_source_prompt_tokens: int = Field(ge=0, le=_MAX_TOKENS)
     configured_maximum_source_tokens_per_request: int = Field(gt=0, le=_MAX_TOKENS)
     maximum_source_tokens_per_request: int = Field(ge=0, le=_MAX_TOKENS)
+    maximum_source_byte_upper_bound_tokens: int = Field(ge=0, le=_MAX_TOKENS)
     planned_source_tokens: int = Field(ge=0, le=_MAX_TOKENS)
+    planned_source_byte_upper_bound_tokens: int = Field(ge=0, le=_MAX_TOKENS)
     remaining_source_tokens: int = Field(ge=0, le=_MAX_TOKENS)
+    remaining_source_byte_upper_bound_tokens: int = Field(ge=0, le=_MAX_TOKENS)
     unallocated_prompt_tokens: int = Field(ge=0, le=_MAX_TOKENS)
     evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
 
@@ -380,6 +555,7 @@ class SourceTokenBudgetEvidence(FrozenTokenEvidence):
         reserved_non_source_prompt_tokens: int,
         configured_maximum_source_tokens_per_request: int,
         planned_source_tokens: int,
+        planned_source_byte_upper_bound_tokens: int,
     ) -> Self:
         if reserved_non_source_prompt_tokens < non_source_prompt_tokens:
             raise ContextTokenPlanError(
@@ -393,14 +569,25 @@ class SourceTokenBudgetEvidence(FrozenTokenEvidence):
             or configured_maximum_source_tokens_per_request <= 0
         ):
             raise ContextTokenPlanError("configured maximum source tokens must be positive")
-        maximum_source = min(
-            available_source,
-            configured_maximum_source_tokens_per_request,
+        configured_source_byte_upper = min(
+            _MAX_TOKENS,
+            configured_maximum_source_tokens_per_request * 3,
         )
-        if planned_source_tokens > maximum_source:
+        maximum_source_byte_upper = min(available_source, configured_source_byte_upper)
+        maximum_source = min(
+            configured_maximum_source_tokens_per_request,
+            (maximum_source_byte_upper + 2) // 3,
+        )
+        if (
+            planned_source_tokens > maximum_source
+            or planned_source_byte_upper_bound_tokens > maximum_source_byte_upper
+        ):
             raise ContextTokenPlanError("source allocation exceeds its per-request maximum")
         remaining_source = maximum_source - planned_source_tokens
-        unallocated_prompt = available_source - maximum_source
+        remaining_source_byte_upper = (
+            maximum_source_byte_upper - planned_source_byte_upper_bound_tokens
+        )
+        unallocated_prompt = available_source - maximum_source_byte_upper
         payload: dict[str, Any] = {
             "schema_version": "1.0",
             "usable_prompt_tokens": usable_prompt_tokens,
@@ -410,8 +597,11 @@ class SourceTokenBudgetEvidence(FrozenTokenEvidence):
                 configured_maximum_source_tokens_per_request
             ),
             "maximum_source_tokens_per_request": maximum_source,
+            "maximum_source_byte_upper_bound_tokens": maximum_source_byte_upper,
             "planned_source_tokens": planned_source_tokens,
+            "planned_source_byte_upper_bound_tokens": planned_source_byte_upper_bound_tokens,
             "remaining_source_tokens": remaining_source,
+            "remaining_source_byte_upper_bound_tokens": remaining_source_byte_upper,
             "unallocated_prompt_tokens": unallocated_prompt,
         }
         return cls(
@@ -423,8 +613,11 @@ class SourceTokenBudgetEvidence(FrozenTokenEvidence):
                 configured_maximum_source_tokens_per_request
             ),
             maximum_source_tokens_per_request=maximum_source,
+            maximum_source_byte_upper_bound_tokens=maximum_source_byte_upper,
             planned_source_tokens=planned_source_tokens,
+            planned_source_byte_upper_bound_tokens=planned_source_byte_upper_bound_tokens,
             remaining_source_tokens=remaining_source,
+            remaining_source_byte_upper_bound_tokens=remaining_source_byte_upper,
             unallocated_prompt_tokens=unallocated_prompt,
             evidence_sha256=_canonical_sha256(payload),
         )
@@ -433,7 +626,7 @@ class SourceTokenBudgetEvidence(FrozenTokenEvidence):
     def source_budget_conserves_tokens(self) -> SourceTokenBudgetEvidence:
         if (
             self.reserved_non_source_prompt_tokens
-            + self.maximum_source_tokens_per_request
+            + self.maximum_source_byte_upper_bound_tokens
             + self.unallocated_prompt_tokens
             != self.usable_prompt_tokens
         ):
@@ -450,6 +643,12 @@ class SourceTokenBudgetEvidence(FrozenTokenEvidence):
             != self.maximum_source_tokens_per_request
         ):
             raise ValueError("planned source budget does not conserve its maximum")
+        if (
+            self.planned_source_byte_upper_bound_tokens
+            + self.remaining_source_byte_upper_bound_tokens
+            != self.maximum_source_byte_upper_bound_tokens
+        ):
+            raise ValueError("planned source byte upper bound does not conserve its maximum")
         _require_self_hash(self, "evidence_sha256")
         return self
 
@@ -558,6 +757,11 @@ class RequestTokenPlan(FrozenTokenEvidence):
         min_length=len(PROMPT_ALLOCATION_CATEGORIES),
         max_length=len(PROMPT_ALLOCATION_CATEGORIES),
     )
+    requested_surface_count: int = Field(ge=0, le=10_000)
+    output_allocations: tuple[OutputTokenAllocation, ...] = Field(
+        min_length=len(OUTPUT_ALLOCATION_CATEGORIES),
+        max_length=len(OUTPUT_ALLOCATION_CATEGORIES),
+    )
     required_output_tokens: int = Field(gt=0, le=_MAX_TOKENS)
     reserved_output_tokens: int = Field(gt=0, le=_MAX_TOKENS)
     reserved_reasoning_tokens: int = Field(ge=0, le=_MAX_TOKENS)
@@ -574,6 +778,11 @@ class RequestTokenPlan(FrozenTokenEvidence):
     reserved_system_tokens: int = Field(ge=0, le=_MAX_TOKENS)
     reserved_schema_tokens: int = Field(ge=0, le=_MAX_TOKENS)
     reserved_protocol_tokens: int = Field(ge=0, le=_MAX_TOKENS)
+    reserved_workflow_tokens: int = Field(ge=0, le=_MAX_TOKENS)
+    context_omissions: tuple[ContextOmissionItem, ...] = Field(
+        default=(),
+        max_length=4_096,
+    )
     context_omission_sha256s: tuple[str, ...] = Field(default=(), max_length=4_096)
     source_budget: SourceTokenBudgetEvidence
     global_budget: GlobalTokenBudgetEvidence
@@ -581,9 +790,29 @@ class RequestTokenPlan(FrozenTokenEvidence):
 
     @model_validator(mode="after")
     def plan_is_endpoint_bound_conservative_and_self_hashed(self) -> RequestTokenPlan:
+        if any(
+            route.max_completion_tokens_source != "metadata"
+            for route in self.route_intersection.routes
+        ):
+            raise ValueError("request token plan requires an explicit metadata completion limit")
         categories = tuple(allocation.category for allocation in self.allocations)
         if categories != PROMPT_ALLOCATION_CATEGORIES:
             raise ValueError("prompt allocation categories must be complete, unique, and sorted")
+        output_categories = tuple(allocation.category for allocation in self.output_allocations)
+        if output_categories != OUTPUT_ALLOCATION_CATEGORIES:
+            raise ValueError("output allocation categories must be complete, unique, and sorted")
+        if (
+            sum(allocation.reserved_tokens for allocation in self.output_allocations)
+            != self.required_output_tokens
+        ):
+            raise ValueError("output allocations do not conserve required output tokens")
+        coverage_output = next(
+            allocation
+            for allocation in self.output_allocations
+            if allocation.category is OutputAllocationCategory.COVERAGE
+        )
+        if coverage_output.requested_surface_count != self.requested_surface_count:
+            raise ValueError("surface output allocation differs from the request plan")
         if self.required_output_tokens != self.reserved_output_tokens:
             raise ValueError("required output tokens may not be clamped")
         expected_completion = self.reserved_output_tokens + self.reserved_reasoning_tokens
@@ -635,12 +864,17 @@ class RequestTokenPlan(FrozenTokenEvidence):
         protocol_tokens = allocation_map[
             PromptAllocationCategory.PROTOCOL
         ].estimate.byte_upper_bound_tokens
+        workflow_tokens = allocation_map[
+            PromptAllocationCategory.WORKFLOW
+        ].estimate.byte_upper_bound_tokens
         if self.reserved_system_tokens < system_tokens:
             raise ValueError("system token reserve is below its allocation")
         if self.reserved_schema_tokens < schema_tokens:
             raise ValueError("schema token reserve is below its allocation")
         if self.reserved_protocol_tokens < protocol_tokens:
             raise ValueError("protocol token reserve is below its allocation")
+        if self.reserved_workflow_tokens < workflow_tokens:
+            raise ValueError("workflow token reserve is below its allocation")
         non_source_tokens = (
             sum(
                 allocation.estimate.byte_upper_bound_tokens
@@ -654,20 +888,40 @@ class RequestTokenPlan(FrozenTokenEvidence):
             - system_tokens
             - schema_tokens
             - protocol_tokens
+            - workflow_tokens
             + self.reserved_system_tokens
             + self.reserved_schema_tokens
             + self.reserved_protocol_tokens
+            + self.reserved_workflow_tokens
         )
-        source_tokens = allocation_map[
-            PromptAllocationCategory.SOURCE
-        ].estimate.byte_upper_bound_tokens
+        source_estimate = allocation_map[PromptAllocationCategory.SOURCE].estimate
         if (
             self.source_budget.usable_prompt_tokens != self.usable_prompt_tokens
             or self.source_budget.non_source_prompt_tokens != non_source_tokens
             or self.source_budget.reserved_non_source_prompt_tokens != reserved_non_source_tokens
-            or self.source_budget.planned_source_tokens != source_tokens
+            or self.source_budget.planned_source_tokens != source_estimate.estimated_tokens
+            or self.source_budget.planned_source_byte_upper_bound_tokens
+            != source_estimate.byte_upper_bound_tokens
         ):
             raise ValueError("source token budget differs from prompt allocations")
+        canonical_omissions = tuple(
+            sorted(
+                self.context_omissions,
+                key=lambda item: (
+                    item.category.value,
+                    item.reason.value,
+                    item.omitted_item_sha256,
+                ),
+            )
+        )
+        if self.context_omissions != canonical_omissions:
+            raise ValueError("context omissions must be canonically sorted")
+        omission_hashes = tuple(sorted(item.omitted_item_sha256 for item in self.context_omissions))
+        if (
+            len(omission_hashes) != len(set(omission_hashes))
+            or self.context_omission_sha256s != omission_hashes
+        ):
+            raise ValueError("context omission inventory differs from its hash index")
         if self.context_omission_sha256s != tuple(sorted(self.context_omission_sha256s)):
             raise ValueError("context omission hashes must be canonically sorted")
         if len(self.context_omission_sha256s) != len(set(self.context_omission_sha256s)) or any(
@@ -689,6 +943,7 @@ def build_request_token_plan(
     role: str,
     route_intersection: EndpointRouteIntersection,
     allocations: Sequence[PromptTokenAllocation],
+    requested_surface_count: int = 0,
     required_output_tokens: int,
     reserved_reasoning_tokens: int,
     global_input_token_budget: int,
@@ -699,8 +954,9 @@ def build_request_token_plan(
     configured_reserved_system_tokens: int = 0,
     configured_reserved_schema_tokens: int = 0,
     configured_reserved_protocol_tokens: int = 0,
+    configured_reserved_workflow_tokens: int = 0,
     maximum_source_tokens_per_request: int = 200_000,
-    context_omission_sha256s: Sequence[str] = (),
+    context_omissions: Sequence[ContextOmissionItem] = (),
     prompt_envelope_byte_upper_bound_tokens: int,
 ) -> RequestTokenPlan:
     """Build one fail-closed request plan without peer-role allocation coupling."""
@@ -713,8 +969,18 @@ def build_request_token_plan(
         raise ContextTokenPlanError("context utilization must be between 0.65 and 0.75")
     if isinstance(required_output_tokens, bool) or required_output_tokens <= 0:
         raise ContextTokenPlanError("required output token reserve must be positive")
+    if (
+        isinstance(requested_surface_count, bool)
+        or not isinstance(requested_surface_count, int)
+        or not 0 <= requested_surface_count <= 10_000
+    ):
+        raise ContextTokenPlanError("requested surface count is invalid")
     if isinstance(reserved_reasoning_tokens, bool) or reserved_reasoning_tokens < 0:
         raise ContextTokenPlanError("reasoning token reserve cannot be negative")
+    if any(route.max_completion_tokens_source != "metadata" for route in route_intersection.routes):
+        raise EndpointTokenCapacityError(
+            "endpoint completion capacity requires an explicit metadata limit"
+        )
     if required_output_tokens > route_intersection.max_completion_tokens:
         raise EndpointTokenCapacityError("required output exceeds the endpoint completion limit")
     requested_completion_tokens = required_output_tokens + reserved_reasoning_tokens
@@ -726,6 +992,10 @@ def build_request_token_plan(
         raise EndpointTokenCapacityError("completion reserves leave no endpoint prompt capacity")
 
     canonical_allocations = _canonical_allocations(allocations)
+    output_allocations = build_output_token_allocations(
+        required_output_tokens=required_output_tokens,
+        requested_surface_count=requested_surface_count,
+    )
     estimated_prompt_tokens = sum(
         allocation.estimate.estimated_tokens for allocation in canonical_allocations
     )
@@ -763,8 +1033,10 @@ def build_request_token_plan(
         )
 
     allocation_map = {allocation.category: allocation for allocation in canonical_allocations}
-    source_tokens = allocation_map[PromptAllocationCategory.SOURCE].estimate.byte_upper_bound_tokens
-    non_source_tokens = content_byte_upper_bound - source_tokens + framing_reserve_tokens
+    source_estimate = allocation_map[PromptAllocationCategory.SOURCE].estimate
+    non_source_tokens = (
+        content_byte_upper_bound - source_estimate.byte_upper_bound_tokens + framing_reserve_tokens
+    )
     system_tokens = allocation_map[PromptAllocationCategory.SYSTEM].estimate.byte_upper_bound_tokens
     schema_tokens = allocation_map[PromptAllocationCategory.SCHEMA].estimate.byte_upper_bound_tokens
     protocol_tokens = allocation_map[
@@ -785,21 +1057,32 @@ def build_request_token_plan(
         protocol_tokens,
         field="protocol",
     )
+    workflow_tokens = allocation_map[
+        PromptAllocationCategory.WORKFLOW
+    ].estimate.byte_upper_bound_tokens
+    workflow_reserve = _effective_reserve(
+        configured_reserved_workflow_tokens,
+        workflow_tokens,
+        field="workflow",
+    )
     reserved_non_source_tokens = (
         non_source_tokens
         - system_tokens
         - schema_tokens
         - protocol_tokens
+        - workflow_tokens
         + system_reserve
         + schema_reserve
         + protocol_reserve
+        + workflow_reserve
     )
     source_budget = SourceTokenBudgetEvidence.build(
         usable_prompt_tokens=usable_prompt_tokens,
         non_source_prompt_tokens=non_source_tokens,
         reserved_non_source_prompt_tokens=reserved_non_source_tokens,
         configured_maximum_source_tokens_per_request=maximum_source_tokens_per_request,
-        planned_source_tokens=source_tokens,
+        planned_source_tokens=source_estimate.estimated_tokens,
+        planned_source_byte_upper_bound_tokens=source_estimate.byte_upper_bound_tokens,
     )
     global_budget = GlobalTokenBudgetEvidence.build(
         global_input_token_budget=global_input_token_budget,
@@ -809,7 +1092,8 @@ def build_request_token_plan(
         request_input_tokens=byte_upper_bound,
         request_output_tokens=requested_completion_tokens,
     )
-    omission_hashes = _canonical_omission_hashes(context_omission_sha256s)
+    canonical_omissions = _canonical_context_omissions(context_omissions)
+    omission_hashes = tuple(sorted(item.omitted_item_sha256 for item in canonical_omissions))
     payload: dict[str, Any] = {
         "schema_version": "1.0",
         "request_id": request_id,
@@ -817,6 +1101,8 @@ def build_request_token_plan(
         "route_intersection": route_intersection,
         "context_utilization": context_utilization,
         "allocations": canonical_allocations,
+        "requested_surface_count": requested_surface_count,
+        "output_allocations": output_allocations,
         "required_output_tokens": required_output_tokens,
         "reserved_output_tokens": required_output_tokens,
         "reserved_reasoning_tokens": reserved_reasoning_tokens,
@@ -831,6 +1117,8 @@ def build_request_token_plan(
         "reserved_system_tokens": system_reserve,
         "reserved_schema_tokens": schema_reserve,
         "reserved_protocol_tokens": protocol_reserve,
+        "reserved_workflow_tokens": workflow_reserve,
+        "context_omissions": canonical_omissions,
         "context_omission_sha256s": omission_hashes,
         "source_budget": source_budget,
         "global_budget": global_budget,
@@ -842,6 +1130,8 @@ def build_request_token_plan(
         route_intersection=route_intersection,
         context_utilization=context_utilization,
         allocations=canonical_allocations,
+        requested_surface_count=requested_surface_count,
+        output_allocations=output_allocations,
         required_output_tokens=required_output_tokens,
         reserved_output_tokens=required_output_tokens,
         reserved_reasoning_tokens=reserved_reasoning_tokens,
@@ -856,6 +1146,8 @@ def build_request_token_plan(
         reserved_system_tokens=system_reserve,
         reserved_schema_tokens=schema_reserve,
         reserved_protocol_tokens=protocol_reserve,
+        reserved_workflow_tokens=workflow_reserve,
+        context_omissions=canonical_omissions,
         context_omission_sha256s=omission_hashes,
         source_budget=source_budget,
         global_budget=global_budget,
@@ -877,6 +1169,68 @@ def _canonical_allocations(
     return ordered
 
 
+def build_output_token_allocations(
+    *,
+    required_output_tokens: int,
+    requested_surface_count: int,
+) -> tuple[OutputTokenAllocation, ...]:
+    """Reserve explicit finding, coverage, and summary capacity.
+
+    The per-surface floor is intentionally compact: it proves that the requested
+    coverage inventory is mathematically possible without pretending that this
+    estimate is the provider's tokenizer. The remaining visible output is
+    preferentially retained for findings and a bounded synthesis.
+    """
+
+    if required_output_tokens < len(OUTPUT_ALLOCATION_CATEGORIES):
+        raise ContextTokenPlanError(
+            "required output cannot fund finding, coverage, and summary allocations"
+        )
+    coverage_minimum = max(
+        1,
+        requested_surface_count * MINIMUM_COVERAGE_TOKENS_PER_SURFACE,
+    )
+    findings_minimum = max(
+        MINIMUM_FINDING_OUTPUT_TOKENS,
+        min(1_024, required_output_tokens // 4),
+    )
+    summary_minimum = max(
+        MINIMUM_SUMMARY_OUTPUT_TOKENS,
+        min(512, required_output_tokens // 8),
+    )
+    minimum_total = coverage_minimum + findings_minimum + summary_minimum
+    if minimum_total > required_output_tokens:
+        raise ContextTokenPlanError(
+            "requested surface output is infeasible within the visible output reserve"
+        )
+    remaining = required_output_tokens - minimum_total
+    findings_tokens = findings_minimum + ((remaining * 2) // 3)
+    coverage_tokens = coverage_minimum + (remaining // 6)
+    summary_tokens = required_output_tokens - findings_tokens - coverage_tokens
+    allocations = (
+        OutputTokenAllocation.build(
+            category=OutputAllocationCategory.COVERAGE,
+            reserved_tokens=coverage_tokens,
+            minimum_reserved_tokens=coverage_minimum,
+            requested_surface_count=requested_surface_count,
+            minimum_tokens_per_surface=(
+                MINIMUM_COVERAGE_TOKENS_PER_SURFACE if requested_surface_count else 0
+            ),
+        ),
+        OutputTokenAllocation.build(
+            category=OutputAllocationCategory.FINDINGS,
+            reserved_tokens=findings_tokens,
+            minimum_reserved_tokens=findings_minimum,
+        ),
+        OutputTokenAllocation.build(
+            category=OutputAllocationCategory.SUMMARY,
+            reserved_tokens=summary_tokens,
+            minimum_reserved_tokens=summary_minimum,
+        ),
+    )
+    return tuple(sorted(allocations, key=lambda allocation: allocation.category.value))
+
+
 def _utilized_tokens(capacity: int, utilization: Decimal) -> int:
     return int((Decimal(capacity) * utilization).to_integral_value(rounding=ROUND_FLOOR))
 
@@ -887,12 +1241,24 @@ def _effective_reserve(configured: int, actual: int, *, field: str) -> int:
     return max(configured, actual)
 
 
-def _canonical_omission_hashes(values: Sequence[str]) -> tuple[str, ...]:
-    if any(not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None for value in values):
-        raise ContextTokenPlanError("context omission hashes must be SHA-256 values")
-    canonical = tuple(sorted(values))
-    if len(canonical) != len(set(canonical)):
-        raise ContextTokenPlanError("context omission hashes must be unique")
+def _canonical_context_omissions(
+    values: Sequence[ContextOmissionItem],
+) -> tuple[ContextOmissionItem, ...]:
+    if any(not isinstance(value, ContextOmissionItem) for value in values):
+        raise ContextTokenPlanError("context omission inventory contains invalid evidence")
+    canonical = tuple(
+        sorted(
+            values,
+            key=lambda item: (
+                item.category.value,
+                item.reason.value,
+                item.omitted_item_sha256,
+            ),
+        )
+    )
+    hashes = tuple(item.omitted_item_sha256 for item in canonical)
+    if len(hashes) != len(set(hashes)):
+        raise ContextTokenPlanError("context omission inventory contains duplicate items")
     return canonical
 
 
@@ -941,15 +1307,24 @@ __all__ = [
     "DEFAULT_CONTEXT_UTILIZATION",
     "MAXIMUM_CONTEXT_UTILIZATION",
     "MINIMUM_CONTEXT_UTILIZATION",
+    "MINIMUM_COVERAGE_TOKENS_PER_SURFACE",
+    "MINIMUM_FINDING_OUTPUT_TOKENS",
+    "MINIMUM_SUMMARY_OUTPUT_TOKENS",
+    "OUTPUT_ALLOCATION_CATEGORIES",
     "PROMPT_ALLOCATION_CATEGORIES",
     "PROMPT_UPPER_BOUND_METHOD",
     "UTF8_TOKEN_ESTIMATOR",
+    "ContextOmissionCategory",
+    "ContextOmissionItem",
+    "ContextOmissionReason",
     "ContextTokenPlanError",
     "EndpointRouteIntersection",
     "EndpointRouteTokenCapacity",
     "EndpointTokenCapacityError",
     "GlobalTokenBudgetEvidence",
     "GlobalTokenBudgetPlanningError",
+    "OutputAllocationCategory",
+    "OutputTokenAllocation",
     "PromptAllocationCategory",
     "PromptTokenAllocation",
     "RequestTokenPlan",

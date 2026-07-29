@@ -9,6 +9,8 @@ from mmaudit.config import (
     MAXIMUM_ASSURANCE_BENCHMARK_CORPUS_VERSION,
     MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_SHA256,
     MAXIMUM_ASSURANCE_BENCHMARK_GROUND_TRUTH_VERSION,
+    MAXIMUM_ASSURANCE_MAXIMUM_SOURCE_TOKENS_PER_REQUEST,
+    MAXIMUM_ASSURANCE_MINIMUM_OUTPUT_TOKENS,
     MAXIMUM_ASSURANCE_QUALIFICATION_POLICY_SHA256,
     AuditConfigOverride,
     AuditConfigOverrides,
@@ -383,6 +385,34 @@ def test_maximum_assurance_profile_forces_exact_engine_portfolio(config_factory)
     assert config.models.provider_policy.allow_fallbacks is False
     assert {"echidna", "medusa", "halmos"} <= set(config.formal.required_tools)
     assert "foundry-invariant" not in config.formal.required_tools
+
+
+def test_maximum_assurance_profile_enforces_substantive_token_capacity(
+    config_factory,
+) -> None:
+    configured = config_factory(
+        profile=AuditProfile.MAXIMUM_ASSURANCE,
+        execution={"max_output_tokens_per_request": 256},
+        token_budgets={
+            "reserved_output_tokens": 256,
+            "reserved_workflow_tokens": 0,
+            "maximum_source_tokens_per_request": 1_024,
+        },
+    )
+
+    effective = configured.effective()
+
+    assert (
+        effective.execution.max_output_tokens_per_request == MAXIMUM_ASSURANCE_MINIMUM_OUTPUT_TOKENS
+    )
+    assert effective.token_budgets.reserved_output_tokens == MAXIMUM_ASSURANCE_MINIMUM_OUTPUT_TOKENS
+    assert (
+        effective.token_budgets.reserved_workflow_tokens == MAXIMUM_ASSURANCE_MINIMUM_OUTPUT_TOKENS
+    )
+    assert (
+        effective.token_budgets.maximum_source_tokens_per_request
+        == MAXIMUM_ASSURANCE_MAXIMUM_SOURCE_TOKENS_PER_REQUEST
+    )
 
 
 def test_maximum_assurance_qualification_inputs_are_release_pinned(config_factory) -> None:

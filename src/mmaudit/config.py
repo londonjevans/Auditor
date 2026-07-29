@@ -184,6 +184,7 @@ class TokenBudgetConfig(ConfigModel):
     reserved_system_tokens: int = Field(default=8_192, ge=0, le=65_536)
     reserved_schema_tokens: int = Field(default=8_192, ge=0, le=65_536)
     reserved_protocol_tokens: int = Field(default=2_048, ge=0, le=65_536)
+    reserved_workflow_tokens: int = Field(default=32_768, ge=0, le=65_536)
     maximum_source_tokens_per_request: int = Field(
         default=200_000,
         ge=1_024,
@@ -240,6 +241,10 @@ class TokenBudgetConfig(ConfigModel):
         ):
             raise ValueError("per-role cost budgets require safe role IDs and positive caps")
         return dict(sorted(value.items()))
+
+
+MAXIMUM_ASSURANCE_MINIMUM_OUTPUT_TOKENS = 32_768
+MAXIMUM_ASSURANCE_MAXIMUM_SOURCE_TOKENS_PER_REQUEST = 200_000
 
 
 class DependencyPreparationConfig(ConfigModel):
@@ -1035,7 +1040,28 @@ class AuditConfig(ConfigModel):
 
         if self.profile is not AuditProfile.MAXIMUM_ASSURANCE:
             return self
-        execution = self.execution.model_copy(update={"max_json_repair_attempts": 0})
+        execution = self.execution.model_copy(
+            update={
+                "max_json_repair_attempts": 0,
+                "max_output_tokens_per_request": max(
+                    MAXIMUM_ASSURANCE_MINIMUM_OUTPUT_TOKENS,
+                    self.execution.max_output_tokens_per_request,
+                ),
+            }
+        )
+        token_budgets = self.token_budgets.model_copy(
+            update={
+                "reserved_output_tokens": execution.max_output_tokens_per_request,
+                "reserved_workflow_tokens": max(
+                    MAXIMUM_ASSURANCE_MINIMUM_OUTPUT_TOKENS,
+                    self.token_budgets.reserved_workflow_tokens,
+                ),
+                "maximum_source_tokens_per_request": max(
+                    MAXIMUM_ASSURANCE_MAXIMUM_SOURCE_TOKENS_PER_REQUEST,
+                    self.token_budgets.maximum_source_tokens_per_request,
+                ),
+            }
+        )
         smart_contracts = self.smart_contracts.model_copy(
             update={
                 "enabled": True,
@@ -1170,6 +1196,7 @@ class AuditConfig(ConfigModel):
             update={
                 "scope": scope,
                 "execution": execution,
+                "token_budgets": token_budgets,
                 "smart_contracts": smart_contracts,
                 "reproduction": reproduction,
                 "quality_gates": quality_gates,

@@ -552,9 +552,9 @@ class SpecialistFindingAgent:
                 completion=completion,
                 rendered_user_context=rendered_user_context,
             )
-        except ModelReviewEvidenceError:
+        except ModelReviewEvidenceError as exc:
             raise OpenRouterSchemaError(
-                "model response did not provide valid requested-surface evidence"
+                f"model response did not provide valid requested-surface evidence: {exc}"
             ) from None
         requested = usage.requested_model
         returned = usage.returned_model
@@ -611,6 +611,46 @@ class SpecialistFindingAgent:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedReportQualityInput:
+    """Exact bounded workflow material prepared before context allocation."""
+
+    workflow_prompt: str
+    workflow_byte_upper_bound_tokens: int
+    workflow_sha256: str
+
+    @classmethod
+    def build(cls, payload: dict[str, object]) -> PreparedReportQualityInput:
+        payload_json = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+        workflow_prompt = "\n".join(
+            (
+                "<REPORT_QUALITY_INPUT_JSON>",
+                payload_json,
+                "</REPORT_QUALITY_INPUT_JSON>",
+                "",
+            )
+        )
+        encoded = workflow_prompt.encode("utf-8")
+        return cls(
+            workflow_prompt=workflow_prompt,
+            workflow_byte_upper_bound_tokens=len(encoded),
+            workflow_sha256=hashlib.sha256(encoded).hexdigest(),
+        )
+
+    def __post_init__(self) -> None:
+        encoded = self.workflow_prompt.encode("utf-8")
+        if self.workflow_byte_upper_bound_tokens != len(encoded):
+            raise ValueError("prepared report-quality workflow byte bound is inconsistent")
+        if self.workflow_sha256 != hashlib.sha256(encoded).hexdigest():
+            raise ValueError("prepared report-quality workflow hash is inconsistent")
+
+
 class ReportQualityAgent:
     """Review report calibration without receiving authority over findings."""
 
@@ -618,18 +658,17 @@ class ReportQualityAgent:
         self.config = config
         self.client = client
 
-    async def run(
-        self,
+    @staticmethod
+    def prepare_input(
         *,
         findings: list[Finding],
         rejected_count: int,
         coverage: SolidityCoverage | None,
         quality_gates: list[QualityGateResult],
         incomplete_reasons: list[str],
-        context: ContextPackage,
-    ) -> ReportQualityReview:
-        configured = self.config.models.role("report_quality")
-        definition = SPECIALIST_ROLE_REGISTRY["report_quality"]
+    ) -> PreparedReportQualityInput:
+        """Prepare the exact non-context workflow before endpoint budgeting."""
+
         payload = {
             "findings": [finding.model_dump(mode="json") for finding in findings],
             "rejected_finding_count": rejected_count,
@@ -647,6 +686,33 @@ class ReportQualityAgent:
                 "clean_report_limitation",
             ],
         }
+        return PreparedReportQualityInput.build(payload)
+
+    async def run(
+        self,
+        *,
+        findings: list[Finding],
+        rejected_count: int,
+        coverage: SolidityCoverage | None,
+        quality_gates: list[QualityGateResult],
+        incomplete_reasons: list[str],
+        context: ContextPackage,
+        prepared_input: PreparedReportQualityInput | None = None,
+    ) -> ReportQualityReview:
+        configured = self.config.models.role("report_quality")
+        definition = SPECIALIST_ROLE_REGISTRY["report_quality"]
+        expected_input = self.prepare_input(
+            findings=findings,
+            rejected_count=rejected_count,
+            coverage=coverage,
+            quality_gates=quality_gates,
+            incomplete_reasons=incomplete_reasons,
+        )
+        if prepared_input is not None and prepared_input != expected_input:
+            raise OpenRouterSchemaError(
+                "prepared report-quality workflow differs from the reviewed evidence"
+            )
+        effective_input = prepared_input or expected_input
         return await self.client.complete(
             role="specialist:report_quality",
             models=[configured.primary, *configured.fallbacks],
@@ -659,14 +725,7 @@ class ReportQualityAgent:
                     "</ROLE_CONTRACT_JSON>",
                 )
             ),
-            user_prompt="\n".join(
-                (
-                    "<REPORT_QUALITY_INPUT_JSON>",
-                    json.dumps(payload, sort_keys=True),
-                    "</REPORT_QUALITY_INPUT_JSON>",
-                    render_context(context),
-                )
-            ),
+            user_prompt=effective_input.workflow_prompt + render_context(context),
             context_package=context,
             response_model=ReportQualityReview,
             schema_name=definition.effective_schema_name(),

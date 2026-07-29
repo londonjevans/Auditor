@@ -26,6 +26,11 @@ from mmaudit.models.schemas import (
     SoliditySymbolIndex,
     ThreatModel,
 )
+from mmaudit.models.token_planning import (
+    ContextOmissionCategory,
+    ContextOmissionItem,
+    ContextOmissionReason,
+)
 from mmaudit.orchestration.model_coverage import build_model_surface_requests
 from mmaudit.repository.chunking import chunk_text
 from mmaudit.repository.discovery import DiscoveredFile, DiscoveryResult
@@ -47,6 +52,78 @@ class ContextCategoryMeasurement:
 
     content_sha256: str
     utf8_bytes: int
+
+
+def _add_context_omission(
+    inventory: dict[str, ContextOmissionItem],
+    *,
+    category: ContextOmissionCategory,
+    reason: ContextOmissionReason,
+    identity: Any,
+) -> None:
+    """Bind one omission to deterministic identity while retaining hash-only evidence."""
+
+    identity_payload = {
+        "category": category.value,
+        "reason": reason.value,
+        "identity": identity,
+    }
+    item = ContextOmissionItem.build(
+        category=category,
+        reason=reason,
+        omitted_item_sha256=hashlib.sha256(
+            json.dumps(
+                identity_payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest(),
+    )
+    inventory[item.evidence_sha256] = item
+
+
+def _inventory_transition_identity(
+    component: str,
+    *,
+    before: Any,
+    after: Any,
+    bounds: dict[str, int] | None = None,
+) -> dict[str, Any]:
+    """Return hash-only before/after inventory identity for one reduction."""
+
+    def content_hash(value: Any) -> str:
+        return hashlib.sha256(
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+
+    identity: dict[str, Any] = {
+        "kind": "inventory_transition",
+        "component": component,
+        "before_sha256": content_hash(before),
+        "after_sha256": content_hash(after),
+    }
+    if bounds is not None:
+        identity["bounds"] = dict(sorted(bounds.items()))
+    return identity
+
+
+def _canonical_context_omissions(
+    inventory: dict[str, ContextOmissionItem],
+) -> list[ContextOmissionItem]:
+    return sorted(
+        inventory.values(),
+        key=lambda item: (
+            item.category.value,
+            item.reason.value,
+            item.omitted_item_sha256,
+        ),
+    )
 
 
 _ROLE_CATEGORY_WEIGHTS: dict[str, dict[str, int]] = {
@@ -435,10 +512,7 @@ class ContextBuilder:
     def remaining_bytes(self) -> int:
         """Return the per-package serialization ceiling kept for compatibility."""
 
-        return min(
-            self.repository_config.max_total_context_bytes,
-            self.maximum_source_tokens_per_request,
-        )
+        return self.repository_config.max_total_context_bytes
 
     def build(
         self,
@@ -454,27 +528,57 @@ class ContextBuilder:
 
         if request_model_surface_reviews and requested_model_surfaces is not None:
             raise ContextBudgetError("model surface requests cannot be both derived and supplied")
-        # Without exact tokenizer evidence, one UTF-8 byte per token is the
-        # conservative source bound. The provider request planner adds its own
-        # explicit chat-envelope reserve before transport.
-        token_derived_byte_ceiling = self.maximum_source_tokens_per_request
-        default_share = min(
-            self.repository_config.max_total_context_bytes,
-            token_derived_byte_ceiling,
+        # The source limit is an estimated-token planning ceiling, while the
+        # package budget covers source plus deterministic metadata. The provider
+        # planner independently reserves the full UTF-8 byte upper bound before
+        # transport, so allowing the deterministic byte/3 estimate here cannot
+        # overrun an endpoint.
+        source_byte_ceiling = min(
+            2**31 - 1,
+            self.maximum_source_tokens_per_request * 3,
         )
+        default_share = self.repository_config.max_total_context_bytes
         budget = min(
             requested_budget or default_share,
             self.repository_config.max_total_context_bytes,
-            token_derived_byte_ceiling,
         )
         if budget <= 0:
             raise ContextBudgetError("repository context package budget is invalid")
-        omissions: list[str] = []
+        omissions: dict[str, ContextOmissionItem] = {}
+
+        def omit(
+            category: ContextOmissionCategory,
+            reason: ContextOmissionReason,
+            identity: Any,
+        ) -> None:
+            _add_context_omission(
+                omissions,
+                category=category,
+                reason=reason,
+                identity=identity,
+            )
+
         file_limit = min(300, len(self.repository_map.files))
         scanner_limit = min(200, len(self.scanner_findings))
         entity_limit = 500
         graph_edge_limit = 700
+        include_solidity_index = self.solidity_index is not None
+        include_solidity_graphs = self.solidity_graphs is not None
         included_threat_model = threat_model
+        included_solidity_compilations = list(self.solidity_compilations)
+        included_solidity_invariants = (
+            None if request_model_surface_reviews else self.solidity_invariants
+        )
+        included_invariant_executions = (
+            [] if request_model_surface_reviews else list(self.invariant_executions)
+        )
+        included_economic_simulations = (
+            [] if request_model_surface_reviews else list(self.economic_simulations)
+        )
+        included_formal_runs = [] if request_model_surface_reviews else list(self.formal_runs)
+        included_solidity_coverage = (
+            None if request_model_surface_reviews else self.solidity_coverage
+        )
         selected_model_surfaces = list(requested_model_surfaces or [])
         deterministic_preferred_paths = set(preferred_paths or set())
         deterministic_preferred_paths.update(
@@ -482,29 +586,69 @@ class ContextBuilder:
             for request in selected_model_surfaces
             for location in request.allowed_locations
         )
+        available_source_bytes = min(
+            source_byte_ceiling,
+            sum(len(item.content.encode("utf-8")) for item in self._safe_files),
+        )
+        source_serialization_capacity = min(
+            max(0, budget - 1),
+            available_source_bytes + (8_192 if available_source_bytes else 0),
+        )
+        minimum_source_reserve = min(8_192, source_serialization_capacity)
         source_reserve = min(
             max(0, budget - 1),
-            max(8_192, (budget * 65) // 100),
+            source_serialization_capacity,
+            max(minimum_source_reserve, (budget * 65) // 100),
         )
         metadata_ceiling = max(1, budget - source_reserve)
         review_request_mode = bool(selected_model_surfaces) or request_model_surface_reviews
         if review_request_mode:
-            omissions.append(
-                "bulk deterministic analysis omitted because exact surface requests "
-                "carry the bounded review contract"
+            omit(
+                ContextOmissionCategory.METADATA,
+                ContextOmissionReason.REVIEW_CONTRACT_WITHHELD,
+                _inventory_transition_identity(
+                    "bulk_deterministic_analysis",
+                    before={
+                        "solidity_invariants": (
+                            self.solidity_invariants.model_dump(mode="json")
+                            if self.solidity_invariants is not None
+                            else None
+                        ),
+                        "invariant_executions": [
+                            result.model_dump(mode="json") for result in self.invariant_executions
+                        ],
+                        "economic_simulations": [
+                            plan.model_dump(mode="json") for plan in self.economic_simulations
+                        ],
+                        "formal_runs": [run.model_dump(mode="json") for run in self.formal_runs],
+                        "solidity_coverage": (
+                            self.solidity_coverage.model_dump(mode="json")
+                            if self.solidity_coverage is not None
+                            else None
+                        ),
+                    },
+                    after={
+                        "solidity_invariants": None,
+                        "invariant_executions": [],
+                        "economic_simulations": [],
+                        "formal_runs": [],
+                        "solidity_coverage": None,
+                    },
+                ),
             )
         minimum_compact_limit = 8 if review_request_mode else 32
+        preserve_invariant_index = role.removeprefix("specialist:") == "invariant_review"
         while True:
             compact_map = _compact_map(self.repository_map, role, max_files=file_limit)
             selected_scanners = self.scanner_findings[:scanner_limit]
             compact_index = compact_solidity_index(
-                self.solidity_index,
+                self.solidity_index if include_solidity_index else None,
                 role=role,
                 max_entities=entity_limit,
                 preferred_paths=deterministic_preferred_paths,
             )
             compact_graphs = compact_solidity_graphs(
-                self.solidity_graphs,
+                self.solidity_graphs if include_solidity_graphs else None,
                 role=role,
                 max_edges=graph_edge_limit,
                 preferred_paths=deterministic_preferred_paths,
@@ -516,84 +660,336 @@ class ContextBuilder:
                     invariants=self.solidity_invariants,
                     economic_simulations=self.economic_simulations,
                 )
-            base_payload = {
-                "repository_map": compact_map.model_dump(mode="json"),
-                "scanner_findings": [
-                    finding.model_dump(mode="json") for finding in selected_scanners
-                ],
-                "requested_model_surfaces": [
-                    request.model_dump(mode="json") for request in selected_model_surfaces
-                ],
-                "threat_model": (
-                    included_threat_model.model_dump(mode="json") if included_threat_model else None
-                ),
-                "solidity_projects": [
-                    project.model_dump(mode="json") for project in self.solidity_projects
-                ],
-                "solidity_compilations": [
-                    result.model_dump(mode="json") for result in self.solidity_compilations
-                ],
-                "solidity_index": (
-                    compact_index.model_dump(mode="json") if compact_index is not None else None
-                ),
-                "solidity_graphs": (
-                    compact_graphs.model_dump(mode="json") if compact_graphs is not None else None
-                ),
-                "solidity_invariants": (
-                    self.solidity_invariants.model_dump(mode="json")
-                    if self.solidity_invariants is not None and not review_request_mode
-                    else None
-                ),
-                "invariant_executions": [
-                    result.model_dump(mode="json") for result in self.invariant_executions
-                ]
-                if not review_request_mode
-                else [],
-                "economic_simulations": [
-                    plan.model_dump(mode="json") for plan in self.economic_simulations
-                ]
-                if not review_request_mode
-                else [],
-                "formal_runs": (
-                    [run.model_dump(mode="json") for run in self.formal_runs]
-                    if not review_request_mode
-                    else []
-                ),
-                "solidity_coverage": (
-                    self.solidity_coverage.model_dump(mode="json")
-                    if self.solidity_coverage is not None and not review_request_mode
-                    else None
-                ),
-            }
-            base_bytes = len(json.dumps(base_payload, sort_keys=True).encode()) + 512
+            base_package = ContextPackage(
+                role=role,
+                byte_budget=budget,
+                bytes_used=0,
+                repository_map=compact_map,
+                scanner_findings=selected_scanners,
+                excerpts=[],
+                requested_model_surfaces=selected_model_surfaces,
+                threat_model=included_threat_model,
+                solidity_projects=self.solidity_projects,
+                solidity_compilations=included_solidity_compilations,
+                solidity_index=compact_index,
+                solidity_graphs=compact_graphs,
+                solidity_invariants=(None if review_request_mode else included_solidity_invariants),
+                invariant_executions=([] if review_request_mode else included_invariant_executions),
+                economic_simulations=([] if review_request_mode else included_economic_simulations),
+                formal_runs=[] if review_request_mode else included_formal_runs,
+                solidity_coverage=(None if review_request_mode else included_solidity_coverage),
+                omissions=_canonical_context_omissions(omissions),
+            )
+            base_bytes = len(render_context(base_package).encode("utf-8"))
             if base_bytes <= metadata_ceiling:
                 break
-            if graph_edge_limit > minimum_compact_limit:
-                graph_edge_limit = max(minimum_compact_limit, graph_edge_limit // 2)
-                omissions.append("semantic graph evidence reduced to reserve source-excerpt budget")
-            elif entity_limit > minimum_compact_limit:
-                entity_limit = max(minimum_compact_limit, entity_limit // 2)
-                omissions.append("Solidity symbol index reduced to reserve source-excerpt budget")
+            if (
+                compact_graphs is not None
+                and compact_graphs.edges
+                and graph_edge_limit > minimum_compact_limit
+            ):
+                previous_limit = graph_edge_limit
+                next_limit = max(minimum_compact_limit, graph_edge_limit // 2)
+                next_graphs = compact_solidity_graphs(
+                    self.solidity_graphs,
+                    role=role,
+                    max_edges=next_limit,
+                    preferred_paths=deterministic_preferred_paths,
+                )
+                before_graphs = compact_graphs.model_dump(mode="json")
+                after_graphs = (
+                    next_graphs.model_dump(mode="json") if next_graphs is not None else None
+                )
+                graph_edge_limit = next_limit
+                if before_graphs == after_graphs:
+                    continue
+                omit(
+                    ContextOmissionCategory.GRAPH,
+                    ContextOmissionReason.METADATA_BUDGET_EXCLUDED,
+                    _inventory_transition_identity(
+                        "solidity_graphs",
+                        before=before_graphs,
+                        after=after_graphs,
+                        bounds={"before_limit": previous_limit, "after_limit": next_limit},
+                    ),
+                )
+            elif include_solidity_graphs:
+                include_solidity_graphs = False
+                if compact_graphs is None:
+                    continue
+                omit(
+                    ContextOmissionCategory.GRAPH,
+                    ContextOmissionReason.METADATA_BUDGET_EXCLUDED,
+                    _inventory_transition_identity(
+                        "solidity_graphs",
+                        before=compact_graphs.model_dump(mode="json"),
+                        after=None,
+                        bounds={"before_limit": graph_edge_limit, "after_limit": 0},
+                    ),
+                )
+            elif preserve_invariant_index and included_formal_runs:
+                before_formal_runs = [run.model_dump(mode="json") for run in included_formal_runs]
+                included_formal_runs = []
+                omit(
+                    ContextOmissionCategory.INVARIANT,
+                    ContextOmissionReason.METADATA_BUDGET_EXCLUDED,
+                    _inventory_transition_identity(
+                        "formal_runs",
+                        before=before_formal_runs,
+                        after=[],
+                    ),
+                )
+            elif preserve_invariant_index and included_economic_simulations:
+                before_economic_simulations = [
+                    plan.model_dump(mode="json") for plan in included_economic_simulations
+                ]
+                included_economic_simulations = []
+                omit(
+                    ContextOmissionCategory.INVARIANT,
+                    ContextOmissionReason.METADATA_BUDGET_EXCLUDED,
+                    _inventory_transition_identity(
+                        "economic_simulations",
+                        before=before_economic_simulations,
+                        after=[],
+                    ),
+                )
+            elif preserve_invariant_index and included_invariant_executions:
+                before_invariant_executions = [
+                    result.model_dump(mode="json") for result in included_invariant_executions
+                ]
+                included_invariant_executions = []
+                omit(
+                    ContextOmissionCategory.INVARIANT,
+                    ContextOmissionReason.METADATA_BUDGET_EXCLUDED,
+                    _inventory_transition_identity(
+                        "invariant_executions",
+                        before=before_invariant_executions,
+                        after=[],
+                    ),
+                )
+            elif preserve_invariant_index and included_solidity_coverage is not None:
+                before_solidity_coverage = included_solidity_coverage.model_dump(mode="json")
+                included_solidity_coverage = None
+                omit(
+                    ContextOmissionCategory.FRAMEWORK,
+                    ContextOmissionReason.METADATA_BUDGET_EXCLUDED,
+                    _inventory_transition_identity(
+                        "solidity_coverage",
+                        before=before_solidity_coverage,
+                        after=None,
+                    ),
+                )
+            elif preserve_invariant_index and included_solidity_compilations:
+                before_solidity_compilations = [
+                    result.model_dump(mode="json") for result in included_solidity_compilations
+                ]
+                included_solidity_compilations = []
+                omit(
+                    ContextOmissionCategory.FRAMEWORK,
+                    ContextOmissionReason.METADATA_BUDGET_EXCLUDED,
+                    _inventory_transition_identity(
+                        "solidity_compilations",
+                        before=before_solidity_compilations,
+                        after=[],
+                    ),
+                )
+            elif (
+                compact_index is not None
+                and compact_index.entities
+                and entity_limit > minimum_compact_limit
+            ):
+                previous_limit = entity_limit
+                next_limit = max(minimum_compact_limit, entity_limit // 2)
+                next_index = compact_solidity_index(
+                    self.solidity_index,
+                    role=role,
+                    max_entities=next_limit,
+                    preferred_paths=deterministic_preferred_paths,
+                )
+                before_index = compact_index.model_dump(mode="json")
+                after_index = next_index.model_dump(mode="json") if next_index is not None else None
+                entity_limit = next_limit
+                if before_index == after_index:
+                    continue
+                omit(
+                    ContextOmissionCategory.FRAMEWORK,
+                    ContextOmissionReason.METADATA_BUDGET_EXCLUDED,
+                    _inventory_transition_identity(
+                        "solidity_index",
+                        before=before_index,
+                        after=after_index,
+                        bounds={"before_limit": previous_limit, "after_limit": next_limit},
+                    ),
+                )
+            elif include_solidity_index:
+                include_solidity_index = False
+                if compact_index is None:
+                    continue
+                omit(
+                    ContextOmissionCategory.FRAMEWORK,
+                    ContextOmissionReason.METADATA_BUDGET_EXCLUDED,
+                    _inventory_transition_identity(
+                        "solidity_index",
+                        before=compact_index.model_dump(mode="json"),
+                        after=None,
+                        bounds={"before_limit": entity_limit, "after_limit": 0},
+                    ),
+                )
+            elif included_formal_runs:
+                before_formal_runs = [run.model_dump(mode="json") for run in included_formal_runs]
+                included_formal_runs = []
+                omit(
+                    ContextOmissionCategory.INVARIANT,
+                    ContextOmissionReason.METADATA_BUDGET_EXCLUDED,
+                    _inventory_transition_identity(
+                        "formal_runs",
+                        before=before_formal_runs,
+                        after=[],
+                    ),
+                )
+            elif included_economic_simulations:
+                before_economic_simulations = [
+                    plan.model_dump(mode="json") for plan in included_economic_simulations
+                ]
+                included_economic_simulations = []
+                omit(
+                    ContextOmissionCategory.INVARIANT,
+                    ContextOmissionReason.METADATA_BUDGET_EXCLUDED,
+                    _inventory_transition_identity(
+                        "economic_simulations",
+                        before=before_economic_simulations,
+                        after=[],
+                    ),
+                )
+            elif included_invariant_executions:
+                before_invariant_executions = [
+                    result.model_dump(mode="json") for result in included_invariant_executions
+                ]
+                included_invariant_executions = []
+                omit(
+                    ContextOmissionCategory.INVARIANT,
+                    ContextOmissionReason.METADATA_BUDGET_EXCLUDED,
+                    _inventory_transition_identity(
+                        "invariant_executions",
+                        before=before_invariant_executions,
+                        after=[],
+                    ),
+                )
+            elif included_solidity_invariants is not None:
+                before_solidity_invariants = included_solidity_invariants.model_dump(mode="json")
+                included_solidity_invariants = None
+                omit(
+                    ContextOmissionCategory.INVARIANT,
+                    ContextOmissionReason.METADATA_BUDGET_EXCLUDED,
+                    _inventory_transition_identity(
+                        "solidity_invariants",
+                        before=before_solidity_invariants,
+                        after=None,
+                    ),
+                )
+            elif included_solidity_coverage is not None:
+                before_solidity_coverage = included_solidity_coverage.model_dump(mode="json")
+                included_solidity_coverage = None
+                omit(
+                    ContextOmissionCategory.FRAMEWORK,
+                    ContextOmissionReason.METADATA_BUDGET_EXCLUDED,
+                    _inventory_transition_identity(
+                        "solidity_coverage",
+                        before=before_solidity_coverage,
+                        after=None,
+                    ),
+                )
+            elif included_solidity_compilations:
+                before_solidity_compilations = [
+                    result.model_dump(mode="json") for result in included_solidity_compilations
+                ]
+                included_solidity_compilations = []
+                omit(
+                    ContextOmissionCategory.FRAMEWORK,
+                    ContextOmissionReason.METADATA_BUDGET_EXCLUDED,
+                    _inventory_transition_identity(
+                        "solidity_compilations",
+                        before=before_solidity_compilations,
+                        after=[],
+                    ),
+                )
             elif scanner_limit:
-                scanner_limit //= 2
-                omissions.append("normalized scanner evidence reduced to fit context budget")
+                previous_limit = scanner_limit
+                next_limit = scanner_limit // 2
+                before_scanners = [finding.model_dump(mode="json") for finding in selected_scanners]
+                after_scanners = [
+                    finding.model_dump(mode="json")
+                    for finding in self.scanner_findings[:next_limit]
+                ]
+                scanner_limit = next_limit
+                if before_scanners == after_scanners:
+                    continue
+                omit(
+                    ContextOmissionCategory.SCANNER,
+                    ContextOmissionReason.METADATA_BUDGET_EXCLUDED,
+                    _inventory_transition_identity(
+                        "scanner_findings",
+                        before=before_scanners,
+                        after=after_scanners,
+                        bounds={"before_limit": previous_limit, "after_limit": next_limit},
+                    ),
+                )
             elif file_limit:
-                file_limit //= 2
-                omissions.append("repository map file list reduced to fit context budget")
+                previous_limit = file_limit
+                next_limit = file_limit // 2
+                next_map = _compact_map(self.repository_map, role, max_files=next_limit)
+                before_map = compact_map.model_dump(mode="json")
+                after_map = next_map.model_dump(mode="json")
+                file_limit = next_limit
+                if before_map == after_map:
+                    continue
+                omit(
+                    ContextOmissionCategory.METADATA,
+                    ContextOmissionReason.METADATA_BUDGET_EXCLUDED,
+                    _inventory_transition_identity(
+                        "repository_map",
+                        before=before_map,
+                        after=after_map,
+                        bounds={"before_limit": previous_limit, "after_limit": next_limit},
+                    ),
+                )
             elif included_threat_model is not None:
+                before_threat_model = included_threat_model.model_dump(mode="json")
                 included_threat_model = None
-                omissions.append("threat model omitted because it exceeded this role budget")
+                omit(
+                    ContextOmissionCategory.METADATA,
+                    ContextOmissionReason.METADATA_BUDGET_EXCLUDED,
+                    _inventory_transition_identity(
+                        "threat_model",
+                        before=before_threat_model,
+                        after=None,
+                    ),
+                )
             elif base_bytes <= budget:
-                omissions.append(
-                    "minimum deterministic metadata prevented the requested source-excerpt reserve"
+                omit(
+                    ContextOmissionCategory.METADATA,
+                    ContextOmissionReason.METADATA_BUDGET_EXCLUDED,
+                    {
+                        "kind": "metadata_source_reserve_conflict",
+                        "metadata_sha256": hashlib.sha256(
+                            render_context(base_package).encode("utf-8")
+                        ).hexdigest(),
+                        "metadata_bytes": base_bytes,
+                        "metadata_ceiling": metadata_ceiling,
+                        "source_reserve": source_reserve,
+                    },
                 )
                 break
             else:
                 raise ContextBudgetError(
                     f"minimum metadata for role {role} exceeds its {budget}-byte allocation"
                 )
-        excerpt_budget = max(0, budget - base_bytes)
+        excerpt_budget = min(
+            source_byte_ceiling,
+            max(0, budget - base_bytes),
+        )
         used = base_bytes
+        source_used = 0
         excerpts: list[ContextExcerpt] = []
         preferred_paths = deterministic_preferred_paths | solidity_preferred_paths(
             self.solidity_index,
@@ -606,27 +1002,83 @@ class ContextBuilder:
                 *_score(item, role),
             ),
         )
-        for item in ranked:
+        ranked_source_inventory = [
+            {
+                "path_sha256": hashlib.sha256(item.relative_path.encode("utf-8")).hexdigest(),
+                "content_sha256": hashlib.sha256(item.content.encode("utf-8")).hexdigest(),
+                "utf8_bytes": len(item.content.encode("utf-8")),
+            }
+            for item in ranked
+        ]
+        for item_index, item in enumerate(ranked):
+            remaining_source_inventory = ranked_source_inventory[item_index:]
             if used >= budget:
-                omissions.append("context byte budget exhausted")
+                omit(
+                    ContextOmissionCategory.SOURCE,
+                    ContextOmissionReason.SOURCE_BUDGET_EXCLUDED,
+                    {
+                        "kind": "source_inventory_excluded",
+                        "cause": "context_byte_budget",
+                        "items": remaining_source_inventory,
+                    },
+                )
                 break
-            chunk_limit = min(48_000, max(1, excerpt_budget))
+            remaining_source_bytes = excerpt_budget - source_used
+            if remaining_source_bytes <= 0:
+                omit(
+                    ContextOmissionCategory.SOURCE,
+                    ContextOmissionReason.SOURCE_BUDGET_EXCLUDED,
+                    {
+                        "kind": "source_inventory_excluded",
+                        "cause": "source_token_budget",
+                        "items": remaining_source_inventory,
+                    },
+                )
+                break
+            chunk_limit = min(48_000, remaining_source_bytes, max(1, budget - used))
             result = chunk_text(
                 path=item.relative_path,
                 content=item.content,
                 categories=item.categories,
                 max_chunk_bytes=chunk_limit,
             )
-            omissions.extend(result.omissions)
+            for descriptor in result.omissions:
+                omit(
+                    ContextOmissionCategory.SOURCE,
+                    ContextOmissionReason.LOGICAL_BLOCK_EXCEEDS_LIMIT,
+                    {
+                        "kind": "logical_block_excluded",
+                        "path_sha256": hashlib.sha256(
+                            item.relative_path.encode("utf-8")
+                        ).hexdigest(),
+                        "source_sha256": hashlib.sha256(item.content.encode("utf-8")).hexdigest(),
+                        "descriptor_sha256": hashlib.sha256(descriptor.encode("utf-8")).hexdigest(),
+                    },
+                )
             for excerpt in result.excerpts:
-                size = len(excerpt.content.encode())
-                if size > budget - used:
-                    omissions.append(
-                        f"{excerpt.path}:{excerpt.start_line}-{excerpt.end_line} omitted by role budget"
+                size = len(excerpt.content.encode("utf-8"))
+                remaining_excerpt_bytes = min(
+                    max(0, budget - used),
+                    max(0, excerpt_budget - source_used),
+                )
+                if size > remaining_excerpt_bytes:
+                    omit(
+                        ContextOmissionCategory.SOURCE,
+                        ContextOmissionReason.SOURCE_BUDGET_EXCLUDED,
+                        {
+                            "kind": "source_excerpt_excluded",
+                            "path_sha256": hashlib.sha256(excerpt.path.encode("utf-8")).hexdigest(),
+                            "start_line": excerpt.start_line,
+                            "end_line": excerpt.end_line,
+                            "content_sha256": excerpt.content_hash,
+                            "utf8_bytes": size,
+                            "available_bytes": remaining_excerpt_bytes,
+                        },
                     )
                     continue
                 excerpts.append(excerpt)
                 used += size
+                source_used += size
         package = ContextPackage(
             role=role,
             byte_budget=budget,
@@ -637,36 +1089,47 @@ class ContextBuilder:
             requested_model_surfaces=selected_model_surfaces,
             threat_model=included_threat_model,
             solidity_projects=self.solidity_projects,
-            solidity_compilations=self.solidity_compilations,
+            solidity_compilations=included_solidity_compilations,
             solidity_index=compact_solidity_index(
-                self.solidity_index,
+                self.solidity_index if include_solidity_index else None,
                 role=role,
                 max_entities=entity_limit,
                 preferred_paths=deterministic_preferred_paths,
             ),
             solidity_graphs=compact_solidity_graphs(
-                self.solidity_graphs,
+                self.solidity_graphs if include_solidity_graphs else None,
                 role=role,
                 max_edges=graph_edge_limit,
                 preferred_paths=deterministic_preferred_paths,
             ),
-            solidity_invariants=(None if review_request_mode else self.solidity_invariants),
-            invariant_executions=([] if review_request_mode else self.invariant_executions),
-            economic_simulations=([] if review_request_mode else self.economic_simulations),
-            formal_runs=[] if review_request_mode else self.formal_runs,
-            solidity_coverage=None if review_request_mode else self.solidity_coverage,
-            omissions=sorted(set(omissions)),
+            solidity_invariants=(None if review_request_mode else included_solidity_invariants),
+            invariant_executions=([] if review_request_mode else included_invariant_executions),
+            economic_simulations=([] if review_request_mode else included_economic_simulations),
+            formal_runs=[] if review_request_mode else included_formal_runs,
+            solidity_coverage=(None if review_request_mode else included_solidity_coverage),
+            omissions=_canonical_context_omissions(omissions),
         )
         actual_bytes = len(render_context(package).encode())
         while package.excerpts and actual_bytes > budget:
             removed = package.excerpts[-1]
-            omissions.append(
-                f"{removed.path}:{removed.start_line}-{removed.end_line} omitted by serialized budget"
+            omit(
+                ContextOmissionCategory.SOURCE,
+                ContextOmissionReason.SERIALIZED_BUDGET_EXCLUDED,
+                {
+                    "kind": "source_excerpt_excluded",
+                    "path_sha256": hashlib.sha256(removed.path.encode("utf-8")).hexdigest(),
+                    "start_line": removed.start_line,
+                    "end_line": removed.end_line,
+                    "content_sha256": removed.content_hash,
+                    "utf8_bytes": len(removed.content.encode("utf-8")),
+                    "serialized_bytes_before": actual_bytes,
+                    "serialized_budget": budget,
+                },
             )
             package = package.model_copy(
                 update={
                     "excerpts": package.excerpts[:-1],
-                    "omissions": sorted(set(omissions)),
+                    "omissions": _canonical_context_omissions(omissions),
                 }
             )
             actual_bytes = len(render_context(package).encode())
@@ -675,6 +1138,10 @@ class ContextBuilder:
                 f"serialized metadata for role {role} exceeds its {budget}-byte allocation"
             )
         package = package.model_copy(update={"bytes_used": actual_bytes})
+        if package.requested_model_surfaces and not package.excerpts:
+            raise ContextBudgetError(
+                f"model surface review context for role {role} omitted all source evidence"
+            )
         return package
 
 
@@ -776,11 +1243,35 @@ def render_context(package: ContextPackage) -> str:
         parts.extend(
             [
                 "<OMISSIONS_JSON>",
-                json.dumps(package.omissions, sort_keys=True),
+                json.dumps(
+                    [item.model_dump(mode="json") for item in package.omissions],
+                    sort_keys=True,
+                ),
                 "</OMISSIONS_JSON>",
             ]
         )
     return "\n".join(parts)
+
+
+def context_json_escape_overhead_tokens(package: ContextPackage) -> int:
+    """Return exact JSON-string escaping overhead for the rendered context.
+
+    OpenRouter transports the user message inside JSON. This local measurement
+    accounts for quotes, control characters, backslashes, and non-ASCII source
+    without retaining a second serialized copy in runtime evidence.
+    """
+
+    rendered = render_context(package)
+    raw_bytes = len(rendered.encode("utf-8"))
+    encoded_string = json.dumps(
+        rendered,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    escaped_bytes = len(encoded_string) - 2
+    if escaped_bytes < raw_bytes:
+        raise ContextBudgetError("context JSON escaping measurement is inconsistent")
+    return escaped_bytes - raw_bytes
 
 
 def context_category_byte_counts(package: ContextPackage) -> dict[str, int]:

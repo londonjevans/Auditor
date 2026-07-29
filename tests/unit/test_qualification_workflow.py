@@ -62,6 +62,7 @@ from mmaudit.reporting.json_report import stable_json
 from tests.identity_fixtures import (
     bind_synthetic_usage_identity,
     reattest_synthetic_real_usage,
+    rebind_synthetic_token_plan,
 )
 from tests.output_evidence_fixtures import synthetic_structured_output_routing
 from tests.qualification_support import synthetic_release_observation
@@ -300,7 +301,9 @@ def _as_real_report(
                 "routing": routing,
             }
         )
-        record = bind_synthetic_usage_identity(UsageRecord.model_validate(usage))
+        record = bind_synthetic_usage_identity(
+            rebind_synthetic_token_plan(UsageRecord.model_validate(usage))
+        )
         case["usage_record"] = record.model_dump(mode="json")
         case["generation_evidence"] = benchmark_fixtures._forged_real_generation_evidence(
             record

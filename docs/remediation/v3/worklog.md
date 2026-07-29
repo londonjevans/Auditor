@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_BY_OPERATOR
+AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Endpoint-aware token budgets and context manifests
 CURRENT_TICKET: V3-TOKENS-001
-LAST_COMPLETED_TICKET: V3-OUTPUT-001
-NEXT_ACTION: Resume V3-TOKENS-001 with the complete fake-provider pipeline suite, broad token/manifest matrix, independent closure review, and full repository gates; fix failures before updating queue, traceability, and runtime status.
-LAST_COMMAND: .venv/bin/pytest -q tests/unit/test_token_planning.py tests/unit/test_context.py tests/unit/test_context_manifest.py tests/unit/test_usage.py tests/unit/test_openrouter.py
-LAST_RESULT: PASS; 327 tests passed in 1.47s. Affected Ruff, generated-schema synchronization, and git diff checks also passed.
+LAST_COMPLETED_TICKET: V3-TOKENS-001
+NEXT_ACTION: Review and checkpoint the validated V3-TOKENS-001 diff, SSH-push it, and begin promoted V3-FLOOR-001.
+LAST_COMMAND: .venv/bin/pytest -q
+LAST_RESULT: PASS — 2367 passed and 10 explicit external-prerequisite tests skipped in 329.08s on the final post-closure tree.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -20,6 +20,168 @@ OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
 LAST_CHECKPOINT_COMMIT: 39fb4392f3dfcf06f2f92dd79bc5bc3563432b49
+
+## 2026-07-29 — Operator pause during V3-TOKENS-001
+
+- **Status:** `PAUSED_BY_OPERATOR`; the ticket remains `IN_PROGRESS`.
+- **Preserved state:** All V3-TOKENS-001 implementation, generated schema, tests,
+  operator documentation, and prior validation evidence remain uncommitted in
+  the worktree at source commit
+  `5f52bb0eb19a19c43e2ea480fb8563e4109df5b7`.
+- **Last proven validation:** The combined formerly failing fixture matrix
+  passed `427` tests in `104.90s`. The final repository-wide static/schema gate
+  result was lost to output truncation and is intentionally not claimed.
+- **Resume action:** Re-run formatting, Ruff, mypy, schema freshness, and diff
+  checks; run the complete pytest suite; then review, record, checkpoint, and
+  SSH-push V3-TOKENS-001 before starting `V3-FLOOR-001`.
+- **Safety/accounting:** No provider call, network access, operator-secret
+  access, paid spend, commit, or push was performed while pausing.
+
+## 2026-07-29 — V3-TOKENS-001 resumed after operator pause
+
+- **Status:** `IN_PROGRESS`.
+- **Recovery:** Re-read the authoritative objective in four complete chunks;
+  its `1417` lines and SHA-256
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`
+  are unchanged. Rechecked the queue, worklog, current status, diff stat, and
+  diff integrity.
+- **Preserved scope:** The worktree still contains only the uncommitted
+  endpoint-aware token planning, typed omission evidence, context-manifest,
+  report-quality budgeting, generated schema, operator documentation, and
+  regression work for this ticket.
+- **Next validation:** Run formatting, Ruff, strict mypy, schema synchronization,
+  diff checks, and the complete local suite before recording or checkpointing
+  completion. No paid provider call is part of this ticket.
+- **Static/schema validation:** `.venv/bin/ruff format .` reported `312 files
+  left unchanged`; the first Ruff check identified one mechanical import-order
+  issue in a modified synthetic qualification test, which was corrected, and
+  the second `.venv/bin/ruff check .` passed. `.venv/bin/mypy` passed with
+  `Success: no issues found in 139 source files`;
+  `.venv/bin/python scripts/generate_release_schemas.py` and
+  `git diff --check` both passed without output.
+- **Long-running gate prepared:** The complete local pytest suite is the next
+  command. Provider tests remain explicitly gated and no secret file will be
+  read.
+- **First complete-suite result:** `.venv/bin/pytest -q` passed with `2340
+  passed, 10 skipped in 326.79s`. The skips remain explicit external
+  prerequisites: rootless isolation image, Echidna, Medusa, hardened isolation
+  for Halmos/replay, local-fork-capable isolation, paid-provider opt-in, and
+  loopback availability.
+- **Independent closure review:** Corrected the operator document's
+  `atomic-reservation` label to the emitted `cost-budget` preflight class. Added
+  a negative report-quality regression that provides a separately valid but
+  evidence-drifted prepared workflow and proves typed rejection before a spy
+  transport receives any call. The affected token/context/report-quality
+  matrix passed `88` tests in `0.81s`; the report-quality file independently
+  passed `4` tests, Ruff, and diff integrity.
+- **Final validation prepared:** Because the new regression was added after the
+  first complete run, all repository-wide static/schema gates and the complete
+  suite will run again before completion is claimed.
+- **Second complete-suite baseline:** After the drift regression,
+  `.venv/bin/pytest -q` passed with `2341 passed, 10 skipped in 328.36s`. This
+  remains a baseline rather than completion evidence because the independent
+  production-diff review identified additional ticket-scope gaps.
+- **Closure defects accepted:** The review demonstrated that a
+  maximum-assurance effective config could retain a `256`-token visible output
+  cap and `1024`-token source cap; context omission hashes could collapse
+  repeated reductions behind a generic descriptor; multiple individually
+  bounded logical blocks could cumulatively exceed the source ceiling; dynamic
+  candidate falsifier routes could differ from the context-preview routes;
+  verifier/judge preview rejection could append `None` and later crash evidence
+  normalization; and a self-rehashed persisted request plan could omit
+  metadata-backed completion capacity.
+- **Maximum-assurance and persisted-plan remediation:** The effective maximum
+  assurance profile now floors visible output and workflow reserve at `32768`
+  tokens and source capacity at `200000` tokens while final endpoint planning
+  still fails closed if an approved route cannot supply them. A
+  `RequestTokenPlan` now independently rejects routes without an explicit
+  metadata completion limit, including a self-rehashed persisted-plan
+  regression. The affected config/token/OpenRouter/context-manifest matrix
+  passed `298` tests in `1.26s`; Ruff and strict mypy passed.
+- **Remaining ticket work:** Complete the bounded ContextBuilder omission/source
+  fixes and pipeline route/graceful-preflight fixes, then rerun all affected,
+  static/schema, integration, and complete-suite gates. No provider call,
+  secret access, or spend is involved.
+- **First closure remediation:** Context omissions now bind each actual
+  before/after inventory transition without persisting omitted content, repeated
+  reductions remain distinct, and source excerpts share one cumulative
+  source-token ceiling. Verifier/judge preview failures preserve fail-closed
+  artifacts without appending invalid context values. Exact dynamically selected
+  candidate cross-examination routes are previewed instead of the configured
+  falsifier alias.
+- **Exact workflow and envelope remediation:** Verification, judgment,
+  candidate cross-examination, exploit planning, reproduction falsification,
+  and report-quality inputs are prepared as immutable canonical workflows before
+  context allocation. Each carries an exact UTF-8 bound and SHA-256 and is
+  recomputed before transport; drift receives a typed rejection with zero
+  transport calls. Preview uses provider-visible JSON-string workflow size and
+  iterates against the exact rendered-context JSON escape overhead.
+- **Context identity and source-priority remediation:** Candidate
+  cross-examination packages use a distinct context role and cannot masquerade
+  as the completed reproduction-falsifier context in specialist execution
+  evidence. ContextBuilder now measures its base serialization exactly and
+  reserves bounded per-file serialization overhead so graph/metadata material
+  cannot consume all source capacity on a review request.
+- **Focused closure evidence:** Prepared-input unit tests passed `16`; the
+  exact-route, graceful-refusal, generated-reproduction, and
+  maximum-assurance integration slice passed `7`; the combined
+  token/config/OpenRouter/context/report-quality/pipeline matrix passed `380`
+  tests in `111.66s`. Affected Ruff and strict mypy checks passed. All paid
+  provider paths remained disabled; no network, secret access, reservation, or
+  spend occurred.
+- **Pre-full-gate state:** `V3-TOKENS-001` remains `IN_PROGRESS` pending the
+  final independent re-review and repository-wide formatter, Ruff, mypy, schema,
+  diff, artifact, secret-pattern, and complete pytest gates.
+- **Second closure correction:** Independent review found that a temporary
+  per-file source-framing estimate could reserve `65,000` bytes for `27` source
+  bytes and discard fitting deterministic metadata, and that the first
+  escape-adjusted preview could retain a larger pre-adjustment `byte_budget`.
+  The reserve is now a fixed bounded serialization allowance only when source
+  exists; a 100-file/100,000-byte regression retains source, all `40` indexed
+  entities, `20` invariants, and `10` scanner findings while using more than
+  `75,000` bytes. Preview returns only when the built package's recorded budget
+  is no greater than the escape-adjusted endpoint cap; otherwise it rebuilds or
+  fails closed after eight deterministic passes.
+- **Post-correction evidence:** The tiny-file capacity regression and complete
+  maximum-assurance synthetic integration both passed (`2 passed in 21.07s`);
+  affected Ruff and strict mypy passed. Indivisible logical blocks larger than
+  the configured chunk bound remain explicitly omitted with typed evidence;
+  a requested-surface context with no source excerpt now fails before provider
+  transport. Semantic resharding remains a later queued ticket.
+- **Independent final re-review:** The reviewer reran the tiny-file and exact
+  selected-model assays (`3 passed`) and found no material blocker in source
+  allocation, prepared workflow identity, route selection, context identity,
+  escape convergence, or persisted context-budget evidence.
+- **Final static/schema gate:** `.venv/bin/ruff format .` left `314` files
+  unchanged; `.venv/bin/ruff check .` passed; `.venv/bin/mypy` passed `139`
+  source files; `.venv/bin/python scripts/generate_release_schemas.py` and
+  `git diff --check` passed without output. The complete local pytest suite is
+  the remaining ticket gate.
+- **Complete local gate:** `.venv/bin/pytest -q` passed `2366` tests with `10`
+  explicit skips in `421.74s`. The skips are the documented unavailable
+  rootless isolation image, Echidna, Medusa, hardened Halmos/replay isolation,
+  local-fork isolation, loopback binding, and explicitly disabled paid-provider
+  integration. No skipped requirement is represented as real execution.
+- **Ticket result:** `V3-TOKENS-001` is `COMPLETE` as a local implementation
+  ticket. It proves endpoint-aware fail-closed token/context accounting,
+  prepared dynamic workflow preflight, normalized evidence, and report/schema
+  serialization through deterministic local and fake-provider execution. It
+  does not claim a new provider call, real audit, external engine, or semantic
+  resharding result.
+- **Zero-source preflight closure:** A final adversarial assay showed that one
+  oversized indivisible logical block could produce a requested-surface package
+  with zero source excerpts. Although downstream evidence validation rejected
+  review credit, the provider request itself was inherently uncreditable.
+  Context construction now rejects that state before transport. The new
+  zero-source regression, tiny-file capacity regression, and complete
+  maximum-assurance synthetic integration passed together (`3 passed`); affected
+  Ruff and strict mypy passed.
+- **Final post-closure validation:** `.venv/bin/ruff format .` left `314` files
+  unchanged; `.venv/bin/ruff check .` passed; `.venv/bin/mypy` passed all `139`
+  source files; schema synchronization and `git diff --check` passed. The exact
+  final tree then passed `.venv/bin/pytest -q` with `2367 passed, 10 skipped in
+  329.08s`. Every skip is an explicit external-engine, isolation, loopback, or
+  paid-provider prerequisite; none is counted as real execution.
 
 ## 2026-07-29 — V3-OUTPUT-001
 
@@ -369,6 +531,94 @@ LAST_CHECKPOINT_COMMIT: 39fb4392f3dfcf06f2f92dd79bc5bc3563432b49
   prompt-envelope planning, typed preflight classification, actual-usage
   fail-closed checks, generated schema, regressions, and exact resumable pause
   state without claiming ticket completion.
+- **Fifth resume checkpoint:** Automatic goal continuation resumed from clean,
+  synchronized state commit
+  `5f52bb0eb19a19c43e2ea480fb8563e4109df5b7`. The authoritative `1417`-line
+  objective was reread and reverified at SHA-256
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`;
+  repository instructions, active queue sequencing, worklog, Git status, and
+  upstream state were rechecked. Work resumes with local deterministic
+  V3-TOKENS closure only; no provider request, secret access, paid call, or
+  additional spend is authorized for this validation slice.
+- **Sixth operator pause checkpoint:** The operator requested a pause after the
+  endpoint-aware source/total-package separation and explicit output-allocation
+  regressions reached a filesystem-stable checkpoint. The focused token/context
+  suite passes `25` tests. The maximum-assurance fake-provider regression now
+  retains its expected findings and confirmations, but remains failing because
+  `specialist:report_quality` bypasses endpoint-aware context construction and
+  is correctly rejected before transport for endpoint capacity. Three
+  independent read-only reviews are complete and no worker or validation
+  process remains active. The nine modified files shown by `git status` preserve
+  uncommitted in-progress work; no commit, push, generated runtime artifact,
+  provider request, network access, secret access, cost reservation, or spend
+  occurred. `V3-TOKENS-001` remains `IN_PROGRESS`.
+- **Sixth resume checkpoint:** Automatic goal continuation resumed from the
+  preserved nine-file V3-TOKENS worktree at source commit
+  `5f52bb0eb19a19c43e2ea480fb8563e4109df5b7`. The complete authoritative
+  objective was reread and its SHA-256 remains
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`;
+  queue sequencing, worklog, current diff, and whitespace integrity were
+  rechecked. Work resumes only on local deterministic ticket closure. No
+  provider, network, paid call, cost reservation, or operator-secret access is
+  authorized for this slice.
+- **Endpoint-aware report-quality closure:** Report-quality review now prepares
+  and hashes its exact workflow before context construction, reserves the
+  greater of the configured and measured workflow bounds, and reuses the exact
+  prepared workflow at execution. Drift is rejected before transport. The
+  maximum-assurance fake-provider regression passed `1` test in `5.41s` after
+  role-specific metadata compaction preserved the invariant symbol index.
+- **Output-capacity closure:** Token planning now records typed finding,
+  coverage, and summary minimums, conserves the requested output allocation,
+  and rejects endpoint routes without an explicit metadata-backed completion
+  limit. Focused token-planning and context-manifest validation passed `80`
+  tests; usage validation passed `81`.
+- **Partial-preflight evidence:** Added a self-hashed diagnostic planning
+  snapshot that retains only measured route, prompt-allocation,
+  output-allocation, envelope, demand, and omission evidence when a complete
+  request plan cannot be formed. It is mutually exclusive with a full plan,
+  receives zero review, reservation, provider-request, or planned-request
+  credit, and is required for planless token-planner rejection. Focused
+  snapshot coverage passed `83` tests; the broader OpenRouter,
+  context-manifest, and usage matrix passed `311`.
+- **Static validation so far:** Affected Ruff and strict mypy checks passed
+  after the report-quality closure. The example configuration and its tests now
+  expose and bound `reserved_workflow_tokens = 32768`.
+- **Seventh operator pause checkpoint:** The operator requested a pause at this
+  filesystem-stable boundary. Three delegated read-only reviewers are complete.
+  The worktree preserves `16` modified files and one new focused test file; no
+  commit or push is claimed because `V3-TOKENS-001` is still `IN_PROGRESS`.
+  Category-specific omission evidence, large-metadata pressure coverage,
+  persisted nonzero category allocation evidence, a high-capacity
+  ContextBuilder-to-manifest regression, operator documentation, schema
+  regeneration, full static and pytest gates, and final queue/traceability/
+  runtime-state updates remain pending. No provider request, network access,
+  secret access, cost reservation, generated runtime claim, or additional
+  spend occurred.
+- **Seventh resume checkpoint:** Goal continuation resumed from source commit
+  `5f52bb0eb19a19c43e2ea480fb8563e4109df5b7`. The authoritative objective was
+  reread completely and its SHA-256 remains
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`;
+  repository instructions, active queue sequencing, status, diff, and
+  whitespace integrity were rechecked.
+- **Typed omission closure:** Context packages now retain only self-hashed,
+  category- and reason-bound omission records. Host construction assigns each
+  category at the omission origin; OpenRouter no longer guesses from strings or
+  accepts an unknown fallback. Full plans, diagnostic partial snapshots, usage,
+  and manifests bind the same exact inventory, while blind prior-audit
+  withholding remains separate. Raw omitted paths and detail do not persist.
+- **End-to-end acceptance coverage:** Added deterministic pressure coverage
+  proving oversized framework, graph, scanner, and invariant metadata compacts
+  before coherent source is exhausted; a serialized manifest preserves nonzero
+  semantic category allocations and zero prior-audit allocation; and a
+  high-capacity ContextBuilder-to-fake-OpenRouter-to-manifest flow proves an
+  approximately 200,000-token estimate with a 32,768-token visible-output
+  reserve. The three acceptance tests passed in `0.59s`.
+- **Schema and focused validation:** The stale context-manifest schema was
+  reproduced, regenerated, and verified current. Typed omission/context tests
+  passed `260`; the broader token, context, OpenRouter, usage, specialist,
+  manifest, schema, and selected pipeline matrix passed `368` in `9.24s`.
+  Affected Ruff and strict mypy passed. No provider, network, secret, paid call,
+  cost reservation, or new runtime claim occurred.
 
 ## 2026-07-28 — V3-SMOKE-001
 

@@ -97,9 +97,9 @@ class FindingAgent(AgentBase):
                 completion=completion,
                 rendered_user_context=rendered_user_context,
             )
-        except ModelReviewEvidenceError:
+        except ModelReviewEvidenceError as exc:
             raise OpenRouterSchemaError(
-                "model response did not provide valid requested-surface evidence"
+                f"model response did not provide valid requested-surface evidence: {exc}"
             ) from None
         requested = usage.requested_model
         returned = usage.returned_model

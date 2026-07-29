@@ -33,6 +33,11 @@ from mmaudit.models.schemas import (
     SoliditySymbolIndex,
     UsageRecord,
 )
+from mmaudit.models.token_planning import (
+    ContextOmissionCategory,
+    ContextOmissionItem,
+    ContextOmissionReason,
+)
 from mmaudit.orchestration.context import render_context
 from mmaudit.orchestration.model_review_evidence import (
     ModelReviewEvidenceError,
@@ -41,7 +46,10 @@ from mmaudit.orchestration.model_review_evidence import (
 from mmaudit.orchestration.model_review_evidence import (
     seal_model_surface_review_artifact as _seal_model_surface_review_artifact,
 )
-from tests.identity_fixtures import synthetic_strict_zdr_privacy_routing
+from tests.identity_fixtures import (
+    synthetic_strict_zdr_privacy_routing,
+    synthetic_token_plan_routing,
+)
 from tests.output_evidence_fixtures import (
     SYNTHETIC_OUTPUT_CAPABILITY_SHA256,
     synthetic_structured_output_routing,
@@ -56,6 +64,19 @@ _SOURCE = (
     "}\n"
 )
 _INVARIANT = "Recorded assets cannot exceed observed token receipts."
+
+
+def _typed_omission(
+    descriptor: str,
+    *,
+    category: ContextOmissionCategory = ContextOmissionCategory.SOURCE,
+    reason: ContextOmissionReason = ContextOmissionReason.SOURCE_BUDGET_EXCLUDED,
+) -> ContextOmissionItem:
+    return ContextOmissionItem.build(
+        category=category,
+        reason=reason,
+        omitted_item_sha256=hashlib.sha256(descriptor.encode()).hexdigest(),
+    )
 
 
 def seal_model_surface_review_artifact(
@@ -412,7 +433,7 @@ def _usage(batch: CandidateReviewBatch, *, role: str = _ROLE) -> UsageRecord:
         },
         source_label=f"model-review-evidence:{role}",
     )
-    return UsageRecord(
+    record = UsageRecord(
         request_id="request-surface-review",
         role=role,
         execution_evidence=ExecutionEvidenceKind.MOCK,
@@ -444,6 +465,9 @@ def _usage(batch: CandidateReviewBatch, *, role: str = _ROLE) -> UsageRecord:
         validation_status=ModelRequestValidationStatus.VALID,
         status="success",
         attempts=1,
+    )
+    return record.model_copy(
+        update={"routing": synthetic_token_plan_routing(record, record.routing)}
     )
 
 
@@ -530,7 +554,15 @@ def test_seal_rejects_a_post_hoc_context_substitution() -> None:
         ),
     )
     substituted_context = original_context.model_copy(
-        update={"omissions": ["post-hoc context substitution"]}
+        update={
+            "omissions": [
+                _typed_omission(
+                    "post-hoc context substitution",
+                    category=ContextOmissionCategory.CONTEXT_PACKAGE,
+                    reason=ContextOmissionReason.CONTEXT_BUDGET_EXCLUDED,
+                )
+            ]
+        }
     )
 
     with pytest.raises(ModelReviewEvidenceError, match="differs from the rendered"):
@@ -720,7 +752,7 @@ def test_seal_rejects_credit_when_preferred_source_was_omitted_by_budget() -> No
     context = _context((request,)).model_copy(
         update={
             "excerpts": [],
-            "omissions": [f"{_PATH}: preferred source omitted by context budget"],
+            "omissions": [_typed_omission(f"{_PATH}: preferred source omitted by context budget")],
         }
     )
 
@@ -743,7 +775,7 @@ def test_seal_allows_inconclusive_when_source_was_omitted_by_budget() -> None:
     context = _context((request,)).model_copy(
         update={
             "excerpts": [],
-            "omissions": [f"{_PATH}: preferred source omitted by context budget"],
+            "omissions": [_typed_omission(f"{_PATH}: preferred source omitted by context budget")],
         }
     )
 

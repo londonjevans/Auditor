@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 import pytest
 
+from mmaudit.agents.specialists import build_specialist_execution_records
 from mmaudit.benchmark.certificate import (
     BenchmarkCertificateVerification,
     CertificateVerificationOrigin,
@@ -20,7 +21,7 @@ from mmaudit.benchmark.certificate import (
 from mmaudit.config import configured_model_ids
 from mmaudit.constants import ALL_SPECIALIST_ROLES, ExitCode
 from mmaudit.isolation.dependencies import dependency_tree_sha256
-from mmaudit.models.openrouter import OpenRouterClient
+from mmaudit.models.openrouter import OpenRouterClient, OpenRouterRequestLimitError
 from mmaudit.models.runtime import build_openrouter_runtime_controls
 from mmaudit.models.schemas import (
     AuditProfile,
@@ -29,6 +30,7 @@ from mmaudit.models.schemas import (
     AuditScopeAssessment,
     CandidateFinding,
     CompilationStatus,
+    ContextPackage,
     DependencyPreparationResult,
     DependencyPreparationStatus,
     DependencySbom,
@@ -995,6 +997,163 @@ async def test_successful_multi_agent_audit(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("secondary_role", ["verifier", "judge"])
+async def test_candidate_falsifier_context_preview_uses_exact_selected_models(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    secondary_role: str,
+) -> None:
+    base = config_factory()
+    falsifier_model = "golf/gale-secure"
+    falsifier_registry = model_registry_entry(falsifier_model)
+    registry: list[dict[str, Any]] = []
+    for entry in base.models.registry:
+        payload = entry.model_dump(mode="json")
+        if secondary_role == "judge" and entry.canonical_model_id == base.models.verifier.primary:
+            payload["root_lineage"] = falsifier_registry["root_lineage"]
+        registry.append(payload)
+    registry.append(falsifier_registry)
+    config = config_factory(
+        profile=AuditProfile.DEEP,
+        privacy={
+            "fail_on_detected_secret": False,
+            "approved_model_lineages": sorted({str(entry["root_lineage"]) for entry in registry}),
+        },
+        models={
+            "specialists": {
+                "falsifier": {
+                    "primary": falsifier_model,
+                    "fallbacks": [],
+                    "quality_tier": "high",
+                    "capabilities": ["structured_json", "security_reasoning"],
+                }
+            },
+            "registry": registry,
+        },
+    ).effective()
+    expected_models = (
+        falsifier_model,
+        config.models.role(secondary_role).primary,
+    )
+    observed_previews: list[tuple[str, ...]] = []
+    observed_workflow_previews: list[tuple[tuple[str, ...], int | None, str | None, int]] = []
+    original_preview = OpenRouterClient.context_package_byte_budget
+
+    def record_preview(
+        client: OpenRouterClient,
+        models: list[str] | tuple[str, ...],
+        *,
+        workflow_byte_upper_bound_tokens: int | None = None,
+        workflow_prompt: str | None = None,
+        context_json_escape_overhead_tokens: int = 0,
+    ) -> int:
+        observed_previews.append(tuple(models))
+        observed_workflow_previews.append(
+            (
+                tuple(models),
+                workflow_byte_upper_bound_tokens,
+                workflow_prompt,
+                context_json_escape_overhead_tokens,
+            )
+        )
+        return original_preview(
+            client,
+            models,
+            workflow_byte_upper_bound_tokens=workflow_byte_upper_bound_tokens,
+            workflow_prompt=workflow_prompt,
+            context_json_escape_overhead_tokens=context_json_escape_overhead_tokens,
+        )
+
+    monkeypatch.setattr(OpenRouterClient, "context_package_byte_budget", record_preview)
+    fake = FakeOpenRouter(extra_model_ids=[falsifier_model])
+
+    result = await _run(config, vulnerable_repo, tmp_path, fake)
+
+    actual_cross_exam_models = {
+        str(request["model"])
+        for request in fake.requests
+        if _request_schema_name(request).startswith("mmaudit_candidate_cross_examination_")
+    }
+    assert result.report.cross_examination_decisions
+    assert actual_cross_exam_models == set(expected_models)
+    assert expected_models in observed_previews
+    assert any(
+        models == expected_models
+        and prompt is not None
+        and bound == len(prompt.encode("utf-8"))
+        and context_escape_overhead > 0
+        for models, bound, prompt, context_escape_overhead in observed_workflow_previews
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_role", ["verifier", "judge"])
+async def test_context_preview_failure_preserves_fail_closed_pipeline_artifacts(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failed_role: str,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False}).effective()
+    failed_role_config = config.models.role(failed_role)
+    failed_models = (
+        failed_role_config.primary,
+        *failed_role_config.fallbacks,
+    )
+    original_preview = OpenRouterClient.context_package_byte_budget
+
+    def fail_selected_preview(
+        client: OpenRouterClient,
+        models: list[str] | tuple[str, ...],
+        *,
+        workflow_byte_upper_bound_tokens: int | None = None,
+        workflow_prompt: str | None = None,
+        context_json_escape_overhead_tokens: int = 0,
+    ) -> int:
+        if tuple(models) == failed_models:
+            raise OpenRouterRequestLimitError(f"synthetic {failed_role} context preview refusal")
+        return original_preview(
+            client,
+            models,
+            workflow_byte_upper_bound_tokens=workflow_byte_upper_bound_tokens,
+            workflow_prompt=workflow_prompt,
+            context_json_escape_overhead_tokens=context_json_escape_overhead_tokens,
+        )
+
+    monkeypatch.setattr(OpenRouterClient, "context_package_byte_budget", fail_selected_preview)
+    fake = FakeOpenRouter()
+
+    result = await _run(config, vulnerable_repo, tmp_path, fake)
+
+    assert result.exit_code is ExitCode.MODEL_FAILURE
+    assert not result.report.completed
+    assert any(
+        f"{failed_role}: synthetic {failed_role} context preview refusal" in reason
+        for reason in result.report.incomplete_reasons
+    )
+    assert not any(
+        _request_schema_name(request)
+        == f"mmaudit_{'judgment' if failed_role == 'judge' else 'verification'}"
+        for request in fake.requests
+    )
+    for artifact in (
+        "specialist-execution.json",
+        "context-manifest.json",
+        "final-findings.json",
+        "audit-report.md",
+        "run-evidence-manifest.json",
+    ):
+        assert (result.run_dir / artifact).is_file()
+    specialist_execution = json.loads(
+        (result.run_dir / "specialist-execution.json").read_text(encoding="utf-8")
+    )
+    assert isinstance(specialist_execution["records"], list)
+
+
+@pytest.mark.asyncio
 async def test_strict_default_links_effective_privacy_evidence_to_report_and_manifest(
     config_factory,
     vulnerable_repo: Path,
@@ -1569,10 +1728,32 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
     fake = FakeOpenRouter(
         mode="maximum_assurance",
         extra_model_ids=[slot.primary for slot in config.models.specialists.values()],
+        context_length=300_000,
+        max_prompt_tokens=280_000,
+        max_completion_tokens=65_536,
     )
+    execution_contexts: list[ContextPackage] = []
+
+    def capture_execution_contexts(
+        execution_config: Any,
+        *,
+        usage_records: list[UsageRecord],
+        contexts: list[ContextPackage],
+    ) -> Any:
+        execution_contexts.extend(contexts)
+        return build_specialist_execution_records(
+            execution_config,
+            usage_records=usage_records,
+            contexts=contexts,
+        )
+
     monkeypatch.setattr(
         "mmaudit.orchestration.pipeline.compile_solidity_projects",
         _synthetic_compiler,
+    )
+    monkeypatch.setattr(
+        "mmaudit.orchestration.pipeline.build_specialist_execution_records",
+        capture_execution_contexts,
     )
     before = {
         path.relative_to(repo): hashlib.sha256(path.read_bytes()).hexdigest()
@@ -1703,6 +1884,17 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
         (result.run_dir / "specialist-execution.json").read_text(encoding="utf-8")
     )
     specialist_records = {record["role"]: record for record in specialist_execution["records"]}
+    reproduction_falsifier_contexts = [
+        context for context in execution_contexts if context.role == "specialist:falsifier"
+    ]
+    assert len(reproduction_falsifier_contexts) == 1
+    assert any(context.role == "candidate_cross_examination" for context in execution_contexts)
+    assert specialist_records["falsifier"]["context_budget_bytes"] == (
+        reproduction_falsifier_contexts[0].byte_budget
+    )
+    assert specialist_records["falsifier"]["context_bytes_used"] == (
+        reproduction_falsifier_contexts[0].bytes_used
+    )
     assert set(specialist_records) == set(ALL_SPECIALIST_ROLES)
     assert all(record["configured"] for record in specialist_records.values())
     assert all(

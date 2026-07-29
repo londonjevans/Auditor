@@ -73,7 +73,12 @@ from mmaudit.models.schemas import (
     UsageRecord,
 )
 from mmaudit.models.structured_output import StructuredOutputFailureCode
-from mmaudit.models.token_planning import PromptAllocationCategory
+from mmaudit.models.token_planning import (
+    ContextOmissionCategory,
+    ContextOmissionItem,
+    ContextOmissionReason,
+    PromptAllocationCategory,
+)
 from mmaudit.models.usage import (
     UsageLedger,
     _attest_owned_real_usage_record,
@@ -4452,13 +4457,148 @@ async def test_endpoint_capacity_planning_failure_is_planless_preflight(
     assert preflight.reason is ContextPreflightReason.ENDPOINT_CAPACITY
     assert preflight.request_plan is None
     assert preflight.request_plan_sha256 is None
-    assert preflight.estimated_prompt_tokens is None
+    assert preflight.planning_snapshot is not None
+    assert preflight.planning_snapshot_sha256 in preflight.decision_evidence_sha256s
+    assert preflight.estimated_prompt_tokens == (
+        preflight.planning_snapshot.estimated_prompt_tokens
+    )
+    assert preflight.planning_snapshot.route_state.value == "MEASURED"
+    assert preflight.planning_snapshot.prompt_state.value == "MEASURED"
+    assert preflight.planning_snapshot.output_state.value == "MEASURED"
+    assert not preflight.planning_snapshot.provider_request_sent
+    assert not preflight.planning_snapshot.atomic_reservation_created
+    assert not preflight.planning_snapshot.review_credit
+    assert client.budget.spent_input_tokens == 0
+    assert client.budget.reserved_input_tokens == 0
+    assert client.budget.spent_output_tokens == 0
+    assert client.budget.reserved_output_tokens == 0
     manifest = build_context_manifest(
         run_id="capacity-preflight",
         usage_records=[],
         preflight_records=client.context_preflight.records,
     )
     assert manifest.requests == client.context_preflight.records
+
+
+@pytest.mark.asyncio
+async def test_context_preview_reserves_provider_visible_workflow_bytes(
+    config_factory,
+) -> None:
+    policy = OpenRouterProviderPolicy(only=("approved-provider",))
+    config = config_factory()
+    client, http_client, _usage = _client(
+        config,
+        lambda _request: _completion_response('{"answer":"unused"}'),
+        provider_policy=policy,
+    )
+    client.register_endpoint_snapshot(evidence=_endpoint_snapshot())
+    configured_workflow_reserve = config.token_budgets.reserved_workflow_tokens
+    workflow_prompt = '"\\\n\té🙂' * 3_300
+    raw_workflow_bound = len(workflow_prompt.encode("utf-8"))
+    provider_visible_workflow_bound = len(
+        json.dumps(
+            workflow_prompt,
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    assert raw_workflow_bound > configured_workflow_reserve
+    assert provider_visible_workflow_bound > raw_workflow_bound
+    try:
+        raw_only_budget = client.context_package_byte_budget(
+            ["alpha/atlas-secure"],
+            workflow_byte_upper_bound_tokens=raw_workflow_bound,
+        )
+        provider_visible_budget = client.context_package_byte_budget(
+            ["alpha/atlas-secure"],
+            workflow_byte_upper_bound_tokens=raw_workflow_bound,
+            workflow_prompt=workflow_prompt,
+        )
+    finally:
+        await http_client.aclose()
+
+    assert raw_only_budget - provider_visible_budget == (
+        provider_visible_workflow_bound - raw_workflow_bound
+    )
+
+
+@pytest.mark.asyncio
+async def test_context_preview_deducts_exact_context_json_escape_overhead(
+    config_factory,
+) -> None:
+    policy = OpenRouterProviderPolicy(only=("approved-provider",))
+    config = config_factory()
+    client, http_client, _usage = _client(
+        config,
+        lambda _request: _completion_response('{"answer":"unused"}'),
+        provider_policy=policy,
+    )
+    client.register_endpoint_snapshot(evidence=_endpoint_snapshot())
+    workflow_prompt = "review the prepared synthetic surface"
+    raw_workflow_bound = len(workflow_prompt.encode("utf-8"))
+    context_json_escape_overhead_tokens = 4_321
+    try:
+        baseline_budget = client.context_package_byte_budget(
+            ["alpha/atlas-secure"],
+            workflow_byte_upper_bound_tokens=raw_workflow_bound,
+            workflow_prompt=workflow_prompt,
+        )
+        escaped_context_budget = client.context_package_byte_budget(
+            ["alpha/atlas-secure"],
+            workflow_byte_upper_bound_tokens=raw_workflow_bound,
+            workflow_prompt=workflow_prompt,
+            context_json_escape_overhead_tokens=context_json_escape_overhead_tokens,
+        )
+    finally:
+        await http_client.aclose()
+
+    assert baseline_budget - escaped_context_budget == context_json_escape_overhead_tokens
+
+
+@pytest.mark.asyncio
+async def test_context_preview_validates_exact_workflow_and_escape_inputs(
+    config_factory,
+) -> None:
+    policy = OpenRouterProviderPolicy(only=("approved-provider",))
+    client, http_client, _usage = _client(
+        config_factory(),
+        lambda _request: _completion_response('{"answer":"unused"}'),
+        provider_policy=policy,
+    )
+    client.register_endpoint_snapshot(evidence=_endpoint_snapshot())
+    workflow_prompt = '"synthetic"\n🙂'
+    raw_workflow_bound = len(workflow_prompt.encode("utf-8"))
+    try:
+        derived_budget = client.context_package_byte_budget(
+            ["alpha/atlas-secure"],
+            workflow_prompt=workflow_prompt,
+        )
+        validated_budget = client.context_package_byte_budget(
+            ["alpha/atlas-secure"],
+            workflow_byte_upper_bound_tokens=raw_workflow_bound,
+            workflow_prompt=workflow_prompt,
+        )
+        assert derived_budget == validated_budget
+
+        with pytest.raises(OpenRouterRequestLimitError, match="raw workflow bound"):
+            client.context_package_byte_budget(
+                ["alpha/atlas-secure"],
+                workflow_byte_upper_bound_tokens=raw_workflow_bound + 1,
+                workflow_prompt=workflow_prompt,
+            )
+        with pytest.raises(OpenRouterRequestLimitError, match="workflow prompt"):
+            client.context_package_byte_budget(
+                ["alpha/atlas-secure"],
+                workflow_prompt=object(),  # type: ignore[arg-type]
+            )
+        for invalid_overhead in (True, -1, 1.5):
+            with pytest.raises(OpenRouterRequestLimitError, match="escape overhead"):
+                client.context_package_byte_budget(
+                    ["alpha/atlas-secure"],
+                    context_json_escape_overhead_tokens=invalid_overhead,  # type: ignore[arg-type]
+                )
+    finally:
+        await http_client.aclose()
 
 
 @pytest.mark.asyncio
@@ -4536,7 +4676,19 @@ async def test_prompt_envelope_overrun_is_planless_endpoint_preflight(
     assert preflight.reason is ContextPreflightReason.ENDPOINT_CAPACITY
     assert preflight.request_plan is None
     assert preflight.request_plan_sha256 is None
-    assert preflight.estimated_prompt_tokens is None
+    assert preflight.planning_snapshot is not None
+    assert preflight.planning_snapshot.allocations is not None
+    assert preflight.estimated_prompt_tokens == sum(
+        allocation.estimate.estimated_tokens
+        for allocation in preflight.planning_snapshot.allocations
+    )
+    assert preflight.planning_snapshot.prompt_envelope_byte_upper_bound_tokens is not None
+    assert preflight.planning_snapshot.prompt_content_byte_upper_bound_tokens is not None
+    assert (
+        preflight.planning_snapshot.prompt_envelope_byte_upper_bound_tokens
+        >= preflight.planning_snapshot.prompt_content_byte_upper_bound_tokens
+    )
+    assert not preflight.planning_snapshot.provider_request_sent
 
 
 @pytest.mark.asyncio
@@ -4581,7 +4733,17 @@ async def test_plan_time_global_input_budget_failure_is_typed_planless_preflight
     assert preflight.reason is ContextPreflightReason.GLOBAL_TOKEN_BUDGET
     assert preflight.request_plan is None
     assert preflight.request_plan_sha256 is None
-    assert preflight.estimated_prompt_tokens is None
+    assert preflight.planning_snapshot is not None
+    assert preflight.estimated_prompt_tokens == (
+        preflight.planning_snapshot.estimated_prompt_tokens
+    )
+    assert preflight.planning_snapshot.route_intersection is not None
+    assert preflight.planning_snapshot.allocations is not None
+    assert preflight.planning_snapshot.output_allocations is not None
+    assert client.budget.spent_input_tokens == 0
+    assert client.budget.reserved_input_tokens == 0
+    assert client.budget.spent_output_tokens == 0
+    assert client.budget.reserved_output_tokens == 0
 
 
 @pytest.mark.asyncio
@@ -4644,6 +4806,11 @@ async def test_context_package_omitted_from_prompt_is_typed_planless_preflight(
     assert preflight.request_plan is None
     assert preflight.request_plan_sha256 is None
     assert preflight.estimated_prompt_tokens is None
+    assert preflight.planning_snapshot is not None
+    assert preflight.planning_snapshot.route_intersection is not None
+    assert preflight.planning_snapshot.allocations is None
+    assert preflight.planning_snapshot.output_allocations is not None
+    assert preflight.planning_snapshot.prompt_envelope_byte_upper_bound_tokens is not None
 
 
 @pytest.mark.asyncio
@@ -6828,6 +6995,8 @@ async def test_context_package_token_plan_binds_category_hashes_and_omissions(
 ) -> None:
     source = "contract SyntheticVault { function totalAssets() external pure returns (uint256) {} }"
     source_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    source_omission = "src/Generated.sol omitted by deterministic source budget"
+    metadata_omission = "supporting role metadata omitted by the context budget"
     package = ContextPackage(
         role="source_audit",
         byte_budget=100_000,
@@ -6861,8 +7030,16 @@ async def test_context_package_token_plan_binds_category_hashes_and_omissions(
             )
         ],
         omissions=[
-            "src/Generated.sol omitted by deterministic source budget",
-            "test/Noise.t.sol omitted by role relevance",
+            ContextOmissionItem.build(
+                category=ContextOmissionCategory.CONTEXT_PACKAGE,
+                reason=ContextOmissionReason.CONTEXT_BUDGET_EXCLUDED,
+                omitted_item_sha256=hashlib.sha256(metadata_omission.encode()).hexdigest(),
+            ),
+            ContextOmissionItem.build(
+                category=ContextOmissionCategory.SOURCE,
+                reason=ContextOmissionReason.SOURCE_BUDGET_EXCLUDED,
+                omitted_item_sha256=hashlib.sha256(source_omission.encode()).hexdigest(),
+            ),
         ],
     )
     rendered = render_context(package)
@@ -6900,8 +7077,12 @@ async def test_context_package_token_plan_binds_category_hashes_and_omissions(
         hashlib.sha256(workflow_prefix.encode("utf-8")).hexdigest()
     )
     assert plan["context_omission_sha256s"] == sorted(
-        hashlib.sha256(omission.encode("utf-8")).hexdigest() for omission in package.omissions
+        item.omitted_item_sha256 for item in package.omissions
     )
+    assert {(item["category"], item["reason"]) for item in plan["context_omissions"]} == {
+        ("context_package", "CONTEXT_BUDGET_EXCLUDED"),
+        ("source", "SOURCE_BUDGET_EXCLUDED"),
+    }
 
 
 @pytest.mark.asyncio
@@ -6948,8 +7129,7 @@ async def test_request_max_tokens_reserves_visible_output_and_reasoning(
     assert plan["requested_completion_tokens"] == 2_560
     assert plan["prompt_framing_reserve_tokens"] > 0
     assert plan["prompt_byte_upper_bound_tokens"] == (
-        plan["prompt_content_byte_upper_bound_tokens"]
-        + plan["prompt_framing_reserve_tokens"]
+        plan["prompt_content_byte_upper_bound_tokens"] + plan["prompt_framing_reserve_tokens"]
     )
     assert atomic["planned_prompt_tokens"] == plan["prompt_byte_upper_bound_tokens"]
     assert atomic["planned_completion_tokens"] == 2_560

@@ -69,6 +69,7 @@ reserved_output_tokens = 32768
 reserved_system_tokens = 8192
 reserved_schema_tokens = 8192
 reserved_protocol_tokens = 2048
+reserved_workflow_tokens = 32768
 maximum_source_tokens_per_request = 200000
 global_input_token_budget = 8000000
 global_output_token_budget = 2000000

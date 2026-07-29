@@ -29,6 +29,8 @@ from mmaudit.models.output_modes import (
 )
 from mmaudit.models.schemas import ModelIdentityStrength, StructuredOutputEvidence, UsageRecord
 from mmaudit.models.token_planning import (
+    MINIMUM_FINDING_OUTPUT_TOKENS,
+    MINIMUM_SUMMARY_OUTPUT_TOKENS,
     PROMPT_ALLOCATION_CATEGORIES,
     EndpointRouteIntersection,
     EndpointRouteTokenCapacity,
@@ -148,7 +150,10 @@ def synthetic_token_plan_routing(
         for category in PROMPT_ALLOCATION_CATEGORIES
     )
     prompt_ceiling = sum(item.estimate.byte_upper_bound_tokens for item in allocations)
-    completion_ceiling = max(1, record.completion_tokens)
+    completion_ceiling = max(
+        1 + MINIMUM_FINDING_OUTPUT_TOKENS + MINIMUM_SUMMARY_OUTPUT_TOKENS,
+        record.completion_tokens,
+    )
     hard_prompt_capacity = (prompt_ceiling * 4 + 2) // 3
     route = EndpointRouteTokenCapacity.build(
         exact_model_id=record.requested_model,
@@ -200,6 +205,16 @@ def synthetic_token_plan_routing(
         }
     )
     return completed
+
+
+def rebind_synthetic_token_plan(record: UsageRecord) -> UsageRecord:
+    """Explicitly rebuild test-only token evidence after a synthetic route mutation."""
+
+    routing = dict(record.routing)
+    for field in _TOKEN_ROUTING_FIELDS:
+        routing.pop(field, None)
+    unbound = record.model_copy(update={"routing": routing})
+    return unbound.model_copy(update={"routing": synthetic_token_plan_routing(unbound, routing)})
 
 
 def bind_synthetic_usage_identity(

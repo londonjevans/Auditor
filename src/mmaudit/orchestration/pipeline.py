@@ -33,6 +33,7 @@ from mmaudit.agents.specialists import (
 from mmaudit.agents.threat_model import ThreatModelAgent
 from mmaudit.agents.verifier import (
     CandidateCrossExaminerAgent,
+    PreparedCandidateCrossExaminationInput,
     VerifierAgent,
     select_candidate_falsifier_models,
 )
@@ -170,6 +171,7 @@ from mmaudit.orchestration.context import (
     ContextBudgetError,
     ContextBuilder,
     context_hash_index,
+    context_json_escape_overhead_tokens,
 )
 from mmaudit.orchestration.context_manifest import (
     ContextManifest,
@@ -544,7 +546,6 @@ class AuditPipeline:
         verifications = VerificationBatch(decisions=[])
         decisions: dict[str, VerificationDecision] = {}
         cross_examinations: list[CandidateCrossExaminationDecision] = []
-        candidate_falsifier_context: ContextPackage | None = None
         final_findings: list[Finding] = []
         rejected_findings: list[Finding] = []
         scanner_runs: list[ScannerRun] = []
@@ -1231,30 +1232,104 @@ class AuditPipeline:
 
         packages = []
         if context_builder is not None and self.client is not None:
+            client = self.client
             semaphore = asyncio.Semaphore(self.config.execution.concurrency)
 
             async def bounded_call(coroutine: Any) -> Any:
                 async with semaphore:
                     return await coroutine
 
-            def build_context(role: str, **kwargs: Any) -> Any | None:
+            def context_models(role: str) -> tuple[str, ...]:
+                configured_role = role
+                if role.startswith("specialist:"):
+                    configured_role = role.split(":", 1)[1]
+                role_config = self.config.models.role(configured_role)
+                return (role_config.primary, *role_config.fallbacks)
+
+            def build_context(
+                role: str,
+                *,
+                preview_models: tuple[str, ...] | None = None,
+                **kwargs: Any,
+            ) -> ContextPackage | None:
                 nonlocal terminal_code, budget_halted
                 try:
-                    return context_builder.build(role, **kwargs)
+                    configured_budget = kwargs.pop("requested_budget", None)
+                    workflow_byte_upper_bound_tokens = kwargs.pop(
+                        "workflow_byte_upper_bound_tokens",
+                        None,
+                    )
+                    workflow_prompt = kwargs.pop("workflow_prompt", None)
+                    models = preview_models if preview_models is not None else context_models(role)
+
+                    def endpoint_budget(*, context_escape_overhead: int = 0) -> int:
+                        return client.context_package_byte_budget(
+                            models,
+                            workflow_byte_upper_bound_tokens=(workflow_byte_upper_bound_tokens),
+                            workflow_prompt=workflow_prompt,
+                            context_json_escape_overhead_tokens=(context_escape_overhead),
+                        )
+
+                    initial_endpoint_budget = endpoint_budget()
+                    requested_budget = (
+                        initial_endpoint_budget
+                        if configured_budget is None
+                        else min(configured_budget, initial_endpoint_budget)
+                    )
+                    attempted_budgets: set[int] = set()
+                    for _attempt in range(8):
+                        if requested_budget in attempted_budgets:
+                            raise ContextBudgetError(
+                                f"context preview for role {role} did not converge"
+                            )
+                        attempted_budgets.add(requested_budget)
+                        package = context_builder.build(
+                            role,
+                            requested_budget=requested_budget,
+                            **kwargs,
+                        )
+                        escaped_endpoint_budget = endpoint_budget(
+                            context_escape_overhead=(context_json_escape_overhead_tokens(package))
+                        )
+                        validated_budget = (
+                            escaped_endpoint_budget
+                            if configured_budget is None
+                            else min(configured_budget, escaped_endpoint_budget)
+                        )
+                        if requested_budget <= validated_budget:
+                            return package
+                        requested_budget = min(
+                            requested_budget - 1,
+                            validated_budget,
+                        )
+                        if requested_budget <= 0:
+                            raise ContextBudgetError(
+                                f"context preview for role {role} leaves no package capacity"
+                            )
+                    raise ContextBudgetError(
+                        f"context preview for role {role} did not converge within eight passes"
+                    )
                 except ContextBudgetError as exc:
                     incomplete.append(f"{role}: {exc}")
                     terminal_code = ExitCode.INCOMPLETE
+                    budget_halted = True
+                    return None
+                except OpenRouterError as exc:
+                    incomplete.append(f"{role}: {exc}")
+                    terminal_code = ExitCode.MODEL_FAILURE
                     budget_halted = True
                     return None
 
             def build_specialist_context(
                 role: str,
                 *,
+                preview_models: tuple[str, ...] | None = None,
                 request_model_surface_reviews: bool = False,
                 **kwargs: Any,
-            ) -> Any | None:
+            ) -> ContextPackage | None:
                 return build_context(
                     f"specialist:{role}",
+                    preview_models=preview_models,
                     requested_budget=specialist_context_budget(
                         role,
                         total_context_bytes=(self.config.repository.max_total_context_bytes),
@@ -1465,13 +1540,20 @@ class AuditPipeline:
                 location.path for candidate in candidates for location in candidate.locations
             }
             verifier_context = None
-            if not budget_halted:
+            verifier_agent = VerifierAgent(self.config, self.client)
+            prepared_verification_input = verifier_agent.prepare_input(candidates)
+            if candidates and not budget_halted:
                 verifier_context = build_context(
                     "verifier",
+                    workflow_byte_upper_bound_tokens=(
+                        prepared_verification_input.workflow_byte_upper_bound_tokens
+                    ),
+                    workflow_prompt=prepared_verification_input.workflow_prompt,
                     threat_model=threat_model,
                     preferred_paths=preferred_paths,
                 )
-                packages.append(verifier_context)
+                if verifier_context is not None:
+                    packages.append(verifier_context)
             if candidates and verifier_context is not None:
                 try:
                     self.logger.info(
@@ -1479,7 +1561,11 @@ class AuditPipeline:
                         extra={"run_id": run_id},
                     )
                     verifications = await bounded_call(
-                        VerifierAgent(self.config, self.client).run(candidates, verifier_context)
+                        verifier_agent.run(
+                            candidates,
+                            verifier_context,
+                            prepared_input=prepared_verification_input,
+                        )
                     )
                     omitted_verifications = [
                         decision.candidate_id
@@ -1531,13 +1617,42 @@ class AuditPipeline:
                     if terminal_code is ExitCode.SUCCESS:
                         terminal_code = ExitCode.CONFIGURATION
                 else:
-                    candidate_falsifier_context = build_specialist_context(
-                        "falsifier",
-                        threat_model=threat_model,
-                        preferred_paths=preferred_paths,
+                    reviewer_model_ids = tuple(
+                        model_id for model_id, _root_lineage in reviewer_models
                     )
-                    if candidate_falsifier_context is not None:
-                        packages.append(candidate_falsifier_context)
+                    prepared_cross_examinations: dict[
+                        str,
+                        tuple[PreparedCandidateCrossExaminationInput, ContextPackage],
+                    ] = {}
+                    for candidate in cross_examination_candidates:
+                        prepared_cross_examination = CandidateCrossExaminerAgent.prepare_input(
+                            [candidate]
+                        )
+                        candidate_context = build_context(
+                            "candidate_cross_examination",
+                            preview_models=reviewer_model_ids,
+                            requested_budget=specialist_context_budget(
+                                "falsifier",
+                                total_context_bytes=(
+                                    self.config.repository.max_total_context_bytes
+                                ),
+                                planned_packages=context_builder.planned_packages,
+                            ),
+                            workflow_byte_upper_bound_tokens=(
+                                prepared_cross_examination.workflow_byte_upper_bound_tokens
+                            ),
+                            workflow_prompt=prepared_cross_examination.workflow_prompt,
+                            threat_model=threat_model,
+                            preferred_paths=preferred_paths,
+                        )
+                        if candidate_context is None:
+                            break
+                        packages.append(candidate_context)
+                        prepared_cross_examinations[candidate.candidate_id] = (
+                            prepared_cross_examination,
+                            candidate_context,
+                        )
+                    if len(prepared_cross_examinations) == len(cross_examination_candidates):
                         cross_examiner_tasks = [
                             (
                                 reviewer_index,
@@ -1553,7 +1668,10 @@ class AuditPipeline:
                                             root_lineage=root_lineage,
                                         ).run(
                                             [candidate],
-                                            candidate_falsifier_context,
+                                            prepared_cross_examinations[candidate.candidate_id][1],
+                                            prepared_input=prepared_cross_examinations[
+                                                candidate.candidate_id
+                                            ][0],
                                         )
                                     ),
                                     name=f"model:{
@@ -1639,20 +1757,25 @@ class AuditPipeline:
                 ]
                 if configured_planners:
                     for planner_role in configured_planners:
-                        planner_context = build_specialist_context(
-                            planner_role,
-                            threat_model=threat_model,
-                            preferred_paths=preferred_paths,
-                        )
-                        if planner_context is None:
-                            break
-                        packages.append(planner_context)
                         planner = ExploitTestPlannerAgent(
                             self.config,
                             self.client,
                             investigator_role="ensemble",
                             planner_role=planner_role,
                         )
+                        prepared_planner_input = planner.prepare_input(eligible_for_reproduction)
+                        planner_context = build_specialist_context(
+                            planner_role,
+                            workflow_byte_upper_bound_tokens=(
+                                prepared_planner_input.workflow_byte_upper_bound_tokens
+                            ),
+                            workflow_prompt=prepared_planner_input.workflow_prompt,
+                            threat_model=threat_model,
+                            preferred_paths=preferred_paths,
+                        )
+                        if planner_context is None:
+                            break
+                        packages.append(planner_context)
                         planner_tasks.append(
                             (
                                 planner_role,
@@ -1661,6 +1784,7 @@ class AuditPipeline:
                                         planner.run(
                                             eligible_for_reproduction,
                                             planner_context,
+                                            prepared_input=prepared_planner_input,
                                         )
                                     ),
                                     name=f"model:{planner_role}:exploit_test",
@@ -1677,11 +1801,42 @@ class AuditPipeline:
                             self.client,
                             investigator_role=role,
                         )
+                        prepared_planner_input = planner.prepare_input(role_candidates)
+                        configured_role = role.removeprefix("specialist:")
+                        if role.startswith("specialist:"):
+                            planner_context = build_specialist_context(
+                                configured_role,
+                                workflow_byte_upper_bound_tokens=(
+                                    prepared_planner_input.workflow_byte_upper_bound_tokens
+                                ),
+                                workflow_prompt=prepared_planner_input.workflow_prompt,
+                                threat_model=threat_model,
+                                preferred_paths=preferred_paths,
+                            )
+                        else:
+                            planner_context = build_context(
+                                configured_role,
+                                workflow_byte_upper_bound_tokens=(
+                                    prepared_planner_input.workflow_byte_upper_bound_tokens
+                                ),
+                                workflow_prompt=prepared_planner_input.workflow_prompt,
+                                threat_model=threat_model,
+                                preferred_paths=preferred_paths,
+                            )
+                        if planner_context is None:
+                            break
+                        packages.append(planner_context)
                         planner_tasks.append(
                             (
                                 role,
                                 asyncio.create_task(
-                                    bounded_call(planner.run(role_candidates, verifier_context)),
+                                    bounded_call(
+                                        planner.run(
+                                            role_candidates,
+                                            planner_context,
+                                            prepared_input=prepared_planner_input,
+                                        )
+                                    ),
                                     name=f"model:{role}:exploit_test",
                                 ),
                             )
@@ -1754,26 +1909,43 @@ class AuditPipeline:
                         )
                     )
                 if generated_tests and reproductions and not budget_halted:
-                    falsifier_context = candidate_falsifier_context or verifier_context
-                    if (
-                        "falsifier" in self.config.models.specialists
-                        and candidate_falsifier_context is None
-                    ):
+                    falsifier_agent = FalsifierAgent(self.config, self.client)
+                    prepared_falsifier_input = falsifier_agent.prepare_input(
+                        candidates=eligible_for_reproduction,
+                        tests=generated_tests,
+                        results=reproductions,
+                    )
+                    if "falsifier" in self.config.models.specialists:
                         falsifier_context = build_specialist_context(
                             "falsifier",
+                            workflow_byte_upper_bound_tokens=(
+                                prepared_falsifier_input.workflow_byte_upper_bound_tokens
+                            ),
+                            workflow_prompt=prepared_falsifier_input.workflow_prompt,
                             threat_model=threat_model,
                             preferred_paths=preferred_paths,
                         )
-                        if falsifier_context is not None:
-                            packages.append(falsifier_context)
+                    else:
+                        falsifier_context = build_context(
+                            "verifier",
+                            workflow_byte_upper_bound_tokens=(
+                                prepared_falsifier_input.workflow_byte_upper_bound_tokens
+                            ),
+                            workflow_prompt=prepared_falsifier_input.workflow_prompt,
+                            threat_model=threat_model,
+                            preferred_paths=preferred_paths,
+                        )
+                    if falsifier_context is not None:
+                        packages.append(falsifier_context)
                     if falsifier_context is not None and not budget_halted:
                         try:
                             falsifications = await bounded_call(
-                                FalsifierAgent(self.config, self.client).run(
+                                falsifier_agent.run(
                                     candidates=eligible_for_reproduction,
                                     tests=generated_tests,
                                     results=reproductions,
                                     context=falsifier_context,
+                                    prepared_input=prepared_falsifier_input,
                                 )
                             )
                         except BudgetExhaustedError as exc:
@@ -1811,22 +1983,33 @@ class AuditPipeline:
                 _group_payload(group, decisions, validations, scanner_findings) for group in groups
             ]
             judge_context = None
-            if not budget_halted:
+            judge_agent = JudgeAgent(self.config, self.client)
+            prepared_judgment_input = judge_agent.prepare_input(
+                groups=group_payloads,
+                threat_model=threat_model,
+            )
+            if groups and not budget_halted:
                 judge_context = build_context(
                     "judge",
+                    workflow_byte_upper_bound_tokens=(
+                        prepared_judgment_input.workflow_byte_upper_bound_tokens
+                    ),
+                    workflow_prompt=prepared_judgment_input.workflow_prompt,
                     threat_model=threat_model,
                     preferred_paths=preferred_paths,
                 )
-                packages.append(judge_context)
+                if judge_context is not None:
+                    packages.append(judge_context)
             judge_decisions: dict[str, JudgeDecision] = {}
             if groups and judge_context is not None:
                 try:
                     self.logger.info("Running final judge", extra={"run_id": run_id})
                     judgment = await bounded_call(
-                        JudgeAgent(self.config, self.client).run(
+                        judge_agent.run(
                             groups=group_payloads,
                             context=judge_context,
                             threat_model=threat_model,
+                            prepared_input=prepared_judgment_input,
                         )
                     )
                     returned_group_ids = [decision.group_id for decision in judgment.decisions]
@@ -1998,13 +2181,23 @@ class AuditPipeline:
             and not budget_halted
         ):
             try:
-                report_quality_context = context_builder.build(
-                    "specialist:report_quality",
-                    requested_budget=specialist_context_budget(
-                        "report_quality",
-                        total_context_bytes=(self.config.repository.max_total_context_bytes),
-                        planned_packages=context_builder.planned_packages,
+                report_quality_agent = ReportQualityAgent(
+                    self.config,
+                    self.client,
+                )
+                prepared_report_quality_input = report_quality_agent.prepare_input(
+                    findings=final_findings,
+                    rejected_count=len(rejected_findings),
+                    coverage=solidity_coverage,
+                    quality_gates=quality_gates,
+                    incomplete_reasons=incomplete,
+                )
+                report_quality_context = build_specialist_context(
+                    "report_quality",
+                    workflow_byte_upper_bound_tokens=(
+                        prepared_report_quality_input.workflow_byte_upper_bound_tokens
                     ),
+                    workflow_prompt=prepared_report_quality_input.workflow_prompt,
                     threat_model=threat_model,
                     preferred_paths={
                         location.path
@@ -2012,18 +2205,17 @@ class AuditPipeline:
                         for location in finding.locations
                     },
                 )
-                packages.append(report_quality_context)
-                report_quality_review = await ReportQualityAgent(
-                    self.config,
-                    self.client,
-                ).run(
-                    findings=final_findings,
-                    rejected_count=len(rejected_findings),
-                    coverage=solidity_coverage,
-                    quality_gates=quality_gates,
-                    incomplete_reasons=incomplete,
-                    context=report_quality_context,
-                )
+                if report_quality_context is not None:
+                    packages.append(report_quality_context)
+                    report_quality_review = await report_quality_agent.run(
+                        findings=final_findings,
+                        rejected_count=len(rejected_findings),
+                        coverage=solidity_coverage,
+                        quality_gates=quality_gates,
+                        incomplete_reasons=incomplete,
+                        context=report_quality_context,
+                        prepared_input=prepared_report_quality_input,
+                    )
             except ContextBudgetError as exc:
                 incomplete.append(f"report_quality: {exc}")
                 budget_halted = True

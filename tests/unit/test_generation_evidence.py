@@ -46,7 +46,10 @@ from mmaudit.models.usage import (
     is_generation_bindable_usage_record,
 )
 from mmaudit.orchestration.budgets import BudgetManager
-from tests.identity_fixtures import synthetic_strict_zdr_privacy_routing
+from tests.identity_fixtures import (
+    synthetic_strict_zdr_privacy_routing,
+    synthetic_token_plan_routing,
+)
 from tests.output_evidence_fixtures import (
     SYNTHETIC_OUTPUT_CAPABILITY_SHA256,
     synthetic_structured_output_routing,
@@ -244,6 +247,7 @@ def _usage_record(
         status="success",
         attempts=1,
     )
+    usage = usage.model_copy(update={"routing": synthetic_token_plan_routing(usage, usage.routing)})
     if execution_evidence is ExecutionEvidenceKind.REAL:
         usage = _attest_owned_real_usage_record(usage)
     return usage

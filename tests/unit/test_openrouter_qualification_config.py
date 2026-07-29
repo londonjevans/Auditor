@@ -88,6 +88,7 @@ def test_endpoint_token_budget_defaults_are_high_capacity_and_bounded() -> None:
 
     assert budgets.usable_input_fraction == 0.70
     assert budgets.maximum_source_tokens_per_request == 200_000
+    assert budgets.reserved_workflow_tokens == 32_768
     assert budgets.reserved_output_tokens is None
     assert budgets.global_input_token_budget == 8_000_000
     assert budgets.global_output_token_budget == 2_000_000
@@ -100,6 +101,8 @@ def test_endpoint_token_budget_defaults_are_high_capacity_and_bounded() -> None:
         TokenBudgetConfig(per_model_cost_budget_usd={"not-exact": 1})
     with pytest.raises(ValidationError, match="safe role IDs"):
         TokenBudgetConfig(per_role_cost_budget_usd={"role with spaces": 1})
+    with pytest.raises(ValidationError, match="less than or equal to 65536"):
+        TokenBudgetConfig(reserved_workflow_tokens=65_537)
 
 
 def test_explicit_output_reserve_cannot_drift_from_request_limit() -> None:

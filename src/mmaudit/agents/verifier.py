@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from mmaudit.agents.base import AgentBase, load_prompt
@@ -20,6 +23,161 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.models.usage import candidate_falsifier_role, is_creditable_usage_record
 from mmaudit.orchestration.context import render_context
+
+
+def _prepared_workflow(
+    payload: object,
+    *,
+    opening_tag: str,
+    closing_tag: str,
+) -> tuple[str, int, str]:
+    payload_json = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    workflow_prompt = "\n".join((opening_tag, payload_json, closing_tag, ""))
+    encoded = workflow_prompt.encode("utf-8")
+    return workflow_prompt, len(encoded), hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_prepared_workflow(
+    *,
+    workflow_prompt: str,
+    workflow_byte_upper_bound_tokens: int,
+    workflow_sha256: str,
+    opening_tag: str,
+    closing_tag: str,
+    label: str,
+) -> object:
+    encoded = workflow_prompt.encode("utf-8")
+    if workflow_byte_upper_bound_tokens != len(encoded):
+        raise ValueError(f"prepared {label} workflow byte bound is inconsistent")
+    if workflow_sha256 != hashlib.sha256(encoded).hexdigest():
+        raise ValueError(f"prepared {label} workflow hash is inconsistent")
+    prefix = f"{opening_tag}\n"
+    suffix = f"\n{closing_tag}\n"
+    if not workflow_prompt.startswith(prefix) or not workflow_prompt.endswith(suffix):
+        raise ValueError(f"prepared {label} workflow envelope is inconsistent")
+    payload_json = workflow_prompt[len(prefix) : -len(suffix)]
+    try:
+        payload = json.loads(payload_json)
+        canonical_json = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"prepared {label} workflow JSON is inconsistent") from exc
+    if payload_json != canonical_json:
+        raise ValueError(f"prepared {label} workflow JSON is not canonical")
+    return payload
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedCandidateCrossExaminationInput:
+    """Exact anonymous candidate workflow and private response-normalization map."""
+
+    workflow_prompt: str
+    workflow_byte_upper_bound_tokens: int
+    workflow_sha256: str
+    candidate_ids: tuple[tuple[str, str], ...]
+
+    @classmethod
+    def build(
+        cls,
+        anonymized_candidates: list[dict[str, Any]],
+        *,
+        candidate_ids: Mapping[str, str],
+    ) -> PreparedCandidateCrossExaminationInput:
+        normalized_ids = tuple(sorted(candidate_ids.items()))
+        workflow_prompt, byte_bound, workflow_sha256 = _prepared_workflow(
+            anonymized_candidates,
+            opening_tag="<ANONYMIZED_CANDIDATES_JSON>",
+            closing_tag="</ANONYMIZED_CANDIDATES_JSON>",
+        )
+        return cls(
+            workflow_prompt=workflow_prompt,
+            workflow_byte_upper_bound_tokens=byte_bound,
+            workflow_sha256=workflow_sha256,
+            candidate_ids=normalized_ids,
+        )
+
+    def __post_init__(self) -> None:
+        payload = _validate_prepared_workflow(
+            workflow_prompt=self.workflow_prompt,
+            workflow_byte_upper_bound_tokens=self.workflow_byte_upper_bound_tokens,
+            workflow_sha256=self.workflow_sha256,
+            opening_tag="<ANONYMIZED_CANDIDATES_JSON>",
+            closing_tag="</ANONYMIZED_CANDIDATES_JSON>",
+            label="candidate cross-examination",
+        )
+        immutable_map = isinstance(self.candidate_ids, tuple) and all(
+            isinstance(item, tuple)
+            and len(item) == 2
+            and all(isinstance(value, str) for value in item)
+            for item in self.candidate_ids
+        )
+        if (
+            not isinstance(payload, list)
+            or len(payload) != 1
+            or not immutable_map
+            or len(self.candidate_ids) != 1
+        ):
+            raise ValueError(
+                "prepared candidate cross-examination workflow must contain one candidate"
+            )
+        candidate = payload[0]
+        if not isinstance(candidate, dict):
+            raise ValueError(
+                "prepared candidate cross-examination workflow candidate is inconsistent"
+            )
+        candidate_ref = candidate.get("candidate_ref")
+        if (
+            not isinstance(candidate_ref, str)
+            or not candidate_ref
+            or self.candidate_ids[0][0] != candidate_ref
+            or not self.candidate_ids[0][1]
+        ):
+            raise ValueError(
+                "prepared candidate cross-examination workflow reference map is inconsistent"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedVerificationInput:
+    """Exact verification workflow material prepared before context allocation."""
+
+    workflow_prompt: str
+    workflow_byte_upper_bound_tokens: int
+    workflow_sha256: str
+
+    @classmethod
+    def build(cls, payload: object) -> PreparedVerificationInput:
+        workflow_prompt, byte_bound, workflow_sha256 = _prepared_workflow(
+            payload,
+            opening_tag="<SUBMITTED_CANDIDATES_JSON>",
+            closing_tag="</SUBMITTED_CANDIDATES_JSON>",
+        )
+        return cls(
+            workflow_prompt=workflow_prompt,
+            workflow_byte_upper_bound_tokens=byte_bound,
+            workflow_sha256=workflow_sha256,
+        )
+
+    def __post_init__(self) -> None:
+        _validate_prepared_workflow(
+            workflow_prompt=self.workflow_prompt,
+            workflow_byte_upper_bound_tokens=self.workflow_byte_upper_bound_tokens,
+            workflow_sha256=self.workflow_sha256,
+            opening_tag="<SUBMITTED_CANDIDATES_JSON>",
+            closing_tag="</SUBMITTED_CANDIDATES_JSON>",
+            label="verification",
+        )
 
 
 def select_candidate_falsifier_models(config: AuditConfig) -> list[tuple[str, str]]:
@@ -154,16 +312,34 @@ class CandidateCrossExaminerAgent:
         self.model_id = model_id
         self.root_lineage = root_lineage
 
+    @staticmethod
+    def prepare_input(
+        candidates: list[CandidateFinding],
+    ) -> PreparedCandidateCrossExaminationInput:
+        """Prepare one anonymous candidate while retaining its private reference map."""
+
+        if len(candidates) != 1:
+            raise ValueError("candidate falsifier requests must review exactly one candidate")
+        anonymized, candidate_ids = anonymize_cross_examination_candidates(candidates)
+        return PreparedCandidateCrossExaminationInput.build(
+            anonymized,
+            candidate_ids=candidate_ids,
+        )
+
     async def run(
         self,
         candidates: list[CandidateFinding],
         context: ContextPackage,
+        *,
+        prepared_input: PreparedCandidateCrossExaminationInput | None = None,
     ) -> list[CandidateCrossExaminationDecision]:
-        if len(candidates) != 1:
-            raise ValueError("candidate falsifier requests must review exactly one candidate")
-        anonymized, candidate_ids = anonymize_cross_examination_candidates(candidates)
-        if not anonymized:
-            return []
+        expected_input = self.prepare_input(candidates)
+        if prepared_input is not None and prepared_input != expected_input:
+            raise OpenRouterSchemaError(
+                "prepared candidate cross-examination workflow differs from submitted "
+                "candidate evidence"
+            )
+        effective_input = prepared_input or expected_input
         request_role = candidate_falsifier_role(
             candidates[0].candidate_id,
             self.reviewer_index,
@@ -178,14 +354,7 @@ class CandidateCrossExaminerAgent:
                     load_prompt("cross_examination.md"),
                 )
             ),
-            user_prompt="\n".join(
-                (
-                    "<ANONYMIZED_CANDIDATES_JSON>",
-                    json.dumps(anonymized, sort_keys=True),
-                    "</ANONYMIZED_CANDIDATES_JSON>",
-                    render_context(context),
-                )
-            ),
+            user_prompt=effective_input.workflow_prompt + render_context(context),
             context_package=context,
             response_model=CandidateCrossExaminationResponse,
             schema_name=(f"mmaudit_candidate_cross_examination_{self.reviewer_index}"),
@@ -202,7 +371,7 @@ class CandidateCrossExaminerAgent:
         usage = matching_usage[0]
         return normalize_cross_examination_response(
             response,
-            candidate_ids=candidate_ids,
+            candidate_ids=dict(effective_input.candidate_ids),
             request_id=usage.request_id,
             reviewer_index=self.reviewer_index,
             requested_model=self.model_id,
@@ -215,28 +384,32 @@ class VerifierAgent(AgentBase):
     role = "verifier"
     prompt_file = "verifier.md"
 
+    @staticmethod
+    def prepare_input(candidates: list[CandidateFinding]) -> PreparedVerificationInput:
+        """Prepare the exact non-context verification workflow."""
+
+        return PreparedVerificationInput.build(
+            [candidate.model_dump(mode="json") for candidate in candidates]
+        )
+
     async def run(
         self,
         candidates: list[CandidateFinding],
         context: ContextPackage,
+        *,
+        prepared_input: PreparedVerificationInput | None = None,
     ) -> VerificationBatch:
-        candidate_json = json.dumps(
-            [candidate.model_dump(mode="json") for candidate in candidates],
-            sort_keys=True,
-        )
-        prompt = "\n".join(
-            (
-                "<SUBMITTED_CANDIDATES_JSON>",
-                candidate_json,
-                "</SUBMITTED_CANDIDATES_JSON>",
-                render_context(context),
+        expected_input = self.prepare_input(candidates)
+        if prepared_input is not None and prepared_input != expected_input:
+            raise OpenRouterSchemaError(
+                "prepared verification workflow differs from submitted verification evidence"
             )
-        )
+        effective_input = prepared_input or expected_input
         response = await self.client.complete(
             role=self.role,
             models=self.configured_models,
             system_prompt=self.system_prompt,
-            user_prompt=prompt,
+            user_prompt=effective_input.workflow_prompt + render_context(context),
             context_package=context,
             response_model=VerificationBatch,
             schema_name="mmaudit_verification",

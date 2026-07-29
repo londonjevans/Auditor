@@ -50,6 +50,7 @@ from mmaudit.models.schemas import (
 from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.privacy import EndpointPolicyClass, PrivacyProfile, PrivacySourceClassification
 from tests.conftest import model_registry_entry
+from tests.identity_fixtures import synthetic_token_plan_routing
 from tests.output_evidence_fixtures import (
     SYNTHETIC_OUTPUT_CAPABILITY_SHA256,
     synthetic_structured_output_routing,
@@ -225,7 +226,7 @@ def _mock_usage_record(
         schema_name="mmaudit_model_benchmark",
     )
     validated_response_sha256 = model_benchmark_module._validated_response_sha256(response)
-    return UsageRecord(
+    record = UsageRecord(
         request_id=f"request-{target_slug}-{case_id}",
         role="model_benchmark",
         execution_evidence=ExecutionEvidenceKind.MOCK,
@@ -316,6 +317,9 @@ def _mock_usage_record(
         validation_status=ModelRequestValidationStatus.VALID,
         status="success",
         attempts=1,
+    )
+    return record.model_copy(
+        update={"routing": synthetic_token_plan_routing(record, record.routing)}
     )
 
 
