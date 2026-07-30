@@ -26,6 +26,7 @@ from mmaudit.models.schemas import (
     CandidateFinding,
     CandidateFindingArtifact,
     CandidateOriginKind,
+    CandidateReproductionResolution,
     ExecutionEvidenceKind,
     FalsificationDecision,
     ForkRpcReadOnlyEgressEvidence,
@@ -47,10 +48,13 @@ from mmaudit.models.schemas import (
     RepositorySuiteWorkspaceLifecycleStatus,
     RepositoryTestExecution,
     RepositoryTestForkRpcScopeEvidence,
+    ReproductionIntegrityStatus,
+    ReproductionResolutionKind,
     ReproductionResult,
     ReproductionState,
     ScannerRun,
     ScannerStatus,
+    Severity,
     SolidityProjectMetadata,
     StrictModel,
 )
@@ -435,6 +439,10 @@ class _ReproductionArtifact(StrictModel):
     schema_version: Literal["1.0"]
     test_specifications: list[GeneratedFoundryTestSpec] = Field(max_length=100_000)
     results: list[ReproductionResult] = Field(max_length=100_000)
+    candidate_resolutions: list[CandidateReproductionResolution] = Field(
+        default_factory=list,
+        max_length=100_000,
+    )
     falsification_decisions: list[FalsificationDecision] = Field(
         default_factory=list,
         max_length=100_000,
@@ -448,6 +456,9 @@ class _ReproductionArtifact(StrictModel):
             raise ValueError("saved test specifications must be unique")
         if len(result_keys) != len(set(result_keys)):
             raise ValueError("saved reproduction results must be unique")
+        resolution_ids = [item.candidate_id for item in self.candidate_resolutions]
+        if resolution_ids != sorted(set(resolution_ids)):
+            raise ValueError("saved candidate resolutions must be unique and sorted")
         return self
 
 
@@ -1246,6 +1257,64 @@ class _ReplayArtifacts(StrictModel):
         candidate_ids = {item.candidate_id for item in self.candidates.findings}
         if not {candidate_id for candidate_id, _name in specification_keys} <= candidate_ids:
             raise ValueError("saved test specifications reference missing candidates")
+        candidates_by_id = {
+            candidate.candidate_id: candidate for candidate in self.candidates.findings
+        }
+        resolution_ids = {
+            resolution.candidate_id for resolution in self.reproductions.candidate_resolutions
+        }
+        if not resolution_ids <= candidate_ids:
+            raise ValueError("saved candidate resolutions reference missing candidates")
+        for resolution in self.reproductions.candidate_resolutions:
+            candidate = candidates_by_id[resolution.candidate_id]
+            if (
+                candidate.severity not in {Severity.HIGH, Severity.CRITICAL}
+                and candidate.origin_kind is not CandidateOriginKind.DETERMINISTIC_EXECUTION
+            ):
+                raise ValueError(
+                    "saved candidate resolutions may only adjudicate high/critical "
+                    "or execution-origin candidates"
+                )
+        high_critical_result_ids = {
+            result.candidate_id
+            for result in self.reproductions.results
+            if candidates_by_id[result.candidate_id].severity in {Severity.HIGH, Severity.CRITICAL}
+        }
+        if not high_critical_result_ids <= resolution_ids:
+            raise ValueError(
+                "saved high/critical reproduction results require terminal candidate resolutions"
+            )
+        qualifying_reproduction_refs: dict[str, set[str]] = {}
+        for result in self.reproductions.results:
+            if (
+                result.state
+                in {
+                    ReproductionState.REPRODUCED,
+                    ReproductionState.REPRODUCED_AND_MINIMIZED,
+                }
+                and result.attempts > 0
+                and result.successful_attempts == result.attempts
+                and result.integrity is not None
+                and result.integrity.status is ReproductionIntegrityStatus.VERIFIED
+            ):
+                qualifying_reproduction_refs.setdefault(result.candidate_id, set()).add(
+                    f"reproduction:{result.integrity.integrity_sha256}"
+                )
+        for resolution in self.reproductions.candidate_resolutions:
+            expected_refs = qualifying_reproduction_refs.get(resolution.candidate_id, set())
+            if resolution.kind is ReproductionResolutionKind.REPRODUCED:
+                if set(resolution.evidence_refs) != expected_refs:
+                    raise ValueError(
+                        "saved reproduced resolution is not exactly bound to qualifying results"
+                    )
+            elif resolution.evidence_refs:
+                raise ValueError(
+                    "saved inconclusive resolution contains unsupported evidence references"
+                )
+            elif expected_refs:
+                raise ValueError(
+                    "saved inconclusive resolution contradicts a qualifying reproduction result"
+                )
         execution_candidates = [
             candidate
             for candidate in self.candidates.findings
@@ -2339,16 +2408,31 @@ def _repository_differential_execution_identity(
 
 
 def _invariant_projection(result: InvariantExecutionResult) -> dict[str, object]:
-    return result.model_dump(
+    """Compare stable campaign semantics while retaining each run's self-bound raw evidence."""
+
+    projection = result.model_dump(
         mode="json",
         exclude={
+            "attempt_evidence",
             "command",
             "duration_seconds",
+            "execution_observation_sha256",
             "source_path",
             "stdout_path",
             "stderr_path",
         },
     )
+    projection["attempt_evidence"] = [
+        attempt.model_dump(
+            mode="json",
+            exclude={
+                "stdout_sha256",
+                "stderr_sha256",
+            },
+        )
+        for attempt in result.attempt_evidence
+    ]
+    return projection
 
 
 def _reproduction_projection(result: ReproductionResult) -> dict[str, object]:

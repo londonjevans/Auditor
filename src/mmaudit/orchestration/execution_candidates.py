@@ -14,9 +14,11 @@ from mmaudit.models.schemas import (
     CandidateOriginKind,
     DynamicPropertySpec,
     Evidence,
-    ExecutionEvidenceKind,
+    ExecutionOriginDispositionKind,
+    ExecutionOriginRejectionCategory,
     FoundryInvariantHarnessSpec,
     InvariantExecutionCandidateProvenance,
+    InvariantExecutionOriginDisposition,
     InvariantExecutionResult,
     InvariantExecutionStatus,
     InvariantSpec,
@@ -39,6 +41,7 @@ class ExecutionCandidateBuildResult:
     """Deterministic candidate output with explicit rejected-origin accounting."""
 
     candidates: tuple[CandidateFinding, ...]
+    dispositions: tuple[InvariantExecutionOriginDisposition, ...]
     rejected_counterexample_count: int
     limitations: tuple[str, ...]
 
@@ -54,11 +57,14 @@ def build_invariant_execution_candidates(
     """Build candidates only from fully joined, replayed REAL counterexamples."""
 
     raw_counterexamples = [
-        result for result in executions if result.status is InvariantExecutionStatus.COUNTEREXAMPLE
+        (execution_index, result)
+        for execution_index, result in enumerate(executions)
+        if result.status is InvariantExecutionStatus.COUNTEREXAMPLE
     ]
     if not raw_counterexamples:
         return ExecutionCandidateBuildResult(
             candidates=(),
+            dispositions=(),
             rejected_counterexample_count=0,
             limitations=(),
         )
@@ -67,37 +73,74 @@ def build_invariant_execution_candidates(
     validated_harnesses = _validated_harnesses(harnesses)
     validated_corpus = _validated_property_corpus(property_corpus)
     candidates: list[CandidateFinding] = []
+    dispositions: list[InvariantExecutionOriginDisposition] = []
     limitations: list[str] = []
-    rejected_count = 0
     seen_candidate_ids: set[str] = set()
 
-    for index, raw_result in enumerate(raw_counterexamples, start=1):
+    def reject(
+        *,
+        execution_index: int,
+        ordinal: int,
+        raw_result: InvariantExecutionResult,
+        category: ExecutionOriginRejectionCategory,
+        reason: str,
+    ) -> None:
+        limitation = _limitation(ordinal, reason)
+        dispositions.append(
+            _rejected_disposition(
+                execution_index=execution_index,
+                result=raw_result,
+                category=category,
+                detail=limitation,
+            )
+        )
+        limitations.append(limitation)
+
+    for ordinal, (execution_index, raw_result) in enumerate(raw_counterexamples, start=1):
         result = _validated_execution(raw_result)
         if result is None:
-            rejected_count += 1
-            limitations.append(_limitation(index, "invalid typed execution result"))
+            reject(
+                execution_index=execution_index,
+                ordinal=ordinal,
+                raw_result=raw_result,
+                category=ExecutionOriginRejectionCategory.RUNTIME_EVIDENCE,
+                reason="invalid typed execution result",
+            )
             continue
 
         execution_error = _execution_qualification_error(result)
         if execution_error is not None:
-            rejected_count += 1
-            limitations.append(_limitation(index, execution_error))
+            reject(
+                execution_index=execution_index,
+                ordinal=ordinal,
+                raw_result=raw_result,
+                category=ExecutionOriginRejectionCategory.RUNTIME_EVIDENCE,
+                reason=execution_error,
+            )
             continue
 
         invariants = [
             invariant for invariant in validated_invariants if invariant.id == result.invariant_id
         ]
         if len(invariants) != 1:
-            rejected_count += 1
-            limitations.append(
-                _limitation(index, "expected exactly one executable non-model invariant")
+            reject(
+                execution_index=execution_index,
+                ordinal=ordinal,
+                raw_result=raw_result,
+                category=ExecutionOriginRejectionCategory.INVARIANT_BINDING,
+                reason="expected exactly one executable non-model invariant",
             )
             continue
         invariant = invariants[0]
         invariant_error = _invariant_qualification_error(invariant)
         if invariant_error is not None:
-            rejected_count += 1
-            limitations.append(_limitation(index, invariant_error))
+            reject(
+                execution_index=execution_index,
+                ordinal=ordinal,
+                raw_result=raw_result,
+                category=ExecutionOriginRejectionCategory.INVARIANT_BINDING,
+                reason=invariant_error,
+            )
             continue
 
         joined_harnesses = [
@@ -106,8 +149,13 @@ def build_invariant_execution_candidates(
             if harness.invariant_id == result.invariant_id and harness.name == result.harness_name
         ]
         if len(joined_harnesses) != 1:
-            rejected_count += 1
-            limitations.append(_limitation(index, "expected exactly one matching typed harness"))
+            reject(
+                execution_index=execution_index,
+                ordinal=ordinal,
+                raw_result=raw_result,
+                category=ExecutionOriginRejectionCategory.HARNESS_BINDING,
+                reason="expected exactly one matching typed harness",
+            )
             continue
         harness = joined_harnesses[0]
         if (
@@ -116,20 +164,33 @@ def build_invariant_execution_candidates(
             or result.depth != harness.depth
             or result.seed != harness.seed
         ):
-            rejected_count += 1
-            limitations.append(
-                _limitation(index, "execution identity differs from its exact typed harness")
+            reject(
+                execution_index=execution_index,
+                ordinal=ordinal,
+                raw_result=raw_result,
+                category=ExecutionOriginRejectionCategory.HARNESS_BINDING,
+                reason="execution identity differs from its exact typed harness",
             )
             continue
         coverage_error = _harness_coverage_error(result, harness)
         if coverage_error is not None:
-            rejected_count += 1
-            limitations.append(_limitation(index, coverage_error))
+            reject(
+                execution_index=execution_index,
+                ordinal=ordinal,
+                raw_result=raw_result,
+                category=ExecutionOriginRejectionCategory.HARNESS_BINDING,
+                reason=coverage_error,
+            )
             continue
 
         if validated_corpus is None:
-            rejected_count += 1
-            limitations.append(_limitation(index, "property corpus failed typed validation"))
+            reject(
+                execution_index=execution_index,
+                ordinal=ordinal,
+                raw_result=raw_result,
+                category=ExecutionOriginRejectionCategory.PROPERTY_BINDING,
+                reason="property corpus failed typed validation",
+            )
             continue
         properties = [
             property_spec
@@ -143,23 +204,34 @@ def build_invariant_execution_candidates(
             properties=properties,
         )
         if property_error is not None:
-            rejected_count += 1
-            limitations.append(_limitation(index, property_error))
+            reject(
+                execution_index=execution_index,
+                ordinal=ordinal,
+                raw_result=raw_result,
+                category=ExecutionOriginRejectionCategory.PROPERTY_BINDING,
+                reason=property_error,
+            )
             continue
 
         source_locations = _canonical_source_locations(properties)
         if not source_locations or _location_keys(source_locations) != _location_keys(
             invariant.locations
         ):
-            rejected_count += 1
-            limitations.append(
-                _limitation(index, "property source locations do not exactly match the invariant")
+            reject(
+                execution_index=execution_index,
+                ordinal=ordinal,
+                raw_result=raw_result,
+                category=ExecutionOriginRejectionCategory.SOURCE_BINDING,
+                reason="property source locations do not exactly match the invariant",
             )
             continue
         if not _locations_validate(repository_root, source_locations):
-            rejected_count += 1
-            limitations.append(
-                _limitation(index, "property source location failed current-source validation")
+            reject(
+                execution_index=execution_index,
+                ordinal=ordinal,
+                raw_result=raw_result,
+                category=ExecutionOriginRejectionCategory.SOURCE_BINDING,
+                reason="property source location failed current-source validation",
             )
             continue
 
@@ -173,7 +245,7 @@ def build_invariant_execution_candidates(
             property_hashes=tuple(
                 sorted(property_spec.property_hash for property_spec in properties)
             ),
-            execution_result_sha256=_canonical_sha256(result.model_dump(mode="json")),
+            execution_result_sha256=result.canonical_result_sha256(),
             execution_observation_sha256=result.execution_observation_sha256,
             executable_sha256=result.executable_sha256,
             source_sha256=result.source_sha256,
@@ -202,15 +274,35 @@ def build_invariant_execution_candidates(
             provenance=provenance,
         )
         if candidate.candidate_id in seen_candidate_ids:
-            rejected_count += 1
-            limitations.append(_limitation(index, "duplicate execution provenance was omitted"))
+            reject(
+                execution_index=execution_index,
+                ordinal=ordinal,
+                raw_result=raw_result,
+                category=ExecutionOriginRejectionCategory.DUPLICATE_ORIGIN,
+                reason="duplicate execution provenance was omitted",
+            )
             continue
         seen_candidate_ids.add(candidate.candidate_id)
         candidates.append(candidate)
+        dispositions.append(
+            InvariantExecutionOriginDisposition(
+                execution_index=execution_index,
+                invariant_id=result.invariant_id,
+                harness_name=result.harness_name,
+                execution_result_sha256=provenance.execution_result_sha256,
+                kind=ExecutionOriginDispositionKind.ORIGINATED,
+                candidate_id=candidate.candidate_id,
+                execution_provenance=provenance,
+            )
+        )
 
     return ExecutionCandidateBuildResult(
         candidates=tuple(sorted(candidates, key=lambda item: item.candidate_id)),
-        rejected_counterexample_count=rejected_count,
+        dispositions=tuple(sorted(dispositions, key=lambda item: item.execution_index)),
+        rejected_counterexample_count=sum(
+            disposition.kind is ExecutionOriginDispositionKind.REJECTED
+            for disposition in dispositions
+        ),
         limitations=_bounded_limitations(limitations),
     )
 
@@ -301,7 +393,7 @@ def validate_invariant_execution_candidate_provenance(
         "property_hashes": tuple(
             sorted(property_spec.property_hash for property_spec in properties)
         ),
-        "execution_result_sha256": _canonical_sha256(result.model_dump(mode="json")),
+        "execution_result_sha256": result.canonical_result_sha256(),
         "execution_observation_sha256": result.execution_observation_sha256,
         "executable_sha256": result.executable_sha256,
         "source_sha256": result.source_sha256,
@@ -360,82 +452,9 @@ def _validated_execution(result: InvariantExecutionResult) -> InvariantExecution
 
 
 def _execution_qualification_error(result: InvariantExecutionResult) -> str | None:
-    coverage = result.campaign_coverage
-    if (
-        result.status is not InvariantExecutionStatus.COUNTEREXAMPLE
-        or result.execution_evidence is not ExecutionEvidenceKind.REAL
-        or not _is_sha256(result.executable_sha256)
-        or not _is_sha256(result.source_sha256)
-        or not _nonempty(result.compiler_version)
-        or not _is_sha256(result.compiler_sha256)
-        or not _nonempty(result.isolation_backend)
-        or not _is_sha256(result.isolation_attestation_sha256)
-        or not _is_sha256(result.execution_observation_sha256)
-        or result.execution_observation_sha256 != result.expected_execution_observation_sha256()
-        or not result.command
-        or any(not _nonempty(argument) for argument in result.command)
-        or result.runs <= 0
-        or result.depth <= 0
-        or result.attempts < 2
-        or result.successful_attempts != result.attempts
-        or not result.replay_confirmed
-        or len(result.attempt_evidence) != result.attempts
-        or not _nonempty(result.stdout_path)
-        or not _nonempty(result.stderr_path)
-    ):
-        return "execution did not satisfy repeated REAL isolated evidence requirements"
-
-    expected_attempts = list(range(1, result.attempts + 1))
-    observed_attempts = [attempt.attempt for attempt in result.attempt_evidence]
-    if observed_attempts != expected_attempts:
-        return "execution attempts were not complete and canonically ordered"
-    if any(
-        attempt.status is not InvariantExecutionStatus.COUNTEREXAMPLE
-        or not attempt.fresh_workspace
-        or attempt.source_sha256 != result.source_sha256
-        or not _is_sha256(attempt.stdout_sha256)
-        or not _is_sha256(attempt.stderr_sha256)
-        or not _nonempty(attempt.stdout_path)
-        or not _nonempty(attempt.stderr_path)
-        or attempt.process_exit_code not in {0, 1}
-        or not attempt.machine_output_validated
-        or attempt.campaign_runs <= 0
-        or attempt.campaign_calls <= 0
-        for attempt in result.attempt_evidence
-    ):
-        return "execution attempts were not fresh, agreeing, and machine-validated"
-    attempt_dimensions = {
-        (
-            attempt.status,
-            attempt.source_sha256,
-            attempt.process_exit_code,
-            attempt.campaign_runs,
-            attempt.campaign_calls,
-        )
-        for attempt in result.attempt_evidence
-    }
-    if len(attempt_dimensions) != 1:
-        return "execution attempts disagreed"
-    if (
-        coverage is None
-        or not coverage.attempts_consistent
-        or coverage.sequence_depth_bound != result.depth
-        or coverage.observed_campaign_runs <= 0
-        or coverage.observed_campaign_calls <= 0
-        or not coverage.declared_action_functions
-        or coverage.observed_action_functions != coverage.declared_action_functions
-        or not coverage.declared_state_properties
-        or coverage.observed_state_properties != coverage.declared_state_properties
-        or not coverage.observed_sequence_lengths
-    ):
-        return "execution campaign coverage was incomplete or inconsistent"
-    attempt = result.attempt_evidence[0]
-    if (
-        coverage.observed_campaign_runs != attempt.campaign_runs
-        or coverage.observed_campaign_calls != attempt.campaign_calls
-    ):
-        return "execution campaign totals disagreed with attempt evidence"
-    return None
+    if result.has_qualifying_replayed_real_counterexample_evidence():
+        return None
+    return "execution did not satisfy repeated REAL isolated evidence requirements"
 
 
 def _invariant_qualification_error(invariant: InvariantSpec) -> str | None:
@@ -620,6 +639,26 @@ def _location_key(location: Location) -> tuple[str, int, int, str, str]:
         location.end_line,
         location.symbol or "",
         location.content_hash or "",
+    )
+
+
+def _rejected_disposition(
+    *,
+    execution_index: int,
+    result: InvariantExecutionResult,
+    category: ExecutionOriginRejectionCategory,
+    detail: str,
+) -> InvariantExecutionOriginDisposition:
+    """Bind a rejected origin decision to the exact serialized counterexample."""
+
+    return InvariantExecutionOriginDisposition(
+        execution_index=execution_index,
+        invariant_id=result.invariant_id,
+        harness_name=result.harness_name,
+        execution_result_sha256=result.canonical_result_sha256(),
+        kind=ExecutionOriginDispositionKind.REJECTED,
+        rejection_category=category,
+        rejection_detail=detail,
     )
 
 

@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED
 CURRENT_MILESTONE: Execution-originated candidate consensus
 CURRENT_TICKET: V3-EXECORIGIN-001
 LAST_COMPLETED_TICKET: V3-OMISSION-001
-NEXT_ACTION: Resume V3-EXECORIGIN-001 from the preserved pause checkpoint; repair the typed offline-replay `candidate_resolutions` join, enforce runtime-counterexample-to-candidate manifest completeness, close the post-judge severity gate, fix the SARIF typing error and three stale `model_construct` tests, then rerun the affected and complete gates.
-LAST_COMMAND: Interrupted the remaining read-only acceptance worker, ran `git status --short`, `git diff --check`, and recorded the exact focused-test and static-analysis state at the operator-requested pause boundary.
-LAST_RESULT: PAUSED — filesystem diff validation passes; focused execution-origin suites have 32 and 240 passing tests, and the real sealed local Forge pipeline regression passes, but the independent acceptance slice remains 121/124 with three stale test-helper failures and affected strict mypy has one SARIF error. Replay, manifest completeness, post-judge severity, full pipeline, and complete release gates remain uncredited.
+NEXT_ACTION: Resume `V3-EXECORIGIN-001` by completing and reviewing the typed originated/rejected runtime disposition flow; require an exact host-authored execution link before a model proposal can join an execution-origin group; require a resolution for every saved high/critical candidate even when no reproduction result exists; add pipeline-level post-judge fail-closed coverage and bounded Markdown rejected-disposition evidence; then run the focused, integration, schema, static, and complete gates.
+LAST_COMMAND: Ran `git diff --check` and affected Ruff over the eleven changed Python files at the operator-requested pause boundary.
+LAST_RESULT: PASS — all parallel workers are stopped, `git diff --check` passed, and affected Ruff passed. The ticket remains intentionally incomplete and its interrupted disposition implementation has not received integrated acceptance credit.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: bd45918924bd530044d88369644f8d0eb569f302
+LAST_CHECKPOINT_COMMIT: 27cd4e4f1c4313da08d37c457faaa4987b804949
 
 ## 2026-07-30 — V3-OMISSION-001
 
@@ -341,6 +341,51 @@ LAST_CHECKPOINT_COMMIT: bd45918924bd530044d88369644f8d0eb569f302
 - **Pause checkpoint:** Incomplete execution-origin work is preserved in
   `bd45918924bd530044d88369644f8d0eb569f302`. This commit is a recovery
   checkpoint, not acceptance evidence and not a completed ticket.
+- **Resume:** Autorun resumed at `2026-07-30T05:36:46Z` from clean synchronized
+  state checkpoint `27cd4e4f1c4313da08d37c457faaa4987b804949`.
+  The exact objective, repository policy, queue, and recorded blockers were
+  re-read. Work remains limited to the existing execution-origin ticket; no
+  provider, secret, public RPC, wallet, signing, broadcast, or paid operation
+  is in scope.
+- **Resumed expected-red evidence:** The exact artifact suite reproduced the
+  recorded stale-helper failure with `3 failed, 23 passed in 0.56s`; all three
+  failures are `AuditReport.model_construct` fixtures that omit the now-required
+  `schema_version`, not accepted runtime reports. Affected strict mypy also
+  reproduced the SARIF dictionary-unpack error.
+- **First corrective slice:** SARIF now constructs an explicitly typed
+  `dict[str, Any]` result-property map before serialization. Ruff and strict
+  mypy pass for the affected module; the corrected scanner/reporting suite
+  passed `104` tests in `2.30s`. One initial pytest command named a nonexistent
+  `tests/unit/test_sarif.py` and ran no tests, so it receives no credit.
+- **Replay and severity slices:** Typed replay now validates emitted candidate
+  resolutions against exact candidates and qualifying integrity-bound results;
+  actual hardened local replay of the real Forge/solc execution-origin run
+  reached `REPLAYED`. Replay/artifact tests passed `78`, and the real local
+  integration passed `1` in `15.55s`. Post-judge HIGH/CRITICAL impact remains
+  visible but an execution candidate omitted from pre-judgment high/critical
+  phases becomes `NEEDS_REVIEW`, forces `INCOMPLETE`, and enters the exact
+  assurance denominators. Its focused and adjacent suites passed `4` and `190`
+  tests respectively; affected Ruff and strict mypy passed.
+- **Runtime-completeness correction and deeper negative assay:** Initial
+  schema/manifest changes closed the empty-candidate omission and passed `71`
+  focused tests plus all `68` pipeline integration tests. A follow-up assay
+  then proved those changes were over-broad: a runtime-valid counterexample
+  correctly rejected for a mismatched harness caused final report construction
+  to raise instead of emitting the intended incomplete forensic evidence. A
+  typed per-runtime origin disposition is now required so each counterexample
+  is either exactly originated or explicitly rejected with its bound reason;
+  metadata counts and free-form limitation strings alone are not accepted.
+- **Operator pause:** At `2026-07-30T06:03:29Z`, all three remaining parallel
+  workers were interrupted at safe tool-call boundaries. The working tree
+  preserves the in-progress typed disposition, replay, post-judge accounting,
+  manifest, reporting, and regression changes. `git diff --check` and affected
+  Ruff passed. Integrated tests are not credited for the interrupted
+  disposition slice, and `V3-EXECORIGIN-001` remains `IN_PROGRESS`. Resume must
+  also close the independently identified host-link grouping, no-result
+  high/critical replay-resolution, pipeline post-judge, and rejected-disposition
+  Markdown gaps before acceptance. No provider call, secret access, public RPC,
+  wallet, signing, broadcast, external execution, reservation, or paid
+  operation occurred during this pause slice.
 
 ## 2026-07-30 — V3-FIXTURE-001
 

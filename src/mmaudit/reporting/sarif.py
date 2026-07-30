@@ -139,6 +139,13 @@ def generate_sarif(
             }
             for location in finding.locations
         ]
+        result_properties: dict[str, Any] = {
+            "confidence": finding.confidence,
+            "status": finding.status.value,
+            "cwe": finding.cwe,
+            "owasp": finding.owasp,
+            **origin_properties,
+        }
         results.append(
             {
                 "ruleId": finding.id,
@@ -160,13 +167,7 @@ def generate_sarif(
                     "mmaudit/v1": finding.location_validation.content_hash or finding.id,
                     "mmaudit/origin/v1": _origin_fingerprint(finding),
                 },
-                "properties": {
-                    "confidence": finding.confidence,
-                    "status": finding.status.value,
-                    "cwe": finding.cwe,
-                    "owasp": finding.owasp,
-                    **origin_properties,
-                },
+                "properties": result_properties,
             }
         )
     run_properties: dict[str, Any] = {

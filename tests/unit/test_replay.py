@@ -30,6 +30,7 @@ from mmaudit.models.schemas import (
     AttackerCapabilityPolicy,
     AuditProfile,
     AuditReport,
+    CandidateReproductionResolution,
     ExecutionEvidenceKind,
     ForkActor,
     ForkAssertion,
@@ -72,6 +73,7 @@ from mmaudit.models.schemas import (
     RepositoryTestForkRpcScopeEvidence,
     RepositoryTestKind,
     ReproductionAttemptEvidence,
+    ReproductionResolutionKind,
     ReproductionResult,
     ReproductionState,
     ScannerRun,
@@ -93,6 +95,7 @@ from mmaudit.orchestration.replay import (
     OfflineReplayStatus,
     ReplayComponentKind,
     ReplayComponentStatus,
+    _invariant_projection,
     _load_replay_artifacts,
     _repository_differential_is_qualifying,
     _repository_differential_projection,
@@ -111,6 +114,7 @@ from mmaudit.scanners.fork_matrix import (
     ForkMatrixDependencies,
     repository_fork_matrix_timeout_budget_seconds,
 )
+from mmaudit.solidity.properties import build_property_corpus
 from tests.unit.test_repository_fork_differential_schema import (
     _matrix as _repository_differential_matrix,
 )
@@ -1058,6 +1062,7 @@ def _write_replay_run(
     invariant_result = _invariant_result()
     specification = _test_specification()
     reproduction = _reproduction_result()
+    property_corpus = build_property_corpus(None, None, [])
     privacy: dict[str, object] = {"code_egress_enabled": False}
     if differential is not None:
         privacy["fork_rpc_egress"] = RepositoryForkRpcPrivacyEvidence.from_differential(
@@ -1098,6 +1103,8 @@ def _write_replay_run(
         privacy=privacy,
         scanner_runs=[scanner],
         repository_suite_differential=differential,
+        invariants=_invariant_suite(source_hash),
+        invariant_executions=[invariant_result],
         usage=[],
         budget_usd=20,
         accounted_cost_usd=0,
@@ -1137,12 +1144,7 @@ def _write_replay_run(
         },
         "property-corpus.json": {
             "schema_version": "1.0",
-            "corpus": {
-                "schema_version": "1.0",
-                "properties": [],
-                "limitations": [],
-                "corpus_hash": "b" * 64,
-            },
+            "corpus": property_corpus.model_dump(mode="json"),
         },
         "invariant-execution-results.json": {
             "schema_version": "1.0",
@@ -1157,6 +1159,13 @@ def _write_replay_run(
             "schema_version": "1.0",
             "test_specifications": [specification.model_dump(mode="json")],
             "results": [reproduction.model_dump(mode="json")],
+            "candidate_resolutions": [
+                CandidateReproductionResolution(
+                    candidate_id=candidate.candidate_id,
+                    kind=ReproductionResolutionKind.INCONCLUSIVE,
+                    detail="attempted reproduction did not produce a qualifying terminal outcome",
+                ).model_dump(mode="json")
+            ],
             "falsification_decisions": [],
         },
         "formal-results.json": {"schema_version": "1.0", "runs": []},
@@ -2608,6 +2617,110 @@ def _rebind_artifact(payload: dict[str, object], path: Path) -> None:
     artifact_bytes = path.read_bytes()
     binding["sha256"] = hashlib.sha256(artifact_bytes).hexdigest()
     binding["size"] = len(artifact_bytes)
+
+
+def test_replay_loads_pipeline_candidate_resolution_as_typed_evidence(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+) -> None:
+    config = config_factory()
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    _repository, run_dir, _manifest_path = _write_replay_run(tmp_path, config, candidate)
+
+    artifacts = _load_replay_artifacts(run_dir, config=config)
+
+    assert artifacts.reproductions.candidate_resolutions == [
+        CandidateReproductionResolution(
+            candidate_id="candidate-replay",
+            kind=ReproductionResolutionKind.INCONCLUSIVE,
+            detail="attempted reproduction did not produce a qualifying terminal outcome",
+        )
+    ]
+
+
+def test_invariant_replay_projection_ignores_only_raw_output_volatility() -> None:
+    expected = _invariant_result()
+    attempts = [
+        attempt.model_copy(
+            update={
+                "stdout_sha256": "a" * 64,
+                "stderr_sha256": "b" * 64,
+            }
+        )
+        for attempt in expected.attempt_evidence
+    ]
+    volatile_rerun = expected.model_copy(
+        update={
+            "attempt_evidence": attempts,
+            "execution_observation_sha256": None,
+        }
+    )
+
+    assert _invariant_projection(volatile_rerun) == _invariant_projection(expected)
+
+    semantic_drift = volatile_rerun.model_copy(
+        update={
+            "attempt_evidence": [
+                attempts[0].model_copy(update={"campaign_calls": attempts[0].campaign_calls + 1})
+            ],
+        }
+    )
+    assert _invariant_projection(semantic_drift) != _invariant_projection(expected)
+
+
+@pytest.mark.parametrize(
+    ("tamper", "expected_error"),
+    [
+        ("missing", "require terminal candidate resolutions"),
+        ("unknown", "reference missing candidates"),
+        ("unbound_reproduced", "not exactly bound to qualifying results"),
+        ("inconclusive_refs", "contains unsupported evidence references"),
+        ("duplicate", "must be unique and sorted"),
+    ],
+)
+def test_replay_rejects_unjoined_or_ambiguous_candidate_resolutions(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+    tamper: str,
+    expected_error: str,
+) -> None:
+    config = config_factory()
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    _repository, run_dir, _manifest_path = _write_replay_run(
+        tmp_path / tamper,
+        config,
+        candidate,
+    )
+    path = run_dir / "reproduction-results.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    resolution = payload["candidate_resolutions"][0]
+    if tamper == "missing":
+        payload["candidate_resolutions"] = []
+    elif tamper == "unknown":
+        resolution["candidate_id"] = "candidate-unknown"
+    elif tamper == "unbound_reproduced":
+        resolution["kind"] = ReproductionResolutionKind.REPRODUCED.value
+        resolution["evidence_refs"] = ["reproduction:" + ("a" * 64)]
+    elif tamper == "inconclusive_refs":
+        resolution["evidence_refs"] = ["reproduction:" + ("a" * 64)]
+    else:
+        payload["candidate_resolutions"].append(dict(resolution))
+    write_json(path, payload)
+
+    with pytest.raises(ValidationError, match=expected_error):
+        _load_replay_artifacts(run_dir, config=config)
 
 
 @pytest.mark.asyncio

@@ -19,8 +19,10 @@ from mmaudit.models.schemas import (
     AuditReport,
     CandidateFindingArtifact,
     CandidateOriginKind,
+    EvidenceStrength,
     ExecutionEvidenceKind,
     FindingOriginKind,
+    FindingStatus,
     InvariantExecutionResult,
     InvariantExecutionStatus,
     LocalInvariantDeployment,
@@ -34,6 +36,12 @@ from mmaudit.orchestration.manifest import (
     validate_manifest_artifacts,
 )
 from mmaudit.orchestration.pipeline import AuditPipeline
+from mmaudit.orchestration.replay import (
+    OfflineReplayOrchestrator,
+    OfflineReplayStatus,
+    ReplayComponentKind,
+    ReplayComponentStatus,
+)
 from mmaudit.orchestration.verification import (
     RunVerificationStatus,
     verify_run_evidence,
@@ -264,10 +272,24 @@ async def test_real_counterexample_originates_pipeline_finding_but_safe_control_
     ]
     assert len(execution_findings) == 1
     finding = execution_findings[0]
+    assert finding.status is FindingStatus.CONFIRMED
+    assert finding.evidence_strength in {
+        EvidenceStrength.DETERMINISTIC_EXECUTION_COUNTEREXAMPLE,
+        EvidenceStrength.LOCAL_FORK_REPRODUCTION,
+        EvidenceStrength.MINIMIZED_LOCAL_FORK_REPRODUCTION,
+        EvidenceStrength.FORMAL_COUNTEREXAMPLE,
+    }
     assert candidate.candidate_id in finding.contributing_candidate_ids
     assert finding.execution_provenance == (provenance,)
     assert finding.location_validation.valid
     assert tuple(finding.locations) == provenance.source_locations
+    execution_evidence = [item for item in finding.evidence if item.type == "execution"]
+    assert len(execution_evidence) == 1
+    assert execution_evidence[0].source == "mmaudit-foundry-invariant"
+    assert execution_evidence[0].rule_id == provenance.invariant_id
+    assert execution_evidence[0].fingerprint == provenance.provenance_sha256
+    assert not finding.model_votes
+    assert all(item.type != "model" for item in finding.evidence)
 
     markdown = (result.run_dir / "audit-report.md").read_text(encoding="utf-8")
     assert "Finding discovery origins: deterministic execution=1" in markdown
@@ -293,3 +315,19 @@ async def test_real_counterexample_originates_pipeline_finding_but_safe_control_
         config=config,
     )
     assert verification.status is RunVerificationStatus.CURRENT
+
+    replay = await OfflineReplayOrchestrator(
+        config,
+        invariant_runner=invariant_runner,
+    ).replay(
+        manifest_path=manifest_path,
+        run_dir=result.run_dir,
+        repository_root=repository,
+        work_dir=tmp_path / "offline-replay",
+    )
+    assert replay.status is OfflineReplayStatus.REPLAYED
+    assert not replay.missing_kinds
+    assert {(item.kind, item.status) for item in replay.components} == {
+        (ReplayComponentKind.COUNTEREXAMPLE, ReplayComponentStatus.MATCHED),
+        (ReplayComponentKind.SAVED_TEST, ReplayComponentStatus.MATCHED),
+    }

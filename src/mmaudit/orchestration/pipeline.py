@@ -787,6 +787,7 @@ class AuditPipeline:
         execution_candidates_integrated = False
         execution_candidate_build = ExecutionCandidateBuildResult(
             candidates=(),
+            dispositions=(),
             rejected_counterexample_count=0,
             limitations=(),
         )
@@ -795,6 +796,7 @@ class AuditPipeline:
         cross_examinations: list[CandidateCrossExaminationDecision] = []
         final_findings: list[Finding] = []
         rejected_findings: list[Finding] = []
+        post_judge_execution_severity_candidates: dict[str, CandidateFinding] = {}
         scanner_runs: list[ScannerRun] = []
         threat_model: ThreatModel | None = None
         threat_location_rejections: list[str] = []
@@ -1416,12 +1418,7 @@ class AuditPipeline:
         pending_execution_candidates = list(execution_candidate_build.candidates)
         if pending_execution_candidates and time_to_first_candidate_seconds is None:
             time_to_first_candidate_seconds = time.monotonic() - run_started_monotonic
-        real_counterexamples = sum(
-            result.status is InvariantExecutionStatus.COUNTEREXAMPLE
-            and result.execution_evidence is ExecutionEvidenceKind.REAL
-            for result in invariant_executions
-        )
-        if execution_candidate_build.rejected_counterexample_count and real_counterexamples:
+        if execution_candidate_build.rejected_counterexample_count:
             incomplete.extend(
                 f"execution-origin evidence rejected: {limitation}"
                 for limitation in execution_candidate_build.limitations
@@ -2178,6 +2175,9 @@ class AuditPipeline:
                 for candidate in candidates
                 if candidate.severity in {Severity.HIGH, Severity.CRITICAL}
             ]
+            pre_judgment_high_critical_ids = {
+                candidate.candidate_id for candidate in cross_examination_candidates
+            }
             cross_examination_required = bool(cross_examination_candidates) and (
                 "falsifier" in self.config.models.specialists
                 or self.config.profile is AuditProfile.MAXIMUM_ASSURANCE
@@ -2672,6 +2672,26 @@ class AuditPipeline:
                         self.config.maximum_assurance.require_formal_or_reproduction_for_confirmed_critical
                     ),
                 )
+                (
+                    finding,
+                    post_judge_accounting_candidates,
+                    post_judge_limitation,
+                ) = _enforce_post_judge_execution_severity_accounting(
+                    group=group,
+                    finding=finding,
+                    judge=judge_decisions.get(group.group_id),
+                    pre_judgment_high_critical_ids=pre_judgment_high_critical_ids,
+                )
+                if post_judge_limitation is not None:
+                    incomplete.append(post_judge_limitation)
+                    post_judge_execution_severity_candidates.update(
+                        {
+                            candidate.candidate_id: candidate
+                            for candidate in post_judge_accounting_candidates
+                        }
+                    )
+                    if terminal_code is ExitCode.SUCCESS:
+                        terminal_code = ExitCode.INCOMPLETE
                 judge_vote = _judge_vote(
                     judge_decisions.get(group.group_id),
                     self.client,
@@ -2725,16 +2745,36 @@ class AuditPipeline:
                 else:
                     final_findings.append(finding)
 
-        assurance_high_critical_candidates = [
-            candidate
+        assurance_high_critical_candidates_by_id = {
+            candidate.candidate_id: candidate
             for candidate in candidates
             if candidate.severity in {Severity.HIGH, Severity.CRITICAL}
             and (validation := validations.get(candidate.candidate_id)) is not None
             and validation.valid
-        ]
+        }
+        assurance_high_critical_candidates_by_id.update(
+            {
+                candidate_id: candidate
+                for candidate_id, candidate in post_judge_execution_severity_candidates.items()
+                if (validation := validations.get(candidate_id)) is not None and validation.valid
+            }
+        )
+        assurance_high_critical_candidates = sorted(
+            assurance_high_critical_candidates_by_id.values(),
+            key=lambda candidate: candidate.candidate_id,
+        )
+        runtime_eligible_candidates_by_id = {
+            candidate.candidate_id: candidate for candidate in eligible_for_reproduction
+        }
+        runtime_eligible_candidates_by_id.update(post_judge_execution_severity_candidates)
+        runtime_eligible_candidates = sorted(
+            runtime_eligible_candidates_by_id.values(),
+            key=lambda candidate: candidate.candidate_id,
+        )
         reproduction_resolutions = _build_candidate_reproduction_resolutions(
             candidates=assurance_high_critical_candidates,
             results=reproductions,
+            forced_candidate_ids=set(post_judge_execution_severity_candidates),
         )
         unchanged = _repository_unchanged(discovery)
         if not unchanged:
@@ -2814,7 +2854,7 @@ class AuditPipeline:
             scope_assessment=scope_assessment,
             prior_audit_comparison=prior_audit_comparison,
             invariant_executions=invariant_executions,
-            eligible_candidates=eligible_for_reproduction,
+            eligible_candidates=runtime_eligible_candidates,
             reproductions=reproductions,
             usage_roles={
                 record.role
@@ -2964,9 +3004,7 @@ class AuditPipeline:
         }
         if solidity_coverage is not None:
             high_critical_candidate_ids = {
-                candidate.candidate_id
-                for candidate in eligible_for_reproduction
-                if candidate.severity in {Severity.HIGH, Severity.CRITICAL}
+                candidate.candidate_id for candidate in assurance_high_critical_candidates
             }
             configured_model_roles = {
                 "threat_model",
@@ -2984,7 +3022,7 @@ class AuditPipeline:
                 configured_model_roles.add("verifier")
             if candidate_groups_count:
                 configured_model_roles.add("judge")
-            if eligible_for_reproduction:
+            if runtime_eligible_candidates:
                 configured_model_roles.update(
                     {
                         "specialist:test_generation",
@@ -3007,7 +3045,7 @@ class AuditPipeline:
             solidity_coverage = with_runtime_coverage(
                 solidity_coverage,
                 eligible_candidate_ids={
-                    candidate.candidate_id for candidate in eligible_for_reproduction
+                    candidate.candidate_id for candidate in runtime_eligible_candidates
                 },
                 attempted_candidate_ids={
                     result.candidate_id for result in reproductions if result.attempts > 0
@@ -3045,7 +3083,7 @@ class AuditPipeline:
             scope_assessment=scope_assessment,
             prior_audit_comparison=prior_audit_comparison,
             invariant_executions=invariant_executions,
-            eligible_candidates=eligible_for_reproduction,
+            eligible_candidates=runtime_eligible_candidates,
             reproductions=reproductions,
             usage_roles=successful_usage_roles,
             scanner_only=scanner_only,
@@ -3079,6 +3117,7 @@ class AuditPipeline:
             "economic-simulation-plan.json",
             "formal-results.json",
             "reproduction-results.json",
+            "execution-origin-dispositions.json",
             "cross-examination.json",
             "specialist-execution.json",
             "model-review-coverage.json",
@@ -3822,6 +3861,7 @@ class AuditPipeline:
             invariants=solidity_invariants,
             invariant_review=invariant_review,
             invariant_executions=invariant_executions,
+            execution_origin_dispositions=list(execution_candidate_build.dispositions),
             economic_simulations=economic_simulations,
             formal_runs=formal_runs,
             solidity_coverage=solidity_coverage,
@@ -4092,6 +4132,16 @@ class AuditPipeline:
             },
         )
         write_json(
+            run_dir / "execution-origin-dispositions.json",
+            {
+                "schema_version": "1.0",
+                "dispositions": [
+                    disposition.model_dump(mode="json")
+                    for disposition in report.execution_origin_dispositions
+                ],
+            },
+        )
+        write_json(
             run_dir / "verification-results.json",
             {
                 "schema_version": REPORT_SCHEMA_VERSION,
@@ -4251,6 +4301,7 @@ class AuditPipeline:
             "scanner-results.json",
             "repository-suite-differential.json",
             "candidate-findings.json",
+            "execution-origin-dispositions.json",
             "verification-results.json",
             "final-findings.json",
             "audit-report.md",
@@ -5018,19 +5069,90 @@ def _apply_reproduction_results(
     )
 
 
+def _enforce_post_judge_execution_severity_accounting(
+    *,
+    group: CandidateGroup,
+    finding: Finding,
+    judge: JudgeDecision | None,
+    pre_judgment_high_critical_ids: set[str],
+) -> tuple[Finding, tuple[CandidateFinding, ...], str | None]:
+    """Fail closed when judgment first raises an execution observation to high impact.
+
+    The judge may assess impact severity, but it runs after candidate cross-examination
+    and reproduction planning. A newly high/critical execution-origin finding therefore
+    cannot retain an accepted status or disappear from downstream assurance denominators.
+    """
+
+    if (
+        judge is None
+        or finding.origin_kind is not FindingOriginKind.DETERMINISTIC_EXECUTION
+        or finding.status is FindingStatus.REJECTED
+        or finding.severity not in {Severity.HIGH, Severity.CRITICAL}
+    ):
+        return finding, (), None
+
+    # Preserve the exact candidate artifact (including its pre-judgment severity).
+    # The final finding owns the judge's impact assessment; downstream gates use
+    # the provenance-derived candidate ID as an additional required denominator.
+    accounting_candidates = tuple(
+        candidate
+        for candidate in group.execution_candidates
+        if candidate.candidate_id not in pre_judgment_high_critical_ids
+    )
+    if not accounting_candidates:
+        return finding, (), None
+
+    candidate_ids = ", ".join(candidate.candidate_id for candidate in accounting_candidates)
+    limitation = (
+        f"execution-origin group {group.group_id} received {finding.severity.value} impact "
+        "severity only after the pre-judgment high/critical phases; provenance-bound "
+        f"candidate(s) {candidate_ids} did not receive candidate-specific cross-examination "
+        "or reproduction planning, so the finding requires manual review and the run is "
+        "incomplete"
+    )
+    accepted_statuses = {
+        FindingStatus.CONFIRMED,
+        FindingStatus.STRONGLY_SUPPORTED,
+        FindingStatus.HIGH_CONFIDENCE,
+        FindingStatus.PLAUSIBLE,
+    }
+    status = FindingStatus.NEEDS_REVIEW if finding.status in accepted_statuses else finding.status
+    return (
+        finding.model_copy(
+            update={
+                "status": status,
+                "disagreement": (
+                    f"{finding.disagreement}; {limitation}" if finding.disagreement else limitation
+                ),
+            }
+        ),
+        accounting_candidates,
+        limitation,
+    )
+
+
 def _build_candidate_reproduction_resolutions(
     *,
     candidates: list[CandidateFinding],
     results: list[ReproductionResult],
+    forced_candidate_ids: set[str] | None = None,
 ) -> list[CandidateReproductionResolution]:
-    """Derive one fail-closed terminal resolution per high/critical candidate."""
+    """Derive one fail-closed terminal resolution per high/critical obligation.
 
+    Forced IDs retain their exact emitted candidate payload while a post-judgment
+    impact assessment introduces the high/critical assurance obligation.
+    """
+
+    forced_candidate_ids = forced_candidate_ids or set()
     results_by_candidate: dict[str, list[ReproductionResult]] = {}
     for result in results:
         results_by_candidate.setdefault(result.candidate_id, []).append(result)
     resolutions: list[CandidateReproductionResolution] = []
     for candidate in sorted(candidates, key=lambda item: item.candidate_id):
-        if candidate.severity not in {Severity.HIGH, Severity.CRITICAL}:
+        if (
+            candidate.severity not in {Severity.HIGH, Severity.CRITICAL}
+            and candidate.candidate_id not in forced_candidate_ids
+        ):
             continue
         candidate_results = results_by_candidate.get(candidate.candidate_id, [])
         reproduced_refs: set[str] = set()

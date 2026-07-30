@@ -26,8 +26,10 @@ from mmaudit.models.schemas import (
     AuditReport,
     CandidateFindingArtifact,
     CandidateOriginKind,
+    ExecutionOriginDispositionKind,
     FindingOriginKind,
     FoundryInvariantHarnessSpec,
+    InvariantExecutionOriginDispositionArtifact,
     InvariantExecutionResult,
     MaximumAssuranceStatus,
     PropertyCorpus,
@@ -519,6 +521,27 @@ def _validate_report_artifact_consistency(root: Path, report: AuditReport) -> No
     candidate_artifact = CandidateFindingArtifact.model_validate(
         _read_json_artifact(root, "candidate-findings.json")
     )
+    disposition_path = root / "execution-origin-dispositions.json"
+    disposition_artifact_present = (
+        disposition_path.exists()
+        or disposition_path.is_symlink()
+        or disposition_path.is_junction()
+    )
+    if disposition_artifact_present != (report.schema_version == "1.2"):
+        raise ValueError(
+            "execution-origin disposition artifact presence differs from report schema"
+        )
+    disposition_artifact = (
+        InvariantExecutionOriginDispositionArtifact.model_validate(
+            _read_json_artifact(root, "execution-origin-dispositions.json")
+        )
+        if disposition_artifact_present
+        else InvariantExecutionOriginDispositionArtifact()
+    )
+    if disposition_artifact.dispositions != report.execution_origin_dispositions:
+        raise ValueError(
+            "execution-origin-dispositions.json differs from the final report"
+        )
     candidates = candidate_artifact.findings
     candidates_by_id = {candidate.candidate_id: candidate for candidate in candidates}
     execution_candidate_ids = {
@@ -528,21 +551,67 @@ def _validate_report_artifact_consistency(root: Path, report: AuditReport) -> No
     }
     if execution_candidate_ids and candidate_artifact.schema_version != "1.1":
         raise ValueError("execution-origin candidates require candidate artifact schema 1.1")
-    if execution_candidate_ids:
+    originated_candidate_ids: set[str] = set()
+    for disposition in disposition_artifact.dispositions:
+        if disposition.kind is not ExecutionOriginDispositionKind.ORIGINATED:
+            continue
+        candidate_id = disposition.candidate_id
+        if candidate_id is None:
+            raise ValueError("originated execution disposition lacks a candidate ID")
+        candidate = candidates_by_id.get(candidate_id)
+        if (
+            candidate is None
+            or candidate.origin_kind is not CandidateOriginKind.DETERMINISTIC_EXECUTION
+            or candidate.execution_provenance != disposition.execution_provenance
+        ):
+            raise ValueError(
+                "originated execution disposition differs from candidate-findings.json"
+            )
+        originated_candidate_ids.add(candidate_id)
+    if originated_candidate_ids != execution_candidate_ids:
+        raise ValueError(
+            "execution candidate inventory differs from originated runtime dispositions"
+        )
+
+    execution_runtime_names = (
+        "solidity-invariants.json",
+        "invariant-harness-plan.json",
+        "property-corpus.json",
+        "invariant-execution-results.json",
+    )
+    execution_runtime_presence = {
+        name: ((root / name).exists() or (root / name).is_symlink() or (root / name).is_junction())
+        for name in execution_runtime_names
+    }
+    if (
+        (report.schema_version == "1.2" or execution_candidate_ids)
+        and any(execution_runtime_presence.values())
+        and not all(execution_runtime_presence.values())
+    ):
+        raise ValueError("emitted invariant runtime artifact set is incomplete")
+    if execution_candidate_ids and not all(execution_runtime_presence.values()):
+        raise ValueError("current execution-origin runtime artifacts are absent")
+    if all(execution_runtime_presence.values()):
+        invariant_artifact = _read_json_artifact(root, "solidity-invariants.json")
         harness_plan = _read_json_artifact(root, "invariant-harness-plan.json")
-        invariant_results = _read_json_artifact(root, "invariant-execution-results.json")
         property_artifact = _read_json_artifact(root, "property-corpus.json")
+        invariant_results = _read_json_artifact(root, "invariant-execution-results.json")
+        raw_invariant_suite = invariant_artifact.get("invariants")
         raw_planned_harnesses = harness_plan.get("harnesses")
         raw_execution_harnesses = invariant_results.get("harnesses")
         raw_results = invariant_results.get("results")
         raw_corpus = property_artifact.get("corpus")
+        serialized_report_invariants = (
+            report.invariants.model_dump(mode="json") if report.invariants is not None else None
+        )
         if (
-            not isinstance(raw_planned_harnesses, list)
+            raw_invariant_suite != serialized_report_invariants
+            or not isinstance(raw_planned_harnesses, list)
             or not isinstance(raw_execution_harnesses, list)
             or not isinstance(raw_results, list)
             or not isinstance(raw_corpus, dict)
         ):
-            raise ValueError("execution-origin candidate runtime artifacts are incomplete")
+            raise ValueError("emitted invariant runtime artifacts differ or are incomplete")
         planned_harnesses = [
             FoundryInvariantHarnessSpec.model_validate(item) for item in raw_planned_harnesses
         ]
@@ -557,9 +626,19 @@ def _validate_report_artifact_consistency(root: Path, report: AuditReport) -> No
             (harness.invariant_id, harness.name): canonical_sha256(harness.model_dump(mode="json"))
             for harness in execution_harnesses
         }
-        if planned_by_key != execution_by_key or len(planned_by_key) != len(planned_harnesses):
+        if (
+            planned_by_key != execution_by_key
+            or len(planned_by_key) != len(planned_harnesses)
+            or len(execution_by_key) != len(execution_harnesses)
+        ):
             raise ValueError("execution-origin harness artifacts disagree")
         typed_results = [InvariantExecutionResult.model_validate(item) for item in raw_results]
+        if [result.model_dump(mode="json") for result in typed_results] != [
+            result.model_dump(mode="json") for result in report.invariant_executions
+        ]:
+            raise ValueError(
+                "invariant-execution-results.json differs from the final report runtime evidence"
+            )
         typed_corpus = PropertyCorpus.model_validate(raw_corpus)
         for candidate in candidates:
             if candidate.origin_kind is not CandidateOriginKind.DETERMINISTIC_EXECUTION:
@@ -614,6 +693,7 @@ def _validate_report_artifact_consistency(root: Path, report: AuditReport) -> No
             raise ValueError("non-execution finding contains an execution-origin candidate")
     if reported_execution_ids != execution_candidate_ids:
         raise ValueError("an execution-origin candidate was omitted from final report evidence")
+    report._validate_execution_origin_bindings()
     differential_path = root / "repository-suite-differential.json"
     fork_privacy_path = root / "privacy-fork-rpc-egress.json"
     for path in (differential_path, fork_privacy_path):

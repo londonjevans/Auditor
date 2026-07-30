@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from mmaudit.models.schemas import (
     CandidateFinding,
     CandidateFindingArtifact,
     CandidateOriginKind,
+    CandidateReproductionResolution,
     Evidence,
     Finding,
     FoundryInvariantHarnessSpec,
@@ -21,6 +23,8 @@ from mmaudit.models.schemas import (
     InvariantSuite,
     Location,
     PropertyCorpus,
+    RepositoryMap,
+    ReproductionResolutionKind,
     Severity,
     VerificationTest,
 )
@@ -123,6 +127,7 @@ def _replay_payload(
                 "schema_version": "1.0",
                 "test_specifications": [],
                 "results": [],
+                "candidate_resolutions": [],
             },
         },
         candidate,
@@ -153,10 +158,36 @@ def _report_shell(
     """Build only the typed fields exercised by the manifest consistency gate."""
 
     return AuditReport.model_construct(
+        schema_version="1.2",
+        run_id="execution-origin-artifact-test",
+        generated_at=datetime(2026, 7, 30, tzinfo=UTC),
+        completed=False,
+        incomplete_reasons=["Synthetic partial report for artifact validation."],
+        repository=RepositoryMap(
+            root_name="synthetic-execution-origin-repository",
+            languages={"Solidity": 1},
+            frameworks=["Foundry"],
+            manifests=[],
+            entry_points=[],
+            api_surfaces=[],
+            auth_components=[],
+            data_layers=[],
+            network_clients=[],
+            file_handlers=[],
+            configuration_files=[],
+            sensitive_processing=[],
+            security_tests=[],
+            files=[],
+        ),
+        configuration_hash="a" * 64,
+        model_configuration_hash="b" * 64,
         privacy={},
         metadata={},
         repository_suite_differential=None,
         scanner_runs=[],
+        usage=[],
+        budget_usd=0,
+        accounted_cost_usd=0,
         findings=findings or [],
         rejected_findings=rejected_findings or [],
         invariants=invariants,
@@ -170,6 +201,7 @@ def _write_manifest_inputs(
     candidates: list[dict[str, Any]],
     schema_version: object = "1.1",
     execution_runtime: tuple[
+        InvariantSuite,
         FoundryInvariantHarnessSpec,
         PropertyCorpus,
         InvariantExecutionResult,
@@ -194,7 +226,14 @@ def _write_manifest_inputs(
         },
     )
     if execution_runtime is not None:
-        harness, corpus, execution = execution_runtime
+        suite, harness, corpus, execution = execution_runtime
+        write_json(
+            root / "solidity-invariants.json",
+            {
+                "schema_version": "1.2",
+                "invariants": suite.model_dump(mode="json"),
+            },
+        )
         write_json(
             root / "invariant-harness-plan.json",
             {
@@ -230,7 +269,7 @@ def _manifest_execution_fixture(
     root = _write_manifest_inputs(
         tmp_path,
         candidates=[candidate.model_dump(mode="json")],
-        execution_runtime=(harness, corpus, execution),
+        execution_runtime=(suite, harness, corpus, execution),
     )
     report = _report_shell(
         findings=[_execution_finding(provenance)],
@@ -321,12 +360,29 @@ def test_replay_accepts_exact_execution_candidate_artifact_join(tmp_path: Path) 
     assert artifacts.candidates.findings[0].execution_provenance == provenance
 
 
+def test_replay_accepts_forced_resolution_for_exact_execution_origin_candidate(
+    tmp_path: Path,
+) -> None:
+    payload, candidate, _provenance = _replay_payload(tmp_path)
+    payload["reproductions"]["candidate_resolutions"] = [
+        CandidateReproductionResolution(
+            candidate_id=candidate.candidate_id,
+            kind=ReproductionResolutionKind.INCONCLUSIVE,
+            detail="post-judgment severity requires explicit unresolved disposition",
+        ).model_dump(mode="json")
+    ]
+
+    artifacts = _ReplayArtifacts.model_validate(payload)
+
+    assert artifacts.reproductions.candidate_resolutions[0].candidate_id == candidate.candidate_id
+
+
 def test_final_report_accepts_exact_invariant_execution_binding(tmp_path: Path) -> None:
     repository, suite, harness, corpus, execution = _inputs(tmp_path)
     candidate = _build(repository, suite, harness, corpus, execution).candidates[0]
     provenance = candidate.execution_provenance
     assert provenance is not None
-    report = AuditReport.model_construct(
+    report = _report_shell(
         findings=[_execution_finding(provenance)],
         rejected_findings=[],
         invariant_executions=[execution],
@@ -336,13 +392,29 @@ def test_final_report_accepts_exact_invariant_execution_binding(tmp_path: Path) 
     report._validate_execution_origin_bindings()
 
 
+def test_final_report_rejects_qualifying_counterexample_without_disposition(
+    tmp_path: Path,
+) -> None:
+    _repository, suite, _harness, _corpus, execution = _inputs(tmp_path)
+    report = _report_shell(
+        invariants=suite,
+        invariant_executions=[execution],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="requires one final or rejected execution-origin disposition",
+    ):
+        report._validate_execution_origin_bindings()
+
+
 def test_final_report_rejects_forged_invariant_evidence_binding(tmp_path: Path) -> None:
     repository, suite, harness, corpus, execution = _inputs(tmp_path)
     candidate = _build(repository, suite, harness, corpus, execution).candidates[0]
     provenance = candidate.execution_provenance
     assert provenance is not None
     forged = _reseal_provenance(provenance, invariant_evidence_sha256="f" * 64)
-    report = AuditReport.model_construct(
+    report = _report_shell(
         findings=[_execution_finding(forged)],
         rejected_findings=[],
         invariant_executions=[execution],
@@ -361,7 +433,7 @@ def test_final_report_rejects_runtime_provenance_that_contradicts_result(
     provenance = candidate.execution_provenance
     assert provenance is not None
     forged = _reseal_provenance(provenance, compiler_sha256="f" * 64)
-    report = AuditReport.model_construct(
+    report = _report_shell(
         findings=[_execution_finding(forged)],
         rejected_findings=[],
         invariant_executions=[execution],
@@ -476,6 +548,45 @@ def test_manifest_rejects_execution_candidate_omitted_from_final_findings(
     )
 
     with pytest.raises(ValueError, match="omitted from final report evidence"):
+        _validate_report_artifact_consistency(root, report)
+
+
+def test_manifest_rejects_qualifying_runtime_omitted_from_candidate_inventory(
+    tmp_path: Path,
+) -> None:
+    _repository, suite, harness, corpus, execution = _inputs(tmp_path)
+    root = _write_manifest_inputs(
+        tmp_path,
+        candidates=[],
+        execution_runtime=(suite, harness, corpus, execution),
+    )
+    report = _report_shell(
+        invariants=suite,
+        invariant_executions=[execution],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="requires one final or rejected execution-origin disposition",
+    ):
+        _validate_report_artifact_consistency(root, report)
+
+
+def test_manifest_rejects_emitted_runtime_omitted_from_report_and_candidates(
+    tmp_path: Path,
+) -> None:
+    _repository, suite, harness, corpus, execution = _inputs(tmp_path)
+    root = _write_manifest_inputs(
+        tmp_path,
+        candidates=[],
+        execution_runtime=(suite, harness, corpus, execution),
+    )
+    report = _report_shell(invariants=suite)
+
+    with pytest.raises(
+        ValueError,
+        match="differs from the final report runtime evidence",
+    ):
         _validate_report_artifact_consistency(root, report)
 
 

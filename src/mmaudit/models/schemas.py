@@ -376,6 +376,24 @@ class CandidateOriginKind(StrEnum):
     DETERMINISTIC_EXECUTION = "deterministic_execution"
 
 
+class ExecutionOriginDispositionKind(StrEnum):
+    """Whether one runtime counterexample became a deterministic candidate."""
+
+    ORIGINATED = "originated"
+    REJECTED = "rejected"
+
+
+class ExecutionOriginRejectionCategory(StrEnum):
+    """Bounded reason class for a counterexample that cannot acquire candidate authority."""
+
+    RUNTIME_EVIDENCE = "runtime_evidence"
+    INVARIANT_BINDING = "invariant_binding"
+    HARNESS_BINDING = "harness_binding"
+    PROPERTY_BINDING = "property_binding"
+    SOURCE_BINDING = "source_binding"
+    DUPLICATE_ORIGIN = "duplicate_origin"
+
+
 class FindingOriginKind(StrEnum):
     """Trusted discovery origin retained on a normalized finding."""
 
@@ -2399,6 +2417,77 @@ class CandidateFindingArtifact(StrictModel):
         return self
 
 
+class InvariantExecutionOriginDisposition(StrictModel):
+    """Typed terminal origin decision for one exact invariant counterexample record."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    execution_index: int = Field(ge=0, le=100_000)
+    invariant_id: str = Field(min_length=1, max_length=160)
+    harness_name: str = Field(min_length=1, max_length=240)
+    execution_result_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    kind: ExecutionOriginDispositionKind
+    candidate_id: str | None = Field(default=None, min_length=1, max_length=500)
+    execution_provenance: InvariantExecutionCandidateProvenance | None = None
+    rejection_category: ExecutionOriginRejectionCategory | None = None
+    rejection_detail: str | None = Field(default=None, min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def terminal_fields_are_exact(self) -> InvariantExecutionOriginDisposition:
+        if self.kind is ExecutionOriginDispositionKind.ORIGINATED:
+            provenance = self.execution_provenance
+            if (
+                self.candidate_id is None
+                or provenance is None
+                or self.rejection_category is not None
+                or self.rejection_detail is not None
+            ):
+                raise ValueError(
+                    "originated execution dispositions require only candidate provenance"
+                )
+            if (
+                self.candidate_id != f"exec-{provenance.provenance_sha256[:24]}"
+                or self.invariant_id != provenance.invariant_id
+                or self.harness_name != provenance.harness_name
+                or self.execution_result_sha256 != provenance.execution_result_sha256
+            ):
+                raise ValueError(
+                    "originated execution disposition differs from its exact provenance"
+                )
+            return self
+        if (
+            self.candidate_id is not None
+            or self.execution_provenance is not None
+            or self.rejection_category is None
+            or self.rejection_detail is None
+            or not self.rejection_detail.strip()
+        ):
+            raise ValueError(
+                "rejected execution dispositions require only a typed bounded rejection"
+            )
+        return self
+
+
+class InvariantExecutionOriginDispositionArtifact(StrictModel):
+    """Versioned per-runtime origin inventory emitted with candidate evidence."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    dispositions: list[InvariantExecutionOriginDisposition] = Field(
+        default_factory=list,
+        max_length=100_000,
+    )
+
+    @model_validator(mode="after")
+    def runtime_indices_are_unique_and_sorted(
+        self,
+    ) -> InvariantExecutionOriginDispositionArtifact:
+        indices = [item.execution_index for item in self.dispositions]
+        if indices != sorted(set(indices)):
+            raise ValueError("execution-origin disposition indices must be unique and sorted")
+        return self
+
+
 class Finding(StrictModel):
     id: str = Field(min_length=1)
     group_id: str | None = None
@@ -2485,9 +2574,7 @@ class Finding(StrictModel):
         expected_locations = tuple(locations_by_key[key] for key in sorted(locations_by_key))
         if tuple(self.locations) != expected_locations:
             raise ValueError("execution finding locations must exactly match its provenance")
-        expected_evidence = {
-            (item.invariant_id, item.provenance_sha256) for item in provenance
-        }
+        expected_evidence = {(item.invariant_id, item.provenance_sha256) for item in provenance}
         execution_evidence = [item for item in self.evidence if item.type == "execution"]
         observed_evidence = {
             (item.rule_id, item.fingerprint)
@@ -2498,9 +2585,7 @@ class Finding(StrictModel):
             len(execution_evidence) != len(expected_evidence)
             or observed_evidence != expected_evidence
         ):
-            raise ValueError(
-                "execution finding evidence must exactly bind every provenance record"
-            )
+            raise ValueError("execution finding evidence must exactly bind every provenance record")
         if self.status is FindingStatus.REJECTED:
             return
         if not self.location_validation.valid:
@@ -8474,6 +8559,97 @@ class InvariantExecutionResult(StrictModel):
             ).encode()
         ).hexdigest()
 
+    def canonical_result_sha256(self) -> str:
+        """Hash the exact serialized result with the repository-wide canonical encoding."""
+
+        return _canonical_model_sha256(self.model_dump(mode="json"))
+
+    def has_qualifying_replayed_real_counterexample_evidence(self) -> bool:
+        """Return whether this runtime record independently requires finding disposition."""
+
+        coverage = self.campaign_coverage
+        if (
+            self.status is not InvariantExecutionStatus.COUNTEREXAMPLE
+            or self.execution_evidence is not ExecutionEvidenceKind.REAL
+            or self.executable_sha256 is None
+            or re.fullmatch(r"[0-9a-f]{64}", self.executable_sha256) is None
+            or self.source_sha256 is None
+            or re.fullmatch(r"[0-9a-f]{64}", self.source_sha256) is None
+            or self.compiler_version is None
+            or not self.compiler_version.strip()
+            or self.compiler_sha256 is None
+            or re.fullmatch(r"[0-9a-f]{64}", self.compiler_sha256) is None
+            or self.isolation_backend is None
+            or not self.isolation_backend.strip()
+            or self.isolation_attestation_sha256 is None
+            or re.fullmatch(r"[0-9a-f]{64}", self.isolation_attestation_sha256) is None
+            or self.execution_observation_sha256 is None
+            or re.fullmatch(r"[0-9a-f]{64}", self.execution_observation_sha256) is None
+            or self.execution_observation_sha256 != self.expected_execution_observation_sha256()
+            or not self.command
+            or any(not argument.strip() for argument in self.command)
+            or self.runs <= 0
+            or self.depth <= 0
+            or self.attempts < 2
+            or self.successful_attempts != self.attempts
+            or not self.replay_confirmed
+            or len(self.attempt_evidence) != self.attempts
+            or self.stdout_path is None
+            or not self.stdout_path.strip()
+            or self.stderr_path is None
+            or not self.stderr_path.strip()
+        ):
+            return False
+
+        expected_attempts = list(range(1, self.attempts + 1))
+        if [attempt.attempt for attempt in self.attempt_evidence] != expected_attempts:
+            return False
+        if any(
+            attempt.status is not InvariantExecutionStatus.COUNTEREXAMPLE
+            or not attempt.fresh_workspace
+            or attempt.source_sha256 != self.source_sha256
+            or re.fullmatch(r"[0-9a-f]{64}", attempt.stdout_sha256) is None
+            or re.fullmatch(r"[0-9a-f]{64}", attempt.stderr_sha256) is None
+            or not attempt.stdout_path.strip()
+            or not attempt.stderr_path.strip()
+            or attempt.process_exit_code not in {0, 1}
+            or not attempt.machine_output_validated
+            or attempt.campaign_runs <= 0
+            or attempt.campaign_calls <= 0
+            for attempt in self.attempt_evidence
+        ):
+            return False
+        attempt_dimensions = {
+            (
+                attempt.status,
+                attempt.source_sha256,
+                attempt.process_exit_code,
+                attempt.campaign_runs,
+                attempt.campaign_calls,
+            )
+            for attempt in self.attempt_evidence
+        }
+        if len(attempt_dimensions) != 1:
+            return False
+        if (
+            coverage is None
+            or not coverage.attempts_consistent
+            or coverage.sequence_depth_bound != self.depth
+            or coverage.observed_campaign_runs <= 0
+            or coverage.observed_campaign_calls <= 0
+            or not coverage.declared_action_functions
+            or coverage.observed_action_functions != coverage.declared_action_functions
+            or not coverage.declared_state_properties
+            or coverage.observed_state_properties != coverage.declared_state_properties
+            or not coverage.observed_sequence_lengths
+        ):
+            return False
+        attempt = self.attempt_evidence[0]
+        return (
+            coverage.observed_campaign_runs == attempt.campaign_runs
+            and coverage.observed_campaign_calls == attempt.campaign_calls
+        )
+
     @model_validator(mode="after")
     def replay_and_minimization_are_consistent(self) -> InvariantExecutionResult:
         if self.attempts != len(self.attempt_evidence):
@@ -10042,6 +10218,10 @@ class AuditReport(StrictModel):
     invariants: InvariantSuite | None = None
     invariant_review: InvariantReviewResult | None = None
     invariant_executions: list[InvariantExecutionResult] = Field(default_factory=list)
+    execution_origin_dispositions: list[InvariantExecutionOriginDisposition] = Field(
+        default_factory=list,
+        max_length=100_000,
+    )
     economic_simulations: list[EconomicSimulationPlan] = Field(default_factory=list)
     formal_runs: list[FormalToolRun] = Field(default_factory=list)
     solidity_coverage: SolidityCoverage | None = None
@@ -10113,51 +10293,75 @@ class AuditReport(StrictModel):
             for finding in [*self.findings, *self.rejected_findings]
             if finding.origin_kind is FindingOriginKind.DETERMINISTIC_EXECUTION
         ]
-        if execution_findings and self.schema_version != "1.2":
-            raise ValueError("execution-origin findings require report schema 1.2")
         execution_keys = [
             (result.invariant_id, result.harness_name) for result in self.invariant_executions
         ]
         if len(execution_keys) != len(set(execution_keys)):
             raise ValueError("report invariant execution identities must be unique")
-        execution_results = {
-            (result.invariant_id, result.harness_name): result
-            for result in self.invariant_executions
+        if self.schema_version != "1.2":
+            if execution_findings or self.execution_origin_dispositions:
+                raise ValueError("execution-origin evidence requires report schema 1.2")
+            return
+
+        counterexamples_by_index = {
+            index: result
+            for index, result in enumerate(self.invariant_executions)
+            if result.status is InvariantExecutionStatus.COUNTEREXAMPLE
         }
+        dispositions_by_index = {
+            disposition.execution_index: disposition
+            for disposition in self.execution_origin_dispositions
+        }
+        if (
+            len(dispositions_by_index) != len(self.execution_origin_dispositions)
+            or set(dispositions_by_index) != set(counterexamples_by_index)
+        ):
+            raise ValueError(
+                "every invariant counterexample requires one exact execution-origin disposition"
+            )
         invariant_by_id = {
             invariant.id: invariant
             for invariant in (self.invariants.invariants if self.invariants is not None else [])
         }
-        observed_provenance: set[str] = set()
-        for finding in execution_findings:
-            for provenance in finding.execution_provenance:
-                if provenance.provenance_sha256 in observed_provenance:
-                    raise ValueError(
-                        "execution provenance cannot appear in more than one finding group"
-                    )
-                observed_provenance.add(provenance.provenance_sha256)
-                result = execution_results.get((provenance.invariant_id, provenance.harness_name))
-                invariant = invariant_by_id.get(provenance.invariant_id)
-                result_minimized = bool(
-                    result is not None
-                    and result.minimization_evidence is not None
-                    and result.minimization_evidence.proven_minimal
+        originated_by_provenance: dict[str, InvariantExecutionOriginDisposition] = {}
+        rejected_dispositions: list[InvariantExecutionOriginDisposition] = []
+        for execution_index, disposition in dispositions_by_index.items():
+            result = counterexamples_by_index[execution_index]
+            result_sha256 = result.canonical_result_sha256()
+            if (
+                disposition.invariant_id != result.invariant_id
+                or disposition.harness_name != result.harness_name
+                or disposition.execution_result_sha256 != result_sha256
+            ):
+                raise ValueError(
+                    "execution-origin disposition differs from its exact runtime result"
                 )
-                invariant_location_keys = (
-                    sorted(
-                        (
-                            location.path,
-                            location.start_line,
-                            location.end_line,
-                            location.symbol or "",
-                            location.content_hash or "",
-                        )
-                        for location in invariant.locations
+            if disposition.kind is ExecutionOriginDispositionKind.REJECTED:
+                rejected_dispositions.append(disposition)
+                continue
+
+            provenance = disposition.execution_provenance
+            invariant = invariant_by_id.get(disposition.invariant_id)
+            result_minimized = bool(
+                result.minimization_evidence is not None
+                and result.minimization_evidence.proven_minimal
+            )
+            invariant_location_keys = (
+                sorted(
+                    (
+                        location.path,
+                        location.start_line,
+                        location.end_line,
+                        location.symbol or "",
+                        location.content_hash or "",
                     )
-                    if invariant is not None
-                    else []
+                    for location in invariant.locations
                 )
-                provenance_location_keys = [
+                if invariant is not None
+                else []
+            )
+            provenance_location_keys = (
+                [
                     (
                         location.path,
                         location.start_line,
@@ -10167,33 +10371,75 @@ class AuditReport(StrictModel):
                     )
                     for location in provenance.source_locations
                 ]
+                if provenance is not None
+                else []
+            )
+            if (
+                provenance is None
+                or invariant is None
+                or not result.has_qualifying_replayed_real_counterexample_evidence()
+                or result.harness_spec_sha256 != provenance.harness_spec_sha256
+                or result.execution_observation_sha256
+                != provenance.execution_observation_sha256
+                or result_sha256 != provenance.execution_result_sha256
+                or invariant.evidence_hash != provenance.invariant_evidence_sha256
+                or provenance.executable_sha256 != result.executable_sha256
+                or provenance.source_sha256 != result.source_sha256
+                or provenance.compiler_version != result.compiler_version
+                or provenance.compiler_sha256 != result.compiler_sha256
+                or provenance.isolation_backend != result.isolation_backend
+                or provenance.isolation_attestation_sha256
+                != result.isolation_attestation_sha256
+                or provenance.attempts != result.attempts
+                or provenance.successful_attempts != result.successful_attempts
+                or provenance.replay_confirmed != result.replay_confirmed
+                or provenance.minimized != result_minimized
+                or provenance_location_keys != invariant_location_keys
+            ):
+                raise ValueError(
+                    "originated execution disposition differs from serialized invariant evidence"
+                )
+            if provenance.provenance_sha256 in originated_by_provenance:
+                raise ValueError("execution provenance cannot originate more than once")
+            originated_by_provenance[provenance.provenance_sha256] = disposition
+
+        observed_provenance: set[str] = set()
+        for finding in execution_findings:
+            for provenance in finding.execution_provenance:
+                if provenance.provenance_sha256 in observed_provenance:
+                    raise ValueError(
+                        "execution provenance cannot appear in more than one finding group"
+                    )
+                observed_provenance.add(provenance.provenance_sha256)
+                disposition = originated_by_provenance.get(provenance.provenance_sha256)
                 if (
-                    result is None
-                    or invariant is None
-                    or result.status is not InvariantExecutionStatus.COUNTEREXAMPLE
-                    or result.execution_evidence is not ExecutionEvidenceKind.REAL
-                    or result.harness_spec_sha256 != provenance.harness_spec_sha256
-                    or result.execution_observation_sha256
-                    != provenance.execution_observation_sha256
-                    or _canonical_model_sha256(result.model_dump(mode="json"))
-                    != provenance.execution_result_sha256
-                    or invariant.evidence_hash != provenance.invariant_evidence_sha256
-                    or provenance.executable_sha256 != result.executable_sha256
-                    or provenance.source_sha256 != result.source_sha256
-                    or provenance.compiler_version != result.compiler_version
-                    or provenance.compiler_sha256 != result.compiler_sha256
-                    or provenance.isolation_backend != result.isolation_backend
-                    or provenance.isolation_attestation_sha256
-                    != result.isolation_attestation_sha256
-                    or provenance.attempts != result.attempts
-                    or provenance.successful_attempts != result.successful_attempts
-                    or provenance.replay_confirmed != result.replay_confirmed
-                    or provenance.minimized != result_minimized
-                    or provenance_location_keys != invariant_location_keys
+                    disposition is None
+                    or disposition.execution_provenance != provenance
+                    or disposition.candidate_id not in finding.contributing_candidate_ids
                 ):
                     raise ValueError(
-                        "execution-origin finding differs from its serialized invariant evidence"
+                        "execution-origin finding lacks its exact originated disposition"
                     )
+        if observed_provenance != set(originated_by_provenance):
+            raise ValueError(
+                "every originated execution candidate requires one final or rejected finding"
+            )
+        if rejected_dispositions:
+            first_rejection = min(
+                rejected_dispositions,
+                key=lambda disposition: disposition.execution_index,
+            )
+            required_reason = (
+                f"execution-origin evidence rejected: {first_rejection.rejection_detail}"
+            )
+            if (
+                self.completed
+                or self.run_status is AuditRunStatus.COMPLETE
+                or required_reason not in self.incomplete_reasons
+            ):
+                raise ValueError(
+                    "rejected execution-origin evidence must force an incomplete run"
+                )
 
     def _validate_minimum_floor_runtime_bindings(self, floor: MinimumAnalysisFloor) -> None:
         """Bind serialized floor claims back to the report's normalized runtime evidence."""
