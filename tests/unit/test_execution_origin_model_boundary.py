@@ -17,6 +17,7 @@ from mmaudit.models.schemas import (
     CandidateReviewBatch,
     ContextPackage,
     ContextRequestEvidence,
+    Evidence,
     EvidenceStrength,
     FindingOriginKind,
     FindingStatus,
@@ -26,6 +27,7 @@ from mmaudit.models.schemas import (
     VerificationVerdict,
 )
 from mmaudit.orchestration.consensus import (
+    HOST_EXECUTION_ANALYSIS_LINK_SOURCE,
     group_candidates,
     merge_group,
     preliminary_status,
@@ -141,6 +143,46 @@ def test_pipeline_rejects_execution_origin_claim_that_bypasses_agent_normalizati
         )
 
 
+def test_pipeline_rejects_model_claimed_host_execution_analysis_link() -> None:
+    candidate = _model_candidate(
+        candidate_id="model-claimed-host-execution-link",
+        locations=[_provenance().source_locations[0]],
+    )
+    claimed_link = candidate.model_copy(
+        update={
+            "evidence": [
+                *candidate.evidence,
+                Evidence(
+                    type="repository",
+                    source=HOST_EXECUTION_ANALYSIS_LINK_SOURCE,
+                    description="Model-authored execution relation.",
+                    rule_id="invariant-a",
+                    fingerprint="a" * 64,
+                ),
+            ]
+        }
+    )
+    batch = CandidateReviewBatch(findings=[claimed_link], surface_reviews=())
+    context = _context((), role="source_audit")
+    usage = _bound_usage(batch, context)
+    result = FindingReviewResult(
+        findings=(claimed_link,),
+        surface_review_artifact=None,
+        surface_review_context=context,
+        completion_usage=usage,
+    )
+
+    with pytest.raises(
+        OpenRouterSchemaError,
+        match="model review attempted to claim a host-owned execution analysis link",
+    ):
+        _validated_finding_result(
+            result,
+            expected_role="source_audit",
+            usage_records=[usage],
+        )
+
+
 def test_model_verifier_and_judge_cannot_delete_execution_origin() -> None:
     execution = _execution_candidate(_provenance())
     group = group_candidates([execution])[0]
@@ -230,6 +272,7 @@ def test_model_enrichment_cannot_change_execution_identity_or_location() -> None
         candidate_id="model-impact-remediation-enrichment",
         locations=[provenance.source_locations[0], relocated],
         confidence=0.99,
+        execution_candidate=execution,
     ).model_copy(
         update={
             "title": "Model-authored replacement title",

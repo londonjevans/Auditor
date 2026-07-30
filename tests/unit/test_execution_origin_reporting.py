@@ -16,10 +16,13 @@ from mmaudit.models.schemas import (
     CandidateOriginKind,
     Evidence,
     EvidenceStrength,
+    ExecutionOriginDispositionKind,
+    ExecutionOriginRejectionCategory,
     Finding,
     FindingOriginKind,
     FindingStatus,
     InvariantExecutionCandidateProvenance,
+    InvariantExecutionOriginDisposition,
     Location,
     LocationValidation,
     ModelVote,
@@ -29,7 +32,11 @@ from mmaudit.models.schemas import (
     VerificationTest,
     execution_origin_location_validation_sha256,
 )
-from mmaudit.orchestration.consensus import group_candidates, merge_group
+from mmaudit.orchestration.consensus import (
+    bind_model_analysis_to_execution_origin,
+    group_candidates,
+    merge_group,
+)
 from mmaudit.orchestration.pipeline import _scanner_findings_for_report
 from mmaudit.reporting.markdown import render_markdown
 from mmaudit.reporting.sarif import generate_sarif
@@ -107,7 +114,7 @@ def _model_candidate(
     *,
     commentary: str,
 ) -> CandidateFinding:
-    return CandidateFinding(
+    candidate = CandidateFinding(
         candidate_id="candidate-model-commentary",
         title="Executed accounting invariant",
         severity=Severity.CRITICAL,
@@ -142,6 +149,10 @@ def _model_candidate(
                 rationale=commentary,
             )
         ],
+    )
+    return bind_model_analysis_to_execution_origin(
+        execution_candidate=_execution_candidate(provenance),
+        model_candidate=candidate,
     )
 
 
@@ -317,6 +328,76 @@ def _sarif_result(finding: Finding) -> tuple[dict[str, object], dict[str, object
     return run["tool"]["driver"]["rules"][0], run["results"][0]
 
 
+def test_markdown_distinguishes_originated_and_rejected_runtime_origins() -> None:
+    provenance = _provenance()
+    originated = InvariantExecutionOriginDisposition(
+        execution_index=0,
+        invariant_id=provenance.invariant_id,
+        harness_name=provenance.harness_name,
+        execution_result_sha256=provenance.execution_result_sha256,
+        kind=ExecutionOriginDispositionKind.ORIGINATED,
+        candidate_id=f"exec-{provenance.provenance_sha256[:24]}",
+        execution_provenance=provenance,
+    )
+    rejected = InvariantExecutionOriginDisposition(
+        execution_index=1,
+        invariant_id="invariant-rejected-source",
+        harness_name="Rejected | Harness",
+        execution_result_sha256="c" * 64,
+        kind=ExecutionOriginDispositionKind.REJECTED,
+        rejection_category=ExecutionOriginRejectionCategory.SOURCE_BINDING,
+        rejection_detail="Current source <changed> | exact location no longer validates.",
+    )
+    report = _report([]).model_copy(
+        update={"execution_origin_dispositions": [originated, rejected]}
+    )
+
+    markdown = render_markdown(report)
+
+    assert "## Deterministic execution-origin dispositions" in markdown
+    assert "Runtime counterexamples dispositioned: 2" in markdown
+    assert "Originated candidates: 1" in markdown
+    assert "Rejected before candidate creation: 1" in markdown
+    assert "`originated`" in markdown
+    assert originated.candidate_id in markdown
+    assert provenance.provenance_sha256[:12] in markdown
+    assert "`rejected`" in markdown
+    assert "`source_binding`" in markdown
+    assert "Rejected \\| Harness" in markdown
+    assert "Current source &lt;changed&gt; \\| exact location no longer validates." in markdown
+    assert "is not a finding, and is omitted from SARIF" in markdown
+
+    sarif = generate_sarif(report.findings)["runs"][0]
+    assert sarif["tool"]["driver"]["rules"] == []
+    assert sarif["results"] == []
+
+
+def test_execution_origin_disposition_markdown_is_bounded() -> None:
+    dispositions = [
+        InvariantExecutionOriginDisposition(
+            execution_index=index,
+            invariant_id=f"invariant-bounded-{index:03d}",
+            harness_name=f"BoundedHarness{index:03d}",
+            execution_result_sha256=f"{index + 1:064x}",
+            kind=ExecutionOriginDispositionKind.REJECTED,
+            rejection_category=ExecutionOriginRejectionCategory.RUNTIME_EVIDENCE,
+            rejection_detail=f"bounded-marker-{index:03d}",
+        )
+        for index in range(25)
+    ]
+    report = _report([]).model_copy(update={"execution_origin_dispositions": dispositions})
+
+    markdown = render_markdown(report)
+
+    assert "Runtime counterexamples dispositioned: 25" in markdown
+    assert "Originated candidates: 0" in markdown
+    assert "Rejected before candidate creation: 25" in markdown
+    assert "bounded-marker-019" in markdown
+    assert "bounded-marker-020" not in markdown
+    assert markdown.count("| `rejected` |") == 20
+    assert "5 additional disposition record(s) remain in the JSON forensic artifacts." in markdown
+
+
 def test_markdown_and_sarif_distinguish_all_discovery_origins() -> None:
     findings = [
         _review_finding(FindingOriginKind.MODEL_REVIEW),
@@ -334,7 +415,9 @@ def test_markdown_and_sarif_distinguish_all_discovery_origins() -> None:
     assert "Discovery origin: **Deterministic execution**" in markdown
     assert "Discovery origin: **Static analyzer**" in markdown
     assert "replay-confirmed deterministic invariant counterexample" in markdown
-    assert "Confirmed:** passed the deterministic consensus gate and verifier review" not in markdown
+    assert (
+        "Confirmed:** passed the deterministic consensus gate and verifier review" not in markdown
+    )
 
     sarif = generate_sarif(findings)["runs"][0]
     rules = {rule["id"]: rule for rule in sarif["tool"]["driver"]["rules"]}
@@ -354,7 +437,7 @@ def test_markdown_and_sarif_distinguish_all_discovery_origins() -> None:
 def test_legacy_report_version_cannot_claim_execution_origin() -> None:
     report = _report([_execution_finding(_provenance())])
 
-    with pytest.raises(ValidationError, match="report schema 1.2"):
+    with pytest.raises(ValidationError, match=r"report schema 1\.2"):
         AuditReport.model_validate(report.model_dump(mode="python"))
 
 
@@ -510,7 +593,15 @@ def test_mixed_model_commentary_cannot_control_execution_group_or_evidence() -> 
     assert finding.impact == execution.impact
     assert finding.recommendation == execution.recommendation
     assert finding.evidence_strength is EvidenceStrength.DETERMINISTIC_EXECUTION_COUNTEREXAMPLE
-    assert {item.type for item in finding.evidence} == {"execution", "model"}
+    assert {item.type for item in finding.evidence} == {"execution", "model", "repository"}
+    host_links = [
+        item
+        for item in finding.evidence
+        if item.type == "repository" and item.source == "mmaudit-host-execution-link"
+    ]
+    assert len(host_links) == 1
+    assert host_links[0].rule_id == provenance.invariant_id
+    assert host_links[0].fingerprint == provenance.provenance_sha256
     assert finding.model_votes == model.model_votes
 
     rule, result = _sarif_result(finding)

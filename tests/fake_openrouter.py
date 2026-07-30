@@ -497,6 +497,7 @@ def _surface_reviews(
     *,
     role: str,
     status: str = "REVIEWED_NO_ISSUE",
+    force_inconclusive: bool = False,
 ) -> list[dict[str, Any]]:
     requests = _extract_json(user_prompt, "TRUSTED_MODEL_SURFACE_REQUESTS_JSON")
     solidity_facts = _extract_optional_json(user_prompt, "DETERMINISTIC_SOLIDITY_FACTS_JSON") or {}
@@ -511,6 +512,8 @@ def _surface_reviews(
             entities=entities,
             edges=edges,
         )
+        if force_inconclusive:
+            path_evidence = None
         resolved_status = status if path_evidence is not None else "INCONCLUSIVE"
         if path_evidence is None:
             allowed_locations = request["allowed_locations"]
@@ -671,10 +674,14 @@ class FakeOpenRouter:
                 ]
         elif schema_name == "mmaudit_source_audit_findings":
             user = body["messages"][1]["content"]
-            if self.mode == "maximum_assurance":
+            if self.mode in {"execution_origin_post_judge", "maximum_assurance"}:
                 content = {
                     "findings": [],
-                    "surface_reviews": _surface_reviews(user, role="source_audit"),
+                    "surface_reviews": _surface_reviews(
+                        user,
+                        role="source_audit",
+                        force_inconclusive=self.mode == "execution_origin_post_judge",
+                    ),
                 }
                 return self._completion(body, json.dumps(content, sort_keys=True))
             path = (
@@ -698,10 +705,14 @@ class FakeOpenRouter:
                 content["findings"][0]["summary"] += f" {self.first_pass_canary}"
         elif schema_name == "mmaudit_business_logic_findings":
             user = body["messages"][1]["content"]
-            if self.mode == "maximum_assurance":
+            if self.mode in {"execution_origin_post_judge", "maximum_assurance"}:
                 content = {
                     "findings": [],
-                    "surface_reviews": _surface_reviews(user, role="business_logic"),
+                    "surface_reviews": _surface_reviews(
+                        user,
+                        role="business_logic",
+                        force_inconclusive=self.mode == "execution_origin_post_judge",
+                    ),
                 }
                 return self._completion(body, json.dumps(content, sort_keys=True))
             content = {
@@ -721,9 +732,18 @@ class FakeOpenRouter:
             content = (
                 {
                     "findings": [],
-                    "surface_reviews": _surface_reviews(user, role="configuration"),
+                    "surface_reviews": _surface_reviews(
+                        user,
+                        role="configuration",
+                        force_inconclusive=self.mode == "execution_origin_post_judge",
+                    ),
                 }
-                if self.mode in {"solidity_reproduction", "maximum_assurance"}
+                if self.mode
+                in {
+                    "execution_origin_post_judge",
+                    "solidity_reproduction",
+                    "maximum_assurance",
+                }
                 else {
                     "findings": [
                         _candidate(
@@ -809,7 +829,15 @@ class FakeOpenRouter:
                     {
                         "group_id": group["group_id"],
                         "status": group["consensus_status_cap"],
-                        "severity": group["candidates"][0]["severity"],
+                        "severity": (
+                            "high"
+                            if self.mode == "execution_origin_post_judge"
+                            and any(
+                                candidate.get("origin_kind") == "deterministic_execution"
+                                for candidate in group["candidates"]
+                            )
+                            else group["candidates"][0]["severity"]
+                        ),
                         "confidence": 0.9,
                         "cwe": group["candidates"][0]["cwe"],
                         "owasp": group["candidates"][0]["owasp"],
@@ -934,6 +962,7 @@ class FakeOpenRouter:
                 "surface_reviews": _surface_reviews(
                     user,
                     role=f"specialist:{specialist}",
+                    force_inconclusive=self.mode == "execution_origin_post_judge",
                 ),
             }
         elif schema_name == "mmaudit_report_quality_review":

@@ -182,6 +182,7 @@ from mmaudit.orchestration.assurance import (
 )
 from mmaudit.orchestration.budgets import BudgetExhaustedError, BudgetManager
 from mmaudit.orchestration.consensus import (
+    HOST_EXECUTION_ANALYSIS_LINK_SOURCE,
     CandidateGroup,
     enforce_critical_evidence_cap,
     group_candidates,
@@ -406,6 +407,14 @@ def _validated_finding_result(
     ):
         raise OpenRouterSchemaError(
             "model review attempted to claim host-owned deterministic execution origin"
+        )
+    if any(
+        evidence.source == HOST_EXECUTION_ANALYSIS_LINK_SOURCE
+        for finding in result.findings
+        for evidence in finding.evidence
+    ):
+        raise OpenRouterSchemaError(
+            "model review attempted to claim a host-owned execution analysis link"
         )
     artifact = result.surface_review_artifact
     if artifact is None:

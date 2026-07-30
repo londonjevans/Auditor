@@ -16,9 +16,13 @@ from mmaudit.models.schemas import (
     CandidateOriginKind,
     CandidateReproductionResolution,
     Evidence,
+    ExecutionOriginDispositionKind,
+    ExecutionOriginRejectionCategory,
     Finding,
     FoundryInvariantHarnessSpec,
     InvariantExecutionCandidateProvenance,
+    InvariantExecutionOriginDisposition,
+    InvariantExecutionOriginDispositionArtifact,
     InvariantExecutionResult,
     InvariantSuite,
     Location,
@@ -89,6 +93,22 @@ def _reseal_provenance(
     return InvariantExecutionCandidateProvenance.sealed(**payload)
 
 
+def _originated_disposition(
+    provenance: InvariantExecutionCandidateProvenance,
+    *,
+    execution_index: int = 0,
+) -> InvariantExecutionOriginDisposition:
+    return InvariantExecutionOriginDisposition(
+        execution_index=execution_index,
+        invariant_id=provenance.invariant_id,
+        harness_name=provenance.harness_name,
+        execution_result_sha256=provenance.execution_result_sha256,
+        kind=ExecutionOriginDispositionKind.ORIGINATED,
+        candidate_id=f"exec-{provenance.provenance_sha256[:24]}",
+        execution_provenance=provenance,
+    )
+
+
 def _replay_payload(
     tmp_path: Path,
 ) -> tuple[dict[str, Any], CandidateFinding, InvariantExecutionCandidateProvenance]:
@@ -139,12 +159,21 @@ def _with_replay_candidate(
     payload: dict[str, Any],
     candidate: CandidateFinding,
 ) -> dict[str, Any]:
+    reproductions = dict(payload["reproductions"])
+    reproductions["candidate_resolutions"] = [
+        CandidateReproductionResolution(
+            candidate_id=candidate.candidate_id,
+            kind=ReproductionResolutionKind.INCONCLUSIVE,
+            detail="synthetic fixture preserves an explicit unresolved terminal disposition",
+        ).model_dump(mode="json")
+    ]
     return {
         **payload,
         "candidates": {
             "schema_version": "1.1",
             "findings": [candidate.model_dump(mode="json")],
         },
+        "reproductions": reproductions,
     }
 
 
@@ -154,6 +183,8 @@ def _report_shell(
     rejected_findings: list[Finding] | None = None,
     invariants: InvariantSuite | None = None,
     invariant_executions: list[InvariantExecutionResult] | None = None,
+    execution_origin_dispositions: list[InvariantExecutionOriginDisposition] | None = None,
+    incomplete_reasons: list[str] | None = None,
 ) -> AuditReport:
     """Build only the typed fields exercised by the manifest consistency gate."""
 
@@ -162,7 +193,8 @@ def _report_shell(
         run_id="execution-origin-artifact-test",
         generated_at=datetime(2026, 7, 30, tzinfo=UTC),
         completed=False,
-        incomplete_reasons=["Synthetic partial report for artifact validation."],
+        incomplete_reasons=incomplete_reasons
+        or ["Synthetic partial report for artifact validation."],
         repository=RepositoryMap(
             root_name="synthetic-execution-origin-repository",
             languages={"Solidity": 1},
@@ -192,6 +224,7 @@ def _report_shell(
         rejected_findings=rejected_findings or [],
         invariants=invariants,
         invariant_executions=invariant_executions or [],
+        execution_origin_dispositions=execution_origin_dispositions or [],
     )
 
 
@@ -207,6 +240,7 @@ def _write_manifest_inputs(
         InvariantExecutionResult,
     ]
     | None = None,
+    dispositions: list[InvariantExecutionOriginDisposition] | None = None,
 ) -> Path:
     root = tmp_path.resolve()
     write_json(
@@ -224,6 +258,12 @@ def _write_manifest_inputs(
             "schema_version": schema_version,
             "findings": candidates,
         },
+    )
+    write_json(
+        root / "execution-origin-dispositions.json",
+        InvariantExecutionOriginDispositionArtifact(dispositions=dispositions or []).model_dump(
+            mode="json"
+        ),
     )
     if execution_runtime is not None:
         suite, harness, corpus, execution = execution_runtime
@@ -263,18 +303,21 @@ def _manifest_execution_fixture(
     tmp_path: Path,
 ) -> tuple[Path, AuditReport, CandidateFinding, InvariantExecutionCandidateProvenance]:
     repository, suite, harness, corpus, execution = _inputs(tmp_path)
-    candidate = _build(repository, suite, harness, corpus, execution).candidates[0]
+    build = _build(repository, suite, harness, corpus, execution)
+    candidate = build.candidates[0]
     provenance = candidate.execution_provenance
     assert provenance is not None
     root = _write_manifest_inputs(
         tmp_path,
         candidates=[candidate.model_dump(mode="json")],
         execution_runtime=(suite, harness, corpus, execution),
+        dispositions=list(build.dispositions),
     )
     report = _report_shell(
         findings=[_execution_finding(provenance)],
         invariants=suite,
         invariant_executions=[execution],
+        execution_origin_dispositions=list(build.dispositions),
     )
     return root, report, candidate, provenance
 
@@ -379,7 +422,8 @@ def test_replay_accepts_forced_resolution_for_exact_execution_origin_candidate(
 
 def test_final_report_accepts_exact_invariant_execution_binding(tmp_path: Path) -> None:
     repository, suite, harness, corpus, execution = _inputs(tmp_path)
-    candidate = _build(repository, suite, harness, corpus, execution).candidates[0]
+    build = _build(repository, suite, harness, corpus, execution)
+    candidate = build.candidates[0]
     provenance = candidate.execution_provenance
     assert provenance is not None
     report = _report_shell(
@@ -387,6 +431,7 @@ def test_final_report_accepts_exact_invariant_execution_binding(tmp_path: Path) 
         rejected_findings=[],
         invariant_executions=[execution],
         invariants=suite,
+        execution_origin_dispositions=list(build.dispositions),
     )
 
     report._validate_execution_origin_bindings()
@@ -403,7 +448,7 @@ def test_final_report_rejects_qualifying_counterexample_without_disposition(
 
     with pytest.raises(
         ValueError,
-        match="requires one final or rejected execution-origin disposition",
+        match="requires one exact execution-origin disposition",
     ):
         report._validate_execution_origin_bindings()
 
@@ -419,6 +464,7 @@ def test_final_report_rejects_forged_invariant_evidence_binding(tmp_path: Path) 
         rejected_findings=[],
         invariant_executions=[execution],
         invariants=suite,
+        execution_origin_dispositions=[_originated_disposition(forged)],
     )
 
     with pytest.raises(ValueError, match="serialized invariant evidence"):
@@ -438,10 +484,73 @@ def test_final_report_rejects_runtime_provenance_that_contradicts_result(
         rejected_findings=[],
         invariant_executions=[execution],
         invariants=suite,
+        execution_origin_dispositions=[_originated_disposition(forged)],
     )
 
     with pytest.raises(ValueError, match="serialized invariant evidence"):
         report._validate_execution_origin_bindings()
+
+
+def test_execution_origin_disposition_schema_rejects_inexact_terminal_fields(
+    tmp_path: Path,
+) -> None:
+    repository, suite, harness, corpus, execution = _inputs(tmp_path)
+    build = _build(repository, suite, harness, corpus, execution)
+    disposition_payload = build.dispositions[0].model_dump(mode="python")
+    disposition_payload["execution_result_sha256"] = "f" * 64
+
+    with pytest.raises(ValidationError, match="differs from its exact provenance"):
+        InvariantExecutionOriginDisposition.model_validate(disposition_payload)
+
+    rejected_payload = {
+        "execution_index": 0,
+        "invariant_id": execution.invariant_id,
+        "harness_name": execution.harness_name,
+        "execution_result_sha256": execution.canonical_result_sha256(),
+        "kind": ExecutionOriginDispositionKind.REJECTED,
+        "candidate_id": build.candidates[0].candidate_id,
+        "rejection_category": ExecutionOriginRejectionCategory.HARNESS_BINDING,
+        "rejection_detail": "the synthetic harness binding was rejected",
+    }
+    with pytest.raises(ValidationError, match="only a typed bounded rejection"):
+        InvariantExecutionOriginDisposition.model_validate(rejected_payload)
+
+
+def test_execution_origin_disposition_artifact_requires_one_sorted_runtime_index(
+    tmp_path: Path,
+) -> None:
+    repository, suite, harness, corpus, execution = _inputs(tmp_path)
+    disposition = _build(repository, suite, harness, corpus, execution).dispositions[0]
+
+    with pytest.raises(ValidationError, match="indices must be unique and sorted"):
+        InvariantExecutionOriginDispositionArtifact(dispositions=[disposition, disposition])
+
+
+def test_rejected_execution_origin_requires_prominent_incomplete_reason(
+    tmp_path: Path,
+) -> None:
+    repository, suite, harness, corpus, execution = _inputs(tmp_path)
+    changed_harness = harness.model_copy(update={"seed": harness.seed + 1})
+    build = _build(repository, suite, changed_harness, corpus, execution)
+    disposition = build.dispositions[0]
+    assert disposition.kind is ExecutionOriginDispositionKind.REJECTED
+
+    report = _report_shell(
+        invariants=suite,
+        invariant_executions=[execution],
+        execution_origin_dispositions=[disposition],
+    )
+    with pytest.raises(ValueError, match="must force an incomplete run"):
+        report._validate_execution_origin_bindings()
+
+    required_reason = f"execution-origin evidence rejected: {disposition.rejection_detail}"
+    report = _report_shell(
+        invariants=suite,
+        invariant_executions=[execution],
+        execution_origin_dispositions=[disposition],
+        incomplete_reasons=[required_reason],
+    )
+    report._validate_execution_origin_bindings()
 
 
 @pytest.mark.parametrize(
@@ -538,6 +647,86 @@ def test_manifest_binds_execution_candidate_to_exact_final_finding(tmp_path: Pat
     _validate_report_artifact_consistency(root, report)
 
 
+def test_manifest_allows_incomplete_harness_rejection_without_candidate(
+    tmp_path: Path,
+) -> None:
+    repository, suite, harness, corpus, execution = _inputs(tmp_path)
+    changed_harness = harness.model_copy(update={"seed": harness.seed + 1})
+    build = _build(repository, suite, changed_harness, corpus, execution)
+    assert build.candidates == ()
+    assert len(build.dispositions) == 1
+    disposition = build.dispositions[0]
+    assert disposition.kind is ExecutionOriginDispositionKind.REJECTED
+    assert disposition.rejection_category is ExecutionOriginRejectionCategory.HARNESS_BINDING
+    required_reason = f"execution-origin evidence rejected: {disposition.rejection_detail}"
+    root = _write_manifest_inputs(
+        tmp_path,
+        candidates=[],
+        execution_runtime=(suite, changed_harness, corpus, execution),
+        dispositions=list(build.dispositions),
+    )
+    report = _report_shell(
+        invariants=suite,
+        invariant_executions=[execution],
+        execution_origin_dispositions=list(build.dispositions),
+        incomplete_reasons=[required_reason],
+    )
+
+    _validate_report_artifact_consistency(root, report)
+
+
+def test_manifest_allows_incomplete_current_source_rejection_without_candidate(
+    tmp_path: Path,
+) -> None:
+    repository, suite, harness, corpus, execution = _inputs(tmp_path)
+    source = repository / "src" / "Vault.sol"
+    source.write_text(
+        source.read_text(encoding="utf-8").replace(
+            "accountedAssets += 1",
+            "accountedAssets += 2",
+        ),
+        encoding="utf-8",
+    )
+    build = _build(repository, suite, harness, corpus, execution)
+    assert build.candidates == ()
+    assert len(build.dispositions) == 1
+    disposition = build.dispositions[0]
+    assert disposition.kind is ExecutionOriginDispositionKind.REJECTED
+    assert disposition.rejection_category is ExecutionOriginRejectionCategory.SOURCE_BINDING
+    required_reason = f"execution-origin evidence rejected: {disposition.rejection_detail}"
+    root = _write_manifest_inputs(
+        tmp_path,
+        candidates=[],
+        execution_runtime=(suite, harness, corpus, execution),
+        dispositions=list(build.dispositions),
+    )
+    report = _report_shell(
+        invariants=suite,
+        invariant_executions=[execution],
+        execution_origin_dispositions=list(build.dispositions),
+        incomplete_reasons=[required_reason],
+    )
+
+    _validate_report_artifact_consistency(root, report)
+
+
+def test_manifest_rejects_tampered_execution_disposition_artifact(tmp_path: Path) -> None:
+    root, report, _candidate, _provenance_record = _manifest_execution_fixture(tmp_path)
+    tampered = report.execution_origin_dispositions[0].model_copy(update={"execution_index": 1})
+    write_json(
+        root / "execution-origin-dispositions.json",
+        InvariantExecutionOriginDispositionArtifact(dispositions=[tampered]).model_dump(
+            mode="json"
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"execution-origin-dispositions\.json differs from the final report",
+    ):
+        _validate_report_artifact_consistency(root, report)
+
+
 def test_manifest_rejects_execution_candidate_omitted_from_final_findings(
     tmp_path: Path,
 ) -> None:
@@ -545,6 +734,7 @@ def test_manifest_rejects_execution_candidate_omitted_from_final_findings(
     report = _report_shell(
         invariants=report.invariants,
         invariant_executions=report.invariant_executions,
+        execution_origin_dispositions=report.execution_origin_dispositions,
     )
 
     with pytest.raises(ValueError, match="omitted from final report evidence"):
@@ -567,7 +757,7 @@ def test_manifest_rejects_qualifying_runtime_omitted_from_candidate_inventory(
 
     with pytest.raises(
         ValueError,
-        match="requires one final or rejected execution-origin disposition",
+        match="requires one exact execution-origin disposition",
     ):
         _validate_report_artifact_consistency(root, report)
 

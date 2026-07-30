@@ -34,6 +34,8 @@ from mmaudit.models.schemas import (
     AuditScope,
     AuditScopeAssessment,
     CandidateFinding,
+    CandidateFindingArtifact,
+    CandidateOriginKind,
     CompilationStatus,
     ContextPackage,
     DependencyPreparationResult,
@@ -41,6 +43,7 @@ from mmaudit.models.schemas import (
     DependencySbom,
     EconomicSimulationKind,
     ExecutionEvidenceKind,
+    FindingOriginKind,
     FindingStatus,
     FormalToolRun,
     FormalToolStatus,
@@ -62,6 +65,7 @@ from mmaudit.models.schemas import (
     RepositorySuiteDifferentialRun,
     ReproductionAttemptEvidence,
     ReproductionMinimizationEvidence,
+    ReproductionResolutionKind,
     ReproductionResult,
     ReproductionState,
     ScannerFinding,
@@ -75,6 +79,7 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.models.usage import UsageLedger
 from mmaudit.operator_secrets import load_operator_secrets
+from mmaudit.orchestration.assurance import AssuranceRuntime, MaximumAssuranceContract
 from mmaudit.orchestration.budgets import BudgetManager
 from mmaudit.orchestration.context_manifest import (
     context_manifest_report_binding,
@@ -90,6 +95,10 @@ from mmaudit.orchestration.manifest import (
 )
 from mmaudit.orchestration.pipeline import AuditPipeline
 from mmaudit.orchestration.prior_audit import build_prior_audit_comparison
+from mmaudit.orchestration.verification import (
+    RunVerificationStatus,
+    verify_run_evidence,
+)
 from mmaudit.privacy import (
     REQUIRED_PROHIBITED_CONTENT,
     EndpointPolicyClass,
@@ -113,6 +122,7 @@ from mmaudit.traceability import (
 from tests.conftest import FIXTURES, model_registry_entry
 from tests.fake_openrouter import FakeOpenRouter, _request_schema_name
 from tests.qualification_support import synthetic_production_qualification
+from tests.unit.test_execution_candidates import _inputs as _execution_origin_inputs
 
 
 class StaticScannerRunner:
@@ -2374,6 +2384,144 @@ async def test_erc4626_generated_harness_executes_locally_and_is_counted_separat
     )
     assert "1 counterexample, 1 passed" in markdown
     assert "| 2 | 1 counterexample, 1 passed | 2 | 1 |" in markdown
+
+
+@pytest.mark.asyncio
+async def test_mocked_runtime_post_judge_severity_fails_closed_across_pipeline_artifacts(
+    config_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, suite, harness, corpus, execution = _execution_origin_inputs(
+        tmp_path / "execution-origin-inputs"
+    )
+    config = config_factory(
+        privacy={"fail_on_detected_secret": False},
+        smart_contracts={
+            "enabled": True,
+            "compile": False,
+        },
+        reproduction={
+            "enabled": False,
+            "required_for_solidity": False,
+            "require_hardened_isolation": False,
+            "expected_chain_id": 31_337,
+            "repetitions": 2,
+        },
+        invariants={
+            "execute_generated": True,
+            "generate_foundry_templates": False,
+            "harnesses": [harness.model_dump(mode="json")],
+        },
+    )
+    captured_assurance_runtime: list[AssuranceRuntime] = []
+    original_assurance_evaluate = MaximumAssuranceContract.evaluate
+
+    def capture_assurance_runtime(
+        contract: MaximumAssuranceContract,
+        runtime: AssuranceRuntime,
+    ) -> Any:
+        captured_assurance_runtime.append(runtime)
+        return original_assurance_evaluate(contract, runtime)
+
+    async def mocked_execution_results(*_args: Any, **_kwargs: Any) -> list[Any]:
+        return [execution]
+
+    monkeypatch.setattr(
+        "mmaudit.orchestration.pipeline.discover_invariants",
+        lambda *_args, **_kwargs: suite,
+    )
+    monkeypatch.setattr(
+        "mmaudit.orchestration.pipeline.build_property_corpus",
+        lambda *_args, **_kwargs: corpus,
+    )
+    monkeypatch.setattr(
+        AuditPipeline,
+        "_execute_invariant_harnesses",
+        mocked_execution_results,
+    )
+    monkeypatch.setattr(
+        MaximumAssuranceContract,
+        "evaluate",
+        capture_assurance_runtime,
+    )
+    result = await _run(
+        config,
+        repository,
+        tmp_path,
+        FakeOpenRouter(mode="execution_origin_post_judge"),
+        scanner_runner=StaticScannerRunner(status=ScannerStatus.UNAVAILABLE),
+        invariant_runner=SyntheticInvariantRunner(),
+    )
+
+    assert result.exit_code is ExitCode.INCOMPLETE
+    # The mocked wiring intentionally has neither real compilation nor a real
+    # scanner, so the evidence-derived run status can be stricter than the
+    # post-judge INCOMPLETE terminal code. It must never become COMPLETE.
+    assert result.report.run_status in {
+        AuditRunStatus.INCOMPLETE,
+        AuditRunStatus.FAILED,
+    }
+    execution_findings = [
+        finding
+        for finding in result.report.findings
+        if finding.origin_kind is FindingOriginKind.DETERMINISTIC_EXECUTION
+    ]
+    assert len(execution_findings) == 1
+    finding = execution_findings[0]
+    assert finding.severity is Severity.HIGH
+    assert finding.status is FindingStatus.NEEDS_REVIEW
+    assert "did not receive candidate-specific cross-examination" in finding.disagreement
+
+    candidates = CandidateFindingArtifact.model_validate_json(
+        (result.run_dir / "candidate-findings.json").read_text(encoding="utf-8")
+    )
+    execution_candidates = [
+        candidate
+        for candidate in candidates.findings
+        if candidate.origin_kind is CandidateOriginKind.DETERMINISTIC_EXECUTION
+    ]
+    assert len(execution_candidates) == 1
+    candidate = execution_candidates[0]
+    assert candidate.severity is Severity.INFORMATIONAL
+    assert candidate.candidate_id in finding.contributing_candidate_ids
+
+    reproduction_payload = json.loads(
+        (result.run_dir / "reproduction-results.json").read_text(encoding="utf-8")
+    )
+    resolutions = reproduction_payload["candidate_resolutions"]
+    assert len(resolutions) == 1
+    assert resolutions[0]["candidate_id"] == candidate.candidate_id
+    assert resolutions[0]["kind"] == ReproductionResolutionKind.INCONCLUSIVE.value
+    assert not resolutions[0]["evidence_refs"]
+
+    quality_gates = {gate.gate: gate for gate in result.report.quality_gates}
+    assert not quality_gates["reproduction_integrity"].passed
+    assert candidate.candidate_id in quality_gates["reproduction_integrity"].detail
+    assert len(captured_assurance_runtime) == 1
+    assurance_runtime = captured_assurance_runtime[0]
+    assert assurance_runtime.eligible_high_critical_ids == {candidate.candidate_id}
+    fail_closed_assessment = original_assurance_evaluate(
+        MaximumAssuranceContract(config, require=True),
+        assurance_runtime,
+    )
+    requirements = {
+        requirement.engine: requirement for requirement in fail_closed_assessment.requirements
+    }
+    assert not requirements["critical_high_reproduction"].passed
+    assert not requirements["independent_falsifier"].passed
+    assert "1 candidate(s)" in requirements["independent_falsifier"].detail
+
+    manifest_path = result.run_dir / "run-evidence-manifest.json"
+    manifest = RunEvidenceManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+    validate_manifest_artifacts(manifest, result.run_dir)
+    verification = verify_run_evidence(
+        manifest_path=manifest_path,
+        run_dir=result.run_dir,
+        repository_root=repository,
+        config=config,
+    )
+    assert verification.status is RunVerificationStatus.CURRENT
 
 
 @pytest.mark.asyncio

@@ -42,6 +42,8 @@ _STOPWORDS = {
     "possible",
 }
 
+HOST_EXECUTION_ANALYSIS_LINK_SOURCE = "mmaudit-host-execution-link"
+
 
 @dataclass(frozen=True)
 class CandidateGroup:
@@ -128,35 +130,66 @@ def _execution_semantic_compatible(
     execution_candidate: CandidateFinding,
     candidate: CandidateFinding,
 ) -> bool:
-    """Require evidence or narrative affinity in addition to co-location."""
+    """Require an exact host-authored provenance link in addition to co-location."""
 
     if execution_candidate is candidate:
         return True
-    shared_cwe = {
-        value.upper() for value in execution_candidate.cwe
-    } & {value.upper() for value in candidate.cwe}
-    shared_owasp = {
-        value.upper() for value in execution_candidate.owasp
-    } & {value.upper() for value in candidate.owasp}
     provenance = execution_candidate.execution_provenance
-    invariant_linked = provenance is not None and any(
-        evidence.rule_id == provenance.invariant_id for evidence in candidate.evidence
+    if provenance is None:
+        return False
+    if candidate.origin_kind is CandidateOriginKind.DETERMINISTIC_EXECUTION:
+        return candidate.execution_provenance == provenance
+    return any(
+        evidence.type == "repository"
+        and evidence.source == HOST_EXECUTION_ANALYSIS_LINK_SOURCE
+        and evidence.rule_id == provenance.invariant_id
+        and evidence.fingerprint == provenance.provenance_sha256
+        for evidence in candidate.evidence
     )
-    title_affinity = _jaccard(
-        _tokens(execution_candidate.title),
-        _tokens(candidate.title),
+
+
+def bind_model_analysis_to_execution_origin(
+    *,
+    execution_candidate: CandidateFinding,
+    model_candidate: CandidateFinding,
+) -> CandidateFinding:
+    """Attach a host-owned exact-provenance relation without changing model content."""
+
+    provenance = execution_candidate.execution_provenance
+    if (
+        execution_candidate.origin_kind is not CandidateOriginKind.DETERMINISTIC_EXECUTION
+        or provenance is None
+    ):
+        raise ValueError("execution analysis links require a typed execution-origin candidate")
+    if model_candidate.origin_kind is not CandidateOriginKind.MODEL_REVIEW:
+        raise ValueError("execution analysis links may annotate only model-review candidates")
+    if any(
+        evidence.source == HOST_EXECUTION_ANALYSIS_LINK_SOURCE
+        for evidence in model_candidate.evidence
+    ):
+        raise ValueError("model candidate already carries a host execution analysis link")
+    if not _execution_location_compatible(execution_candidate, model_candidate):
+        raise ValueError("execution analysis links require an exact source relationship")
+    if candidate_similarity(execution_candidate, model_candidate) < 0.55:
+        raise ValueError("execution analysis links retain the candidate similarity threshold")
+    linked = model_candidate.model_copy(
+        update={
+            "evidence": [
+                *model_candidate.evidence,
+                Evidence(
+                    type="repository",
+                    source=HOST_EXECUTION_ANALYSIS_LINK_SOURCE,
+                    description=(
+                        "Host validation linked this model analysis to the exact "
+                        "deterministic execution provenance."
+                    ),
+                    rule_id=provenance.invariant_id,
+                    fingerprint=provenance.provenance_sha256,
+                ),
+            ]
+        }
     )
-    path_affinity = _jaccard(
-        _tokens(" ".join(execution_candidate.attack_path)),
-        _tokens(" ".join(candidate.attack_path)),
-    )
-    return bool(
-        shared_cwe
-        or shared_owasp
-        or invariant_linked
-        or title_affinity >= 0.25
-        or path_affinity >= 0.5
-    )
+    return CandidateFinding.model_validate(linked.model_dump(mode="python"))
 
 
 def group_candidates(candidates: list[CandidateFinding]) -> list[CandidateGroup]:

@@ -523,9 +523,7 @@ def _validate_report_artifact_consistency(root: Path, report: AuditReport) -> No
     )
     disposition_path = root / "execution-origin-dispositions.json"
     disposition_artifact_present = (
-        disposition_path.exists()
-        or disposition_path.is_symlink()
-        or disposition_path.is_junction()
+        disposition_path.exists() or disposition_path.is_symlink() or disposition_path.is_junction()
     )
     if disposition_artifact_present != (report.schema_version == "1.2"):
         raise ValueError(
@@ -539,9 +537,7 @@ def _validate_report_artifact_consistency(root: Path, report: AuditReport) -> No
         else InvariantExecutionOriginDispositionArtifact()
     )
     if disposition_artifact.dispositions != report.execution_origin_dispositions:
-        raise ValueError(
-            "execution-origin-dispositions.json differs from the final report"
-        )
+        raise ValueError("execution-origin-dispositions.json differs from the final report")
     candidates = candidate_artifact.findings
     candidates_by_id = {candidate.candidate_id: candidate for candidate in candidates}
     execution_candidate_ids = {

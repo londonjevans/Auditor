@@ -108,6 +108,7 @@ def test_high_model_peer_does_not_satisfy_execution_candidate_obligation() -> No
         candidate_id="model-high-impact-peer",
         locations=execution.locations,
         severity=Severity.HIGH,
+        execution_candidate=execution,
     )
     groups = group_candidates([execution, model_peer])
     assert len(groups) == 1

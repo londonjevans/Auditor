@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED
 CURRENT_MILESTONE: Execution-originated candidate consensus
 CURRENT_TICKET: V3-EXECORIGIN-001
 LAST_COMPLETED_TICKET: V3-OMISSION-001
-NEXT_ACTION: Resume `V3-EXECORIGIN-001` by completing and reviewing the typed originated/rejected runtime disposition flow; require an exact host-authored execution link before a model proposal can join an execution-origin group; require a resolution for every saved high/critical candidate even when no reproduction result exists; add pipeline-level post-judge fail-closed coverage and bounded Markdown rejected-disposition evidence; then run the focused, integration, schema, static, and complete gates.
-LAST_COMMAND: Ran `git diff --check` and affected Ruff over the eleven changed Python files at the operator-requested pause boundary.
-LAST_RESULT: PASS — all parallel workers are stopped, `git diff --check` passed, and affected Ruff passed. The ticket remains intentionally incomplete and its interrupted disposition implementation has not received integrated acceptance credit.
+NEXT_ACTION: Resume `V3-EXECORIGIN-001` by reviewing the integrated execution-origin diff, running the complete focused execution-origin matrix and pipeline integrations, verifying release-schema synchronization, running Ruff and strict mypy, then running the complete local test gate. Update traceability and accept the ticket only from those actual results.
+LAST_COMMAND: `.venv/bin/pytest -q tests/integration/test_pipeline.py::test_mocked_runtime_post_judge_severity_fails_closed_across_pipeline_artifacts`
+LAST_RESULT: PASS — `1 passed in 1.16s`; two inherited pytest temporary-directory cleanup warnings were emitted. This is mocked pipeline-wiring evidence, not real engine evidence. The ticket remains `IN_PROGRESS` pending integrated and complete gates.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -390,6 +390,25 @@ LAST_CHECKPOINT_COMMIT: ab3998d5d14cf30f3cd64d29af7cfff88267c3b8
   `ab3998d5d14cf30f3cd64d29af7cfff88267c3b8` preserves the incomplete
   execution-origin disposition slice and its exact paused runtime state. It is
   a recovery checkpoint, not ticket-completion or release-acceptance evidence.
+- **Resume:** Autorun resumed at `2026-07-30T06:07:25Z` from clean synchronized
+  state commit `92f7654d82fa877c030717c4e2413d91611ab851`. The complete
+  product objective, repository policy, queue, worklog, and recorded acceptance
+  gaps were re-read. Work remains limited to `V3-EXECORIGIN-001`; no provider,
+  secret, public RPC, wallet, signing, broadcast, external target, or paid
+  operation is in scope for this ticket.
+- **Operator pause:** At `2026-07-30T06:31:59Z`, all delegated slices were
+  complete and no process remained active. The host-owned execution-analysis
+  link, typed originated/rejected dispositions, no-result high/critical replay
+  resolution, bounded Markdown disposition evidence, and post-judge
+  fail-closed pipeline regression are preserved in the working tree. The exact
+  mocked pipeline regression passed `1` test in `1.16s`; because its synthetic
+  wiring intentionally omits real compilation and scanning, its evidence-derived
+  run status remains allowed to be stricter than `INCOMPLETE` but can never be
+  `COMPLETE`. This does not weaken a product gate and is not real engine
+  evidence. The full integrated, schema, static, and complete gates have not
+  run for this resumed slice, so `V3-EXECORIGIN-001` remains `IN_PROGRESS`.
+  No provider call, secret access, public RPC, wallet, signing, broadcast,
+  external target, reservation, or paid operation occurred.
 
 ## 2026-07-30 — V3-FIXTURE-001
 

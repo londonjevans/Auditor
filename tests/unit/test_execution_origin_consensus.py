@@ -25,6 +25,7 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.orchestration.consensus import (
     CandidateGroup,
+    bind_model_analysis_to_execution_origin,
     candidate_similarity,
     enforce_critical_evidence_cap,
     group_candidates,
@@ -131,9 +132,10 @@ def _model_candidate(
     confidence: float = 0.95,
     severity: Severity = Severity.CRITICAL,
     model_votes: list[ModelVote] | None = None,
+    execution_candidate: CandidateFinding | None = None,
 ) -> CandidateFinding:
     primary = locations[0]
-    return CandidateFinding(
+    candidate = CandidateFinding(
         candidate_id=candidate_id,
         title="Accounting invariant counterexample",
         severity=severity,
@@ -169,6 +171,12 @@ def _model_candidate(
         role="business_logic",
         model_family=family,
         model_votes=model_votes or [],
+    )
+    if execution_candidate is None:
+        return candidate
+    return bind_model_analysis_to_execution_origin(
+        execution_candidate=execution_candidate,
+        model_candidate=candidate,
     )
 
 
@@ -260,6 +268,7 @@ def test_verifier_and_judge_cannot_delete_or_relocate_valid_execution_origin() -
         candidate_id="model-relocation-attempt",
         locations=[provenance.source_locations[0], relocated],
         confidence=0.99,
+        execution_candidate=execution,
     )
     group = group_candidates([commentary, execution])[0]
     decisions = {
@@ -313,6 +322,7 @@ def test_group_identity_and_origin_do_not_change_under_model_commentary() -> Non
         candidate_id="model-impact-commentary",
         locations=list(provenance.source_locations),
         model_votes=[_vote(role="business_logic", verdict="proposed")],
+        execution_candidate=annotated_execution,
     )
     execution_group_id = group_candidates([bare_execution])[0].group_id
     group = group_candidates([commentary, annotated_execution])[0]
@@ -365,6 +375,7 @@ def test_transitive_model_bridge_cannot_absorb_unrelated_model_candidate() -> No
     bridge = _model_candidate(
         candidate_id="model-bridge",
         locations=[provenance.source_locations[0], remote],
+        execution_candidate=execution,
     )
     unrelated = _model_candidate(
         candidate_id="model-unrelated",
@@ -406,6 +417,52 @@ def test_colocation_alone_cannot_merge_unrelated_model_commentary() -> None:
     assert all(len(group.candidates) == 1 for group in groups)
 
 
+def test_generic_execution_words_cannot_silently_merge_unrelated_commentary() -> None:
+    provenance = _provenance()
+    execution = _execution_candidate(provenance)
+    unrelated = _model_candidate(
+        candidate_id="model-generic-execution-words",
+        locations=list(provenance.source_locations),
+    ).model_copy(
+        update={
+            "title": "Invariant counterexample in administrative metadata",
+            "cwe": [],
+            "summary": "The cited branch changes unrelated administrative metadata.",
+            "attack_path": ["Invoke the administrative metadata branch."],
+        }
+    )
+
+    assert candidate_similarity(execution, unrelated) >= 0.55
+    groups = group_candidates([execution, unrelated])
+
+    assert len(groups) == 2
+    assert all(len(group.candidates) == 1 for group in groups)
+
+
+def test_model_claimed_invariant_identifier_is_not_a_host_execution_link() -> None:
+    provenance = _provenance()
+    execution = _execution_candidate(provenance)
+    claimed = _model_candidate(
+        candidate_id="model-claimed-invariant-link",
+        locations=list(provenance.source_locations),
+    ).model_copy(
+        update={
+            "evidence": [
+                Evidence(
+                    type="model",
+                    source="specialist:business_logic",
+                    description="The model claimed the invariant identifier.",
+                    rule_id=provenance.invariant_id,
+                    fingerprint=provenance.provenance_sha256,
+                )
+            ]
+        }
+    )
+
+    assert candidate_similarity(execution, claimed) >= 0.55
+    assert len(group_candidates([execution, claimed])) == 2
+
+
 def test_transitive_model_bridge_cannot_merge_unrelated_execution_anchors() -> None:
     left = _execution_candidate(
         _provenance(marker="a", start_line=10, end_line=12, symbol="deposit")
@@ -416,6 +473,7 @@ def test_transitive_model_bridge_cannot_merge_unrelated_execution_anchors() -> N
     bridge = _model_candidate(
         candidate_id="model-multilocation-bridge",
         locations=[left.locations[0], right.locations[0]],
+        execution_candidate=left,
     )
     expected_group_ids = {
         group_candidates([left])[0].group_id,
@@ -440,6 +498,7 @@ def test_invalid_execution_anchor_cannot_be_rescued_by_model_verification() -> N
     commentary = _model_candidate(
         candidate_id="model-valid-current-source",
         locations=list(provenance.source_locations),
+        execution_candidate=execution,
     )
     group = group_candidates([execution, commentary])[0]
     validations = {
@@ -466,6 +525,7 @@ def test_execution_finding_validation_state_is_bound_to_execution_anchor() -> No
     commentary = _model_candidate(
         candidate_id="model-valid-current-source",
         locations=list(provenance.source_locations),
+        execution_candidate=execution,
     )
     group = group_candidates([execution, commentary])[0]
 

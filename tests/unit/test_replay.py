@@ -78,6 +78,7 @@ from mmaudit.models.schemas import (
     ReproductionState,
     ScannerRun,
     ScannerStatus,
+    Severity,
     SolidityProjectMetadata,
     SolidityProjectType,
     SolidityProvenance,
@@ -2642,6 +2643,84 @@ def test_replay_loads_pipeline_candidate_resolution_as_typed_evidence(
             detail="attempted reproduction did not produce a qualifying terminal outcome",
         )
     ]
+
+
+def test_replay_rejects_high_candidate_without_test_result_or_resolution(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+) -> None:
+    config = config_factory()
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    _repository, run_dir, _manifest_path = _write_replay_run(tmp_path, config, candidate)
+    path = run_dir / "reproduction-results.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["test_specifications"] = []
+    payload["results"] = []
+    payload["candidate_resolutions"] = []
+    write_json(path, payload)
+
+    with pytest.raises(
+        ValidationError,
+        match="high/critical candidates require terminal candidate resolutions",
+    ):
+        _load_replay_artifacts(run_dir, config=config)
+
+
+def test_replay_accepts_inconclusive_high_candidate_without_generated_test(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+) -> None:
+    config = config_factory()
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    )
+    _repository, run_dir, _manifest_path = _write_replay_run(tmp_path, config, candidate)
+    path = run_dir / "reproduction-results.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["test_specifications"] = []
+    payload["results"] = []
+    write_json(path, payload)
+
+    artifacts = _load_replay_artifacts(run_dir, config=config)
+
+    assert artifacts.reproductions.candidate_resolutions == [
+        CandidateReproductionResolution(
+            candidate_id="candidate-replay",
+            kind=ReproductionResolutionKind.INCONCLUSIVE,
+            detail="attempted reproduction did not produce a qualifying terminal outcome",
+        )
+    ]
+
+
+def test_replay_rejects_resolution_for_non_obligated_model_candidate(
+    tmp_path: Path,
+    config_factory,
+    candidate_factory,
+) -> None:
+    config = config_factory()
+    candidate = candidate_factory(
+        candidate_id="candidate-replay",
+        path="src/Vault.sol",
+        start_line=1,
+        end_line=1,
+    ).model_copy(update={"severity": Severity.MEDIUM})
+    _repository, run_dir, _manifest_path = _write_replay_run(tmp_path, config, candidate)
+
+    with pytest.raises(
+        ValidationError,
+        match="may only adjudicate high/critical or execution-origin candidates",
+    ):
+        _load_replay_artifacts(run_dir, config=config)
 
 
 def test_invariant_replay_projection_ignores_only_raw_output_volatility() -> None:

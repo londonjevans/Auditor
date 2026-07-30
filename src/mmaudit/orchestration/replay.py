@@ -1275,14 +1275,14 @@ class _ReplayArtifacts(StrictModel):
                     "saved candidate resolutions may only adjudicate high/critical "
                     "or execution-origin candidates"
                 )
-        high_critical_result_ids = {
-            result.candidate_id
-            for result in self.reproductions.results
-            if candidates_by_id[result.candidate_id].severity in {Severity.HIGH, Severity.CRITICAL}
+        high_critical_candidate_ids = {
+            candidate.candidate_id
+            for candidate in self.candidates.findings
+            if candidate.severity in {Severity.HIGH, Severity.CRITICAL}
         }
-        if not high_critical_result_ids <= resolution_ids:
+        if not high_critical_candidate_ids <= resolution_ids:
             raise ValueError(
-                "saved high/critical reproduction results require terminal candidate resolutions"
+                "saved high/critical candidates require terminal candidate resolutions"
             )
         qualifying_reproduction_refs: dict[str, set[str]] = {}
         for result in self.reproductions.results:

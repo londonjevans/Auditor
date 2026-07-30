@@ -10312,10 +10312,9 @@ class AuditReport(StrictModel):
             disposition.execution_index: disposition
             for disposition in self.execution_origin_dispositions
         }
-        if (
-            len(dispositions_by_index) != len(self.execution_origin_dispositions)
-            or set(dispositions_by_index) != set(counterexamples_by_index)
-        ):
+        if len(dispositions_by_index) != len(self.execution_origin_dispositions) or set(
+            dispositions_by_index
+        ) != set(counterexamples_by_index):
             raise ValueError(
                 "every invariant counterexample requires one exact execution-origin disposition"
             )
@@ -10379,8 +10378,7 @@ class AuditReport(StrictModel):
                 or invariant is None
                 or not result.has_qualifying_replayed_real_counterexample_evidence()
                 or result.harness_spec_sha256 != provenance.harness_spec_sha256
-                or result.execution_observation_sha256
-                != provenance.execution_observation_sha256
+                or result.execution_observation_sha256 != provenance.execution_observation_sha256
                 or result_sha256 != provenance.execution_result_sha256
                 or invariant.evidence_hash != provenance.invariant_evidence_sha256
                 or provenance.executable_sha256 != result.executable_sha256
@@ -10388,8 +10386,7 @@ class AuditReport(StrictModel):
                 or provenance.compiler_version != result.compiler_version
                 or provenance.compiler_sha256 != result.compiler_sha256
                 or provenance.isolation_backend != result.isolation_backend
-                or provenance.isolation_attestation_sha256
-                != result.isolation_attestation_sha256
+                or provenance.isolation_attestation_sha256 != result.isolation_attestation_sha256
                 or provenance.attempts != result.attempts
                 or provenance.successful_attempts != result.successful_attempts
                 or provenance.replay_confirmed != result.replay_confirmed
@@ -10411,11 +10408,11 @@ class AuditReport(StrictModel):
                         "execution provenance cannot appear in more than one finding group"
                     )
                 observed_provenance.add(provenance.provenance_sha256)
-                disposition = originated_by_provenance.get(provenance.provenance_sha256)
+                originated_disposition = originated_by_provenance.get(provenance.provenance_sha256)
                 if (
-                    disposition is None
-                    or disposition.execution_provenance != provenance
-                    or disposition.candidate_id not in finding.contributing_candidate_ids
+                    originated_disposition is None
+                    or originated_disposition.execution_provenance != provenance
+                    or originated_disposition.candidate_id not in finding.contributing_candidate_ids
                 ):
                     raise ValueError(
                         "execution-origin finding lacks its exact originated disposition"
@@ -10437,9 +10434,7 @@ class AuditReport(StrictModel):
                 or self.run_status is AuditRunStatus.COMPLETE
                 or required_reason not in self.incomplete_reasons
             ):
-                raise ValueError(
-                    "rejected execution-origin evidence must force an incomplete run"
-                )
+                raise ValueError("rejected execution-origin evidence must force an incomplete run")
 
     def _validate_minimum_floor_runtime_bindings(self, floor: MinimumAnalysisFloor) -> None:
         """Bind serialized floor claims back to the report's normalized runtime evidence."""

@@ -13,6 +13,7 @@ from mmaudit.models.schemas import (
     AuditReport,
     AuditRunStatus,
     EconomicMetrics,
+    ExecutionOriginDispositionKind,
     Finding,
     FindingStatus,
     ReproductionIntegrityStatus,
@@ -21,6 +22,8 @@ from mmaudit.models.schemas import (
     Severity,
 )
 from mmaudit.solidity.formal import compare_dynamic_engine_outcomes
+
+_MAX_EXECUTION_ORIGIN_DISPOSITION_ROWS = 20
 
 
 def _clean(value: str) -> str:
@@ -170,6 +173,70 @@ def _execution_origin_lines(finding: Finding) -> list[str]:
                 "",
             ]
         )
+    return lines
+
+
+def _execution_origin_disposition_lines(report: AuditReport) -> list[str]:
+    """Render a bounded host-origin decision summary without inventing findings."""
+
+    dispositions = sorted(
+        report.execution_origin_dispositions,
+        key=lambda item: item.execution_index,
+    )
+    if not dispositions:
+        return []
+    originated = sum(
+        item.kind is ExecutionOriginDispositionKind.ORIGINATED for item in dispositions
+    )
+    rejected = len(dispositions) - originated
+    lines = [
+        "## Deterministic execution-origin dispositions",
+        "",
+        "Every runtime counterexample receives a host-authored origin decision before "
+        "consensus. `originated` means a source-bound candidate was created; it does not "
+        "imply final confirmation. `rejected` means the runtime record did not receive "
+        "candidate authority, is not a finding, and is omitted from SARIF.",
+        "",
+        f"- Runtime counterexamples dispositioned: {len(dispositions)}",
+        f"- Originated candidates: {originated}",
+        f"- Rejected before candidate creation: {rejected}",
+        "",
+        "| Execution index | Invariant | Harness | Disposition | Candidate or rejection evidence |",
+        "| ---: | --- | --- | --- | --- |",
+    ]
+    for disposition in dispositions[:_MAX_EXECUTION_ORIGIN_DISPOSITION_ROWS]:
+        if disposition.kind is ExecutionOriginDispositionKind.ORIGINATED:
+            provenance = disposition.execution_provenance
+            evidence = (
+                f"candidate {_inline(disposition.candidate_id or 'unavailable')}; "
+                "provenance SHA-256 "
+                f"{_inline(provenance.provenance_sha256[:12] + '…' if provenance else 'unavailable')}"
+            )
+        else:
+            category = (
+                disposition.rejection_category.value
+                if disposition.rejection_category is not None
+                else "unavailable"
+            )
+            evidence = (
+                f"category {_inline(category)} — "
+                f"{_text(disposition.rejection_detail or 'rejection detail unavailable')}"
+            )
+        lines.append(
+            f"| {disposition.execution_index} | {_inline(disposition.invariant_id)} | "
+            f"{_text(disposition.harness_name)} | {_inline(disposition.kind.value)} | "
+            f"{evidence} |"
+        )
+    omitted = len(dispositions) - _MAX_EXECUTION_ORIGIN_DISPOSITION_ROWS
+    if omitted > 0:
+        lines.extend(
+            [
+                "",
+                f"{omitted} additional disposition record(s) remain in the JSON forensic "
+                "artifacts.",
+            ]
+        )
+    lines.append("")
     return lines
 
 
@@ -872,6 +939,7 @@ def render_markdown(report: AuditReport) -> str:
                 "",
             ]
         )
+    lines.extend(_execution_origin_disposition_lines(report))
     lines.extend(["## Protocol economic simulations", ""])
     if report.economic_simulations:
         executed_economic = {
