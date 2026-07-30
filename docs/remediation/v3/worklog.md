@@ -9,8 +9,8 @@ CURRENT_MILESTONE: Execution-originated candidate consensus
 CURRENT_TICKET: V3-EXECORIGIN-001
 LAST_COMPLETED_TICKET: V3-OMISSION-001
 NEXT_ACTION: Resume V3-EXECORIGIN-001 by reviewing the preserved typed provenance, execution-candidate builder, consensus, pipeline, replay, manifest, and reporting slices together; add the pending consensus/pipeline/report/replay/manifest regressions; then run focused integration and full validation before checkpointing.
-LAST_COMMAND: .venv/bin/ruff check --fix <six affected source files> && .venv/bin/ruff check <all affected Python files> && .venv/bin/python -m json.tool docs/remediation/v3/runtime_status.json && git diff --check
-LAST_RESULT: PASS — five import-order findings were fixed mechanically, the one missing CandidateFinding import was restored, all affected Python files pass Ruff, runtime status is valid JSON, and the preserved diff has no whitespace errors.
+LAST_COMMAND: git commit -m "Checkpoint execution-origin implementation"
+LAST_RESULT: PASS — created incomplete pause checkpoint 0a9660a84f454da1d1f589a8c0523c34692c1aa8 with the 14 explicitly scoped V3-EXECORIGIN files; this is preservation evidence, not ticket acceptance.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: bb2d1f0dcd3ea764e2a099487bd225b3dd7c093c
+LAST_CHECKPOINT_COMMIT: 0a9660a84f454da1d1f589a8c0523c34692c1aa8
 
 ## 2026-07-30 — V3-OMISSION-001
 
@@ -297,8 +297,9 @@ LAST_CHECKPOINT_COMMIT: bb2d1f0dcd3ea764e2a099487bd225b3dd7c093c
   uncommitted and require integrated review and validation. `git diff --check`
   passed. No provider call, secret access, public RPC, wallet, signing,
   broadcast, external execution, or paid operation occurred. A clearly labeled
-  pause checkpoint will preserve this incomplete ticket at the operator's
-  request; it does not constitute acceptance or completion.
+  pause checkpoint `0a9660a84f454da1d1f589a8c0523c34692c1aa8`
+  preserves this incomplete ticket at the operator's request; it does not
+  constitute acceptance or completion.
 
 ## 2026-07-30 — V3-FIXTURE-001
 
