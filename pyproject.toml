@@ -36,6 +36,10 @@ packages = ["src/mmaudit"]
 addopts = "-ra"
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+  "large_scale: deterministic realistic-size fixture and analysis regressions",
+  "slow: bounded tests intended for separate slow-suite selection",
+]
 
 [tool.ruff]
 target-version = "py312"

@@ -1,0 +1,197 @@
+{
+  "actual": {
+    "file_count": 20,
+    "module_count": 15,
+    "solidity_file_count": 19,
+    "solidity_lines": 4952,
+    "source_utf8_bytes": 175158
+  },
+  "files": [
+    {
+      "lines": 7,
+      "mode": "0644",
+      "path": "foundry.toml",
+      "sha256": "8f715a2635d91e837ab466938736fce94609e31111cfe36e58976f4307a33aa9",
+      "utf8_bytes": 113
+    },
+    {
+      "lines": 49,
+      "mode": "0644",
+      "path": "src/core/Interfaces.sol",
+      "sha256": "95c3dd76029d8d3dabcf079e5b8679a8c37f63e1368764963953e2f5c0ba06a9",
+      "utf8_bytes": 1445
+    },
+    {
+      "lines": 70,
+      "mode": "0644",
+      "path": "src/core/ProtocolRegistry.sol",
+      "sha256": "757b045a411fb2338a10e65c8f87af1c374ca1e74655ab2c5f0db2fbf2f034e4",
+      "utf8_bytes": 2816
+    },
+    {
+      "lines": 134,
+      "mode": "0644",
+      "path": "src/core/SyntheticFixtureOnly.sol",
+      "sha256": "b1a307e6f2470bafa5bbaf4fefd8e678e2acd0bf2365079d59e6f49b4dfec670",
+      "utf8_bytes": 4473
+    },
+    {
+      "lines": 79,
+      "mode": "0644",
+      "path": "src/core/SyntheticProxies.sol",
+      "sha256": "14e79d481f6fc9f3a4ef765b2587068f9bbaa638d074e2ac4785fc72297e8cf4",
+      "utf8_bytes": 2639
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket000.sol",
+      "sha256": "a687275b86c24dbd332f7c3820da8d4930afdbed115d5c5f66534532178aef5f",
+      "utf8_bytes": 10913
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket001.sol",
+      "sha256": "affd4faa6506ffd597dbeb2b146806aec62ad233aa5171a3a1a7b37d7afab75c",
+      "utf8_bytes": 10914
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket002.sol",
+      "sha256": "ac9025af3cc95bb2d45e555612fe2022e5b79e8dc29fe35c259264a547acc864",
+      "utf8_bytes": 10915
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket003.sol",
+      "sha256": "198d4bb0881af5ecb0a104ea1e24e9c97f6294801da0536098940eb944e6a7f6",
+      "utf8_bytes": 10916
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket004.sol",
+      "sha256": "3ee4089c99537fea542a7ed1921a562a3c07f1a459b2827a4a9256e89ac03096",
+      "utf8_bytes": 10917
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket005.sol",
+      "sha256": "e895cba11c7c5b57222060940dd3d57fc6715d4a97a97cdd6cb505a200c02ab8",
+      "utf8_bytes": 10918
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket006.sol",
+      "sha256": "b7f1ceb5ca1b9ad494b95ef1aacf22569586700f46c5d698e399e77491438d84",
+      "utf8_bytes": 10919
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket007.sol",
+      "sha256": "9c4cf0e9181f0b0100f6e3bbfa8ec45abaf8bf37a47821df9f96764e1b4f03fb",
+      "utf8_bytes": 10920
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket008.sol",
+      "sha256": "ad61a76782d046bb115bc2f0c2a363dba3e7af9184bbf5f6d5db5079bdccc5a9",
+      "utf8_bytes": 10921
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket009.sol",
+      "sha256": "310307c8aabf2640ba5157a2385a1d361a8eae880a66a4fb3fa76fd0faec6378",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket010.sol",
+      "sha256": "a38f8cef61954c46a31a4e6b2a55365f63a4adc4650acccfe6c31528418c3430",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket011.sol",
+      "sha256": "026542dcc2a9c2d50900f383f8a75aba9ad6e4239fe1a64272782e79ee2c4b44",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket012.sol",
+      "sha256": "9bd03f6acd8fbfcd93e10b2214d8a31eaef1feb0d22a91b4dbf5d2496634370a",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket013.sol",
+      "sha256": "1e8f9c511a220e5953dd01827c41497c68677fe4464e896de8ca993dc7b9c3b0",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket014.sol",
+      "sha256": "b31adfcc5a2cc3f6c07c5ca03a395e9972319a6d0756856c706d8e16955de433",
+      "utf8_bytes": 10922
+    }
+  ],
+  "fixture_id": "solidity_005k",
+  "generator": {
+    "path": "scripts/generate_realistic_scale_fixtures.py",
+    "sha256": "525795709599aafe69427ef06a720b2611b3e5fc7caab8f4d6fbbce1ae1921b0",
+    "version": "1.0.0"
+  },
+  "manifest_sha256": "712251b7603c53ea66642c1e0205cd61f29ae6d4a24860d835afa2bc252f07ff",
+  "provenance": {
+    "copied_production_source": false,
+    "deployment_artifacts_present": false,
+    "non_deployable": true,
+    "original_for_mmaudit_tests": true,
+    "synthetic": true
+  },
+  "schema_version": "1.0.0",
+  "source_tree_sha256": "7634650ae8de7b40cbdd9144b51369e81c337c860e3e0f01c5b158dc7ee3244e",
+  "structure": {
+    "abstract_contracts": 21,
+    "features": [
+      "asset_custody_and_transfer",
+      "cross_contract_registry_routing",
+      "external_oracle_and_strategy_calls",
+      "guardian_and_governor_controls",
+      "inheritance",
+      "initialization",
+      "proxy_and_delegatecall"
+    ],
+    "functions": 551,
+    "interfaces": 5,
+    "privileged_control_references": 131,
+    "public_or_external_functions": 515,
+    "required_graph_kinds": [
+      "asset_flow",
+      "delegatecall",
+      "external_call",
+      "initializer",
+      "oracle_dependency",
+      "privilege",
+      "proxy",
+      "state_write"
+    ]
+  },
+  "target": {
+    "solidity_lines": 5000,
+    "tolerance_basis_points": 250
+  }
+}

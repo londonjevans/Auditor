@@ -119,11 +119,14 @@
     {
       "id": "I",
       "title": "Coherent repository sharding and seven-pass review",
-      "tickets": ["V3-SHARD-001", "V3-SCHEDULER-001"],
-      "status": "QUEUED",
-      "current_evidence_class": "MISSING",
-      "evidence": [],
-      "remaining_proof": "Stable semantic shards and resumable orientation, blind review, reduction, integration, cross-examination, validation, and judgment passes."
+      "tickets": ["V3-FIXTURE-001", "V3-SHARD-001", "V3-SCHEDULER-001"],
+      "status": "PARTIAL",
+      "current_evidence_class": "LOCAL_IMPLEMENTATION",
+      "evidence": [
+        "A scripted, synthetic, non-deployable corpus now supplies independently manifested 4,952, 15,116, and 35,444-line Solidity roots for scale-dependent indexing, graph, coverage, context, and future sharding regressions.",
+        "Marked scale tests passed five discovery/index/graph/coverage/context-input checks; two exact V3-OMISSION-001 defects remain strict expected reds. No semantic-sharding execution is claimed."
+      ],
+      "remaining_proof": "Stable semantic shards that consume the realistic-scale corpus, plus resumable orientation, blind review, reduction, integration, cross-examination, validation, and judgment passes."
     },
     {
       "id": "J",
@@ -236,7 +239,8 @@
       "current_evidence_class": "REAL_RUNTIME",
       "evidence": [
         "Baseline ticket followed reproduce, validate, trace, and checkpoint sequencing; normal tests did not enable paid calls.",
-        "V3-FORKDIFF-001 reproduced two distinct replay defects, added fail-closed regressions, passed a real local clean/pinned Foundry matrix and manifest-bound default replay, then passed 574 focused tests, Ruff, strict mypy, schema synchronization, diff review, and the full 2992-test suite with 10 explicit prerequisite skips."
+        "V3-FORKDIFF-001 reproduced two distinct replay defects, added fail-closed regressions, passed a real local clean/pinned Foundry matrix and manifest-bound default replay, then passed 574 focused tests, Ruff, strict mypy, schema synchronization, diff review, and the full 2992-test suite with 10 explicit prerequisite skips.",
+        "V3-FIXTURE-001 generated and verified 196 deterministic realistic-scale fixture files, passed its real local compiler integration, and passed the complete suite with 3005 tests, 11 explicit prerequisite skips, and two exact omission expected reds. It remains PARTIAL because semantic sharding is not implemented."
       ],
       "remaining_proof": "Repeat focused/full validation and exact worklog evidence for every ticket."
     },

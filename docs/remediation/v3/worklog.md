@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: ACTIVE
-CURRENT_MILESTONE: Differential and multi-state fork matrix
-CURRENT_TICKET: V3-FORKDIFF-001
+AUTORUN_STATUS: PAUSED
+CURRENT_MILESTONE: Paused after realistic-scale Solidity fixture validation
+CURRENT_TICKET: NONE — operator-requested pause boundary
 LAST_COMPLETED_TICKET: V3-FORKDIFF-001
-NEXT_ACTION: Create and publish the isolated V3-FORKDIFF checkpoint, then begin dependency-free V3-FIXTURE-001 so realistic-scale evidence is available for V3-OMISSION-001.
+NEXT_ACTION: On operator resume, begin V3-OMISSION-001 against the committed 5k/15k/35k corpus; revisit V3-FIXTURE-001 when V3-SHARD-001 can supply the missing semantic-sharding regression.
 LAST_COMMAND: .venv/bin/pytest -q
-LAST_RESULT: PASS — 2992 tests passed with 10 explicit external-engine, rootless-isolation, paid-provider, and opt-in real-local integration skips in 372.66s.
+LAST_RESULT: PASS — loopback-enabled complete suite: 3005 passed, 11 explicit prerequisite skips, and 2 exact V3-OMISSION-001 expected reds in 383.22s; no public network or provider call was in scope.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,121 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 41a3cf5977c33a66d8286f100c32d6c31dd7f23d
+LAST_CHECKPOINT_COMMIT: f719a8772bec2b934c8c5e077dab0d2d8581865e
+
+## 2026-07-30 — V3-FIXTURE-001
+
+- **Status:** `PARTIAL`.
+- **Defensive objective:** Add deterministic, credential-free, non-deployable
+  Solidity repositories at approximately 5,000, 15,000, and 35,000 lines so
+  scale-dependent context, index, graph, coverage, and future semantic-sharding
+  behavior is measured rather than inferred from the existing 5,051-line
+  aggregate fixture corpus.
+- **Starting evidence:** The complete committed Solidity fixture corpus contains
+  only `5,051` lines and its largest individual source file is `300` lines.
+  `V3-OMISSION-001` records the current expected-red context failure above
+  realistic size; `V3-SHARD-001` remains separately queued and receives no
+  implementation credit from fixture generation.
+- **Generated corpus:** Added `196` deterministic golden files under
+  `tests/fixtures/solidity/realistic_scale/`. The three independent Foundry roots
+  contain `4,952`, `15,116`, and `35,444` Solidity lines across `15`, `48`, and
+  `114` generated market modules. Shared prefixes are byte-identical. Every
+  contract is abstract and inherits a reverting synthetic-only base; no
+  deployment script, endpoint, credential, copied production source, compiler
+  artifact, cache, or chain state is present.
+- **Reproducibility evidence:** The typed generator has SHA-256
+  `525795709599aafe69427ef06a720b2611b3e5fc7caab8f4d6fbbce1ae1921b0`.
+  The corpus manifest file has SHA-256
+  `5acc4a50442251aa9944ae57881bd58d82351d806d04588193590c9b5e572099`.
+  Per-profile manifests bind every relative path, UTF-8 byte count, line count,
+  mode, SHA-256, structural minimum, generator hash, and self-hash.
+  `.venv/bin/python scripts/generate_realistic_scale_fixtures.py --write`
+  wrote the golden corpus, and the default check verified all `196` files.
+  Independent unit regeneration into two disposable roots also matched every
+  committed byte.
+- **Expected-red evidence before deferral:** The first scale run produced four
+  failures: the fallback graph lacked an oracle edge because the synthetic
+  interface used an unrecognized member name; the 5k desired context assertion
+  incorrectly required an omission even though all source fit; the 15k package
+  raised the queue-recorded `ContextBudgetError`; and the 35k package exceeded
+  the intended `64`-record ledger bound. The fixture renamed its original oracle
+  member to the analyzer-recognized `latestPrice`; the 5k assertion now permits
+  honest full coverage; and only the two unchanged production defects are
+  retained as strict, ticket-linked expected reds.
+- **Scale path validation:** The marked command `.venv/bin/pytest -q -m
+  large_scale tests/large_scale/test_realistic_solidity_scale.py` passed `5`
+  discovery/index/graph/coverage/context-input tests with `2` strict expected
+  reds in `9.23s`. All sizes have monotonic nonzero file, contract, function, and
+  graph populations; asset, external-call, oracle, privilege, initializer,
+  proxy, delegatecall, and state-write graph kinds are present; model-review
+  numerators remain exactly zero against nonzero public and privileged
+  denominators. The 15k compact index/graph projection is deterministic and
+  explicitly reports bounded truncation; it is not called a semantic shard.
+- **Compiler evidence:** Using the already trusted immutable compiler copy
+  `/private/tmp/mmaudit-trusted-solc-0.8.30/solc` and only disposable output,
+  `forge build --root
+  tests/fixtures/solidity/realistic_scale/solidity_035k --offline --use
+  /private/tmp/mmaudit-trusted-solc-0.8.30/solc --cache-path
+  /private/tmp/mmaudit-scale-build-large.C1Bqoo/cache --out
+  /private/tmp/mmaudit-scale-build-large.C1Bqoo/out` compiled all `118` Solidity
+  files successfully in `590.97ms`. No generated build artifact entered the
+  repository.
+- **Focused and static validation:** The final generator/manifest unit gate passed `8`
+  tests; the combined context, context-manifest, Solidity, generator, and scale
+  gate passed `106` with the same two strict expected reds in `11.77s`. Affected
+  Ruff formatting/checks passed. Explicit strict mypy over the generator passed.
+  `git diff --check` passed; artifact checks found no generated cache/output; the
+  changed-source credential scan found only its two negative canary literals.
+- **AST inheritance regression:** A separately marked conditional integration
+  invokes only external canonical Forge and the explicit trusted `0.8.30`
+  compiler with offline mode, sanitized environment, and disposable
+  cache/output/build-info. The exact command
+  `MMAUDIT_TEST_SOLC_EXECUTABLE=/private/tmp/mmaudit-trusted-solc-0.8.30/solc
+  .venv/bin/pytest -q tests/integration/test_realistic_scale_fixture.py`
+  passed `1` test in `1.68s`. Every 5k source file was AST-backed with no
+  fallback source, compiler-provenance inheritance edges were nonempty, current
+  source hashes were unchanged, and no build artifact entered the fixture.
+- **Pre-full gate state:** Repository-wide Ruff passed; configured strict mypy
+  passed all `148` source files; the deterministic generator verified all `196`
+  committed corpus files. The complete pytest gate is the remaining checkpoint
+  validation.
+- **First complete pytest attempt:** The sandboxed `.venv/bin/pytest -q`
+  completed with `2,926` passing tests, `14` explicit prerequisite skips, `2`
+  expected-red V3-OMISSION xfails, and `71` setup errors in `335.79s`. Every
+  error was the same `PermissionError` while
+  `tests/unit/test_read_only_rpc_bridge.py` attempted to bind a numeric
+  loopback-only listener; no assertion or fixture-ticket test failed. The
+  materially different retry grants only the required local-loopback execution
+  capability and does not authorize public network access.
+- **Loopback-enabled complete-suite result:** The materially different
+  `.venv/bin/pytest -q` retry completed with `3,005` passing tests, `11`
+  explicit external-prerequisite skips, and the two exact
+  `V3-OMISSION-001` expected reds in `383.22s`. The scale integration skip is
+  expected in the default suite because its explicit compiler variable is not
+  configured; the same integration passed separately with the trusted compiler.
+  No assertion failed, no provider call ran, and no public network was used.
+- **Final static and artifact gate:** `.venv/bin/ruff format .` reported `344`
+  files unchanged; `.venv/bin/ruff check .` passed; `.venv/bin/mypy` passed all
+  `148` source files; the generator verified all `196` committed files; both
+  v3 JSON state documents parsed; and `git diff --check` passed. The final
+  fixture-tree review found no cache, output, broadcast, environment, credential,
+  wallet, mnemonic, PEM, or key artifact. The only sensitive-word matches were
+  the two deliberate negative canaries in the generator unit test.
+- **Remaining acceptance gap:** There is no semantic shard implementation or
+  schema in current production code. The fixture proves deterministic graph and
+  index inputs but cannot honestly satisfy the acceptance item requiring a real
+  sharding regression. This ticket will be checkpointed `PARTIAL` and revisited
+  when `V3-SHARD-001` consumes the scale corpus.
+- **Independent review:** Three bounded reviews found no remaining material
+  generator, fixture, or regression blocker after descriptor-safe file
+  replacement, symlink/special-file/hardlink refusal, explicit `0644` modes, and
+  restrictive-umask coverage. All reviewers agreed that semantic sharding
+  remains an honest, separately queued acceptance gap.
+- **Pause boundary:** At `2026-07-30T00:49:44Z`, the operator requested a pause.
+  No next ticket was started. The safe resume action is `V3-OMISSION-001` using
+  these three committed scale roots; `V3-FIXTURE-001` remains `PARTIAL` until
+  `V3-SHARD-001` supplies a genuine sharding regression. No model, provider,
+  secret, public RPC, wallet, signing, broadcast, or paid operation is in scope.
 
 ## 2026-07-29 — V3-FORKDIFF-001
 

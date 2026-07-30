@@ -974,7 +974,24 @@ are invisible to source review by construction.
   `tests/` selection markers, affected regressions.
 - **Dependencies:** None; can be built alongside `V3-OMISSION-001` and is required by its
   acceptance criteria.
-- **Status:** `QUEUED`
+- **Status:** `PARTIAL`
+- **Evidence:** A deterministic scripted corpus now provides independent 4,952,
+  15,116, and 35,444-line synthetic Foundry roots with plausible inheritance,
+  proxy, external-call, asset-flow, oracle, initializer, state-write, and
+  privilege structures. All contracts are deliberately non-deployable. Golden
+  manifests bind all `196` generated files and three source-tree hashes. Marked
+  scale regressions exercise repository discovery, fallback indexing, semantic
+  graph construction, coverage, and context planning; a conditional real
+  `solc 0.8.30` integration proved AST-backed inheritance for the 5k root. The
+  complete suite passed `3005` tests with `11` explicit prerequisite skips and
+  the two exact `V3-OMISSION-001` expected reds.
+- **Remaining acceptance gap:** No semantic-sharding implementation exists yet,
+  so the acceptance item requiring a scale fixture to be consumed by a real
+  sharding regression remains uncredited. `V3-SHARD-001` must consume this
+  corpus before this ticket can become `COMPLETE`.
+- **Next action:** Operator-requested pause boundary. On resume, begin
+  `V3-OMISSION-001`; revisit this ticket when `V3-SHARD-001` implements the
+  missing semantic-sharding regression.
 
 ## Revised sequencing
 

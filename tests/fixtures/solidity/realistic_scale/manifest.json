@@ -1,0 +1,45 @@
+{
+  "corpus_id": "mmaudit-realistic-solidity-scale-v1",
+  "generator": {
+    "path": "scripts/generate_realistic_scale_fixtures.py",
+    "sha256": "525795709599aafe69427ef06a720b2611b3e5fc7caab8f4d6fbbce1ae1921b0",
+    "version": "1.0.0"
+  },
+  "manifest_sha256": "32a8812c2a8c79a1eba9856d9fe77918dd9a7b459f189787879153e29a59b266",
+  "profiles": [
+    {
+      "actual_solidity_lines": 4952,
+      "fixture_id": "solidity_005k",
+      "manifest_file_sha256": "30efa5c9cae4d5145b198bed7221bd25d0035e0967094e9e6d197a268d941851",
+      "manifest_path": "solidity_005k/fixture-manifest.json",
+      "manifest_sha256": "712251b7603c53ea66642c1e0205cd61f29ae6d4a24860d835afa2bc252f07ff",
+      "module_count": 15,
+      "root": "solidity_005k",
+      "source_tree_sha256": "7634650ae8de7b40cbdd9144b51369e81c337c860e3e0f01c5b158dc7ee3244e",
+      "target_solidity_lines": 5000
+    },
+    {
+      "actual_solidity_lines": 15116,
+      "fixture_id": "solidity_015k",
+      "manifest_file_sha256": "81fdd8b7b7e1737f6eeeecf8ffeeaed9d72d445d75efab91e24106ecc97c29cf",
+      "manifest_path": "solidity_015k/fixture-manifest.json",
+      "manifest_sha256": "63b4edd91703a82bfba0afc53aba69940c3e267c40df27f5f61c03d5c26a9813",
+      "module_count": 48,
+      "root": "solidity_015k",
+      "source_tree_sha256": "b2a56a28366ba12b247cc81d9c49752e4b2481c631da4b2d92d990b1944ea131",
+      "target_solidity_lines": 15000
+    },
+    {
+      "actual_solidity_lines": 35444,
+      "fixture_id": "solidity_035k",
+      "manifest_file_sha256": "8ef0ac24987edd15380fdb676ca6623564c47827a79741af94fbf2e000d67cca",
+      "manifest_path": "solidity_035k/fixture-manifest.json",
+      "manifest_sha256": "9dc96d53a2da7a4956bda29383f66e08cd10817efa121aa87e6e6796ef650129",
+      "module_count": 114,
+      "root": "solidity_035k",
+      "source_tree_sha256": "e5b21b27edefd59029b90172f9f61d7fa986a0a7212add151d42abeec3f69fb8",
+      "target_solidity_lines": 35000
+    }
+  ],
+  "schema_version": "1.0.0"
+}

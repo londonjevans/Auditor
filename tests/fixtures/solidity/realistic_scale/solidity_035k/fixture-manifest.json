@@ -1,0 +1,890 @@
+{
+  "actual": {
+    "file_count": 119,
+    "module_count": 114,
+    "solidity_file_count": 118,
+    "solidity_lines": 35444,
+    "source_utf8_bytes": 1256682
+  },
+  "files": [
+    {
+      "lines": 7,
+      "mode": "0644",
+      "path": "foundry.toml",
+      "sha256": "8f715a2635d91e837ab466938736fce94609e31111cfe36e58976f4307a33aa9",
+      "utf8_bytes": 113
+    },
+    {
+      "lines": 49,
+      "mode": "0644",
+      "path": "src/core/Interfaces.sol",
+      "sha256": "95c3dd76029d8d3dabcf079e5b8679a8c37f63e1368764963953e2f5c0ba06a9",
+      "utf8_bytes": 1445
+    },
+    {
+      "lines": 70,
+      "mode": "0644",
+      "path": "src/core/ProtocolRegistry.sol",
+      "sha256": "757b045a411fb2338a10e65c8f87af1c374ca1e74655ab2c5f0db2fbf2f034e4",
+      "utf8_bytes": 2816
+    },
+    {
+      "lines": 134,
+      "mode": "0644",
+      "path": "src/core/SyntheticFixtureOnly.sol",
+      "sha256": "b1a307e6f2470bafa5bbaf4fefd8e678e2acd0bf2365079d59e6f49b4dfec670",
+      "utf8_bytes": 4473
+    },
+    {
+      "lines": 79,
+      "mode": "0644",
+      "path": "src/core/SyntheticProxies.sol",
+      "sha256": "14e79d481f6fc9f3a4ef765b2587068f9bbaa638d074e2ac4785fc72297e8cf4",
+      "utf8_bytes": 2639
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket000.sol",
+      "sha256": "a687275b86c24dbd332f7c3820da8d4930afdbed115d5c5f66534532178aef5f",
+      "utf8_bytes": 10913
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket001.sol",
+      "sha256": "affd4faa6506ffd597dbeb2b146806aec62ad233aa5171a3a1a7b37d7afab75c",
+      "utf8_bytes": 10914
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket002.sol",
+      "sha256": "ac9025af3cc95bb2d45e555612fe2022e5b79e8dc29fe35c259264a547acc864",
+      "utf8_bytes": 10915
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket003.sol",
+      "sha256": "198d4bb0881af5ecb0a104ea1e24e9c97f6294801da0536098940eb944e6a7f6",
+      "utf8_bytes": 10916
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket004.sol",
+      "sha256": "3ee4089c99537fea542a7ed1921a562a3c07f1a459b2827a4a9256e89ac03096",
+      "utf8_bytes": 10917
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket005.sol",
+      "sha256": "e895cba11c7c5b57222060940dd3d57fc6715d4a97a97cdd6cb505a200c02ab8",
+      "utf8_bytes": 10918
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket006.sol",
+      "sha256": "b7f1ceb5ca1b9ad494b95ef1aacf22569586700f46c5d698e399e77491438d84",
+      "utf8_bytes": 10919
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket007.sol",
+      "sha256": "9c4cf0e9181f0b0100f6e3bbfa8ec45abaf8bf37a47821df9f96764e1b4f03fb",
+      "utf8_bytes": 10920
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket008.sol",
+      "sha256": "ad61a76782d046bb115bc2f0c2a363dba3e7af9184bbf5f6d5db5079bdccc5a9",
+      "utf8_bytes": 10921
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket009.sol",
+      "sha256": "310307c8aabf2640ba5157a2385a1d361a8eae880a66a4fb3fa76fd0faec6378",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket010.sol",
+      "sha256": "a38f8cef61954c46a31a4e6b2a55365f63a4adc4650acccfe6c31528418c3430",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket011.sol",
+      "sha256": "026542dcc2a9c2d50900f383f8a75aba9ad6e4239fe1a64272782e79ee2c4b44",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket012.sol",
+      "sha256": "9bd03f6acd8fbfcd93e10b2214d8a31eaef1feb0d22a91b4dbf5d2496634370a",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket013.sol",
+      "sha256": "1e8f9c511a220e5953dd01827c41497c68677fe4464e896de8ca993dc7b9c3b0",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket014.sol",
+      "sha256": "b31adfcc5a2cc3f6c07c5ca03a395e9972319a6d0756856c706d8e16955de433",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket015.sol",
+      "sha256": "ecf796f97df4d5a5cd665e168e2c389fd495d3ec82eb52ef5772c1ca701efd0e",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket016.sol",
+      "sha256": "6d81207a374660a8e479e1fbfae537896c59afc2cb25d1e62f564cfb0716f652",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket017.sol",
+      "sha256": "8acd63a53b4a675203071dc3c1759c46ad0f6048c8215cb3819f1d71b3972179",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket018.sol",
+      "sha256": "d0336e908b4061b003646fd32c490625996ce4623528333c7632dc503e78908c",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket019.sol",
+      "sha256": "fe9c4a83d8ab3089a1d289c089b9bdfd676bced8a92cb31a1b354d5b2de86576",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket020.sol",
+      "sha256": "dde0a065b1b2b5d04dd65bf047f5763c0c4489701d59f00c12526a22ea8f72b8",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket021.sol",
+      "sha256": "7036c5719faa974e865205d63c55d2b322328fd646ee984f78c71c8497c12199",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket022.sol",
+      "sha256": "4742a27b7c21723faff41907a126ee2e4692944ee560aec9c33a52f9cf58d34d",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket023.sol",
+      "sha256": "a8d578bc706cfc2c80cf6c96f94f38a62a2582b84a72892478852a605554f952",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket024.sol",
+      "sha256": "903e9598ba88c061a132f1b8f00b698b57359960af200694c63b7889e3d75163",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket025.sol",
+      "sha256": "d29eb7ef9033dd926de74a0b9f36d765b47f4a615006503ae121c2e46f41cc87",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket026.sol",
+      "sha256": "55337e92eb2864eb7cf1b272c1e59a9f5a76a49a694c6edc4504de7bd3e5bfc4",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket027.sol",
+      "sha256": "fc7a4a5f63a97599ebed2f4773fee571b50303d6967fff7675ca0e3a1fe6388f",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket028.sol",
+      "sha256": "3c19df96cf7520ddf5bd1155b5e908062b52a11eac7c4c880f6e393eca38ec99",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket029.sol",
+      "sha256": "66add8bfdc043291a514626f0dfe901dcbb759472b9e8fb9b356cc56a380aeb5",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket030.sol",
+      "sha256": "6e6f3a303288788986ce89277e9efb9cdcb111b98057719795c2f57d7ff885c3",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket031.sol",
+      "sha256": "33a39cdb62cfc08b2f5720e0f3b9a76026ab7f0ec6bf142e889232aa7963531b",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket032.sol",
+      "sha256": "f512f9c7b04ddd569c833a6bb72bc122bef656bc5d3689e1422e8ba275df5433",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket033.sol",
+      "sha256": "0f1b3e57cc21cd7a2d22aade91f9d572e7f0141a332428a293fb2ce7fabaf90c",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket034.sol",
+      "sha256": "684a9ab30c9b8cf44dfb4c7d984561a60b5831e3665881bc969f8ac52c04464d",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket035.sol",
+      "sha256": "90e425c3fd65221fa72f876432733ccfe4b16a6aa7a29f85ae5a5e747f983075",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket036.sol",
+      "sha256": "6bc1596ed89b51278a9dc15191a9a0c7665498b610081db0c666be8bd063e590",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket037.sol",
+      "sha256": "588b727ae266445491b5bd9f3222cfd30285209e62be2d8e5588a2f8a38b6363",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket038.sol",
+      "sha256": "77d018e4dbb2ca2173e21bdfd46bbaacea928a0069cae0d1be53cb2f46baa77c",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket039.sol",
+      "sha256": "ef6974d92156f8ba0e129d38232b593c10c5c21f0efa46eed83889f35310c407",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket040.sol",
+      "sha256": "95f30b5fc26a066d9850b6b9df166c983ee2180b61074563e0789c11e1a3c63a",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket041.sol",
+      "sha256": "597ad26bd26ce3c03b7221fae86d21555ed2662baabc3edae9600ed361c63ae1",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket042.sol",
+      "sha256": "81c5578c28c9dc3999afdb187839b6bbc2ae32a781ca2c97c6a2032e0db2baf4",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket043.sol",
+      "sha256": "0e0c17e350d4cecfa8fdca818ce74e8f81643448ba98c960d4ee8c3d993cc4fa",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket044.sol",
+      "sha256": "0cfaf3c557b6719e58e0e234cb9fcb3a0233178cc0b049264e3b3703a7dd4241",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket045.sol",
+      "sha256": "7f591f9307883eaae5e83e1f35a9a6424e95a6570bec3f34085706219cc7d199",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket046.sol",
+      "sha256": "371bca5dcc838399b5162bcf63e390fa16aaace7fb9d13c38e668ed0595254da",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket047.sol",
+      "sha256": "a52babe21b7a0b6bddc274cffbd4ea6803364887ab0b999d7d9b67d37f13ddec",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket048.sol",
+      "sha256": "47e3243809ae25f1550e48f8d9b4faa0fd7b97f4931e913d113025b946198240",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket049.sol",
+      "sha256": "28ac82ad65ddcc0db368abd5eb8435a5f0fd7bfb594dd770c875b6ac84e779ec",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket050.sol",
+      "sha256": "231a7e843c812d79bb614934add7e35c7520a92606a9a852a90b9f626425fa41",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket051.sol",
+      "sha256": "263ff8419baaf54f4ba53423987e0bd61d2e24557539b9d93495e3f4a493a40c",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket052.sol",
+      "sha256": "68523db7c4567c34998c9bfdc49faa35fea82cba38362dde9552a57256548663",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket053.sol",
+      "sha256": "fe430455d7e541b68884517f9fe1a27e6b8dbe7f538a43ec65222668db18978c",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket054.sol",
+      "sha256": "e959d7e4290fab5b8b90d784085edc82c14b81fddb9a61e2384b7174710c6b1d",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket055.sol",
+      "sha256": "5c62a36469430e06b2b1081a86113fcf4a40445cadc03376a9ab2e06f7fa524d",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket056.sol",
+      "sha256": "9595425ff3d9a13b4d37190451df3406209926c147dfaf9b935b22bc207af364",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket057.sol",
+      "sha256": "6e8e2ee208eb9b0987c72c7ef823bed67cf44e689a9f76b7c67c29f3f5df64ae",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket058.sol",
+      "sha256": "76516978a5a694f729186b0fe3640bc95efdbb9439a8519d5ac99835ca0fb104",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket059.sol",
+      "sha256": "b4ea2b56f3962a4e961f4ce13d1f5546f86c7386e4ae2f34a57589d8ca9241fe",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket060.sol",
+      "sha256": "a078d7cb50eef2d7f903c5c84142aa2ba72f5eaf6ae6fdf0c393637dfb9d94e6",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket061.sol",
+      "sha256": "bf367869d25a1ec512a94b2d4fe4cc55cd146ad18ca940528a176532311ad3ec",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket062.sol",
+      "sha256": "301dfe0aa048e97b7f2a521ce41378c017690a3c88bfad0bc61123f50673c5a3",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket063.sol",
+      "sha256": "12e2a2c78cdbac12d3d3288518f4ababbffe4f973e3d98fed213b67f1f901ede",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket064.sol",
+      "sha256": "8a6751cf778dc455d978be106854ce5742fc055f2efa707ba1dc6863e4a52e23",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket065.sol",
+      "sha256": "4849982874ec2181cf4da5b5bac43e271abe276556eaa685369fec87ddec2e43",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket066.sol",
+      "sha256": "6a0ed392c07d8655df9fd6c723ff13d024a4a121c40dee8beab96a687ccf8287",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket067.sol",
+      "sha256": "207af1a15ec947a665014ac4aa4ff3ff19b7d98fc8850bf991b88678603d36d5",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket068.sol",
+      "sha256": "f2c65a3d7ee7b73dcd2ddf60bb0395fa9d1ff3af0eab38873398b9c1af1f4b55",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket069.sol",
+      "sha256": "89408d315bc51758180e1d8b77b4e7f95fe3c069ffd91a48a0b08a1415cc3aa7",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket070.sol",
+      "sha256": "bf978bb158757bd39724879dd7a7a089b1cdf1454894fe1e00b0235f5d37b3d8",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket071.sol",
+      "sha256": "f60ecbadb74d99a7470015e68bd770c1201891306e26e998cb2be1af1567ac4a",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket072.sol",
+      "sha256": "cd8191e4a0f042e87e9718e02ba915683ccfab54d3bfcc45789a98c3e70700a3",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket073.sol",
+      "sha256": "d26c104e88f203bcc93e1c7169756eb6d43dbbc4a3252b6dccf71d14e1b0587f",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket074.sol",
+      "sha256": "c0e9502ed6cf4419b4e114b7e286863458d34123002222559afafcca5ed9d6d9",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket075.sol",
+      "sha256": "5786849f6a7710ad787bcdb68ee2d417da46ec52adc2b68774883297f65970a1",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket076.sol",
+      "sha256": "27619638dfdc8964859f5f0762affc5f7c3b55034087ad9c10d129db7345ed9d",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket077.sol",
+      "sha256": "8fcb22b2729b7020dfa2cc419b7c1c28345455cf9535261ee8b91fe06dba9574",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket078.sol",
+      "sha256": "9ee93e8624b5ffb51a35b6440410535a1cd6db8b86eb6f9358aaddb14cb7edec",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket079.sol",
+      "sha256": "3e749309c5759e2ab8549a77e8cd12379262468582abc954527c6b5b37b9d974",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket080.sol",
+      "sha256": "a8707b83eb0c1b7949964018a5d2e1da15e04f352da684cd6d5f825ce03df60d",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket081.sol",
+      "sha256": "6d967c085b307f6faa32d02be8bf907e0759420cd400b0ffba0f725fbc578d25",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket082.sol",
+      "sha256": "0f3992969e7f2cec4ef2d2bd9e00a9b30bed8c8516d5fc6324a0b15f03d9e3b7",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket083.sol",
+      "sha256": "d948ae7aeb89353752c381858b999343583893e3f11ef9af3c33926c383ffeb5",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket084.sol",
+      "sha256": "6f04edc004d12cb6941c69844649fd474b717f8cb33cc60c0383b398c59ff063",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket085.sol",
+      "sha256": "2591e01bcee5163e35780f1ce3397c6b31e93a1249b2a3cbbad8e1dc58cd8c11",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket086.sol",
+      "sha256": "3117a334ce425f8643015fcdb0a1581fdefe3618a2e4ade24874c8aad6e202ba",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket087.sol",
+      "sha256": "e77246332ad5f996513868c224fa51ef4ffcb6e88f3240deabb4935c8735fab1",
+      "utf8_bytes": 10922
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket088.sol",
+      "sha256": "dd169947a140645635f2f6d2dc2417290e00e7dd3bbb74099f1c6e4b1b0d44f5",
+      "utf8_bytes": 10923
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket089.sol",
+      "sha256": "3c59b566d64b3ec2dd807b3500020bc3f79e069c856a32a83a06c46224708d74",
+      "utf8_bytes": 10924
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket090.sol",
+      "sha256": "7580a8c657e1ae22dc9dc6e19a4fe1a0c7126d295330dab4bf3316974c8b1691",
+      "utf8_bytes": 10925
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket091.sol",
+      "sha256": "43f283f4dad369da32a3505457563e30aecb47a80e592da6d10092a6b51f98de",
+      "utf8_bytes": 10926
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket092.sol",
+      "sha256": "5694f39c94f60e6cf46ce31564ec1285557b704c364955b4466808c69985f410",
+      "utf8_bytes": 10927
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket093.sol",
+      "sha256": "93eb853139e310881a5cee1cb36103d6bcfc8be92a754fa507183d53beda5235",
+      "utf8_bytes": 10928
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket094.sol",
+      "sha256": "cca948ccf2998e4213d8574b5070f751c52658ea7cc7484261f5eb36013022c0",
+      "utf8_bytes": 10929
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket095.sol",
+      "sha256": "e109b7d73fcefb1450411dbb0732b499504ba8f2b0ff8414f443d5f23c3a9175",
+      "utf8_bytes": 10930
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket096.sol",
+      "sha256": "f2dffbd46b026b4beb9f28ef6f3bdf55678832353ee4c8197e825487573112ad",
+      "utf8_bytes": 10931
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket097.sol",
+      "sha256": "77397a40bdbdc53bc9bd98b71a13253dba2d14b32cc2ac4e3a911156c4116642",
+      "utf8_bytes": 10932
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket098.sol",
+      "sha256": "9bcae33a6117ad727c116ffdc1b50bbd26eab8965e5449e7efe8c678eb2fa02c",
+      "utf8_bytes": 10933
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket099.sol",
+      "sha256": "04c49e0e486cf9a5b0b7e8f3a6118f62f2d33a4146abbaa83401e12dd5610da4",
+      "utf8_bytes": 10934
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket100.sol",
+      "sha256": "5d135ef461186078761faef61eef89fcc8b9e631b0bfe61aff809b7e24698496",
+      "utf8_bytes": 10934
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket101.sol",
+      "sha256": "74030afd3409efad036914e73b8bc74037e4af736de8a8ef4de6fa049da0f411",
+      "utf8_bytes": 10934
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket102.sol",
+      "sha256": "26494e45036ed3ba4849172549fd8a2acebafe309e271115859be45ad8921546",
+      "utf8_bytes": 10934
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket103.sol",
+      "sha256": "9741ba9f39758fcd5e6fc2939bf0479d6d3dda053017660b67bb69eade5d18bc",
+      "utf8_bytes": 10934
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket104.sol",
+      "sha256": "e9d94fdcadd5bd5a22dd23e496e03808c7021d368ed2bd2b099c182b934a6fa7",
+      "utf8_bytes": 10934
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket105.sol",
+      "sha256": "19ee99036296bf435d9230ea91a79cdbe79a1468da81531362adb5347d67d4e1",
+      "utf8_bytes": 10934
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket106.sol",
+      "sha256": "04ed80771e662d515ecc19be1e744410865bd8df21fa9b194f70c3208e7b4c45",
+      "utf8_bytes": 10934
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket107.sol",
+      "sha256": "c626a3d540edf1f20b2aeddad98630c494a0e0a7645d5f55fe17af72e1b96032",
+      "utf8_bytes": 10934
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket108.sol",
+      "sha256": "1d0281ddb79ca72040a624729b8e15d248a461da53236e18e41535a631f177c5",
+      "utf8_bytes": 10934
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket109.sol",
+      "sha256": "2b72a91a59b015669469b779f0db67c9f6e0996d1188b5d999c0bc303073402c",
+      "utf8_bytes": 10934
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket110.sol",
+      "sha256": "b684cbc9a5a4d9b66d7429b3050eb5b1c130811e7f3a643efbebb8d080a1c17e",
+      "utf8_bytes": 10934
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket111.sol",
+      "sha256": "ce2d3997ee467705c78d77b20619d02d7ce096ee28cc6ea5ea017660cb8097fc",
+      "utf8_bytes": 10934
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket112.sol",
+      "sha256": "bb0c04ee4c0da27456140f56eea7949e700ca52d36049f8c34c5fc436517e20d",
+      "utf8_bytes": 10934
+    },
+    {
+      "lines": 308,
+      "mode": "0644",
+      "path": "src/markets/SyntheticMarket113.sol",
+      "sha256": "1b4c4ae6108d6c116923d698f434834456e9391a65122fd71ddeffed0a965a88",
+      "utf8_bytes": 10934
+    }
+  ],
+  "fixture_id": "solidity_035k",
+  "generator": {
+    "path": "scripts/generate_realistic_scale_fixtures.py",
+    "sha256": "525795709599aafe69427ef06a720b2611b3e5fc7caab8f4d6fbbce1ae1921b0",
+    "version": "1.0.0"
+  },
+  "manifest_sha256": "9dc96d53a2da7a4956bda29383f66e08cd10817efa121aa87e6e6796ef650129",
+  "provenance": {
+    "copied_production_source": false,
+    "deployment_artifacts_present": false,
+    "non_deployable": true,
+    "original_for_mmaudit_tests": true,
+    "synthetic": true
+  },
+  "schema_version": "1.0.0",
+  "source_tree_sha256": "e5b21b27edefd59029b90172f9f61d7fa986a0a7212add151d42abeec3f69fb8",
+  "structure": {
+    "abstract_contracts": 120,
+    "features": [
+      "asset_custody_and_transfer",
+      "cross_contract_registry_routing",
+      "external_oracle_and_strategy_calls",
+      "guardian_and_governor_controls",
+      "inheritance",
+      "initialization",
+      "proxy_and_delegatecall"
+    ],
+    "functions": 3917,
+    "interfaces": 5,
+    "privileged_control_references": 923,
+    "public_or_external_functions": 3683,
+    "required_graph_kinds": [
+      "asset_flow",
+      "delegatecall",
+      "external_call",
+      "initializer",
+      "oracle_dependency",
+      "privilege",
+      "proxy",
+      "state_write"
+    ]
+  },
+  "target": {
+    "solidity_lines": 35000,
+    "tolerance_basis_points": 250
+  }
+}
