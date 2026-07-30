@@ -1001,6 +1001,138 @@ are invisible to source review by construction.
   `V3-OMISSION-001`; revisit this ticket when `V3-SHARD-001` implements the
   missing semantic-sharding regression.
 
+## V3-HARDHAT-001 — Hardhat reporter contract and single-loopback backend
+
+- **Objective:** Build the two in-repo components that Hardhat fork execution depends on,
+  before any container image is produced. Both are implementable and fully testable on a host
+  with no container runtime.
+- **Rationale:** `V3-FORKSUITE-001` is `PARTIAL` because real Hardhat execution is
+  `BLOCKED_TECHNICAL`, and the stated blocker is an operator-supplied digest-pinned image.
+  The image is in fact the third missing piece, not the first. Two contracts it would have to
+  satisfy do not yet exist, so building an image now means baking in components that have no
+  specification and no tests.
+  - The trusted reporter does not exist. `scanners/hardhat.py` validates reporter output
+    through `parse_hardhat_inventory_report` and the test-report parser, enforcing an exact
+    `expected_reporter_version`, one strict JSON object, and a byte ceiling. No JavaScript
+    reporter exists anywhere in the repository.
+  - The single-loopback backend does not exist. The adapter requires
+    `backend.hardhat_network_policy == "single-loopback-rpc"` and a validated
+    `hardhat_loopback_capability_sha256`, and `_rootless_backend_error` explicitly rejects the
+    existing no-network `RootlessContainerBackend` as "not a dedicated single-loopback Hardhat
+    capability".
+- **Acceptance criteria:**
+  - The reporter output contract is specified as a published, versioned schema, and the exact
+    `reporter_version` string is a committed constant rather than a caller-supplied value that
+    can drift. Inventory and test phases have separate typed schemas.
+  - A reference reporter implementation is committed in-repo with deterministic output, no
+    network access, no filesystem access beyond its declared output path, and no dependency on
+    repository JavaScript. It is the artifact later baked into the image, and its hash is
+    pinned so an image-baked copy can be proven identical to the reviewed source.
+  - Reporter parsing regressions cover valid output plus malformed, truncated, duplicated,
+    non-UTF-8, oversized, version-mismatched, and semantically inconsistent output. None
+    receives execution credit.
+  - A `SingleLoopbackHardhatBackend` is implemented with `network=none` except a narrowly
+    scoped read-only JSON-RPC bridge to exactly one operator-configured loopback endpoint. It
+    refuses non-loopback endpoints, multiple endpoints, write methods, host credentials, the
+    container socket, and any broader network capability. Its capability attestation hash is
+    computed from its own effective configuration, not supplied by a caller.
+  - The two-phase inventory-then-test protocol is exercised end to end against a local
+    Hardhat fixture with the backend stubbed at the process boundary, so the protocol is
+    proven without a container runtime.
+  - Absent a real runtime the adapter still reports `UNAVAILABLE`; no mock, broad-network
+    container, or host-loopback substitute is accepted, and nothing here relaxes that.
+- **Deferred operator prerequisite:** Image construction and digest pinning remain out of
+  scope here and belong to `V3-AUTONOMY-001`. Note for that work that
+  `rootless_container_image` is validated against `name@sha256:<64-hex>`, which is a registry
+  manifest digest; a locally built image yields a config ID, not a manifest digest, and the
+  backend runs with `--pull never`. The image must therefore be pushed to a registry to mint
+  its digest and pulled back by that digest, so whether a private registry is hosted is a
+  prerequisite decision.
+- **Files expected to change:** `src/mmaudit/scanners/hardhat.py`,
+  `src/mmaudit/isolation/container.py`, new reporter source and published schema,
+  `src/mmaudit/config.py`, `docs/remediation/v3/operator_prerequisites.md`, regressions.
+- **Dependencies:** `V3-OMISSION-001`.
+- **Status:** `QUEUED`
+
+## V3-AUTONOMY-001 — Zero-operator-input managed run profile
+
+- **Objective:** Remove per-run human gating from the audit path so a client purchase can
+  produce a full-quality audit with no operator involvement, by **pre-satisfying** every gate
+  in advance rather than by relaxing or removing any of them.
+- **Read this first — the distinction that governs the whole ticket.** Every gate in this
+  system exists for a reason: supply-chain integrity, privacy law, or honest reporting. The
+  objective is to make each gate *already satisfied* at run time, not to make it optional.
+  Any change that lets a run proceed with an unverified toolchain, unpinned binary,
+  unapproved model lineage, or absent analysis is a regression, not automation.
+  `V3-FLOOR-001` fail-closed behaviour must survive this ticket unchanged: if provisioning is
+  incomplete the run must still fail closed and say so. The fix is to guarantee provisioning,
+  never to permit a silent degraded run.
+- **Current gating inventory.** The audit path presently requires operator input at roughly
+  these points, and the first acceptance criterion is to replace this estimate with an exact
+  enumeration:
+  - nine binary and image trust pins — `solc_sha256`, `anvil_sha256`, `cli_sha256`,
+    `echidna_sha256`, `medusa_sha256`, `halmos_sha256`, `halmos_solver_sha256`,
+    `kontrol_sha256`, `rootless_container_image`;
+  - about twenty `operator-approved`, `operator-authored`, `operator-reviewed`, and
+    `operator-configured` decision points across the source;
+  - `privacy.approved_model_lineages`, which is empty and blocks egress in six call sites;
+  - per-run acknowledgements `allow_code_egress`, `allow_fork_probing`, `allow_network`, and
+    the `require_zdr` posture;
+  - a cumulative cost ledger that must already exist, since initialization is one-time;
+  - a running loopback fork RPC endpoint, plus pinned block and chain;
+  - literal `[reproduction].targets` addresses;
+  - operator-reviewed typed invariant harnesses;
+  - an operator-reviewed, hash-bound dependency snapshot;
+  - an externally prebuilt CodeQL database.
+- **Acceptance criteria:**
+  - An exact, generated inventory of every operator input on the audit path exists, each
+    classified as: pre-provisionable once, client decision captured at purchase, or genuinely
+    irreducible. The classification is committed and kept current by a test that fails when a
+    new operator input appears without a disposition.
+  - A **managed toolchain bundle** is defined and versioned: one pinned set of solc, anvil,
+    Slither, Echidna, Medusa, Halmos, Kontrol, the Hardhat image, and the reporter, with all
+    hashes recorded once. A run resolves its pins from the bundle rather than from per-run
+    operator configuration. Bundle verification still happens every run, and a hash mismatch
+    still fails closed.
+  - Pre-provisionable inputs are provisioned by an explicit, idempotent, auditable setup
+    command that is run outside the audit path — including the cost ledger, the fork endpoint
+    and its pinned block, the CodeQL database, and the dependency snapshot. Provisioning
+    state is verified before spend, and incomplete provisioning is an explicit refusal that
+    names exactly what is missing.
+  - Client decisions are captured once at purchase and bound to that audit, not re-asked per
+    run: scope and authorization, code-egress acknowledgement, and the retention/ZDR posture.
+    A declined non-ZDR consent selects the strict-ZDR model set and the report states the
+    reduced ensemble. Consent still cannot activate implicitly, and its evidence is still
+    recorded — the change is *who* consents and *when*, not *whether*.
+  - Model lineage approval becomes a one-time business decision recorded once per lineage with
+    rationale and evidence hash, not a per-audit judgment. Unreviewed lineages remain
+    fail-closed.
+  - Invariant harness approval is replaced by a reviewed, versioned, hash-pinned template
+    library, so template-derived harnesses are pre-approved by construction. A harness outside
+    the library remains unexecutable without review; automation must not become a path to
+    running arbitrary generated harnesses.
+  - `[reproduction].targets` are derived deterministically from the client's declared
+    deployment material or the audited source, and an underivable alias is a stated
+    limitation rather than a prompt.
+  - A managed profile completes a full-quality audit end to end with zero operator
+    interaction, and an integration regression proves the audit path requires no operator
+    input when provisioning is complete and refuses explicitly when it is not.
+  - No gate is deleted. A diff that removes a verification, acknowledgement, or fail-closed
+    branch without replacing it with an equivalent pre-satisfied check fails review.
+- **Irreducible, and out of scope for automation.** These are not run-path gates and must not
+  be automated away: the independent blind human comparison in `V3-HUMANCMP-001`, which is
+  evidence for a claim rather than a step in an audit; and the operator's own liability and
+  claim-language decisions. If the product later offers human sign-off as a premium tier, that
+  is an addition, not a gate restored.
+- **Files expected to change:** `src/mmaudit/config.py`, `src/mmaudit/cli.py`, managed-bundle
+  and provisioning modules, `src/mmaudit/isolation/`, `src/mmaudit/solidity/
+  invariant_templates.py`, gating-inventory artifact and its schema, documentation,
+  regressions.
+- **Dependencies:** `V3-LINEAGE-001`, `V3-HARDHAT-001`, `V3-INTAKE-001`, `V3-CONSENT-001`.
+  Design work can begin earlier; the gating inventory is useful immediately and should not
+  wait.
+- **Status:** `QUEUED`
+
 ## Revised sequencing
 
 Three tracks are largely independent and should not be run as one strict chain. The
@@ -1020,7 +1152,8 @@ still applies within a track.
    Solidity repository above roughly 5,000 lines can complete context construction for any
    specialist role, so every downstream ticket in this track is being validated only against
    toy-sized inputs. `V3-FIXTURE-001` is what makes the defect visible to the suite at all.
-5. `V3-FORKDIFF-001`, `V3-EXECORIGIN-001`, `V3-TESTQUALITY-001`.
+5. `V3-FORKDIFF-001` — `COMPLETE`. Then `V3-EXECORIGIN-001`, `V3-TESTQUALITY-001`,
+   and `V3-HARDHAT-001` to unblock the Hardhat share of the market.
 6. `V3-CI-001`.
 7. `V3-SHARD-001`, `V3-SCHEDULER-001`, `V3-TRUNCATION-001`, `V3-COVERAGE-001`,
    `V3-TAXONOMY-001`, `V3-CONSENSUS-001`, `V3-REPORT-001`, `V3-SCOPE-001`.
@@ -1042,6 +1175,9 @@ still applies within a track.
 2. `V3-STABILITY-001`.
 3. Remaining existing tickets through `V3-RELEASE-001`.
 4. `V3-QUOTE-001`, `V3-LIFECYCLE-001`, `V3-REVERIFY-001`.
+5. `V3-AUTONOMY-001` — the gating inventory in its first acceptance criterion is useful
+   immediately and should be produced early, even though the managed profile itself lands
+   late. It is what tells you how far the product actually is from self-serve.
 5. `V3-INTAKE-001`, `V3-CONSENT-001`, `V3-SERVICE-001`.
 
 **Deferrals.** `V3-BYTECODE-001` and the parts of `V3-CERTIFICATE-001` that bind toolchain
