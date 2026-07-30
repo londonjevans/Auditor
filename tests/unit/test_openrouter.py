@@ -5501,11 +5501,22 @@ async def test_certification_catalog_does_not_filter_privacy_or_output_mode(
 
     def handler(request: httpx.Request) -> httpx.Response:
         observed.append(request)
-        return httpx.Response(200, json={"data": [{"id": "alpha/atlas-secure"}]})
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "alpha/atlas-secure"},
+                    {"id": "~alpha/atlas-latest"},
+                ]
+            },
+        )
 
     client, http_client, _usage = _client(config_factory(), handler)
     try:
-        assert await client.list_certification_models() == [{"id": "alpha/atlas-secure"}]
+        assert await client.list_certification_models() == [
+            {"id": "alpha/atlas-secure"},
+            {"id": "~alpha/atlas-latest"},
+        ]
     finally:
         await http_client.aclose()
 
@@ -6081,6 +6092,7 @@ async def test_complete_remains_value_only_compatibility_wrapper(config_factory)
         "vendor/model-auto-router",
         "vendor/model:latest",
         "vendor/latest",
+        "~vendor/family-latest",
         "missing-provider",
     ],
 )

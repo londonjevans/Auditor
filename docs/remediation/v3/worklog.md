@@ -8,9 +8,9 @@ AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Current model catalogue discovery and drift detection
 CURRENT_TICKET: V3-MODELREFRESH-001 (IN_PROGRESS; discovery/diff portion)
 LAST_COMPLETED_TICKET: V3-EXECORIGIN-001
-NEXT_ACTION: Audit and checkpoint the corrected source inventory; then execute one explicitly opted-in authenticated metadata-only refresh against that exact commit.
+NEXT_ACTION: Checkpoint the routed-catalog grammar correction and retry one authenticated metadata-only refresh against that corrected exact commit.
 LAST_COMMAND: `.venv/bin/pytest -q`
-LAST_RESULT: PASS — `3534 passed, 11 skipped in 493.12s`. Every skip names an explicit external-integration prerequisite. Two non-fatal post-run cleanup warnings concerned already-restricted temporary `clean-anvil/toolchain` paths.
+LAST_RESULT: PASS — `3544 passed, 11 skipped in 500.97s`. Every skip names an explicit external-integration prerequisite. Two non-fatal cleanup warnings concerned already-restricted temporary `clean-anvil/toolchain` paths.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: ad27e950b1508f448bb9d0667f64acfe494bd305
+LAST_CHECKPOINT_COMMIT: ebd8f9cad0a5905e5237ac9f56476b59c1b714a6
 
 ## 2026-07-30 — V3-MODELREFRESH-001
 
@@ -103,9 +103,23 @@ LAST_CHECKPOINT_COMMIT: ad27e950b1508f448bb9d0667f64acfe494bd305
   mypy over `154` source files, generated-schema verification, and `git diff --check` then passed.
   The corrected complete suite passed `3534` tests with `11` explicit external-integration skips
   in `493.12s`.
-- **External effects so far:** No provider request, completion, model spend, target access, public
-  RPC, wallet, signing, or broadcast occurred in the implementation/test slice. `.env` was not
-  read. The cumulative OpenRouter ledger remains `0.0033415625` USD spent with zero reservation.
+- **External effects so far:** No completion, model spend, target access, public RPC, wallet,
+  signing, or broadcast occurred. The first explicitly opted-in authenticated metadata-only
+  refresh read `.env` only through the operator
+  secret interface, issued no completion, created zero usage records, and failed closed as
+  `MALFORMED_METADATA`. Its exact private failure receipt passed strict staging as `FAILED`.
+  A non-raw diagnostic isolated rejection of the full model catalogue before any ZDR or
+  exact-endpoint normalization; an aggregate public-catalog shape check observed `364` records,
+  of which `10` used the documented `~author/family-latest` router syntax. No provider-controlled
+  value or credential was printed or persisted. The cumulative OpenRouter ledger remains
+  `0.0033415625` USD spent with zero reservation.
+- **Real-catalog correction:** Added one shared bounded catalog-ID grammar that accepts current
+  tilde-prefixed router rows as non-exact discovery metadata. Refresh hash-binds and excludes
+  those rows from its exact-model semantic projection, while request, qualification, selection,
+  and endpoint paths continue to reject them as non-exact. Malformed catalogue identifiers still
+  fail closed. The correction passed `250` focused tests plus affected Ruff, mypy, and
+  generated-schema verification. The complete suite then passed `3544` tests with `11` explicit
+  external-integration skips in `500.97s`.
 - **Remaining partial work:** The scheduled workflow does not yet retrieve a durable prior
   snapshot or bind a real production selection; the audit pipeline does not consume the refresh
   freshness artifact. Automatic benchmark reservation/execution, refreshed-price runtime

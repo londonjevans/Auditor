@@ -31,6 +31,7 @@ from mmaudit.models.endpoint_snapshots import (
 from mmaudit.models.identifiers import (
     EXACT_MODEL_ID_PATTERN,
     is_exact_openrouter_model_id,
+    is_openrouter_catalog_model_id,
     require_exact_openrouter_model_id,
 )
 from mmaudit.models.output_modes import reasoning_capability_parameters, supports_reasoning_request
@@ -287,6 +288,19 @@ class ModelRefreshSnapshot(_FrozenModel):
     @classmethod
     def retrieval_time_is_utc(cls, value: datetime) -> datetime:
         return _whole_second_utc(value, label="refresh retrieval time")
+
+    @field_validator("excluded_routed_model_ids")
+    @classmethod
+    def excluded_ids_are_bounded_non_exact_catalog_ids(
+        cls,
+        value: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if any(
+            not is_openrouter_catalog_model_id(model_id) or is_exact_openrouter_model_id(model_id)
+            for model_id in value
+        ):
+            raise ValueError("excluded routed model IDs are invalid")
+        return value
 
     @model_validator(mode="after")
     def snapshot_is_complete_and_self_bound(self) -> Self:
@@ -609,7 +623,7 @@ def build_model_refresh_snapshot(
     seen_catalog_ids: set[str] = set()
     for raw in raw_models:
         model_id = raw.get("id")
-        if not isinstance(model_id, str) or re.fullmatch(EXACT_MODEL_ID_PATTERN, model_id) is None:
+        if not isinstance(model_id, str) or not is_openrouter_catalog_model_id(model_id):
             raise ModelRefreshValidationError("model catalogue contains an invalid model ID")
         if model_id in seen_catalog_ids:
             raise ModelRefreshValidationError("model catalogue contains duplicate model IDs")
@@ -630,7 +644,7 @@ def build_model_refresh_snapshot(
     zdr_by_route: dict[tuple[str, str], Mapping[str, Any]] = {}
     for raw in raw_zdr:
         model_id = raw.get("model_id")
-        if not isinstance(model_id, str) or re.fullmatch(EXACT_MODEL_ID_PATTERN, model_id) is None:
+        if not isinstance(model_id, str) or not is_openrouter_catalog_model_id(model_id):
             raise ModelRefreshValidationError("ZDR catalogue contains an invalid model ID")
         if not is_exact_openrouter_model_id(model_id):
             # The full provider inventory legitimately includes router aliases

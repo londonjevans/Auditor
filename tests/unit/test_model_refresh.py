@@ -220,15 +220,17 @@ def test_full_zdr_inventory_ignores_hash_bound_router_aliases() -> None:
     registry = _registry()
     routed_model = "openrouter/auto"
     routed_endpoint = _endpoint(routed_model, "openrouter/router")
+    latest_router = "~openrouter/family-latest"
+    latest_endpoint = _endpoint(latest_router, "openrouter/latest-router")
 
     snapshot = _snapshot(
         registry,
-        models=[_model(), _model(routed_model)],
-        zdr_endpoints=[_endpoint(), routed_endpoint],
+        models=[_model(), _model(routed_model), _model(latest_router)],
+        zdr_endpoints=[_endpoint(), routed_endpoint, latest_endpoint],
     )
 
-    assert snapshot.catalog_model_count == 2
-    assert snapshot.excluded_routed_model_ids == (routed_model,)
+    assert snapshot.catalog_model_count == 3
+    assert snapshot.excluded_routed_model_ids == (routed_model, latest_router)
     assert tuple(model.exact_model_id for model in snapshot.models) == (MODEL,)
 
 

@@ -60,7 +60,10 @@ from mmaudit.models.generation_evidence import (
     validate_generation_id,
     validate_openrouter_generation_payload,
 )
-from mmaudit.models.identifiers import is_exact_openrouter_model_id
+from mmaudit.models.identifiers import (
+    is_exact_openrouter_model_id,
+    is_openrouter_catalog_model_id,
+)
 from mmaudit.models.identity import (
     OpenRouterGenerationIdentityEvidence,
     OpenRouterIdentityBindingResult,
@@ -148,9 +151,6 @@ from mmaudit.reporting.json_report import stable_json
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
 
 _NORMALIZED_OPENROUTER_BASE_URL = OPENROUTER_DEFAULT_BASE_URL.rstrip("/") + "/"
-_EXACT_MODEL_ID_PATTERN = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
-)
 _PROVIDER_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,127}$")
 _QUALIFICATION_PROVIDER_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/()&+-]{0,199}$")
 _NON_DIRECT_ROUTING_STRATEGIES = {
@@ -5482,7 +5482,7 @@ def _validated_model_catalog(response: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _is_model_slug(model: str) -> bool:
-    return bool(_EXACT_MODEL_ID_PATTERN.fullmatch(model))
+    return is_openrouter_catalog_model_id(model)
 
 
 def _is_exact_model_id(model: str) -> bool:

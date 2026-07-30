@@ -6,6 +6,11 @@ import re
 from typing import Final
 
 EXACT_MODEL_ID_PATTERN: Final = r"^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$"
+OPENROUTER_CATALOG_MODEL_ID_PATTERN: Final = (
+    r"^~?[A-Za-z0-9][A-Za-z0-9._-]{0,127}/"
+    r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+)
+_CATALOG_MODEL_ID_PATTERN = re.compile(OPENROUTER_CATALOG_MODEL_ID_PATTERN)
 _MUTABLE_OR_ROUTED_PARTS = frozenset(
     {
         "auto",
@@ -16,6 +21,12 @@ _MUTABLE_OR_ROUTED_PARTS = frozenset(
         "router",
     }
 )
+
+
+def is_openrouter_catalog_model_id(value: object) -> bool:
+    """Return whether provider metadata uses one bounded model or router identifier."""
+
+    return isinstance(value, str) and _CATALOG_MODEL_ID_PATTERN.fullmatch(value) is not None
 
 
 def is_exact_openrouter_model_id(value: object) -> bool:
