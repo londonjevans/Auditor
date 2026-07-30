@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: d93454b89ec629d4381106a6d1625c910440d15c
+LAST_CHECKPOINT_COMMIT: 5e61fcad6bf93aab5d4aec4dd3765302d40d25ed
 
 ## 2026-07-30 — V3-CI-001
 
@@ -117,8 +117,10 @@ LAST_CHECKPOINT_COMMIT: d93454b89ec629d4381106a6d1625c910440d15c
   `sk-or-v1-...` canaries in defensive tests; no real credential pattern or generated runtime
   artifact was added. `.env` was not read. The worktree contains only the recorded source,
   workflow, schema, documentation, and test changes.
-- **Pause state:** `PAUSED_BY_OPERATOR`. V3-CALIBRATE-001 has not started. The current cohesive
-  ticket state is ready for its isolated local checkpoint and SSH push.
+- **Pause state:** `PAUSED_BY_OPERATOR`. V3-CALIBRATE-001 has not started. The cohesive
+  V3-CI-001 implementation is checkpointed at
+  `5e61fcad6bf93aab5d4aec4dd3765302d40d25ed`; the state-record commit and requested SSH push are
+  the only remaining pause-boundary actions.
 
 ## 2026-07-30 — V3-TESTQUALITY-001
 
