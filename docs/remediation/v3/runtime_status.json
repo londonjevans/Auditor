@@ -5,7 +5,7 @@
   "autorun_status": "PAUSED",
   "current_milestone": "execution_originated_candidate_consensus",
   "current_ticket": "V3-EXECORIGIN-001",
-  "last_checkpoint_commit": "ab3998d5d14cf30f3cd64d29af7cfff88267c3b8",
+  "last_checkpoint_commit": "c1199ea305a839227961bf59739fc2365d140058",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,
