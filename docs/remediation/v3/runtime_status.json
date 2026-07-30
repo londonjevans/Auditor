@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-07-30T05:32:47Z",
-  "candidate_commit": "d69c7a740bd86942f9c0b25554aaea677e68456b",
+  "updated_at": "2026-07-30T05:34:20Z",
+  "candidate_commit": "bd45918924bd530044d88369644f8d0eb569f302",
   "autorun_status": "PAUSED",
   "current_milestone": "execution_originated_candidate_consensus",
   "current_ticket": "V3-EXECORIGIN-001",
-  "last_checkpoint_commit": "d69c7a740bd86942f9c0b25554aaea677e68456b",
+  "last_checkpoint_commit": "bd45918924bd530044d88369644f8d0eb569f302",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,

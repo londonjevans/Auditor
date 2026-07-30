@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: d69c7a740bd86942f9c0b25554aaea677e68456b
+LAST_CHECKPOINT_COMMIT: bd45918924bd530044d88369644f8d0eb569f302
 
 ## 2026-07-30 — V3-OMISSION-001
 
@@ -338,6 +338,9 @@ LAST_CHECKPOINT_COMMIT: d69c7a740bd86942f9c0b25554aaea677e68456b
   The ticket remains `IN_PROGRESS`; no full pipeline or complete release gate
   is credited. No provider call, secret access, public RPC, wallet, signing,
   broadcast, paid operation, or active reservation occurred.
+- **Pause checkpoint:** Incomplete execution-origin work is preserved in
+  `bd45918924bd530044d88369644f8d0eb569f302`. This commit is a recovery
+  checkpoint, not acceptance evidence and not a completed ticket.
 
 ## 2026-07-30 — V3-FIXTURE-001
 
