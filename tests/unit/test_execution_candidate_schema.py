@@ -21,6 +21,7 @@ from mmaudit.models.schemas import (
     LocationValidation,
     Severity,
     VerificationTest,
+    execution_origin_location_validation_sha256,
 )
 
 
@@ -137,16 +138,20 @@ def _execution_finding(
                 type="execution",
                 source="mmaudit-foundry-invariant",
                 description="Repeated local execution produced the same counterexample.",
-                rule_id=ordered[0].invariant_id,
-                fingerprint=ordered[0].provenance_sha256,
+                rule_id=provenance.invariant_id,
+                fingerprint=provenance.provenance_sha256,
             )
+            for provenance in ordered
         ],
         false_positive_conditions=["The typed invariant does not express intended behavior."],
         recommendation="Correct the state transition and rerun the invariant campaign.",
         verification_test=VerificationTest(
             description="Replay the typed invariant in a fresh isolated workspace."
         ),
-        location_validation=LocationValidation(valid=True, content_hash="e" * 64),
+        location_validation=LocationValidation(
+            valid=True,
+            content_hash=execution_origin_location_validation_sha256(ordered),
+        ),
         contributing_candidate_ids=[
             f"exec-{provenance.provenance_sha256[:24]}" for provenance in ordered
         ],
@@ -315,6 +320,39 @@ def test_execution_finding_round_trip_and_exact_origin_bindings() -> None:
     wrong_location["locations"][0]["end_line"] = 15
     with pytest.raises(ValidationError, match="locations must exactly match"):
         Finding.model_validate(wrong_location)
+
+    model_only = finding.model_dump(mode="python")
+    model_only["evidence"] = [
+        Evidence(
+            type="model",
+            source="synthetic-review",
+            description="A model cannot replace deterministic origin evidence.",
+        ).model_dump(mode="python")
+    ]
+    with pytest.raises(ValidationError, match="exactly bind every provenance"):
+        Finding.model_validate(model_only)
+
+    invalid_location = finding.model_dump(mode="python")
+    invalid_location["location_validation"] = LocationValidation(
+        valid=False,
+        errors=["synthetic stale source"],
+    ).model_dump(mode="python")
+    with pytest.raises(ValidationError, match="valid source locations"):
+        Finding.model_validate(invalid_location)
+
+    wrong_location_hash = finding.model_dump(mode="python")
+    wrong_location_hash["location_validation"]["content_hash"] = "0" * 64
+    with pytest.raises(ValidationError, match="differs from its provenance"):
+        Finding.model_validate(wrong_location_hash)
+
+    model_strength = finding.model_dump(mode="python")
+    model_strength["evidence_strength"] = EvidenceStrength.MODEL_INFERENCE
+    with pytest.raises(ValidationError, match="deterministic execution strength"):
+        Finding.model_validate(model_strength)
+
+    rejected_invalid = invalid_location
+    rejected_invalid["status"] = FindingStatus.REJECTED
+    assert Finding.model_validate(rejected_invalid).status is FindingStatus.REJECTED
 
 
 def test_execution_finding_requires_canonical_provenance_order() -> None:

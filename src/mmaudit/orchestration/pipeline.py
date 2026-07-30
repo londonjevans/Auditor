@@ -2373,7 +2373,12 @@ class AuditPipeline:
                 else:
                     by_role: dict[str, list[CandidateFinding]] = {}
                     for candidate in eligible_for_reproduction:
-                        by_role.setdefault(candidate.role, []).append(candidate)
+                        # Execution-origin candidates deliberately have no originating
+                        # model role. A later planner may analyze them under the
+                        # ordinary source-audit role without acquiring authority over
+                        # their host-derived identity, location, or provenance.
+                        planning_role = candidate.role or "source_audit"
+                        by_role.setdefault(planning_role, []).append(candidate)
                     for role, role_candidates in sorted(by_role.items()):
                         planner = ExploitTestPlannerAgent(
                             self.config,

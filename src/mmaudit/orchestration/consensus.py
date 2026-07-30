@@ -24,6 +24,7 @@ from mmaudit.models.schemas import (
     ScannerFinding,
     VerificationDecision,
     VerificationVerdict,
+    execution_origin_location_validation_sha256,
 )
 
 _STOPWORDS = {
@@ -123,6 +124,41 @@ def _execution_location_compatible(
     return False
 
 
+def _execution_semantic_compatible(
+    execution_candidate: CandidateFinding,
+    candidate: CandidateFinding,
+) -> bool:
+    """Require evidence or narrative affinity in addition to co-location."""
+
+    if execution_candidate is candidate:
+        return True
+    shared_cwe = {
+        value.upper() for value in execution_candidate.cwe
+    } & {value.upper() for value in candidate.cwe}
+    shared_owasp = {
+        value.upper() for value in execution_candidate.owasp
+    } & {value.upper() for value in candidate.owasp}
+    provenance = execution_candidate.execution_provenance
+    invariant_linked = provenance is not None and any(
+        evidence.rule_id == provenance.invariant_id for evidence in candidate.evidence
+    )
+    title_affinity = _jaccard(
+        _tokens(execution_candidate.title),
+        _tokens(candidate.title),
+    )
+    path_affinity = _jaccard(
+        _tokens(" ".join(execution_candidate.attack_path)),
+        _tokens(" ".join(candidate.attack_path)),
+    )
+    return bool(
+        shared_cwe
+        or shared_owasp
+        or invariant_linked
+        or title_affinity >= 0.25
+        or path_affinity >= 0.5
+    )
+
+
 def group_candidates(candidates: list[CandidateFinding]) -> list[CandidateGroup]:
     if not candidates:
         return []
@@ -156,7 +192,11 @@ def group_candidates(candidates: list[CandidateFinding]) -> list[CandidateGroup]
             if candidate.origin_kind is CandidateOriginKind.DETERMINISTIC_EXECUTION
         ]
         return all(
-            anchor is member or _execution_location_compatible(anchor, member)
+            anchor is member
+            or (
+                _execution_location_compatible(anchor, member)
+                and _execution_semantic_compatible(anchor, member)
+            )
             for anchor in execution_anchors
             for member in members
         )
@@ -340,9 +380,17 @@ def _unique_locations(values: Iterable[Location]) -> list[Location]:
 
 
 def _unique_evidence(values: Iterable[Evidence]) -> list[Evidence]:
-    by_key: dict[tuple[str, str, str | None, str], Evidence] = {}
+    by_key: dict[tuple[str, str, str | None, str | None, str], Evidence] = {}
     for evidence in values:
-        by_key[(evidence.type, evidence.source, evidence.rule_id, evidence.description)] = evidence
+        by_key[
+            (
+                evidence.type,
+                evidence.source,
+                evidence.rule_id,
+                evidence.fingerprint,
+                evidence.description,
+            )
+        ] = evidence
     return list(by_key.values())
 
 
@@ -383,6 +431,16 @@ def merge_group(
     valid_execution_candidates = [
         candidate for candidate in group.execution_candidates if candidate in valid_candidates
     ]
+    execution_provenance = tuple(
+        sorted(
+            {
+                candidate.execution_provenance.provenance_sha256: (candidate.execution_provenance)
+                for candidate in group.execution_candidates
+                if candidate.execution_provenance is not None
+            }.values(),
+            key=lambda provenance: provenance.provenance_sha256,
+        )
+    )
     execution_origin_valid = bool(group.execution_candidates) and len(
         valid_execution_candidates
     ) == len(group.execution_candidates)
@@ -437,7 +495,13 @@ def merge_group(
         and validation.content_hash
     ]
     aggregate_hash = (
-        hashlib.sha256("".join(sorted(valid_hashes)).encode()).hexdigest() if valid_hashes else None
+        execution_origin_location_validation_sha256(execution_provenance)
+        if execution_origin_valid
+        else (
+            hashlib.sha256("".join(sorted(valid_hashes)).encode()).hexdigest()
+            if valid_hashes
+            else None
+        )
     )
     if group.execution_candidates and not execution_origin_valid:
         confidence = 0.0
@@ -509,16 +573,6 @@ def merge_group(
             for candidate in valid_candidates
         ),
         has_execution_counterexample=execution_origin_valid,
-    )
-    execution_provenance = tuple(
-        sorted(
-            {
-                candidate.execution_provenance.provenance_sha256: (candidate.execution_provenance)
-                for candidate in group.execution_candidates
-                if candidate.execution_provenance is not None
-            }.values(),
-            key=lambda provenance: provenance.provenance_sha256,
-        )
     )
     return Finding(
         id=stable_finding_id(primary),

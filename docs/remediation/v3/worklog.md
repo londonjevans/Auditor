@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED
 CURRENT_MILESTONE: Execution-originated candidate consensus
 CURRENT_TICKET: V3-EXECORIGIN-001
 LAST_COMPLETED_TICKET: V3-OMISSION-001
-NEXT_ACTION: Resume V3-EXECORIGIN-001 from the preserved working tree; add the pending real local pipeline regression, rerun the consensus and reporting regressions after their production corrections, then run the complete ticket gate.
-LAST_COMMAND: Interrupted the remaining pipeline-integration worker and ran `git diff --check` plus `git status --short` at the operator-requested pause boundary.
-LAST_RESULT: PAUSED — the working tree passes `git diff --check`; completed artifact-adjacent runs report 44 execution tests and 58 manifest/replay tests passing, while integrated post-correction validation and the real local pipeline regression remain outstanding.
+NEXT_ACTION: Resume V3-EXECORIGIN-001 from the preserved pause checkpoint; repair the typed offline-replay `candidate_resolutions` join, enforce runtime-counterexample-to-candidate manifest completeness, close the post-judge severity gate, fix the SARIF typing error and three stale `model_construct` tests, then rerun the affected and complete gates.
+LAST_COMMAND: Interrupted the remaining read-only acceptance worker, ran `git status --short`, `git diff --check`, and recorded the exact focused-test and static-analysis state at the operator-requested pause boundary.
+LAST_RESULT: PAUSED — filesystem diff validation passes; focused execution-origin suites have 32 and 240 passing tests, and the real sealed local Forge pipeline regression passes, but the independent acceptance slice remains 121/124 with three stale test-helper failures and affected strict mypy has one SARIF error. Replay, manifest completeness, post-judge severity, full pipeline, and complete release gates remain uncredited.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 0a9660a84f454da1d1f589a8c0523c34692c1aa8
+LAST_CHECKPOINT_COMMIT: d69c7a740bd86942f9c0b25554aaea677e68456b
 
 ## 2026-07-30 — V3-OMISSION-001
 
@@ -319,6 +319,25 @@ LAST_CHECKPOINT_COMMIT: 0a9660a84f454da1d1f589a8c0523c34692c1aa8
   `git diff --check` passes. The unrelated concurrent work-queue additions
   remain preserved. No provider call, secret access, public RPC, wallet,
   signing, broadcast, external execution, or paid operation occurred.
+- **Resume:** Autorun resumed at `2026-07-30T05:11:40Z` from clean synchronized
+  checkpoint `d69c7a740bd86942f9c0b25554aaea677e68456b`. The exact objective,
+  repository policy, active acceptance criteria, and persistent state were
+  re-read. Work resumes with the missing safe real-local pipeline regression
+  and post-correction validation; no provider, secret, public RPC, wallet,
+  signing, broadcast, or paid operation is in scope.
+- **Operator pause:** At `2026-07-30T05:32:47Z`, the remaining read-only
+  acceptance worker was interrupted at a safe boundary. The new sealed local
+  Forge pipeline regression passed (`1 passed in 8.38s`), the focused
+  execution-origin slices passed `32` and `240` tests, and `git diff --check`
+  passed. Independent review still reports three stale `model_construct`
+  helper failures (`121 passed, 3 failed`) and one strict-mypy SARIF error.
+  Typed offline replay rejects the pipeline's emitted `candidate_resolutions`;
+  manifest validation does not yet require every qualifying runtime
+  counterexample to have an execution-origin candidate; and post-judge
+  high/critical severity accounting still needs a fail-closed regression.
+  The ticket remains `IN_PROGRESS`; no full pipeline or complete release gate
+  is credited. No provider call, secret access, public RPC, wallet, signing,
+  broadcast, paid operation, or active reservation occurred.
 
 ## 2026-07-30 — V3-FIXTURE-001
 

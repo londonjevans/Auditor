@@ -47,7 +47,7 @@ def _provenance(
         harness_name=f"SyntheticHarness{marker.upper()}",
         harness_spec_sha256="2" * 64,
         property_corpus_sha256="3" * 64,
-        property_ids=(f"property-{marker}",),
+        property_ids=(f"prop-{marker * 24}",),
         property_hashes=(marker * 64,),
         execution_result_sha256="4" * 64,
         execution_observation_sha256="5" * 64,
@@ -382,6 +382,28 @@ def test_transitive_model_bridge_cannot_absorb_unrelated_model_candidate() -> No
         )
         assert execution_group.group_id == expected_execution_group_id
         assert unrelated.candidate_id not in _candidate_ids(execution_group)
+
+
+def test_colocation_alone_cannot_merge_unrelated_model_commentary() -> None:
+    provenance = _provenance()
+    execution = _execution_candidate(provenance)
+    unrelated = _model_candidate(
+        candidate_id="model-colocated-unrelated",
+        locations=list(provenance.source_locations),
+    ).model_copy(
+        update={
+            "title": "Unrestricted administrative metadata update",
+            "cwe": ["CWE-284"],
+            "summary": "A separate model concern happens to cite the same function.",
+            "attack_path": ["Invoke an unrelated administrative metadata branch."],
+        }
+    )
+
+    assert candidate_similarity(execution, unrelated) == 0.55
+    groups = group_candidates([execution, unrelated])
+
+    assert len(groups) == 2
+    assert all(len(group.candidates) == 1 for group in groups)
 
 
 def test_transitive_model_bridge_cannot_merge_unrelated_execution_anchors() -> None:

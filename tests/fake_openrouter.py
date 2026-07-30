@@ -61,6 +61,8 @@ def _candidate(
         )
     return {
         "candidate_id": candidate_id,
+        "origin_kind": "model_review",
+        "execution_provenance": None,
         "title": title,
         "severity": severity,
         "confidence": 0.92,

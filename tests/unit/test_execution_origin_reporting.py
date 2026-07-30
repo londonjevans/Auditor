@@ -7,6 +7,9 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from mmaudit.models.schemas import (
     AuditReport,
     CandidateFinding,
@@ -24,6 +27,7 @@ from mmaudit.models.schemas import (
     ScannerFinding,
     Severity,
     VerificationTest,
+    execution_origin_location_validation_sha256,
 )
 from mmaudit.orchestration.consensus import group_candidates, merge_group
 from mmaudit.orchestration.pipeline import _scanner_findings_for_report
@@ -38,7 +42,7 @@ def _provenance() -> InvariantExecutionCandidateProvenance:
         harness_name="SyntheticAccountingHarness",
         harness_spec_sha256="2" * 64,
         property_corpus_sha256="3" * 64,
-        property_ids=("property-accounting",),
+        property_ids=(f"prop-{'4' * 24}",),
         property_hashes=("4" * 64,),
         execution_result_sha256="5" * 64,
         execution_observation_sha256="6" * 64,
@@ -196,7 +200,10 @@ def _execution_finding(
             description="Replay the typed invariant in a fresh isolated workspace."
         ),
         model_votes=votes,
-        location_validation=LocationValidation(valid=True, content_hash="c" * 64),
+        location_validation=LocationValidation(
+            valid=True,
+            content_hash=execution_origin_location_validation_sha256((provenance,)),
+        ),
         contributing_candidate_ids=[f"exec-{provenance.provenance_sha256[:24]}"],
         evidence_strength=EvidenceStrength.DETERMINISTIC_EXECUTION_COUNTEREXAMPLE,
     )
@@ -326,6 +333,8 @@ def test_markdown_and_sarif_distinguish_all_discovery_origins() -> None:
     assert "Discovery origin: **Independent model review**" in markdown
     assert "Discovery origin: **Deterministic execution**" in markdown
     assert "Discovery origin: **Static analyzer**" in markdown
+    assert "replay-confirmed deterministic invariant counterexample" in markdown
+    assert "Confirmed:** passed the deterministic consensus gate and verifier review" not in markdown
 
     sarif = generate_sarif(findings)["runs"][0]
     rules = {rule["id"]: rule for rule in sarif["tool"]["driver"]["rules"]}
@@ -340,6 +349,13 @@ def test_markdown_and_sarif_distinguish_all_discovery_origins() -> None:
         assert f"origin/{origin.value}" in rules[finding_id]["properties"]["tags"]
         assert results[finding_id]["properties"]["findingOrigin"] == origin.value
         assert f"[{origin.value}]" in results[finding_id]["message"]["text"]
+
+
+def test_legacy_report_version_cannot_claim_execution_origin() -> None:
+    report = _report([_execution_finding(_provenance())])
+
+    with pytest.raises(ValidationError, match="report schema 1.2"):
+        AuditReport.model_validate(report.model_dump(mode="python"))
 
 
 def test_scanner_report_conversion_preserves_static_analyzer_origin(tmp_path: Path) -> None:

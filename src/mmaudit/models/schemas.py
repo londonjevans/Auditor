@@ -1105,6 +1105,34 @@ class InvariantExecutionCandidateProvenance(StrictModel):
         return _canonical_model_sha256(payload)
 
 
+def execution_origin_location_validation_sha256(
+    provenances: Sequence[InvariantExecutionCandidateProvenance],
+) -> str:
+    """Aggregate the exact unique provenance locations for final validation evidence."""
+
+    locations_by_key = {
+        (
+            location.path,
+            location.start_line,
+            location.end_line,
+            location.symbol or "",
+            location.content_hash or "",
+        ): location
+        for provenance in provenances
+        for location in provenance.source_locations
+    }
+    if not locations_by_key:
+        raise ValueError("execution-origin location validation requires source evidence")
+    content_hashes = [
+        location.content_hash
+        for location in locations_by_key.values()
+        if location.content_hash is not None
+    ]
+    if len(content_hashes) != len(locations_by_key):
+        raise ValueError("execution-origin location validation requires content hashes")
+    return hashlib.sha256("".join(sorted(content_hashes)).encode()).hexdigest()
+
+
 class ForkTestType(StrEnum):
     UNIT_EXPLOIT = "unit_exploit"
     BOUNDARY_VALUE = "boundary_value"
@@ -2457,6 +2485,40 @@ class Finding(StrictModel):
         expected_locations = tuple(locations_by_key[key] for key in sorted(locations_by_key))
         if tuple(self.locations) != expected_locations:
             raise ValueError("execution finding locations must exactly match its provenance")
+        expected_evidence = {
+            (item.invariant_id, item.provenance_sha256) for item in provenance
+        }
+        execution_evidence = [item for item in self.evidence if item.type == "execution"]
+        observed_evidence = {
+            (item.rule_id, item.fingerprint)
+            for item in execution_evidence
+            if item.source == "mmaudit-foundry-invariant"
+        }
+        if (
+            len(execution_evidence) != len(expected_evidence)
+            or observed_evidence != expected_evidence
+        ):
+            raise ValueError(
+                "execution finding evidence must exactly bind every provenance record"
+            )
+        if self.status is FindingStatus.REJECTED:
+            return
+        if not self.location_validation.valid:
+            raise ValueError("active execution-origin findings require valid source locations")
+        expected_location_hash = execution_origin_location_validation_sha256(provenance)
+        if self.location_validation.content_hash != expected_location_hash:
+            raise ValueError(
+                "execution finding location-validation hash differs from its provenance"
+            )
+        if self.evidence_strength not in {
+            EvidenceStrength.DETERMINISTIC_EXECUTION_COUNTEREXAMPLE,
+            EvidenceStrength.LOCAL_FORK_REPRODUCTION,
+            EvidenceStrength.MINIMIZED_LOCAL_FORK_REPRODUCTION,
+            EvidenceStrength.FORMAL_COUNTEREXAMPLE,
+        }:
+            raise ValueError(
+                "active execution-origin finding requires deterministic execution strength"
+            )
 
 
 class ThreatBoundary(StrictModel):
@@ -10046,6 +10108,13 @@ class AuditReport(StrictModel):
     def _validate_execution_origin_bindings(self) -> None:
         """Bind execution-origin findings to exact serialized runtime evidence."""
 
+        execution_findings = [
+            finding
+            for finding in [*self.findings, *self.rejected_findings]
+            if finding.origin_kind is FindingOriginKind.DETERMINISTIC_EXECUTION
+        ]
+        if execution_findings and self.schema_version != "1.2":
+            raise ValueError("execution-origin findings require report schema 1.2")
         execution_keys = [
             (result.invariant_id, result.harness_name) for result in self.invariant_executions
         ]
@@ -10060,9 +10129,7 @@ class AuditReport(StrictModel):
             for invariant in (self.invariants.invariants if self.invariants is not None else [])
         }
         observed_provenance: set[str] = set()
-        for finding in [*self.findings, *self.rejected_findings]:
-            if finding.origin_kind is not FindingOriginKind.DETERMINISTIC_EXECUTION:
-                continue
+        for finding in execution_findings:
             for provenance in finding.execution_provenance:
                 if provenance.provenance_sha256 in observed_provenance:
                     raise ValueError(

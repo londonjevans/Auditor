@@ -398,7 +398,8 @@ def render_markdown(report: AuditReport) -> str:
         [
             "## Status semantics",
             "",
-            "- **Confirmed:** passed the deterministic consensus gate and verifier review.",
+            "- **Confirmed:** passed the deterministic evidence gate through a validated "
+            "execution/proof, or through verifier-backed corroborating evidence.",
             "- **Strongly supported:** complete validated attack path and independent support, "
             "but no reproduction or deterministic proof strong enough for confirmation.",
             "- **High-confidence:** strong validated evidence accepted by the verifier, without "
@@ -408,8 +409,9 @@ def render_markdown(report: AuditReport) -> str:
             "- **Rejected:** unsupported or contradicted; retained only for auditability.",
             "",
             "For Solidity findings, model agreement alone cannot produce `confirmed`; "
-            "confirmation requires local reproduction, formal proof/counterexample, or "
-            "strong deterministic analyzer evidence plus verifier acceptance.",
+            "confirmation requires a replay-confirmed deterministic invariant counterexample, "
+            "local reproduction, formal proof/counterexample, or strong deterministic analyzer "
+            "evidence plus verifier acceptance.",
             "",
             "Discovery origin is independent of later model adjudication. Model roles cannot "
             "create, suppress, or relocate an execution-originated finding; their contribution "
