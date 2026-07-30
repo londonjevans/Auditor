@@ -9,6 +9,7 @@ from typing import Any, Never
 
 import pytest
 
+import mmaudit.benchmark.model_portfolio as model_portfolio_module
 from mmaudit.benchmark.model_portfolio import (
     create_candidate_benchmark_campaign,
     issue_trusted_candidate_benchmark_campaign_verification,
@@ -36,6 +37,14 @@ from tests.unit import test_candidate_benchmark as fixtures
 ROOT = Path(__file__).parents[2]
 CORPUS_PATH = ROOT / "benchmarks" / "model_corpus" / "manifest.json"
 POLICY_PATH = ROOT / "config" / "models.maximum-assurance.toml"
+
+
+def test_campaign_authority_exposes_no_raw_capability_registrar() -> None:
+    assert not hasattr(model_portfolio_module, "_register_fresh_campaign_journal")
+    assert not hasattr(model_portfolio_module, "_record_live_campaign_binding")
+    assert not hasattr(model_portfolio_module, "_live_campaign_bindings")
+    assert not hasattr(model_portfolio_module, "_register_trusted_campaign_capability")
+    assert not hasattr(model_portfolio_module, "_TrustedCampaignCapabilityState")
 
 
 def _config(config_factory: Callable[..., AuditConfig]) -> AuditConfig:

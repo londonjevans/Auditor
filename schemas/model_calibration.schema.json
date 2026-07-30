@@ -1,0 +1,685 @@
+{
+  "$defs": {
+    "CalibrationExclusionReason": {
+      "description": "Why one exact candidate contributes no calibration distribution values.",
+      "enum": [
+        "candidate_run_not_complete",
+        "report_cases_incomplete",
+        "report_not_real",
+        "root_lineage_not_approved",
+        "root_lineage_review_postdates_campaign"
+      ],
+      "title": "CalibrationExclusionReason",
+      "type": "string"
+    },
+    "CandidateBenchmarkDiagnostic": {
+      "additionalProperties": false,
+      "description": "Non-secret execution summary for exactly one candidate report.",
+      "properties": {
+        "approved_provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+          "title": "Approved Provider Endpoint",
+          "type": "string"
+        },
+        "corpus_cases": {
+          "minimum": 1,
+          "title": "Corpus Cases",
+          "type": "integer"
+        },
+        "cost_ledger_after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateCostLedgerSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cost_ledger_before": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateCostLedgerSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "endpoint_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Endpoint Snapshot Sha256",
+          "type": "string"
+        },
+        "error_kinds": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Error Kinds",
+          "type": "array"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "execution_evidence": {
+          "$ref": "#/$defs/ExecutionEvidenceKind"
+        },
+        "failed_cases": {
+          "minimum": 0,
+          "title": "Failed Cases",
+          "type": "integer"
+        },
+        "failed_request_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Failed Request Count",
+          "type": "integer"
+        },
+        "failure_stage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CandidateBenchmarkFailureStage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "logical_request_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Logical Request Count",
+          "type": "integer"
+        },
+        "observed_usage_sha256": {
+          "default": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Observed Usage Sha256",
+          "type": "string"
+        },
+        "provider_attempt_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Provider Attempt Count",
+          "type": "integer"
+        },
+        "reasoning_suppressed": {
+          "title": "Reasoning Suppressed",
+          "type": "boolean"
+        },
+        "report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Report Sha256",
+          "type": "string"
+        },
+        "requests_observed": {
+          "minimum": 0,
+          "title": "Requests Observed",
+          "type": "integer"
+        },
+        "retry_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Retry Count",
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/CandidateBenchmarkRunState"
+        },
+        "successful_cases": {
+          "minimum": 0,
+          "title": "Successful Cases",
+          "type": "integer"
+        },
+        "successful_request_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Successful Request Count",
+          "type": "integer"
+        },
+        "unresolved_cost_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Unresolved Cost Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "approved_provider_endpoint",
+        "endpoint_snapshot_sha256",
+        "report_sha256",
+        "execution_evidence",
+        "state",
+        "reasoning_suppressed",
+        "corpus_cases",
+        "requests_observed",
+        "successful_cases",
+        "failed_cases",
+        "error_kinds"
+      ],
+      "title": "CandidateBenchmarkDiagnostic",
+      "type": "object"
+    },
+    "CandidateBenchmarkFailureStage": {
+      "description": "Sanitized candidate-local stage that prevented a complete benchmark.",
+      "enum": [
+        "client_initialization",
+        "authentication",
+        "endpoint_registration",
+        "benchmark_execution"
+      ],
+      "title": "CandidateBenchmarkFailureStage",
+      "type": "string"
+    },
+    "CandidateBenchmarkRunState": {
+      "enum": [
+        "complete",
+        "complete_with_failures",
+        "unverified_failure"
+      ],
+      "title": "CandidateBenchmarkRunState",
+      "type": "string"
+    },
+    "CandidateCostLedgerSnapshot": {
+      "additionalProperties": false,
+      "description": "Secret-free, self-hashed projection of one atomic cost-ledger snapshot.",
+      "properties": {
+        "active_reserved_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Active Reserved Usd",
+          "type": "string"
+        },
+        "cap_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Cap Usd",
+          "type": "string"
+        },
+        "entries_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Entries Sha256",
+          "type": "string"
+        },
+        "entry_count": {
+          "minimum": 0,
+          "title": "Entry Count",
+          "type": "integer"
+        },
+        "has_reservation_overrun": {
+          "title": "Has Reservation Overrun",
+          "type": "boolean"
+        },
+        "over_cap": {
+          "title": "Over Cap",
+          "type": "boolean"
+        },
+        "reconciled_count": {
+          "minimum": 0,
+          "title": "Reconciled Count",
+          "type": "integer"
+        },
+        "released_count": {
+          "minimum": 0,
+          "title": "Released Count",
+          "type": "integer"
+        },
+        "remaining_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Remaining Usd",
+          "type": "string"
+        },
+        "reservation_overrun_count": {
+          "minimum": 0,
+          "title": "Reservation Overrun Count",
+          "type": "integer"
+        },
+        "reserved_count": {
+          "minimum": 0,
+          "title": "Reserved Count",
+          "type": "integer"
+        },
+        "snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshot Sha256",
+          "type": "string"
+        },
+        "spent_usd": {
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+          "title": "Spent Usd",
+          "type": "string"
+        },
+        "uncertain_accounted_count": {
+          "minimum": 0,
+          "title": "Uncertain Accounted Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cap_usd",
+        "spent_usd",
+        "active_reserved_usd",
+        "remaining_usd",
+        "over_cap",
+        "has_reservation_overrun",
+        "entry_count",
+        "reserved_count",
+        "reconciled_count",
+        "released_count",
+        "uncertain_accounted_count",
+        "reservation_overrun_count",
+        "entries_sha256",
+        "snapshot_sha256"
+      ],
+      "title": "CandidateCostLedgerSnapshot",
+      "type": "object"
+    },
+    "ExecutionEvidenceKind": {
+      "description": "Whether a runtime record came from a real process or a test double.",
+      "enum": [
+        "real",
+        "mock",
+        "unverified"
+      ],
+      "title": "ExecutionEvidenceKind",
+      "type": "string"
+    },
+    "ModelBenchmarkDimension": {
+      "description": "Independent quality dimensions; aggregates never replace these scores.",
+      "enum": [
+        "solidity_security_reasoning",
+        "cross_contract_business_logic",
+        "accounting_conservation",
+        "access_control",
+        "oracle_assumptions",
+        "upgrade_storage",
+        "signature_replay",
+        "invariant_generation",
+        "false_positive_rejection",
+        "safe_near_miss_rejection",
+        "exact_source_location",
+        "structured_output_compliance",
+        "prompt_injection_resistance",
+        "unsupported_assumption_disclosure",
+        "verifier_quality",
+        "falsifier_quality",
+        "report_quality"
+      ],
+      "title": "ModelBenchmarkDimension",
+      "type": "string"
+    },
+    "ModelBenchmarkDimensionScore": {
+      "additionalProperties": false,
+      "properties": {
+        "dimension": {
+          "$ref": "#/$defs/ModelBenchmarkDimension"
+        },
+        "evaluated": {
+          "minimum": 1,
+          "title": "Evaluated",
+          "type": "integer"
+        },
+        "passed": {
+          "minimum": 0,
+          "title": "Passed",
+          "type": "integer"
+        },
+        "score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Score",
+          "type": "number"
+        }
+      },
+      "required": [
+        "dimension",
+        "passed",
+        "evaluated",
+        "score"
+      ],
+      "title": "ModelBenchmarkDimensionScore",
+      "type": "object"
+    },
+    "ModelCalibrationCandidateObservation": {
+      "additionalProperties": false,
+      "description": "One exact candidate retained whether or not its report is creditable.",
+      "properties": {
+        "diagnostic": {
+          "$ref": "#/$defs/CandidateBenchmarkDiagnostic"
+        },
+        "dimensions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ModelBenchmarkDimensionScore"
+          },
+          "maxItems": 17,
+          "title": "Dimensions",
+          "type": "array"
+        },
+        "exact_model_id": {
+          "maxLength": 300,
+          "minLength": 3,
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "exclusion_reasons": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CalibrationExclusionReason"
+          },
+          "title": "Exclusion Reasons",
+          "type": "array"
+        },
+        "included_in_distribution": {
+          "title": "Included In Distribution",
+          "type": "boolean"
+        },
+        "overall_score": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Overall Score"
+        },
+        "report_execution_evidence": {
+          "$ref": "#/$defs/ExecutionEvidenceKind"
+        },
+        "report_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Report Sha256",
+          "type": "string"
+        },
+        "root_lineage": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Root Lineage"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "report_sha256",
+        "report_execution_evidence",
+        "diagnostic",
+        "included_in_distribution"
+      ],
+      "title": "ModelCalibrationCandidateObservation",
+      "type": "object"
+    },
+    "ModelCalibrationDimensionDistribution": {
+      "additionalProperties": false,
+      "description": "Observed per-model scores for one dimension; no pass threshold is implied.",
+      "properties": {
+        "candidate_count": {
+          "maximum": 128,
+          "minimum": 1,
+          "title": "Candidate Count",
+          "type": "integer"
+        },
+        "dimension": {
+          "$ref": "#/$defs/ModelBenchmarkDimension"
+        },
+        "excluded_candidate_count": {
+          "maximum": 128,
+          "minimum": 0,
+          "title": "Excluded Candidate Count",
+          "type": "integer"
+        },
+        "included_candidate_count": {
+          "maximum": 128,
+          "minimum": 0,
+          "title": "Included Candidate Count",
+          "type": "integer"
+        },
+        "mean_score": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mean Score"
+        },
+        "observations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ModelCalibrationDimensionObservation"
+          },
+          "maxItems": 128,
+          "title": "Observations",
+          "type": "array"
+        },
+        "score_frequencies": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ModelCalibrationScoreFrequency"
+          },
+          "maxItems": 128,
+          "title": "Score Frequencies",
+          "type": "array"
+        }
+      },
+      "required": [
+        "dimension",
+        "candidate_count",
+        "included_candidate_count",
+        "excluded_candidate_count"
+      ],
+      "title": "ModelCalibrationDimensionDistribution",
+      "type": "object"
+    },
+    "ModelCalibrationDimensionObservation": {
+      "additionalProperties": false,
+      "description": "One exact candidate's deterministic score for one dimension.",
+      "properties": {
+        "evaluated": {
+          "minimum": 1,
+          "title": "Evaluated",
+          "type": "integer"
+        },
+        "exact_model_id": {
+          "maxLength": 300,
+          "minLength": 3,
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "passed": {
+          "minimum": 0,
+          "title": "Passed",
+          "type": "integer"
+        },
+        "root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Root Lineage",
+          "type": "string"
+        },
+        "score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Score",
+          "type": "number"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "root_lineage",
+        "passed",
+        "evaluated",
+        "score"
+      ],
+      "title": "ModelCalibrationDimensionObservation",
+      "type": "object"
+    },
+    "ModelCalibrationScoreFrequency": {
+      "additionalProperties": false,
+      "description": "Exact empirical frequency, without an inferred quality threshold.",
+      "properties": {
+        "candidate_count": {
+          "maximum": 128,
+          "minimum": 1,
+          "title": "Candidate Count",
+          "type": "integer"
+        },
+        "score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Score",
+          "type": "number"
+        }
+      },
+      "required": [
+        "score",
+        "candidate_count"
+      ],
+      "title": "ModelCalibrationScoreFrequency",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/model_calibration.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Self-hashed calibration evidence that intentionally makes no disposition.",
+  "properties": {
+    "artifact_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Artifact Sha256",
+      "type": "string"
+    },
+    "benchmark_corpus_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Benchmark Corpus Sha256",
+      "type": "string"
+    },
+    "benchmark_corpus_version": {
+      "maxLength": 100,
+      "minLength": 1,
+      "title": "Benchmark Corpus Version",
+      "type": "string"
+    },
+    "benchmark_ground_truth_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Benchmark Ground Truth Sha256",
+      "type": "string"
+    },
+    "benchmark_ground_truth_version": {
+      "maxLength": 100,
+      "minLength": 1,
+      "title": "Benchmark Ground Truth Version",
+      "type": "string"
+    },
+    "benchmark_policy_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Benchmark Policy Sha256",
+      "type": "string"
+    },
+    "benchmark_portfolio_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Benchmark Portfolio Sha256",
+      "type": "string"
+    },
+    "campaign_journal_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Campaign Journal Sha256",
+      "type": "string"
+    },
+    "candidate_registry_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Candidate Registry Sha256",
+      "type": "string"
+    },
+    "candidate_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Candidate Set Sha256",
+      "type": "string"
+    },
+    "candidates": {
+      "items": {
+        "$ref": "#/$defs/ModelCalibrationCandidateObservation"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "title": "Candidates",
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "discovery_manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Discovery Manifest Sha256",
+      "type": "string"
+    },
+    "distributions": {
+      "items": {
+        "$ref": "#/$defs/ModelCalibrationDimensionDistribution"
+      },
+      "maxItems": 17,
+      "minItems": 17,
+      "title": "Distributions",
+      "type": "array"
+    },
+    "effective_config_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Effective Config Sha256",
+      "type": "string"
+    },
+    "included_root_lineage_count": {
+      "maximum": 128,
+      "minimum": 0,
+      "title": "Included Root Lineage Count",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "created_at",
+    "candidate_registry_sha256",
+    "discovery_manifest_sha256",
+    "candidate_set_sha256",
+    "benchmark_corpus_version",
+    "benchmark_corpus_sha256",
+    "benchmark_ground_truth_version",
+    "benchmark_ground_truth_sha256",
+    "benchmark_portfolio_sha256",
+    "benchmark_policy_sha256",
+    "effective_config_sha256",
+    "campaign_journal_sha256",
+    "included_root_lineage_count",
+    "candidates",
+    "distributions",
+    "artifact_sha256"
+  ],
+  "title": "mmaudit model calibration artifact",
+  "type": "object"
+}

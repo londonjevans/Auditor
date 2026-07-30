@@ -9,6 +9,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from mmaudit.benchmark.engine import BenchmarkReport
+from mmaudit.models.calibration import ModelCalibrationArtifact
 from mmaudit.models.qualification import ModelQualificationArtifact
 from mmaudit.orchestration.context_manifest import ContextManifest
 from mmaudit.privacy import PrivacyRetentionConsent
@@ -27,6 +28,7 @@ SCHEMA_BASE = "https://mmaudit.local/schemas"
 MODELS: dict[str, type[BaseModel]] = {
     "benchmark_report.schema.json": BenchmarkReport,
     "context_manifest.schema.json": ContextManifest,
+    "model_calibration.schema.json": ModelCalibrationArtifact,
     "model_qualification.schema.json": ModelQualificationArtifact,
     "privacy_retention_consent.schema.json": PrivacyRetentionConsent,
     "release_candidate_observation.schema.json": ReleaseCandidateObservation,
@@ -40,6 +42,7 @@ MODELS: dict[str, type[BaseModel]] = {
 }
 TITLE_OVERRIDES = {
     "benchmark_report.schema.json": "mmaudit benchmark report",
+    "model_calibration.schema.json": "mmaudit model calibration artifact",
     "model_qualification.schema.json": "mmaudit model qualification artifact",
 }
 

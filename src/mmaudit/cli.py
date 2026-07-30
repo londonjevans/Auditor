@@ -41,6 +41,7 @@ from mmaudit.benchmark.model_portfolio import (
     CandidateBenchmarkCampaignJournal,
     ModelBenchmarkPortfolio,
     create_candidate_benchmark_campaign,
+    issue_trusted_candidate_benchmark_campaign_verification,
     load_model_benchmark_portfolio,
     resume_candidate_benchmark_campaign,
     seal_model_benchmark_portfolio_from_campaign,
@@ -70,6 +71,10 @@ from mmaudit.config import (
 )
 from mmaudit.constants import DEFAULT_CONFIG_NAME, VERSION, ExitCode
 from mmaudit.logging import configure_logging
+from mmaudit.models.calibration import (
+    build_model_calibration_artifact,
+    write_model_calibration_artifact,
+)
 from mmaudit.models.candidate_benchmark import (
     CandidateBenchmarkExecutionResult,
     CandidateBenchmarkRunState,
@@ -909,6 +914,15 @@ def models_benchmark(
             help="Explicit private candidate campaign journal directory.",
         ),
     ] = None,
+    calibration_output: Annotated[
+        Path | None,
+        typer.Option(
+            "--calibration-output",
+            help=(
+                "Fresh private non-dispositive calibration artifact; candidate-registry mode only."
+            ),
+        ),
+    ] = None,
     resume_campaign: Annotated[
         bool,
         typer.Option(
@@ -950,9 +964,14 @@ def models_benchmark(
                 "and --qualification-policy"
             )
         if not candidate_mode and (
-            campaign_journal is not None or qualification_policy is not None or resume_campaign
+            campaign_journal is not None
+            or qualification_policy is not None
+            or resume_campaign
+            or calibration_output is not None
         ):
             raise ConfigError("candidate campaign options require candidate-registry mode")
+        if calibration_output is not None and resume_campaign:
+            raise ConfigError("calibration requires one fresh same-process candidate campaign")
         config = load_config(config_path)
         benchmark_corpus = load_model_benchmark_corpus(corpus)
         if candidate_mode:
@@ -970,6 +989,7 @@ def models_benchmark(
                 campaign_journal_path=campaign_journal,
                 resume_campaign=resume_campaign,
                 qualification_policy_path=qualification_policy,
+                calibration_output=calibration_output,
                 cost_ledger=cost_ledger,
                 allow_code_egress=allow_code_egress,
                 no_color=no_color,
@@ -1104,6 +1124,7 @@ async def _execute_candidate_registry_benchmark(
     campaign_journal_path: Path,
     resume_campaign: bool,
     qualification_policy_path: Path,
+    calibration_output: Path | None,
     cost_ledger: Path | None,
     allow_code_egress: bool,
     no_color: bool,
@@ -1145,6 +1166,13 @@ async def _execute_candidate_registry_benchmark(
     )
     assert budget.atomic_ledger is not None
     _preflight_model_benchmark_portfolio_output(output, budget.atomic_ledger)
+    if calibration_output is not None:
+        _preflight_model_calibration_output(
+            calibration_output,
+            ledger=budget.atomic_ledger,
+            portfolio_output=output,
+            campaign_journal=campaign_journal_path,
+        )
     if Path(os.path.abspath(output)) == Path(os.path.abspath(campaign_journal_path)):
         raise ConfigError("candidate campaign journal and final portfolio must be distinct")
     effective_config_sha256 = config.stable_hash()
@@ -1190,6 +1218,30 @@ async def _execute_candidate_registry_benchmark(
         output,
         campaign=campaign,
     )
+    if calibration_output is not None:
+        trusted_campaign = issue_trusted_candidate_benchmark_campaign_verification(
+            campaign=campaign,
+            portfolio=portfolio,
+            reports=execution.reports,
+        )
+        calibration = build_model_calibration_artifact(
+            created_at=datetime.now(UTC).replace(microsecond=0),
+            candidate_registry=registry,
+            discovery_run_manifest=discovery_manifest,
+            benchmark_suite=benchmark_corpus,
+            benchmark_portfolio=portfolio,
+            benchmark_reports=execution.reports,
+            benchmark_policy_sha256=qualification_policy.policy_sha256,
+            effective_config_sha256=effective_config_sha256,
+            trusted_campaign_verification=trusted_campaign,
+        )
+        write_model_calibration_artifact(calibration_output, calibration)
+        local_console.print(
+            f"Calibration: {calibration.artifact_sha256}; "
+            f"included_models="
+            f"{sum(item.included_in_distribution for item in calibration.candidates)}",
+            markup=False,
+        )
     _print_candidate_benchmark_diagnostics(execution, target=local_console)
     local_console.print(
         f"Portfolio: {portfolio.portfolio_sha256}; "
@@ -3584,6 +3636,54 @@ def _preflight_model_benchmark_portfolio_output(
             pass
     except OSError as exc:
         raise ConfigError("model benchmark portfolio directory is not writable") from exc
+
+
+def _preflight_model_calibration_output(
+    output: Path,
+    *,
+    ledger: AtomicCostLedger,
+    portfolio_output: Path,
+    campaign_journal: Path,
+) -> None:
+    """Prove the fresh private calibration file can be published before paid work."""
+
+    absolute = Path(os.path.abspath(output))
+    if is_sensitive_workspace_name(absolute.name):
+        raise ConfigError("refusing a sensitive model calibration output filename")
+    if any(
+        candidate.is_symlink() or candidate.is_junction()
+        for candidate in (absolute, *absolute.parents)
+    ):
+        raise ConfigError("model calibration output may not traverse filesystem links")
+    if os.path.lexists(absolute):
+        raise ConfigError("model calibration output must be a fresh file")
+    protected = (
+        ledger.path.resolve(strict=True),
+        ledger.lock_path.resolve(strict=True),
+        Path(os.path.abspath(portfolio_output)),
+        Path(os.path.abspath(campaign_journal)),
+    )
+    if any(
+        absolute == candidate
+        or absolute.is_relative_to(candidate)
+        or candidate.is_relative_to(absolute)
+        for candidate in protected
+    ):
+        raise ConfigError(
+            "model calibration output must be distinct from campaign, portfolio, and ledger state"
+        )
+    absolute.parent.mkdir(parents=True, exist_ok=True)
+    if absolute.parent.is_symlink() or absolute.parent.is_junction():
+        raise ConfigError("model calibration output parent must be a regular directory")
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=absolute.parent,
+            prefix=".mmaudit-model-calibration-preflight-",
+            delete=True,
+        ):
+            pass
+    except OSError as exc:
+        raise ConfigError("model calibration output directory is not writable") from exc
 
 
 def _print_candidate_benchmark_diagnostics(

@@ -58,16 +58,6 @@ _PRIVATE_DIRECTORY_MODE = 0o700
 _PRIVATE_FILE_MODE = 0o600
 
 
-@dataclass(frozen=True, slots=True)
-class _TrustedCampaignCapabilityState:
-    portfolio_sha256: str
-    journal_sha256: str
-    policy_sha256: str
-    effective_config_sha256: str
-    cost_ledger_path_sha256: str
-    report_content_bindings: tuple[tuple[str, str], ...]
-
-
 class TrustedCandidateBenchmarkCampaignVerification:
     """Opaque proof that one fresh complete campaign retains live response provenance."""
 
@@ -120,13 +110,8 @@ class TrustedCandidateBenchmarkCampaignVerification:
 
 
 def _build_campaign_runtime_authority() -> tuple[
-    Callable[[object], None],
-    Callable[[object, int, str], None],
-    Callable[[object], tuple[str, ...] | None],
-    Callable[
-        [TrustedCandidateBenchmarkCampaignVerification, _TrustedCampaignCapabilityState],
-        None,
-    ],
+    Callable[..., CandidateBenchmarkCampaignJournal],
+    Callable[..., TrustedCandidateBenchmarkCampaignVerification],
     Callable[
         [
             TrustedCandidateBenchmarkCampaignVerification,
@@ -140,6 +125,15 @@ def _build_campaign_runtime_authority() -> tuple[
 ]:
     """Create process-local journal and capability registries hidden from data models."""
 
+    @dataclass(frozen=True, slots=True)
+    class TrustedCampaignCapabilityState:
+        portfolio_sha256: str
+        journal_sha256: str
+        policy_sha256: str
+        effective_config_sha256: str
+        cost_ledger_path_sha256: str
+        report_content_bindings: tuple[tuple[str, str], ...]
+
     journal_registry: dict[
         int,
         tuple[weakref.ReferenceType[object], list[str]],
@@ -148,12 +142,12 @@ def _build_campaign_runtime_authority() -> tuple[
         int,
         tuple[
             weakref.ReferenceType[TrustedCandidateBenchmarkCampaignVerification],
-            _TrustedCampaignCapabilityState,
+            TrustedCampaignCapabilityState,
         ],
     ] = {}
     lock = threading.RLock()
 
-    def register_fresh_journal(journal: object) -> None:
+    def register_fresh_journal(journal: object) -> Callable[[int, str], None]:
         key = id(journal)
 
         def discard(reference: weakref.ReferenceType[object]) -> None:
@@ -166,16 +160,18 @@ def _build_campaign_runtime_authority() -> tuple[
         with lock:
             journal_registry[key] = (reference, [])
 
-    def record_live_binding(journal: object, expected_prior_count: int, binding: str) -> None:
-        with lock:
-            registered = journal_registry.get(id(journal))
-            if registered is None:
-                return
-            reference, bindings = registered
-            if reference() is not journal or len(bindings) != expected_prior_count:
-                journal_registry.pop(id(journal), None)
-                raise ValueError("fresh campaign runtime authority became inconsistent")
-            bindings.append(binding)
+        def record_live_binding(expected_prior_count: int, binding: str) -> None:
+            with lock:
+                registered = journal_registry.get(key)
+                if registered is None:
+                    return
+                registered_reference, bindings = registered
+                if registered_reference() is not journal or len(bindings) != expected_prior_count:
+                    journal_registry.pop(key, None)
+                    raise ValueError("fresh campaign runtime authority became inconsistent")
+                bindings.append(binding)
+
+        return record_live_binding
 
     def live_bindings(journal: object) -> tuple[str, ...] | None:
         with lock:
@@ -184,10 +180,66 @@ def _build_campaign_runtime_authority() -> tuple[
                 return None
             return tuple(registered[1])
 
-    def register_capability(
-        capability: TrustedCandidateBenchmarkCampaignVerification,
-        state: _TrustedCampaignCapabilityState,
-    ) -> None:
+    def create_campaign(
+        path: Path,
+        *,
+        candidate_registry: CandidateRegistry,
+        corpus: ModelBenchmarkSuite,
+        effective_config_sha256: str,
+        qualification_policy_sha256: str,
+        cost_ledger: AtomicCostLedger,
+    ) -> CandidateBenchmarkCampaignJournal:
+        journal = _create_candidate_benchmark_campaign_unregistered(
+            path,
+            candidate_registry=candidate_registry,
+            corpus=corpus,
+            effective_config_sha256=effective_config_sha256,
+            qualification_policy_sha256=qualification_policy_sha256,
+            cost_ledger=cost_ledger,
+        )
+        journal._attach_live_binding_recorder(register_fresh_journal(journal))
+        return journal
+
+    def issue_capability(
+        *,
+        campaign: CandidateBenchmarkCampaignJournal,
+        portfolio: ModelBenchmarkPortfolio,
+        reports: tuple[ModelBenchmarkReport, ...],
+    ) -> TrustedCandidateBenchmarkCampaignVerification:
+        if type(campaign) is not CandidateBenchmarkCampaignJournal:
+            raise ValueError("trusted campaign verification requires the original campaign")
+        campaign.require_complete()
+        validated_reports = tuple(
+            ModelBenchmarkReport.model_validate(report.model_dump(mode="json"))
+            for report in reports
+        )
+        verify_model_benchmark_portfolio_campaign(
+            campaign.path,
+            portfolio=portfolio,
+            reports=validated_reports,
+            candidate_registry=campaign._candidate_registry,
+            corpus=campaign._corpus,
+            effective_config_sha256=campaign.manifest.effective_config_sha256,
+            qualification_policy_sha256=campaign.manifest.qualification_policy_sha256,
+            cost_ledger=campaign._cost_ledger,
+        )
+        expected_bindings = tuple(
+            binding for _model_id, binding in _report_content_bindings(validated_reports)
+        )
+        current_live_bindings = live_bindings(campaign)
+        if current_live_bindings is None or current_live_bindings != expected_bindings:
+            raise ValueError(
+                "trusted campaign verification requires every original runtime-attested report"
+            )
+        capability = object.__new__(TrustedCandidateBenchmarkCampaignVerification)
+        state = TrustedCampaignCapabilityState(
+            portfolio_sha256=portfolio.portfolio_sha256,
+            journal_sha256=campaign.journal_sha256,
+            policy_sha256=campaign.manifest.qualification_policy_sha256,
+            effective_config_sha256=campaign.manifest.effective_config_sha256,
+            cost_ledger_path_sha256=campaign.manifest.cost_ledger_path_sha256,
+            report_content_bindings=_report_content_bindings(validated_reports),
+        )
         key = id(capability)
 
         def discard(
@@ -201,6 +253,7 @@ def _build_campaign_runtime_authority() -> tuple[
         reference = weakref.ref(capability, discard)
         with lock:
             capability_registry[key] = (reference, state)
+        return capability
 
     def require_capability(
         capability: TrustedCandidateBenchmarkCampaignVerification,
@@ -225,19 +278,15 @@ def _build_campaign_runtime_authority() -> tuple[
             raise ValueError("trusted campaign verification does not bind qualification inputs")
 
     return (
-        register_fresh_journal,
-        record_live_binding,
-        live_bindings,
-        register_capability,
+        create_campaign,
+        issue_capability,
         require_capability,
     )
 
 
 (
-    _register_fresh_campaign_journal,
-    _record_live_campaign_binding,
-    _live_campaign_bindings,
-    _register_trusted_campaign_capability,
+    create_candidate_benchmark_campaign,
+    issue_trusted_candidate_benchmark_campaign_verification,
     _require_trusted_campaign_capability_positional,
 ) = _build_campaign_runtime_authority()
 
@@ -659,6 +708,15 @@ class CandidateBenchmarkCampaignJournal:
         self._candidate_registry = candidate_registry
         self._corpus = corpus
         self._cost_ledger = cost_ledger
+        self._live_binding_recorder: Callable[[int, str], None] | None = None
+
+    def _attach_live_binding_recorder(
+        self,
+        recorder: Callable[[int, str], None],
+    ) -> None:
+        if self._live_binding_recorder is not None:
+            raise ValueError("candidate campaign runtime authority is already attached")
+        self._live_binding_recorder = recorder
 
     @property
     def reports(self) -> tuple[ModelBenchmarkReport, ...]:
@@ -760,7 +818,8 @@ class CandidateBenchmarkCampaignJournal:
         if loaded != entry:
             raise ValueError("candidate campaign entry changed during persistence")
         self._entries.append(loaded)
-        _record_live_campaign_binding(self, index, live_content_binding)
+        if self._live_binding_recorder is not None:
+            self._live_binding_recorder(index, live_content_binding)
 
     def validate_candidate_start(
         self,
@@ -784,7 +843,7 @@ class CandidateBenchmarkCampaignJournal:
             raise ValueError("candidate campaign does not have exact-set report coverage")
 
 
-def create_candidate_benchmark_campaign(
+def _create_candidate_benchmark_campaign_unregistered(
     path: Path,
     *,
     candidate_registry: CandidateRegistry,
@@ -861,7 +920,6 @@ def create_candidate_benchmark_campaign(
         corpus=suite,
         cost_ledger=cost_ledger,
     )
-    _register_fresh_campaign_journal(journal)
     return journal
 
 
@@ -993,51 +1051,6 @@ def verify_model_benchmark_portfolio_campaign(
         or campaign.final_cost_ledger_snapshot != validated_portfolio.cost_ledger_snapshot
     ):
         raise ValueError("benchmark portfolio differs from its actual campaign journal")
-
-
-def issue_trusted_candidate_benchmark_campaign_verification(
-    *,
-    campaign: CandidateBenchmarkCampaignJournal,
-    portfolio: ModelBenchmarkPortfolio,
-    reports: tuple[ModelBenchmarkReport, ...],
-) -> TrustedCandidateBenchmarkCampaignVerification:
-    """Issue live content authority only from the original complete in-memory campaign."""
-
-    if type(campaign) is not CandidateBenchmarkCampaignJournal:
-        raise ValueError("trusted campaign verification requires the original campaign")
-    campaign.require_complete()
-    validated_reports = tuple(
-        ModelBenchmarkReport.model_validate(report.model_dump(mode="json")) for report in reports
-    )
-    verify_model_benchmark_portfolio_campaign(
-        campaign.path,
-        portfolio=portfolio,
-        reports=validated_reports,
-        candidate_registry=campaign._candidate_registry,
-        corpus=campaign._corpus,
-        effective_config_sha256=campaign.manifest.effective_config_sha256,
-        qualification_policy_sha256=campaign.manifest.qualification_policy_sha256,
-        cost_ledger=campaign._cost_ledger,
-    )
-    expected_bindings = tuple(binding for _model_id, binding in _report_content_bindings(reports))
-    live_bindings = _live_campaign_bindings(campaign)
-    if live_bindings is None or live_bindings != expected_bindings:
-        raise ValueError(
-            "trusted campaign verification requires every original runtime-attested report"
-        )
-    capability = object.__new__(TrustedCandidateBenchmarkCampaignVerification)
-    _register_trusted_campaign_capability(
-        capability,
-        _TrustedCampaignCapabilityState(
-            portfolio_sha256=portfolio.portfolio_sha256,
-            journal_sha256=campaign.journal_sha256,
-            policy_sha256=campaign.manifest.qualification_policy_sha256,
-            effective_config_sha256=campaign.manifest.effective_config_sha256,
-            cost_ledger_path_sha256=campaign.manifest.cost_ledger_path_sha256,
-            report_content_bindings=_report_content_bindings(reports),
-        ),
-    )
-    return capability
 
 
 def seal_model_benchmark_portfolio_from_campaign(

@@ -671,17 +671,19 @@ are invisible to source review by construction.
   Applicable unavailable execution fails closed, but positive real fork-suite execution on that
   runner is `BLOCKED_TECHNICAL`; it remains assigned to `V3-ENGINES-001`,
   `V3-HARDHAT-001`, and the existing fork-suite integration work.
-- **Next action:** Operator-requested pause boundary. On resume, begin `V3-CALIBRATE-001`;
-  retain this ticket as `PARTIAL` until the positive hosted execution prerequisite is proven.
+- **Next action:** Retain this ticket as `PARTIAL` until the positive hosted execution
+  prerequisite is proven; current model-track work continues with the discovery/diff portion of
+  `V3-MODELREFRESH-001`.
 
 ## V3-CALIBRATE-001 — Evidence-derived qualification thresholds
 
 - **Objective:** Replace the aspirational all-dimension `1.0` policy with thresholds derived
   from measurement, so qualification is a meaningful filter rather than an unreachable gate.
   `config/models.maximum-assurance.toml` currently requires `minimum_score = 1.0` across 17
-  dimensions and 50 cases with `tier_a_minimum_overall_score = 1.0`, and the disposition enum
-  offers only `TIER_A`, `NOT_QUALIFIED`, and `INCONCLUSIVE`. As frozen, `V3-QUALIFY-001` will
-  spend budget and qualify nothing.
+  dimensions over 16 cases that produce 50 scored dimension observations, with
+  `tier_a_minimum_overall_score = 1.0`; the disposition enum offers only `TIER_A`,
+  `NOT_QUALIFIED`, and `INCONCLUSIVE`. The frozen policy is not empirically calibrated and may
+  reject every candidate, but that outcome is not asserted before a real campaign.
 - **Acceptance criteria:** A calibration mode runs the frozen corpus against candidate models
   and records observed per-dimension pass distributions without asserting a disposition. The
   resulting policy keeps `1.0` only where determinism is genuinely required — for example
@@ -696,7 +698,39 @@ are invisible to source review by construction.
   `src/mmaudit/models/qualification.py`, `src/mmaudit/models/qualification_workflow.py`,
   benchmark corpus, regressions.
 - **Dependencies:** `V3-TOKENS-001`. Must precede `V3-QUALIFY-001`.
-- **Status:** `QUEUED`
+- **Status:** `PARTIAL`
+- **Starting evidence:** The committed policy still requires `1.0` on every one of seventeen
+  dimensions and an overall `1.0`, while the qualification conclusion has no role-scoped
+  secondary disposition and no calibration artifact or non-dispositive calibration mode exists.
+- **Implemented safe slice:** Candidate-registry benchmark mode can now atomically emit a
+  mode-0600, self-hashed, non-dispositive calibration artifact from the exact live campaign
+  capability. It retains excluded models, credits only complete REAL reports from
+  operator-approved, campaign-timely lineages, records exact per-dimension distributions, and
+  binds candidate, discovery, corpus, truth, portfolio, policy, configuration, and journal
+  evidence. Qualification policy v2 requires per-threshold rationales and distribution hashes,
+  at least three complete models from three reviewed root lineages, four or more cases for every
+  judgment dimension, absolute `1.0` gates only for the three designated hard-gate dimensions, and
+  mandatory investigator/verifier/falsifier/judge semantic dimensions. Role results can remove
+  validator authority without promoting a model above its global Tier A result. Final
+  qualification verification and production capability resolution require a process-local
+  calibrated-policy authority; raw hash-only issuers are not module-reachable. Campaign authority
+  is attached only to an exact fresh journal, so replaying a persisted campaign cannot recreate
+  live response provenance.
+- **Validation:** The authority-hardened focused matrix passed `130` tests. Ruff formatting and
+  checking passed, strict mypy passed all `152` source files, release-schema generation verified,
+  JSON/diff integrity passed, and the full suite passed `3464` tests with `11` explicit
+  external-prerequisite skips in `781.73s`.
+- **Remaining acceptance blockers:** No real calibration campaign has run and the frozen v1
+  policy remains unchanged. The current corpus has only two cases for most judgment dimensions;
+  all frozen candidates lack approved root lineages and omit literal verifier/judge declarations;
+  production reasoning effort is not yet role-bound. A secure CLI path for reviewing and freezing
+  a measured policy remains unresolved because the calibration campaign binds its predecessor
+  policy/config while the later qualification campaign must bind the derived v2 policy/config.
+  These gaps cannot be truthfully closed with synthetic thresholds or a self-attested hash.
+- **Next action:** Complete `V3-MODELREFRESH-001` discovery/diff, `V3-LINEAGE-001`, and
+  `V3-EFFORT-001`; expand the frozen corpus to nontrivial judgment denominators; then return here
+  to run a real non-dispositive calibration, freeze its measured policy before qualification,
+  and validate the full two-campaign lifecycle.
 
 ## V3-LINEAGE-001 — Operator root-lineage review record
 
@@ -710,8 +744,9 @@ are invisible to source review by construction.
   fail-closed at every existing call site.
 - **Files expected to change:** `config/models.candidates.toml`, operator configuration,
   lineage evidence artifacts, regressions.
-- **Dependencies:** None beyond current `HEAD` for the decision itself; the registry binding
-  additionally requires qualification output.
+- **Dependencies:** None beyond current `HEAD` for the decision itself. A refreshed candidate
+  registry can bind the operator review before calibration; the production
+  `ModelLineageConfig` binding additionally requires qualification output.
 - **Status:** `PARTIAL`
 - **Operator decision recorded:** `docs/remediation/v3/model_lineage_review.md` authorises
   eight root lineages — anthropic, openai, google, x-ai, moonshotai, deepseek, z-ai, minimax —
@@ -720,13 +755,14 @@ are invisible to source review by construction.
   The basis is that audited targets are public open-source code; the record states that this
   authorisation does not extend to private pre-deployment client source and must be re-taken
   before the first such audit.
-- **Remaining gap:** `ModelLineageConfig` also requires `measured_quality_score`,
+- **Remaining gap:** Production `ModelLineageConfig` also requires `measured_quality_score`,
   `measured_quality_tier`, and a `quality_measurement` hash, which are qualification outputs.
-  The registry cannot be populated from the decision record alone, so
-  `approved_model_lineages` stays empty and egress stays fail-closed until qualification
-  completes. Do not hand-author registry entries to close this early.
-- **Next action:** Re-run discovery (`V3-MODELREFRESH-001` / `V3-QUALIFY-001`), calibrate
-  thresholds (`V3-CALIBRATE-001`), then bind the registry using the authorised identifiers.
+  Therefore `approved_model_lineages` stays empty and production source egress stays fail-closed
+  until qualification completes. The reviewed lineage decision must first be joined to the
+  refreshed candidates for calibration; do not hand-author production quality entries early.
+- **Next action:** Re-run discovery under `V3-MODELREFRESH-001`, bind the reviewed lineage
+  decisions to the refreshed candidate registry before calibration, then use real calibration and
+  `V3-QUALIFY-001` outputs to populate production lineage quality fields.
 
 ## V3-INTAKE-001 — Untrusted client repository intake
 

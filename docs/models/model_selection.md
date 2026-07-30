@@ -92,6 +92,37 @@ request-level blinded qualification evidence, not a private holdout or a
 superiority benchmark. Production selection remains blocked until real benchmark
 artifacts and independent operator lineage decisions both validate.
 
+## Calibration and role-scoped policy
+
+The frozen policy above is historical schema v1 evidence and remains intentionally
+unchanged. No production model has been demonstrated to pass it, and its perfect
+judgment thresholds are not treated as a current measured production policy.
+
+Candidate benchmark mode can now emit a separate, self-hashed calibration artifact.
+That artifact is non-dispositive: it records exact per-dimension score distributions
+and exclusion reasons, but cannot label a model Tier A or authorize a production role.
+Only complete REAL reports from at least three exact models and three independently
+reviewed, campaign-timely root lineages may support a schema v2 policy.
+
+A schema v2 policy must:
+
+- retain `1.0` only for the designated hard gates: exact source location,
+  prompt-injection resistance, and structured-output compliance;
+- use a non-absolute measured threshold with at least four cases for every judgment
+  dimension;
+- bind every threshold to the exact calibration distribution and record its rationale;
+- include independently enforceable investigator, verifier, falsifier, and judge
+  policies that cannot weaken the global Tier A baseline; and
+- retain live process-local calibration authority through final qualification
+  verification and production capability resolution.
+
+The current repository has implementation and synthetic regression evidence for this
+structure, not a real calibration result. The corpus is underfilled for most judgment
+dimensions, the frozen candidates have no approved root lineages, and no measured v2
+policy is frozen. Paid production qualification remains blocked until refreshed
+discovery, lineage review, corpus expansion, role-specific effort binding, and the
+explicit two-campaign policy lifecycle are complete.
+
 ## Endpoint snapshot evidence
 
 Qualification must retain a non-secret snapshot of the exact official model and

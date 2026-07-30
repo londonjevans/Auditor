@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_BY_OPERATOR
-CURRENT_MILESTONE: Operator pause after continuous-integration code closure
-CURRENT_TICKET: NONE (V3-CI-001 is PARTIAL; V3-CALIBRATE-001 has not started)
+AUTORUN_STATUS: ACTIVE
+CURRENT_MILESTONE: Calibration implementation checkpoint and registry-refresh transition
+CURRENT_TICKET: V3-CALIBRATE-001 (PARTIAL; checkpoint finalization)
 LAST_COMPLETED_TICKET: V3-EXECORIGIN-001
-NEXT_ACTION: On operator resume, begin V3-CALIBRATE-001. Retain V3-CI-001 as PARTIAL until its digest-pinned hosted compiler/scanner/test/rootless-isolation stack executes successfully.
+NEXT_ACTION: Review the complete diff and changed-file secret/artifact scan, checkpoint and SSH-push this explicitly partial slice, then begin the discovery/diff portion of V3-MODELREFRESH-001.
 LAST_COMMAND: `.venv/bin/pytest -q` (numeric local-loopback enabled; external network and paid-provider execution disabled)
-LAST_RESULT: PASS — the complete suite passed `3434` tests with `11` explicit prerequisite skips in `511.50s`. The earlier isolated invariant timeout is retained as failed evidence; its exact three-case and complete `78`-test file both passed before this green rerun. Paid-provider execution remains disabled.
+LAST_RESULT: PASS — `3464 passed, 11 skipped in 781.73s`; two inherited pytest temporary-tree cleanup warnings were non-failing. All skips name explicit unavailable external prerequisites.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,11 +19,84 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 5e61fcad6bf93aab5d4aec4dd3765302d40d25ed
+LAST_CHECKPOINT_COMMIT: 360e3c0fbb5d2e892e220633462cb40e54cb1518
+
+## 2026-07-30 — V3-CALIBRATE-001
+
+- **Status:** `PARTIAL`.
+- **Defensive objective:** Derive a frozen, hash-bound qualification policy from observed
+  non-empty benchmark distributions without allowing calibration to qualify a model, and retain
+  strict deterministic gates where perfect behavior is required.
+- **Starting evidence:** `config/models.maximum-assurance.toml` requires a perfect score on all
+  seventeen dimensions and a perfect overall score. `QualificationDisposition` exposes only
+  `TIER_A`, `NOT_QUALIFIED`, and `INCONCLUSIVE`; the workflow applies only the global policy and
+  cannot express a role-scoped investigator-only qualification. No calibration artifact or
+  calibration execution mode exists.
+- **Initial next safe action:** Add failing schema/policy regressions for a non-dispositive
+  calibration result, non-vacuous distribution-bound thresholds, and role-scoped secondary
+  disposition. Preserve the independent verifier and frozen-policy requirements. No provider,
+  secret, public RPC, wallet, signing, broadcast, or external-target operation is required.
+- **Initial regressions:** The first calibration collection failed as expected with
+  `ModuleNotFoundError` because no calibration module existed. The independent role-policy
+  regression also failed collection because no role-scoped derivation API existed. Intermediate
+  runs retained six role-policy failures and then seven timestamp/policy/schema failures until the
+  corresponding implementation and generated-schema bindings were corrected.
+- **Implemented safe slice:** Added a strict non-dispositive calibration schema and implementation,
+  canonical mode-0600 artifact persistence, exact candidate/discovery/corpus/truth/portfolio/
+  policy/config/journal joins, explicit exclusions, campaign-time lineage decisions, and exact
+  per-dimension distributions. Candidate benchmark CLI mode can emit the artifact only from a
+  fresh complete live campaign and preflights its output before provider work. Calibration cannot
+  issue a qualification disposition.
+- **Measured-policy structure:** Qualification policy schema v2 carries a rationale and exact
+  calibration-distribution hash for every threshold. The three designated hard-gate dimensions
+  retain exact `1.0`; judgment dimensions require at least four cases and a measured non-absolute
+  score.
+  At least three complete REAL candidates from three campaign-timely approved lineages are
+  required. Investigator, verifier, falsifier, and judge policies have mandatory semantic
+  dimensions and can only narrow a globally Tier-A model's authority.
+- **Runtime authority hardening:** Calibration authority is issued only by rebuilding exact live
+  campaign provenance; calibrated-policy sealing additionally requires at least three complete
+  REAL models from three approved root lineages. Campaign issuance replays the private journal and
+  exact report bindings. Raw campaign capability registration was removed, and fresh-journal
+  binding is attached only to the exact newly created journal; a resumed campaign cannot reattach
+  live provenance. Regression tests assert that the former raw registrar/state names are not
+  module-reachable.
+- **Validation so far:** Schema generation write and verify completed successfully. A joined
+  pre-hardening slice passed `123` tests in `43.72s`; the timestamp/lineage follow-up passed `13`
+  tests in `7.60s`. A later joined campaign/calibration/qualification/schema run passed `130`
+  tests in `51.54s`, and the final authority-hardened repeat passed `130` tests in `317.29s`.
+  A mistyped joined command naming absent `tests/unit/test_schema_generation.py` exited `4` with
+  no tests collected; it was corrected to the actual schema test files. Affected Ruff and strict
+  mypy checks pass.
+- **Exact focused acceptance command:** `.venv/bin/pytest -q tests/unit/test_candidate_benchmark_campaign.py tests/unit/test_model_calibration.py tests/unit/test_model_calibration_cli.py tests/unit/test_qualification_policy_calibration.py tests/unit/test_role_qualification.py tests/unit/test_qualification_workflow.py tests/unit/test_model_qualification.py tests/unit/test_model_qualification_schema.py tests/unit/test_release_schemas.py` — PASS, `130 passed in 317.29s`.
+- **Final repository validation:** `.venv/bin/ruff format .` left `370` files unchanged;
+  `.venv/bin/ruff check .` passed; `.venv/bin/mypy` passed all `152` source files;
+  `.venv/bin/python scripts/generate_release_schemas.py` verified synchronization;
+  `python -m json.tool docs/remediation/v3/review_traceability.json` and
+  `git diff --check` passed. The full `.venv/bin/pytest -q` run, with only numeric local loopback
+  enabled, passed `3464` tests with `11` explicit external-prerequisite skips in `781.73s`. Two
+  inherited stale temporary-tree cleanup warnings were non-failing.
+- **Disposition rationale:** No real calibration run or measured v2 policy is claimed. The
+  committed v1 policy remains unchanged because most judgment dimensions have only two cases,
+  the stale candidate registry has no approved lineages, literal verifier/judge roles are absent,
+  and per-role reasoning effort is not yet bound. The predecessor-policy/config binding of a
+  calibration campaign versus the later derived-policy qualification campaign also needs an
+  explicit two-campaign lifecycle before paid qualification.
+- **Narrow blocked review:** One auxiliary read-only authority review was rejected by the platform
+  and is recorded `BLOCKED_SAFETY` without retrying the same content. The root agent completed the
+  local source review and added the campaign authority regressions; this does not block the safe
+  implementation slice.
+- **External effects:** No provider call, model spend, secret access, public RPC, wallet, signing,
+  broadcast, or external-target operation occurred. `.env` was not read and the cumulative
+  OpenRouter ledger remains `0.0033415625` USD spent with zero reservation.
+- **Remaining acceptance work:** Refresh and diff the current model catalogue, complete independent
+  operator lineage review and role-specific effort controls, expand the frozen judgment corpus,
+  resolve the two-campaign policy lifecycle, then execute a real non-dispositive calibration and
+  freeze the measured v2 policy before any qualification campaign.
 
 ## 2026-07-30 — V3-CI-001
 
-- **Status:** `IN_PROGRESS`.
+- **Status:** `PARTIAL`.
 - **Defensive objective:** Make pull-request analysis structurally model-free and secret-free,
   retain evidence after fail-closed exits, execute applicable repository-owned tests only through
   hardened isolation, and compare current deterministic evidence with a source- and
@@ -117,10 +190,10 @@ LAST_CHECKPOINT_COMMIT: 5e61fcad6bf93aab5d4aec4dd3765302d40d25ed
   `sk-or-v1-...` canaries in defensive tests; no real credential pattern or generated runtime
   artifact was added. `.env` was not read. The worktree contains only the recorded source,
   workflow, schema, documentation, and test changes.
-- **Pause state:** `PAUSED_BY_OPERATOR`. V3-CALIBRATE-001 has not started. The cohesive
+- **Pause state:** `PAUSED_BY_OPERATOR`. V3-CALIBRATE-001 had not started at this checkpoint. The cohesive
   V3-CI-001 implementation is checkpointed at
-  `5e61fcad6bf93aab5d4aec4dd3765302d40d25ed`; the state-record commit and requested SSH push are
-  the only remaining pause-boundary actions.
+  `5e61fcad6bf93aab5d4aec4dd3765302d40d25ed`; the state-record commit was
+  `360e3c0fbb5d2e892e220633462cb40e54cb1518`, and both were pushed through the SSH remote.
 
 ## 2026-07-30 — V3-TESTQUALITY-001
 

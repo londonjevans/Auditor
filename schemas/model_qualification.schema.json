@@ -71,6 +71,15 @@
           "title": "Canonical Model Slug",
           "type": "string"
         },
+        "declared_roles": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 128,
+          "title": "Declared Roles",
+          "type": "array"
+        },
         "dimensions": {
           "default": [],
           "items": {
@@ -151,6 +160,15 @@
           "pattern": "^[0-9a-f]{64}$",
           "title": "Result Sha256",
           "type": "string"
+        },
+        "role_results": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RoleQualificationResult"
+          },
+          "maxItems": 4,
+          "title": "Role Results",
+          "type": "array"
         },
         "root_lineage": {
           "anyOf": [
@@ -331,6 +349,100 @@
       ],
       "title": "QualificationDisposition",
       "type": "string"
+    },
+    "QualificationRoleClass": {
+      "description": "Security-sensitive role classes with independently measured quality gates.",
+      "enum": [
+        "investigator",
+        "verifier",
+        "falsifier",
+        "judge"
+      ],
+      "title": "QualificationRoleClass",
+      "type": "string"
+    },
+    "RoleQualificationDisposition": {
+      "description": "One role-class conclusion subordinate to the global Tier A baseline.",
+      "enum": [
+        "qualified",
+        "not_qualified",
+        "inconclusive"
+      ],
+      "title": "RoleQualificationDisposition",
+      "type": "string"
+    },
+    "RoleQualificationFailure": {
+      "description": "Bounded reasons why a role-specific gate did not authorize a model.",
+      "enum": [
+        "global_baseline_not_tier_a",
+        "global_baseline_inconclusive",
+        "minimum_cases",
+        "minimum_dimension_score",
+        "minimum_overall_score"
+      ],
+      "title": "RoleQualificationFailure",
+      "type": "string"
+    },
+    "RoleQualificationResult": {
+      "additionalProperties": false,
+      "description": "Deterministic secondary conclusion for one role class.",
+      "properties": {
+        "dimensions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/QualificationDimensionResult"
+          },
+          "maxItems": 17,
+          "title": "Dimensions",
+          "type": "array"
+        },
+        "disposition": {
+          "$ref": "#/$defs/RoleQualificationDisposition"
+        },
+        "failed_minimum_case_dimensions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ModelBenchmarkDimension"
+          },
+          "maxItems": 17,
+          "title": "Failed Minimum Case Dimensions",
+          "type": "array"
+        },
+        "failed_minimum_score_dimensions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ModelBenchmarkDimension"
+          },
+          "maxItems": 17,
+          "title": "Failed Minimum Score Dimensions",
+          "type": "array"
+        },
+        "failure_reasons": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RoleQualificationFailure"
+          },
+          "maxItems": 5,
+          "title": "Failure Reasons",
+          "type": "array"
+        },
+        "overall_score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Overall Score",
+          "type": "number"
+        },
+        "role_class": {
+          "$ref": "#/$defs/QualificationRoleClass"
+        }
+      },
+      "required": [
+        "role_class",
+        "disposition",
+        "overall_score"
+      ],
+      "title": "RoleQualificationResult",
+      "type": "object"
     },
     "StructuredOutputMode": {
       "description": "One exact request/validation protocol for model output.",

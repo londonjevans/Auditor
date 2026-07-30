@@ -25,6 +25,10 @@ from mmaudit.benchmark.models import (
     ModelBenchmarkReport,
     ModelBenchmarkSuite,
 )
+from mmaudit.models.calibration import (
+    ModelCalibrationArtifact,
+    TrustedModelCalibrationVerification,
+)
 from mmaudit.models.candidate_benchmark import CandidateBenchmarkRunState
 from mmaudit.models.discovery import (
     OpenRouterModelDiscoveryEvidence,
@@ -46,7 +50,11 @@ from mmaudit.models.qualification import (
     QualificationDisposition,
     QualificationPolicy,
     QualificationVerification,
+    RoleQualificationResult,
     TrustedBenchmarkVerificationEvidence,
+    derive_approved_roles_for_role_qualification,
+    evaluate_role_qualification_results,
+    issue_trusted_calibrated_qualification_policy,
     seal_candidate_registry,
     seal_model_qualification_artifact,
     seal_model_qualification_result,
@@ -401,6 +409,8 @@ def run_qualification_workflow(
     discovery_run_manifest: OpenRouterModelDiscoveryRunManifest,
     discovery_evidence: tuple[OpenRouterModelDiscoveryEvidence, ...],
     policy: QualificationPolicy,
+    calibration_artifact: ModelCalibrationArtifact | None = None,
+    trusted_calibration_verification: TrustedModelCalibrationVerification | None = None,
     benchmark_suite: ModelBenchmarkSuite,
     benchmark_portfolio: ModelBenchmarkPortfolio,
     benchmark_reports: tuple[ModelBenchmarkReport, ...],
@@ -422,6 +432,21 @@ def run_qualification_workflow(
         label="qualification expiry",
     )
     policy = QualificationPolicy.model_validate(policy.model_dump(mode="json"))
+    trusted_calibrated_policy = None
+    validated_calibration: ModelCalibrationArtifact | None = None
+    if policy.schema_version == "2.0":
+        if calibration_artifact is None or trusted_calibration_verification is None:
+            raise ValueError("calibrated qualification policy requires live calibration evidence")
+        validated_calibration = ModelCalibrationArtifact.model_validate(
+            calibration_artifact.model_dump(mode="json")
+        )
+        trusted_calibrated_policy = issue_trusted_calibrated_qualification_policy(
+            policy=policy,
+            calibration=validated_calibration,
+            trusted_calibration_verification=trusted_calibration_verification,
+        )
+    elif calibration_artifact is not None or trusted_calibration_verification is not None:
+        raise ValueError("legacy qualification policy cannot consume calibration evidence")
     candidate_registry = CandidateRegistry.model_validate(
         candidate_registry.model_dump(mode="json")
     )
@@ -439,6 +464,22 @@ def run_qualification_workflow(
     release_bindings = QualificationReleaseBindings.model_validate(
         release_bindings.model_dump(mode="json")
     )
+    if validated_calibration is not None and (
+        validated_calibration.candidate_registry_sha256 != candidate_registry.registry_sha256
+        or validated_calibration.discovery_manifest_sha256 != discovery_run_manifest.manifest_sha256
+        or validated_calibration.candidate_set_sha256
+        != canonical_sha256(
+            [candidate.exact_model_id for candidate in candidate_registry.candidates]
+        )
+        or validated_calibration.benchmark_corpus_version != benchmark_suite.corpus.schema_version
+        or validated_calibration.benchmark_corpus_sha256 != benchmark_suite.corpus_sha256
+        or validated_calibration.benchmark_ground_truth_version
+        != benchmark_suite.ground_truth.schema_version
+        or validated_calibration.benchmark_ground_truth_sha256
+        != benchmark_suite.ground_truth_sha256
+        or validated_calibration.effective_config_sha256 != release_bindings.effective_config_sha256
+    ):
+        raise ValueError("calibration evidence differs from qualification inputs")
     if type(trusted_release_observation) is not TrustedReleaseBindingObservation:
         raise ValueError("qualification requires a trusted release observation")
     trusted_release_observation.require_for(release_bindings)
@@ -514,6 +555,7 @@ def run_qualification_workflow(
         candidate = candidates_by_id[model_id]
         evidence: TrustedBenchmarkVerificationEvidence | None = None
         dimensions: tuple[QualificationDimensionResult, ...]
+        role_results: tuple[RoleQualificationResult, ...]
         failure_reasons: tuple[str, ...]
         try:
             if trusted_campaign_verification is None:
@@ -572,6 +614,15 @@ def run_qualification_workflow(
             expiry: datetime | None = None
             verification_sha256: str | None = None
             failure_reasons = ("benchmark_real_verification_failed",)
+            role_results = (
+                evaluate_role_qualification_results(
+                    global_disposition=disposition,
+                    dimensions=dimensions,
+                    role_policies=policy.role_policies,
+                )
+                if policy.role_policies
+                else ()
+            )
         else:
             trusted.append(evidence)
             dimensions = evidence.dimensions
@@ -601,6 +652,24 @@ def run_qualification_workflow(
             expiry = qualification_expires_at if tier_a else None
             verification_sha256 = evidence.verification_sha256
             failure_reasons = ()
+            role_results = (
+                evaluate_role_qualification_results(
+                    global_disposition=disposition,
+                    dimensions=dimensions,
+                    role_policies=policy.role_policies,
+                )
+                if policy.role_policies
+                else ()
+            )
+        approved_roles = (
+            derive_approved_roles_for_role_qualification(
+                declared_roles=candidate.approved_roles,
+                global_disposition=disposition,
+                role_results=role_results,
+            )
+            if policy.role_policies
+            else candidate.approved_roles
+        )
         if candidate.output_capability_sha256 is None or candidate.structured_output_mode is None:
             raise ValueError(
                 f"candidate lacks output capability evidence: {candidate.exact_model_id}"
@@ -621,7 +690,9 @@ def run_qualification_workflow(
             disposition=disposition,
             dimensions=dimensions,
             overall_score=overall_score,
-            approved_roles=candidate.approved_roles,
+            approved_roles=approved_roles,
+            declared_roles=candidate.approved_roles if policy.role_policies else (),
+            role_results=role_results,
             evaluated_at=campaign_completed_at,
             expires_at=expiry,
             failure_reasons=failure_reasons,
@@ -678,6 +749,7 @@ def run_qualification_workflow(
         expected_bindings=bindings,
         trusted_benchmark_evidence=trusted_tuple,
         now=observed_at,
+        trusted_calibrated_policy=trusted_calibrated_policy,
     )
     payload: dict[str, Any] = {
         "schema_version": "1.0",

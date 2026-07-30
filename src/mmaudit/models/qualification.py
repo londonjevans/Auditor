@@ -69,6 +69,16 @@ _MIN_SPECIALIST_RESPONSIBILITIES = 24
 _MIN_WHOLE_PROTOCOL_LINEAGES = 4
 _MIN_CRITICAL_SURFACE_LINEAGES = 3
 _MIN_FALSIFIER_LINEAGES = 2
+MIN_CALIBRATION_INCLUDED_CANDIDATES = 3
+MIN_CALIBRATION_INCLUDED_ROOT_LINEAGES = 3
+MIN_CALIBRATED_JUDGMENT_CASES = 4
+DETERMINISTIC_QUALIFICATION_DIMENSIONS = frozenset(
+    {
+        ModelBenchmarkDimension.EXACT_SOURCE_LOCATION,
+        ModelBenchmarkDimension.PROMPT_INJECTION_RESISTANCE,
+        ModelBenchmarkDimension.STRUCTURED_OUTPUT_COMPLIANCE,
+    }
+)
 
 _JSON_ADAPTER = TypeAdapter(Any)
 
@@ -100,6 +110,60 @@ class QualificationDisposition(StrEnum):
     TIER_A = "tier_a"
     NOT_QUALIFIED = "not_qualified"
     INCONCLUSIVE = "inconclusive"
+
+
+class QualificationThresholdBasis(StrEnum):
+    """Why a frozen qualification threshold has its selected value."""
+
+    DETERMINISTIC_REQUIREMENT = "deterministic_requirement"
+    CALIBRATED_DISTRIBUTION = "calibrated_distribution"
+
+
+class QualificationRoleClass(StrEnum):
+    """Security-sensitive role classes with independently measured quality gates."""
+
+    INVESTIGATOR = "investigator"
+    VERIFIER = "verifier"
+    FALSIFIER = "falsifier"
+    JUDGE = "judge"
+
+
+_REQUIRED_ROLE_QUALIFICATION_DIMENSIONS = {
+    QualificationRoleClass.INVESTIGATOR: frozenset(
+        {
+            ModelBenchmarkDimension.EXACT_SOURCE_LOCATION,
+            ModelBenchmarkDimension.FALSE_POSITIVE_REJECTION,
+            ModelBenchmarkDimension.SOLIDITY_SECURITY_REASONING,
+        }
+    ),
+    QualificationRoleClass.VERIFIER: frozenset({ModelBenchmarkDimension.VERIFIER_QUALITY}),
+    QualificationRoleClass.FALSIFIER: frozenset({ModelBenchmarkDimension.FALSIFIER_QUALITY}),
+    QualificationRoleClass.JUDGE: frozenset(
+        {
+            ModelBenchmarkDimension.FALSIFIER_QUALITY,
+            ModelBenchmarkDimension.REPORT_QUALITY,
+            ModelBenchmarkDimension.VERIFIER_QUALITY,
+        }
+    ),
+}
+
+
+class RoleQualificationDisposition(StrEnum):
+    """One role-class conclusion subordinate to the global Tier A baseline."""
+
+    QUALIFIED = "qualified"
+    NOT_QUALIFIED = "not_qualified"
+    INCONCLUSIVE = "inconclusive"
+
+
+class RoleQualificationFailure(StrEnum):
+    """Bounded reasons why a role-specific gate did not authorize a model."""
+
+    GLOBAL_BASELINE_NOT_TIER_A = "global_baseline_not_tier_a"
+    GLOBAL_BASELINE_INCONCLUSIVE = "global_baseline_inconclusive"
+    MINIMUM_CASES = "minimum_cases"
+    MINIMUM_DIMENSION_SCORE = "minimum_dimension_score"
+    MINIMUM_OVERALL_SCORE = "minimum_overall_score"
 
 
 class RequirementState(StrEnum):
@@ -555,18 +619,116 @@ class QualificationDimensionThreshold(StrictModel):
     dimension: ModelBenchmarkDimension
     minimum_cases: int = Field(ge=1, le=10_000)
     minimum_score: float = Field(ge=0, le=1)
+    basis: QualificationThresholdBasis | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    rationale: str | None = Field(
+        default=None,
+        min_length=20,
+        max_length=2_000,
+        exclude_if=lambda value: value is None,
+    )
+    calibration_distribution_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+
+    @model_validator(mode="after")
+    def calibration_metadata_is_all_or_nothing(self) -> QualificationDimensionThreshold:
+        supplied = (
+            self.basis is not None,
+            self.rationale is not None,
+            self.calibration_distribution_sha256 is not None,
+        )
+        if any(supplied) and not all(supplied):
+            raise ValueError("qualification threshold calibration metadata must be complete")
+        return self
+
+
+def _validate_calibrated_threshold(threshold: QualificationDimensionThreshold) -> None:
+    if threshold.basis is None:
+        raise ValueError("calibrated qualification threshold requires measurement metadata")
+    if threshold.dimension in DETERMINISTIC_QUALIFICATION_DIMENSIONS:
+        if (
+            threshold.basis is not QualificationThresholdBasis.DETERMINISTIC_REQUIREMENT
+            or threshold.minimum_score != 1
+        ):
+            raise ValueError("deterministic qualification dimensions require an exact 1.0 gate")
+        return
+    if (
+        threshold.basis is not QualificationThresholdBasis.CALIBRATED_DISTRIBUTION
+        or threshold.minimum_cases < MIN_CALIBRATED_JUDGMENT_CASES
+        or not 0 < threshold.minimum_score < 1
+    ):
+        raise ValueError(
+            "judgment qualification dimensions require measured non-absolute thresholds"
+        )
+
+
+class RoleQualificationPolicy(StrictModel):
+    """A non-vacuous secondary quality gate for one security-sensitive role class."""
+
+    role_class: QualificationRoleClass
+    thresholds: tuple[QualificationDimensionThreshold, ...] = Field(
+        min_length=1,
+        max_length=len(ModelBenchmarkDimension),
+    )
+    minimum_overall_score: float = Field(ge=0, le=1)
+    minimum_overall_rationale: str = Field(min_length=20, max_length=2_000)
+
+    @model_validator(mode="after")
+    def dimensions_are_unique_and_sorted(self) -> RoleQualificationPolicy:
+        dimensions = tuple(threshold.dimension.value for threshold in self.thresholds)
+        if dimensions != tuple(sorted(set(dimensions))):
+            raise ValueError("role qualification thresholds must be unique and sorted")
+        if any(threshold.basis is None for threshold in self.thresholds):
+            raise ValueError("role qualification thresholds require calibration metadata")
+        required = _REQUIRED_ROLE_QUALIFICATION_DIMENSIONS[self.role_class]
+        if not required.issubset({threshold.dimension for threshold in self.thresholds}):
+            raise ValueError("role qualification policy omits mandatory semantic dimensions")
+        return self
 
 
 class QualificationPolicy(StrictModel):
     """Self-hashed, non-vacuous Tier A policy."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "2.0"] = "1.0"
     created_at: datetime
     thresholds: tuple[QualificationDimensionThreshold, ...] = Field(
         min_length=len(ModelBenchmarkDimension),
         max_length=len(ModelBenchmarkDimension),
     )
+    role_policies: tuple[RoleQualificationPolicy, ...] = Field(
+        default=(),
+        max_length=len(QualificationRoleClass),
+        exclude_if=lambda value: not value,
+    )
+    calibration_artifact_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
+    calibration_included_candidate_count: int | None = Field(
+        default=None,
+        ge=MIN_CALIBRATION_INCLUDED_CANDIDATES,
+        le=128,
+        exclude_if=lambda value: value is None,
+    )
+    calibration_included_root_lineage_count: int | None = Field(
+        default=None,
+        ge=MIN_CALIBRATION_INCLUDED_ROOT_LINEAGES,
+        le=128,
+        exclude_if=lambda value: value is None,
+    )
     tier_a_minimum_overall_score: float = Field(ge=0, le=1)
+    tier_a_overall_rationale: str | None = Field(
+        default=None,
+        min_length=20,
+        max_length=2_000,
+        exclude_if=lambda value: value is None,
+    )
     maximum_validity_days: int = Field(ge=1, le=90)
     maximum_benchmark_evidence_age_days: int = Field(ge=1, le=30)
     require_real_execution: Literal[True] = True
@@ -584,6 +746,50 @@ class QualificationPolicy(StrictModel):
         expected_dimensions = tuple(sorted(item.value for item in ModelBenchmarkDimension))
         if dimensions != expected_dimensions:
             raise ValueError("qualification thresholds must cover every dimension exactly once")
+        role_classes = tuple(item.role_class.value for item in self.role_policies)
+        expected_role_classes = tuple(sorted(item.value for item in QualificationRoleClass))
+        calibration_fields = (
+            self.calibration_artifact_sha256,
+            self.calibration_included_candidate_count,
+            self.calibration_included_root_lineage_count,
+            self.tier_a_overall_rationale,
+        )
+        if self.schema_version == "1.0":
+            if role_classes or any(value is not None for value in calibration_fields):
+                raise ValueError("qualification policy v1 cannot contain calibrated policy fields")
+            if any(threshold.basis is not None for threshold in self.thresholds):
+                raise ValueError("qualification policy v1 cannot contain calibrated thresholds")
+        else:
+            if role_classes != expected_role_classes:
+                raise ValueError("qualification policy v2 must cover every role class exactly once")
+            if any(value is None for value in calibration_fields):
+                raise ValueError("qualification policy v2 requires complete calibration evidence")
+            if not 0 < self.tier_a_minimum_overall_score < 1:
+                raise ValueError(
+                    "calibrated Tier A aggregate threshold must be between zero and one"
+                )
+            global_thresholds = {item.dimension: item for item in self.thresholds}
+            for threshold in self.thresholds:
+                _validate_calibrated_threshold(threshold)
+            for role_policy in self.role_policies:
+                if not 0 < role_policy.minimum_overall_score < 1:
+                    raise ValueError(
+                        "calibrated role aggregate threshold must be between zero and one"
+                    )
+                if role_policy.minimum_overall_score < self.tier_a_minimum_overall_score:
+                    raise ValueError("role aggregate threshold cannot weaken the Tier A baseline")
+                for threshold in role_policy.thresholds:
+                    _validate_calibrated_threshold(threshold)
+                    global_threshold = global_thresholds[threshold.dimension]
+                    if (
+                        threshold.minimum_cases != global_threshold.minimum_cases
+                        or threshold.calibration_distribution_sha256
+                        != global_threshold.calibration_distribution_sha256
+                        or threshold.minimum_score < global_threshold.minimum_score
+                    ):
+                        raise ValueError(
+                            "role qualification threshold cannot weaken or rebind calibration"
+                        )
         expected = canonical_sha256(self.model_dump(mode="json", exclude={"policy_sha256"}))
         if self.policy_sha256 != expected:
             raise ValueError("qualification policy self-hash is inconsistent")
@@ -597,9 +803,23 @@ def seal_qualification_policy(
     tier_a_minimum_overall_score: float,
     maximum_validity_days: int,
     maximum_benchmark_evidence_age_days: int = 7,
+    role_policies: tuple[RoleQualificationPolicy, ...] = (),
+    calibration_artifact_sha256: str | None = None,
+    calibration_included_candidate_count: int | None = None,
+    calibration_included_root_lineage_count: int | None = None,
+    tier_a_overall_rationale: str | None = None,
 ) -> QualificationPolicy:
+    calibrated = bool(role_policies) or any(
+        value is not None
+        for value in (
+            calibration_artifact_sha256,
+            calibration_included_candidate_count,
+            calibration_included_root_lineage_count,
+            tier_a_overall_rationale,
+        )
+    )
     payload: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": "2.0" if calibrated else "1.0",
         "created_at": created_at,
         "thresholds": [
             threshold.model_dump(mode="json")
@@ -611,8 +831,123 @@ def seal_qualification_policy(
         "require_real_execution": True,
         "require_certification_routing": True,
     }
+    if role_policies:
+        payload["role_policies"] = [
+            role_policy.model_dump(mode="json")
+            for role_policy in sorted(role_policies, key=lambda item: item.role_class.value)
+        ]
+    if calibration_artifact_sha256 is not None:
+        payload["calibration_artifact_sha256"] = calibration_artifact_sha256
+    if calibration_included_candidate_count is not None:
+        payload["calibration_included_candidate_count"] = calibration_included_candidate_count
+    if calibration_included_root_lineage_count is not None:
+        payload["calibration_included_root_lineage_count"] = calibration_included_root_lineage_count
+    if tier_a_overall_rationale is not None:
+        payload["tier_a_overall_rationale"] = tier_a_overall_rationale
     payload["policy_sha256"] = _canonical_json_sha256(payload)
     return QualificationPolicy.model_validate(payload)
+
+
+class TrustedCalibratedQualificationPolicy:
+    """Opaque authority proving a v2 policy was joined to live calibration evidence."""
+
+    __slots__ = ("__weakref__",)
+
+    def __new__(
+        cls,
+        *_args: object,
+        **_kwargs: object,
+    ) -> TrustedCalibratedQualificationPolicy:
+        del cls
+        raise TypeError("trusted calibrated policy cannot be constructed directly")
+
+    def __init__(
+        self,
+        *_args: object,
+        **_kwargs: object,
+    ) -> None:
+        del self, _args, _kwargs
+
+    def require_for(self, policy: QualificationPolicy) -> None:
+        _require_trusted_calibrated_policy(self, policy.policy_sha256)
+
+    def __copy__(self) -> None:
+        raise TypeError("trusted calibrated policy cannot be copied")
+
+    def __deepcopy__(self, _memo: object) -> None:
+        raise TypeError("trusted calibrated policy cannot be copied")
+
+    def __reduce__(self) -> Never:
+        raise TypeError("trusted calibrated policy cannot be serialized")
+
+    def __reduce_ex__(self, _protocol: SupportsIndex) -> Never:
+        raise TypeError("trusted calibrated policy cannot be serialized")
+
+
+def _build_trusted_calibrated_policy_authority() -> tuple[
+    Callable[..., TrustedCalibratedQualificationPolicy],
+    Callable[[TrustedCalibratedQualificationPolicy, str], None],
+]:
+    registry: dict[
+        int,
+        tuple[weakref.ReferenceType[TrustedCalibratedQualificationPolicy], str],
+    ] = {}
+    lock = threading.RLock()
+
+    def issue(
+        *,
+        policy: QualificationPolicy,
+        calibration: Any,
+        trusted_calibration_verification: Any,
+    ) -> TrustedCalibratedQualificationPolicy:
+        from mmaudit.models.calibration import verify_calibrated_qualification_policy
+
+        if type(policy) is not QualificationPolicy:
+            raise ValueError("trusted calibrated policy issuance requires a typed policy")
+        validated = QualificationPolicy.model_validate(policy.model_dump(mode="json"))
+        if validated.schema_version != "2.0":
+            raise ValueError("trusted calibrated policy authority requires policy v2")
+        verify_calibrated_qualification_policy(
+            calibration=calibration,
+            policy=validated,
+            trusted_calibration_verification=trusted_calibration_verification,
+        )
+        capability = object.__new__(TrustedCalibratedQualificationPolicy)
+        key = id(capability)
+
+        def discard(
+            reference: weakref.ReferenceType[TrustedCalibratedQualificationPolicy],
+        ) -> None:
+            with lock:
+                current = registry.get(key)
+                if current is not None and current[0] is reference:
+                    registry.pop(key, None)
+
+        reference = weakref.ref(capability, discard)
+        with lock:
+            registry[key] = (reference, validated.policy_sha256)
+        return capability
+
+    def require(
+        capability: TrustedCalibratedQualificationPolicy,
+        policy_sha256: str,
+    ) -> None:
+        with lock:
+            registered = registry.get(id(capability))
+            if (
+                registered is None
+                or registered[0]() is not capability
+                or registered[1] != policy_sha256
+            ):
+                raise ValueError("trusted calibrated policy authority is absent or mismatched")
+
+    return issue, require
+
+
+(
+    issue_trusted_calibrated_qualification_policy,
+    _require_trusted_calibrated_policy,
+) = _build_trusted_calibrated_policy_authority()
 
 
 class QualificationBindings(StrictModel):
@@ -647,6 +982,101 @@ class QualificationDimensionResult(StrictModel):
             6,
         ):
             raise ValueError("qualification dimension arithmetic is inconsistent")
+        return self
+
+
+class RoleQualificationResult(StrictModel):
+    """Deterministic secondary conclusion for one role class."""
+
+    role_class: QualificationRoleClass
+    disposition: RoleQualificationDisposition
+    dimensions: tuple[QualificationDimensionResult, ...] = Field(
+        default=(),
+        max_length=len(ModelBenchmarkDimension),
+    )
+    overall_score: float = Field(ge=0, le=1)
+    failed_minimum_case_dimensions: tuple[ModelBenchmarkDimension, ...] = Field(
+        default=(),
+        max_length=len(ModelBenchmarkDimension),
+    )
+    failed_minimum_score_dimensions: tuple[ModelBenchmarkDimension, ...] = Field(
+        default=(),
+        max_length=len(ModelBenchmarkDimension),
+    )
+    failure_reasons: tuple[RoleQualificationFailure, ...] = Field(
+        default=(),
+        max_length=len(RoleQualificationFailure),
+    )
+
+    @field_validator(
+        "failed_minimum_case_dimensions",
+        "failed_minimum_score_dimensions",
+    )
+    @classmethod
+    def failed_dimensions_are_unique_and_sorted(
+        cls,
+        value: tuple[ModelBenchmarkDimension, ...],
+    ) -> tuple[ModelBenchmarkDimension, ...]:
+        if value != tuple(sorted(set(value), key=lambda item: item.value)):
+            raise ValueError("failed role qualification dimensions must be unique and sorted")
+        return value
+
+    @field_validator("failure_reasons")
+    @classmethod
+    def failure_reasons_are_unique_and_sorted(
+        cls,
+        value: tuple[RoleQualificationFailure, ...],
+    ) -> tuple[RoleQualificationFailure, ...]:
+        if value != tuple(sorted(set(value), key=lambda item: item.value)):
+            raise ValueError("role qualification failures must be unique and sorted")
+        return value
+
+    @model_validator(mode="after")
+    def conclusion_is_internally_consistent(self) -> RoleQualificationResult:
+        dimension_names = tuple(item.dimension.value for item in self.dimensions)
+        if dimension_names != tuple(sorted(set(dimension_names))):
+            raise ValueError("role qualification dimensions must be unique and sorted")
+        observed_dimensions = {item.dimension for item in self.dimensions}
+        if not set(self.failed_minimum_case_dimensions).issubset(observed_dimensions) or not set(
+            self.failed_minimum_score_dimensions
+        ).issubset(observed_dimensions):
+            raise ValueError("failed role qualification dimensions were not evaluated")
+        expected_overall = (
+            round(sum(item.score for item in self.dimensions) / len(self.dimensions), 6)
+            if self.dimensions
+            else 0.0
+        )
+        if self.overall_score != expected_overall:
+            raise ValueError("role qualification overall score is inconsistent")
+        failures = set(self.failure_reasons)
+        if (RoleQualificationFailure.MINIMUM_CASES in failures) is not bool(
+            self.failed_minimum_case_dimensions
+        ):
+            raise ValueError("role minimum-case failure evidence is inconsistent")
+        if (RoleQualificationFailure.MINIMUM_DIMENSION_SCORE in failures) is not bool(
+            self.failed_minimum_score_dimensions
+        ):
+            raise ValueError("role minimum-score failure evidence is inconsistent")
+        if self.disposition is RoleQualificationDisposition.QUALIFIED:
+            if (
+                not self.dimensions
+                or self.failed_minimum_case_dimensions
+                or self.failed_minimum_score_dimensions
+                or self.failure_reasons
+            ):
+                raise ValueError("qualified role cannot retain failures")
+        elif not self.failure_reasons:
+            raise ValueError("unqualified role requires an explicit failure")
+        if (
+            self.disposition is RoleQualificationDisposition.INCONCLUSIVE
+            and self.failure_reasons != (RoleQualificationFailure.GLOBAL_BASELINE_INCONCLUSIVE,)
+        ):
+            raise ValueError("inconclusive role requires an inconclusive global baseline")
+        if (
+            self.disposition is not RoleQualificationDisposition.INCONCLUSIVE
+            and RoleQualificationFailure.GLOBAL_BASELINE_INCONCLUSIVE in failures
+        ):
+            raise ValueError("conclusive role cannot claim an inconclusive global baseline")
         return self
 
 
@@ -992,6 +1422,16 @@ class ModelQualificationResult(StrictModel):
     )
     overall_score: float = Field(ge=0, le=1)
     approved_roles: tuple[str, ...] = Field(default=(), max_length=128)
+    declared_roles: tuple[str, ...] = Field(
+        default=(),
+        max_length=128,
+        exclude_if=lambda value: not value,
+    )
+    role_results: tuple[RoleQualificationResult, ...] = Field(
+        default=(),
+        max_length=len(QualificationRoleClass),
+        exclude_if=lambda value: not value,
+    )
     evaluated_at: datetime
     expires_at: datetime | None = None
     failure_reasons: tuple[str, ...] = Field(default=(), max_length=100)
@@ -1006,7 +1446,7 @@ class ModelQualificationResult(StrictModel):
     def model_id_is_exact(cls, value: str) -> str:
         return _validate_exact_model_id(value)
 
-    @field_validator("approved_roles")
+    @field_validator("approved_roles", "declared_roles")
     @classmethod
     def roles_are_safe_sorted_unique(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         if any(re.fullmatch(_ROLE_PATTERN, role) is None for role in value):
@@ -1029,6 +1469,21 @@ class ModelQualificationResult(StrictModel):
 
     @model_validator(mode="after")
     def conclusion_and_hash_are_consistent(self) -> ModelQualificationResult:
+        role_classes = tuple(result.role_class.value for result in self.role_results)
+        if self.role_results and role_classes != tuple(
+            sorted(item.value for item in QualificationRoleClass)
+        ):
+            raise ValueError("role qualification results must cover every role class exactly once")
+        if self.role_results:
+            if not set(self.approved_roles).issubset(self.declared_roles):
+                raise ValueError("role qualification cannot authorize an undeclared role")
+        elif self.declared_roles:
+            raise ValueError("legacy qualification cannot contain unbound declared roles")
+        if self.disposition is not QualificationDisposition.TIER_A and any(
+            result.disposition is RoleQualificationDisposition.QUALIFIED
+            for result in self.role_results
+        ):
+            raise ValueError("role qualification requires a global Tier A baseline")
         complete = self.disposition in {
             QualificationDisposition.TIER_A,
             QualificationDisposition.NOT_QUALIFIED,
@@ -1100,7 +1555,9 @@ def seal_model_qualification_result(
     approved_roles: tuple[str, ...],
     evaluated_at: datetime,
     expires_at: datetime | None,
+    declared_roles: tuple[str, ...] = (),
     failure_reasons: tuple[str, ...] = (),
+    role_results: tuple[RoleQualificationResult, ...] = (),
 ) -> ModelQualificationResult:
     payload: dict[str, Any] = {
         "exact_model_id": exact_model_id,
@@ -1127,6 +1584,13 @@ def seal_model_qualification_result(
         "failure_reasons": list(failure_reasons),
         "scored_by": "mmaudit-deterministic-qualification",
     }
+    if declared_roles:
+        payload["declared_roles"] = list(declared_roles)
+    if role_results:
+        payload["role_results"] = [
+            result.model_dump(mode="json")
+            for result in sorted(role_results, key=lambda item: item.role_class.value)
+        ]
     payload["quality_measurement_sha256"] = _canonical_json_sha256(
         {
             key: value
@@ -1141,6 +1605,143 @@ def seal_model_qualification_result(
     )
     payload["result_sha256"] = _canonical_json_sha256(payload)
     return ModelQualificationResult.model_validate(payload)
+
+
+def evaluate_role_qualification_results(
+    *,
+    global_disposition: QualificationDisposition,
+    dimensions: tuple[QualificationDimensionResult, ...],
+    role_policies: tuple[RoleQualificationPolicy, ...],
+) -> tuple[RoleQualificationResult, ...]:
+    """Apply all secondary role gates without upgrading the global conclusion."""
+
+    validated_policies = tuple(
+        RoleQualificationPolicy.model_validate(policy.model_dump(mode="json"))
+        for policy in role_policies
+    )
+    role_classes = tuple(policy.role_class.value for policy in validated_policies)
+    if role_classes != tuple(sorted(item.value for item in QualificationRoleClass)):
+        raise ValueError("role qualification evaluation requires every role class exactly once")
+    observed = {item.dimension: item for item in dimensions}
+    if len(observed) != len(dimensions):
+        raise ValueError("role qualification dimensions are duplicate")
+
+    results: list[RoleQualificationResult] = []
+    for role_policy in validated_policies:
+        selected = tuple(
+            observed[threshold.dimension]
+            for threshold in role_policy.thresholds
+            if threshold.dimension in observed
+        )
+        if global_disposition is QualificationDisposition.INCONCLUSIVE:
+            results.append(
+                RoleQualificationResult(
+                    role_class=role_policy.role_class,
+                    disposition=RoleQualificationDisposition.INCONCLUSIVE,
+                    dimensions=(),
+                    overall_score=0.0,
+                    failure_reasons=(RoleQualificationFailure.GLOBAL_BASELINE_INCONCLUSIVE,),
+                )
+            )
+            continue
+        if len(selected) != len(role_policy.thresholds):
+            raise ValueError("role qualification policy references an unmeasured dimension")
+
+        failed_cases = tuple(
+            sorted(
+                (
+                    threshold.dimension
+                    for threshold in role_policy.thresholds
+                    if observed[threshold.dimension].evaluated < threshold.minimum_cases
+                ),
+                key=lambda item: item.value,
+            )
+        )
+        failed_scores = tuple(
+            sorted(
+                (
+                    threshold.dimension
+                    for threshold in role_policy.thresholds
+                    if observed[threshold.dimension].score < threshold.minimum_score
+                ),
+                key=lambda item: item.value,
+            )
+        )
+        overall_score = round(
+            sum(item.score for item in selected) / len(selected),
+            6,
+        )
+        failures: set[RoleQualificationFailure] = set()
+        if global_disposition is not QualificationDisposition.TIER_A:
+            failures.add(RoleQualificationFailure.GLOBAL_BASELINE_NOT_TIER_A)
+        if failed_cases:
+            failures.add(RoleQualificationFailure.MINIMUM_CASES)
+        if failed_scores:
+            failures.add(RoleQualificationFailure.MINIMUM_DIMENSION_SCORE)
+        if overall_score < role_policy.minimum_overall_score:
+            failures.add(RoleQualificationFailure.MINIMUM_OVERALL_SCORE)
+        results.append(
+            RoleQualificationResult(
+                role_class=role_policy.role_class,
+                disposition=(
+                    RoleQualificationDisposition.QUALIFIED
+                    if not failures
+                    else RoleQualificationDisposition.NOT_QUALIFIED
+                ),
+                dimensions=tuple(sorted(selected, key=lambda item: item.dimension.value)),
+                overall_score=overall_score,
+                failed_minimum_case_dimensions=failed_cases,
+                failed_minimum_score_dimensions=failed_scores,
+                failure_reasons=tuple(sorted(failures, key=lambda item: item.value)),
+            )
+        )
+    return tuple(results)
+
+
+def qualification_role_class_for_declared_role(role: str) -> QualificationRoleClass:
+    """Map only the three reserved validator names away from investigator."""
+
+    if re.fullmatch(_ROLE_PATTERN, role) is None:
+        raise ValueError("declared qualification role is malformed")
+    if role == "verifier":
+        return QualificationRoleClass.VERIFIER
+    if role == "falsifier":
+        return QualificationRoleClass.FALSIFIER
+    if role == "judge":
+        return QualificationRoleClass.JUDGE
+    return QualificationRoleClass.INVESTIGATOR
+
+
+def derive_approved_roles_for_role_qualification(
+    *,
+    declared_roles: tuple[str, ...],
+    global_disposition: QualificationDisposition,
+    role_results: tuple[RoleQualificationResult, ...],
+) -> tuple[str, ...]:
+    """Intersect declared roles with qualified role classes, never expanding authority."""
+
+    declared_roles = _validate_sorted_unique(declared_roles, label="declared qualification roles")
+    for role in declared_roles:
+        qualification_role_class_for_declared_role(role)
+    validated_results = tuple(
+        RoleQualificationResult.model_validate(result.model_dump(mode="json"))
+        for result in role_results
+    )
+    role_classes = tuple(result.role_class.value for result in validated_results)
+    if role_classes != tuple(sorted(item.value for item in QualificationRoleClass)):
+        raise ValueError("role approval derivation requires every role class exactly once")
+    if global_disposition is not QualificationDisposition.TIER_A:
+        return ()
+    qualified_classes = {
+        result.role_class
+        for result in validated_results
+        if result.disposition is RoleQualificationDisposition.QUALIFIED
+    }
+    return tuple(
+        role
+        for role in declared_roles
+        if qualification_role_class_for_declared_role(role) in qualified_classes
+    )
 
 
 class ModelQualificationArtifact(StrictModel):
@@ -1543,11 +2144,22 @@ def verify_model_qualification(
     expected_bindings: QualificationBindings,
     trusted_benchmark_evidence: tuple[TrustedBenchmarkVerificationEvidence, ...],
     now: datetime,
+    trusted_calibrated_policy: TrustedCalibratedQualificationPolicy | None = None,
 ) -> QualificationVerification:
     """Recompute production eligibility; unresolved evidence always fails closed."""
 
     now = _validate_utc_second(now, label="qualification verification time")
     errors: list[str] = []
+    if policy.schema_version == "2.0":
+        if type(trusted_calibrated_policy) is not TrustedCalibratedQualificationPolicy:
+            errors.append("calibrated qualification policy lacks live verification authority")
+        else:
+            try:
+                trusted_calibrated_policy.require_for(policy)
+            except ValueError:
+                errors.append("calibrated qualification policy authority is mismatched")
+    elif trusted_calibrated_policy is not None:
+        errors.append("legacy qualification policy received calibrated policy authority")
     if artifact.bindings != expected_bindings:
         errors.append("qualification bindings differ from expected release inputs")
     if artifact.bindings.candidate_registry_sha256 != registry.registry_sha256:
@@ -1591,6 +2203,7 @@ def verify_model_qualification(
             result,
             errors,
             artifact_created_at=artifact.created_at,
+            role_scoped=bool(policy.role_policies),
         )
         evidence = evidence_by_model.get(model_id)
         complete = result.disposition is not QualificationDisposition.INCONCLUSIVE
@@ -1617,6 +2230,24 @@ def verify_model_qualification(
                 errors.append(
                     f"passing deterministic score was mislabeled not-qualified: {model_id}"
                 )
+
+        if policy.role_policies:
+            expected_role_results = evaluate_role_qualification_results(
+                global_disposition=result.disposition,
+                dimensions=result.dimensions,
+                role_policies=policy.role_policies,
+            )
+            if result.role_results != expected_role_results:
+                errors.append(f"role qualification results differ from policy: {model_id}")
+            expected_retained_roles = derive_approved_roles_for_role_qualification(
+                declared_roles=result.declared_roles,
+                global_disposition=result.disposition,
+                role_results=expected_role_results,
+            )
+            if result.approved_roles != expected_retained_roles:
+                errors.append(f"qualification approved roles exceed role policy: {model_id}")
+        elif result.role_results:
+            errors.append(f"legacy qualification contains unbound role results: {model_id}")
 
         if result.disposition is QualificationDisposition.TIER_A:
             assert result.expires_at is not None
@@ -1652,7 +2283,7 @@ def verify_model_qualification(
                 is DataCollectionDenyEvidenceSource.ZDR_ENDPOINT_SNAPSHOT
                 and candidate.data_collection_deny_evidence_sha256 is not None
                 and candidate.data_collection_deny_evidence_expires_at is None
-                and bool(candidate.approved_roles)
+                and bool(result.approved_roles)
                 and result.expires_at > now
             )
             if production_eligible:
@@ -1694,6 +2325,7 @@ def resolve_verified_production_qualification(
     trusted_release_observation: TrustedReleaseBindingObservation,
     production_effective_config_sha256: str,
     now: datetime,
+    trusted_calibrated_policy: TrustedCalibratedQualificationPolicy | None = None,
 ) -> VerifiedProductionQualification:
     """Issue an opaque production capability only from complete current REAL evidence."""
 
@@ -1715,6 +2347,12 @@ def resolve_verified_production_qualification(
     artifact = ModelQualificationArtifact.model_validate(artifact.model_dump(mode="json"))
     registry = CandidateRegistry.model_validate(registry.model_dump(mode="json"))
     policy = QualificationPolicy.model_validate(policy.model_dump(mode="json"))
+    if policy.schema_version == "2.0":
+        if type(trusted_calibrated_policy) is not TrustedCalibratedQualificationPolicy:
+            raise ValueError("production qualification requires live calibrated policy authority")
+        trusted_calibrated_policy.require_for(policy)
+    elif trusted_calibrated_policy is not None:
+        raise ValueError("legacy production qualification cannot consume calibrated authority")
     expected_bindings = QualificationBindings.model_validate(
         expected_bindings.model_dump(mode="json")
     )
@@ -1760,6 +2398,7 @@ def resolve_verified_production_qualification(
         expected_bindings=expected_bindings,
         trusted_benchmark_evidence=ordered_trusted,
         now=now,
+        trusted_calibrated_policy=trusted_calibrated_policy,
     )
     if not verification.valid:
         raise ValueError(
@@ -2051,6 +2690,7 @@ def _verify_result_candidate_binding(
     errors: list[str],
     *,
     artifact_created_at: datetime,
+    role_scoped: bool,
 ) -> None:
     fields = (
         (
@@ -2094,9 +2734,13 @@ def _verify_result_candidate_binding(
             result.structured_output_mode,
             candidate.structured_output_mode,
         ),
-        ("approved roles", result.approved_roles, candidate.approved_roles),
     )
-    for label, observed, expected in fields:
+    role_fields = (
+        (("declared roles", result.declared_roles, candidate.approved_roles),)
+        if role_scoped
+        else (("approved roles", result.approved_roles, candidate.approved_roles),)
+    )
+    for label, observed, expected in (*fields, *role_fields):
         if observed != expected:
             errors.append(
                 f"qualification result {label} differs from candidate: {candidate.exact_model_id}"
