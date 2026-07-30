@@ -24,6 +24,9 @@ from mmaudit.constants import ALL_MODEL_ROLES, VERSION
 from mmaudit.models.schemas import (
     AuditProfile,
     AuditReport,
+    CandidateFinding,
+    CandidateOriginKind,
+    FindingOriginKind,
     MaximumAssuranceStatus,
     StrictModel,
 )
@@ -507,6 +510,54 @@ def _validate_report_artifact_consistency(root: Path, report: AuditReport) -> No
     scanner_results = _read_json_artifact(root, "scanner-results.json")
     if scanner_results.get("runs") != [run.model_dump(mode="json") for run in report.scanner_runs]:
         raise ValueError("scanner-results.json differs from the final report")
+    candidate_artifact = _read_json_artifact(root, "candidate-findings.json")
+    raw_candidates = candidate_artifact.get("findings")
+    if not isinstance(raw_candidates, list):
+        raise ValueError("candidate-findings.json lacks a typed candidate inventory")
+    candidates = [CandidateFinding.model_validate(item) for item in raw_candidates]
+    candidate_ids = [candidate.candidate_id for candidate in candidates]
+    if len(candidate_ids) != len(set(candidate_ids)):
+        raise ValueError("candidate-findings.json contains duplicate candidate IDs")
+    candidates_by_id = {candidate.candidate_id: candidate for candidate in candidates}
+    execution_candidate_ids = {
+        candidate.candidate_id
+        for candidate in candidates
+        if candidate.origin_kind is CandidateOriginKind.DETERMINISTIC_EXECUTION
+    }
+    if execution_candidate_ids and candidate_artifact.get("schema_version") != "1.1":
+        raise ValueError("execution-origin candidates require candidate artifact schema 1.1")
+    reported_execution_ids: set[str] = set()
+    for finding in [*report.findings, *report.rejected_findings]:
+        contributing = {
+            candidate_id
+            for candidate_id in finding.contributing_candidate_ids
+            if candidate_id in candidates_by_id
+        }
+        contributing_execution = contributing & execution_candidate_ids
+        if finding.origin_kind is FindingOriginKind.DETERMINISTIC_EXECUTION:
+            if not contributing_execution:
+                raise ValueError("execution-origin finding lacks an execution-origin candidate")
+            candidate_provenance = {
+                provenance.provenance_sha256
+                for candidate_id in contributing_execution
+                if (
+                    provenance := candidates_by_id[candidate_id].execution_provenance
+                )
+                is not None
+            }
+            finding_provenance = {
+                provenance.provenance_sha256
+                for provenance in finding.execution_provenance
+            }
+            if candidate_provenance != finding_provenance:
+                raise ValueError(
+                    "execution-origin finding provenance differs from candidate-findings.json"
+                )
+            reported_execution_ids.update(contributing_execution)
+        elif contributing_execution:
+            raise ValueError("non-execution finding contains an execution-origin candidate")
+    if reported_execution_ids != execution_candidate_ids:
+        raise ValueError("an execution-origin candidate was omitted from final report evidence")
     differential_path = root / "repository-suite-differential.json"
     fork_privacy_path = root / "privacy-fork-rpc-egress.json"
     for path in (differential_path, fork_privacy_path):

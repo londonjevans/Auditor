@@ -10,6 +10,7 @@ from mmaudit.config import AuditConfig, model_family
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterSchemaError
 from mmaudit.models.schemas import (
     CandidateFinding,
+    CandidateOriginKind,
     CandidateReviewBatch,
     ContextPackage,
     Evidence,
@@ -151,16 +152,19 @@ class FindingAgent(AgentBase):
                             fingerprint=None,
                         )
                     )
+            stamped_candidate = finding.model_copy(
+                update={
+                    "candidate_id": f"cand-{stable_candidate}",
+                    "origin_kind": CandidateOriginKind.MODEL_REVIEW,
+                    "execution_provenance": None,
+                    "role": self.role,
+                    "model_family": family,
+                    "model_votes": [vote],
+                    "evidence": evidence,
+                }
+            )
             stamped.append(
-                finding.model_copy(
-                    update={
-                        "candidate_id": f"cand-{stable_candidate}",
-                        "role": self.role,
-                        "model_family": family,
-                        "model_votes": [vote],
-                        "evidence": evidence,
-                    }
-                )
+                CandidateFinding.model_validate(stamped_candidate.model_dump(mode="python"))
             )
         return FindingReviewResult(
             findings=tuple(stamped),

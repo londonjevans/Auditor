@@ -369,6 +369,21 @@ class FindingStatus(StrEnum):
     REJECTED = "rejected"
 
 
+class CandidateOriginKind(StrEnum):
+    """Trusted origin of a candidate before consensus and adjudication."""
+
+    MODEL_REVIEW = "model_review"
+    DETERMINISTIC_EXECUTION = "deterministic_execution"
+
+
+class FindingOriginKind(StrEnum):
+    """Trusted discovery origin retained on a normalized finding."""
+
+    MODEL_REVIEW = "model_review"
+    DETERMINISTIC_EXECUTION = "deterministic_execution"
+    STATIC_ANALYZER = "static_analyzer"
+
+
 class AuditProfile(StrEnum):
     QUICK = "quick"
     STANDARD = "standard"
@@ -462,6 +477,7 @@ class EvidenceStrength(StrEnum):
     INDEPENDENT_MODEL_SUPPORT = "independent_model_support"
     VALIDATED_ATTACK_PATH = "validated_attack_path"
     DETERMINISTIC_ANALYZER = "deterministic_analyzer"
+    DETERMINISTIC_EXECUTION_COUNTEREXAMPLE = "deterministic_execution_counterexample"
     LOCAL_FORK_REPRODUCTION = "local_fork_reproduction"
     MINIMIZED_LOCAL_FORK_REPRODUCTION = "minimized_local_fork_reproduction"
     FORMAL_COUNTEREXAMPLE = "formal_counterexample"
@@ -972,7 +988,7 @@ class SourceSink(StrictModel):
 
 
 class Evidence(StrictModel):
-    type: Literal["model", "scanner", "reproduction", "formal", "repository"]
+    type: Literal["model", "scanner", "execution", "reproduction", "formal", "repository"]
     source: str
     description: str = Field(min_length=1)
     rule_id: str | None = None
@@ -990,6 +1006,94 @@ class VerificationTest(StrictModel):
         if not value:
             raise ValueError("verification tests must be safe and local")
         return value
+
+
+class InvariantExecutionCandidateProvenance(StrictModel):
+    """Self-hashed origin evidence for one replayed deterministic counterexample."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    producer: Literal["foundry_invariant"] = "foundry_invariant"
+    execution_evidence: Literal[ExecutionEvidenceKind.REAL] = ExecutionEvidenceKind.REAL
+    invariant_id: str = Field(min_length=1, max_length=160)
+    invariant_evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    harness_name: str = Field(min_length=1, max_length=240)
+    harness_spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    property_corpus_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    property_ids: tuple[str, ...] = Field(min_length=1, max_length=10_000)
+    property_hashes: tuple[str, ...] = Field(min_length=1, max_length=10_000)
+    execution_result_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    execution_observation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    executable_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    compiler_version: str = Field(min_length=1, max_length=1_000)
+    compiler_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    isolation_backend: str = Field(min_length=1, max_length=160)
+    isolation_attestation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    replay_confirmed: Literal[True] = True
+    attempts: int = Field(ge=2, le=10)
+    successful_attempts: int = Field(ge=2, le=10)
+    minimized: bool
+    source_locations: tuple[Location, ...] = Field(min_length=1, max_length=100)
+    provenance_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> InvariantExecutionCandidateProvenance:
+        """Validate and self-hash one execution-origin candidate record."""
+
+        if "provenance_sha256" in values:
+            raise ValueError("provenance_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, provenance_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"provenance_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "provenance_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @model_validator(mode="after")
+    def execution_origin_is_canonical_and_hash_linked(
+        self,
+    ) -> InvariantExecutionCandidateProvenance:
+        if self.property_ids != tuple(sorted(set(self.property_ids))):
+            raise ValueError("execution provenance property IDs must be unique and sorted")
+        if self.property_hashes != tuple(sorted(set(self.property_hashes))) or any(
+            re.fullmatch(r"[0-9a-f]{64}", value) is None for value in self.property_hashes
+        ):
+            raise ValueError("execution provenance property hashes must be unique and sorted")
+        if len(self.property_ids) != len(self.property_hashes):
+            raise ValueError("execution provenance property IDs and hashes must have equal length")
+        if self.attempts != self.successful_attempts:
+            raise ValueError("execution provenance requires every replay attempt to succeed")
+        location_keys = [
+            (
+                location.path,
+                location.start_line,
+                location.end_line,
+                location.symbol or "",
+                location.content_hash or "",
+            )
+            for location in self.source_locations
+        ]
+        if location_keys != sorted(set(location_keys)) or any(
+            location.content_hash is None
+            or re.fullmatch(r"[0-9a-f]{64}", location.content_hash) is None
+            for location in self.source_locations
+        ):
+            raise ValueError(
+                "execution provenance source locations must be unique, sorted, and content-hashed"
+            )
+        if self.provenance_sha256 != self.expected_provenance_sha256():
+            raise ValueError("execution provenance hash does not match its typed contents")
+        return self
+
+    def expected_provenance_sha256(self) -> str:
+        """Return the canonical hash of every non-derived provenance field."""
+
+        payload = self.model_dump(mode="json", exclude={"provenance_sha256"})
+        return _canonical_model_sha256(payload)
 
 
 class ForkTestType(StrEnum):
@@ -2161,6 +2265,8 @@ class CandidateFinding(StrictModel):
     """Finding proposed by an analysis role before independent verification."""
 
     candidate_id: str = Field(min_length=1)
+    origin_kind: CandidateOriginKind = CandidateOriginKind.MODEL_REVIEW
+    execution_provenance: InvariantExecutionCandidateProvenance | None = None
     title: str = Field(min_length=1)
     severity: Severity
     confidence: float = Field(ge=0, le=1)
@@ -2178,13 +2284,57 @@ class CandidateFinding(StrictModel):
     false_positive_conditions: list[str] = Field(min_length=1)
     recommendation: str = Field(min_length=1)
     verification_test: VerificationTest
-    role: str
-    model_family: str
+    role: str | None
+    model_family: str | None
     model_votes: list[ModelVote] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def origin_fields_are_exact(self) -> CandidateFinding:
+        if self.origin_kind is CandidateOriginKind.MODEL_REVIEW:
+            if self.execution_provenance is not None:
+                raise ValueError("model-review candidates cannot claim execution provenance")
+            if not self.role or not self.role.strip() or not self.model_family:
+                raise ValueError("model-review candidates require a non-empty role and family")
+            if not self.model_family.strip():
+                raise ValueError("model-review candidates require a non-empty role and family")
+            return self
+
+        provenance = self.execution_provenance
+        if provenance is None:
+            raise ValueError("execution-origin candidates require typed provenance")
+        provenance = InvariantExecutionCandidateProvenance.model_validate(
+            provenance.model_dump(mode="python")
+        )
+        if self.role is not None or self.model_family is not None:
+            raise ValueError("execution-origin candidates cannot claim a model role or family")
+        expected_id = f"exec-{provenance.provenance_sha256[:24]}"
+        if self.candidate_id != expected_id:
+            raise ValueError("execution-origin candidate ID must derive from provenance")
+        if tuple(self.locations) != provenance.source_locations:
+            raise ValueError("execution-origin candidate locations must exactly match provenance")
+        execution_evidence = [item for item in self.evidence if item.type == "execution"]
+        if len(execution_evidence) != 1:
+            raise ValueError("execution-origin candidates require exactly one execution evidence")
+        bound_evidence = execution_evidence[0]
+        if (
+            bound_evidence.source != "mmaudit-foundry-invariant"
+            or bound_evidence.rule_id != provenance.invariant_id
+            or bound_evidence.fingerprint != provenance.provenance_sha256
+        ):
+            raise ValueError("execution evidence must bind the exact provenance record")
+        if any(item.type == "model" for item in self.evidence):
+            raise ValueError("execution-origin candidates cannot contain model evidence")
+        return self
 
 
 class Finding(StrictModel):
     id: str = Field(min_length=1)
+    group_id: str | None = None
+    origin_kind: FindingOriginKind = FindingOriginKind.MODEL_REVIEW
+    execution_provenance: tuple[InvariantExecutionCandidateProvenance, ...] = Field(
+        default_factory=tuple,
+        max_length=100,
+    )
     title: str = Field(min_length=1)
     status: FindingStatus
     severity: Severity
@@ -2212,6 +2362,7 @@ class Finding(StrictModel):
 
     @model_validator(mode="after")
     def accepted_findings_are_complete(self) -> Finding:
+        self._validate_origin_fields()
         if self.status is FindingStatus.REJECTED:
             return self
         required_collections = (
@@ -2226,6 +2377,42 @@ class Finding(StrictModel):
         if not self.impact or not self.recommendation or self.verification_test is None:
             raise ValueError("non-rejected findings require impact, remediation, and a test")
         return self
+
+    def _validate_origin_fields(self) -> None:
+        if self.origin_kind is not FindingOriginKind.DETERMINISTIC_EXECUTION:
+            if self.execution_provenance:
+                raise ValueError("non-execution findings cannot claim execution provenance")
+            return
+        if self.group_id is None or not self.group_id.strip():
+            raise ValueError("execution-origin findings require a non-empty group ID")
+        if not self.execution_provenance:
+            raise ValueError("execution-origin findings require typed provenance")
+        provenance = tuple(
+            InvariantExecutionCandidateProvenance.model_validate(item.model_dump(mode="python"))
+            for item in self.execution_provenance
+        )
+        provenance_hashes = tuple(item.provenance_sha256 for item in provenance)
+        if provenance_hashes != tuple(sorted(set(provenance_hashes))):
+            raise ValueError("execution finding provenance must be unique and sorted")
+        if len(self.contributing_candidate_ids) != len(set(self.contributing_candidate_ids)):
+            raise ValueError("execution finding contributing candidate IDs must be unique")
+        expected_candidate_ids = {f"exec-{item.provenance_sha256[:24]}" for item in provenance}
+        if not expected_candidate_ids <= set(self.contributing_candidate_ids):
+            raise ValueError("execution finding must retain every provenance-derived candidate ID")
+        locations_by_key = {
+            (
+                location.path,
+                location.start_line,
+                location.end_line,
+                location.symbol or "",
+                location.content_hash or "",
+            ): location
+            for item in provenance
+            for location in item.source_locations
+        }
+        expected_locations = tuple(locations_by_key[key] for key in sorted(locations_by_key))
+        if tuple(self.locations) != expected_locations:
+            raise ValueError("execution finding locations must exactly match its provenance")
 
 
 class ThreatBoundary(StrictModel):
@@ -9758,6 +9945,7 @@ class AuditReport(StrictModel):
 
     @model_validator(mode="after")
     def run_status_matches_minimum_analysis_floor(self) -> AuditReport:
+        self._validate_execution_origin_bindings()
         if self.schema_version != "1.2":
             if self.run_status is not None or self.minimum_analysis_floor is not None:
                 raise ValueError("typed minimum-floor evidence requires report schema 1.2")
@@ -9810,6 +9998,45 @@ class AuditReport(StrictModel):
                 )
         self._validate_minimum_floor_runtime_bindings(self.minimum_analysis_floor)
         return self
+
+    def _validate_execution_origin_bindings(self) -> None:
+        """Bind execution-origin findings to exact serialized runtime evidence."""
+
+        execution_results = {
+            (result.invariant_id, result.harness_name): result
+            for result in self.invariant_executions
+        }
+        invariant_by_id = {
+            invariant.id: invariant
+            for invariant in (self.invariants.invariants if self.invariants is not None else [])
+        }
+        observed_provenance: set[str] = set()
+        for finding in [*self.findings, *self.rejected_findings]:
+            if finding.origin_kind is not FindingOriginKind.DETERMINISTIC_EXECUTION:
+                continue
+            for provenance in finding.execution_provenance:
+                if provenance.provenance_sha256 in observed_provenance:
+                    raise ValueError(
+                        "execution provenance cannot appear in more than one finding group"
+                    )
+                observed_provenance.add(provenance.provenance_sha256)
+                result = execution_results.get((provenance.invariant_id, provenance.harness_name))
+                invariant = invariant_by_id.get(provenance.invariant_id)
+                if (
+                    result is None
+                    or invariant is None
+                    or result.status is not InvariantExecutionStatus.COUNTEREXAMPLE
+                    or result.execution_evidence is not ExecutionEvidenceKind.REAL
+                    or result.harness_spec_sha256 != provenance.harness_spec_sha256
+                    or result.execution_observation_sha256
+                    != provenance.execution_observation_sha256
+                    or _canonical_model_sha256(result.model_dump(mode="json"))
+                    != provenance.execution_result_sha256
+                    or invariant.evidence_hash != provenance.invariant_evidence_sha256
+                ):
+                    raise ValueError(
+                        "execution-origin finding differs from its serialized invariant evidence"
+                    )
 
     def _validate_minimum_floor_runtime_bindings(self, floor: MinimumAnalysisFloor) -> None:
         """Bind serialized floor claims back to the report's normalized runtime evidence."""

@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Execution-originated candidate consensus
 CURRENT_TICKET: V3-EXECORIGIN-001
 LAST_COMPLETED_TICKET: V3-OMISSION-001
-NEXT_ACTION: Resume V3-EXECORIGIN-001 from the read-only architecture review; add the typed execution provenance boundary and expected-red defensive regressions before production edits.
-LAST_COMMAND: Interrupt the two active read-only V3-EXECORIGIN review agents after the operator pause request.
-LAST_RESULT: PASS — both active review agents stopped; no V3-EXECORIGIN production implementation had begun and the worktree was clean.
+NEXT_ACTION: Resume V3-EXECORIGIN-001 by reviewing the preserved typed provenance, execution-candidate builder, consensus, pipeline, replay, manifest, and reporting slices together; add the pending consensus/pipeline/report/replay/manifest regressions; then run focused integration and full validation before checkpointing.
+LAST_COMMAND: .venv/bin/ruff check --fix <six affected source files> && .venv/bin/ruff check <all affected Python files> && .venv/bin/python -m json.tool docs/remediation/v3/runtime_status.json && git diff --check
+LAST_RESULT: PASS — five import-order findings were fixed mechanically, the one missing CandidateFinding import was restored, all affected Python files pass Ruff, runtime status is valid JSON, and the preserved diff has no whitespace errors.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 14391ba7234aba3adfb1e3eb4159e5950754d833
+LAST_CHECKPOINT_COMMIT: bb2d1f0dcd3ea764e2a099487bd225b3dd7c093c
 
 ## 2026-07-30 — V3-OMISSION-001
 
@@ -279,6 +279,26 @@ LAST_CHECKPOINT_COMMIT: 14391ba7234aba3adfb1e3eb4159e5950754d833
   production source or test file changed, and no provider, secret, network,
   wallet, signing, broadcast, or paid operation occurred. Resume from the
   typed provenance and authority-boundary regression design.
+- **Resume:** Autorun resumed at `2026-07-30T04:28:42Z` from clean synchronized
+  checkpoint `bb2d1f0dcd3ea764e2a099487bd225b3dd7c093c`. The current ticket and
+  defensive scope are unchanged; no paid provider or external execution is in
+  scope for this work unit.
+- **Operator pause:** At `2026-07-30T04:46:28Z`, all three implementation
+  workers stopped at safe atomic boundaries. The typed origin/provenance schema
+  and its 10 focused tests are preserved; the execution-candidate builder and
+  its 8 focused tests are preserved; and the reporting slice is preserved
+  pending post-schema regressions. The schema worker reports Ruff, focused
+  schema tests, and 152 neighboring regression tests passing; the builder
+  worker reports Ruff, strict mypy, and all 8 focused tests passing. A final
+  pause check caught one missing type import and five import-order findings;
+  the missing import was restored, Ruff fixed the ordering mechanically, and
+  all affected Python files now pass Ruff. Root-owned
+  consensus, pipeline, replay, manifest, and model-boundary edits remain
+  uncommitted and require integrated review and validation. `git diff --check`
+  passed. No provider call, secret access, public RPC, wallet, signing,
+  broadcast, external execution, or paid operation occurred. A clearly labeled
+  pause checkpoint will preserve this incomplete ticket at the operator's
+  request; it does not constitute acceptance or completion.
 
 ## 2026-07-30 — V3-FIXTURE-001
 

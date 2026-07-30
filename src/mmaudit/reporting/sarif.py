@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Sequence
 from typing import Any
 from urllib.parse import quote
@@ -22,6 +24,38 @@ _LEVEL = {
     Severity.LOW: "note",
     Severity.INFORMATIONAL: "note",
 }
+
+
+def _execution_provenance_sha256s(finding: Finding) -> list[str]:
+    return sorted({item.provenance_sha256 for item in finding.execution_provenance})
+
+
+def _origin_properties(finding: Finding) -> dict[str, Any]:
+    properties: dict[str, Any] = {
+        "findingOrigin": finding.origin_kind.value,
+        "executionProvenanceSha256s": _execution_provenance_sha256s(finding),
+    }
+    if finding.group_id is not None:
+        properties["groupId"] = finding.group_id
+    return properties
+
+
+def _origin_fingerprint(finding: Finding) -> str:
+    payload = {
+        "finding_id": finding.id,
+        "group_id": finding.group_id,
+        "origin_kind": finding.origin_kind.value,
+        "execution_provenance_sha256s": _execution_provenance_sha256s(finding),
+    }
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode()
+    ).hexdigest()
 
 
 def generate_sarif(
@@ -60,7 +94,13 @@ def generate_sarif(
     rules = []
     results = []
     for finding in included:
-        tags = [*finding.cwe, *finding.owasp, f"status/{finding.status.value}"]
+        tags = [
+            *finding.cwe,
+            *finding.owasp,
+            f"status/{finding.status.value}",
+            f"origin/{finding.origin_kind.value}",
+        ]
+        origin_properties = _origin_properties(finding)
         rules.append(
             {
                 "id": finding.id,
@@ -75,6 +115,7 @@ def generate_sarif(
                     "security-severity": f"{_security_score(finding):.1f}",
                     "confidence": finding.confidence,
                     "status": finding.status.value,
+                    **origin_properties,
                 },
             }
         )
@@ -108,7 +149,8 @@ def generate_sarif(
                 ),
                 "message": {
                     "text": (
-                        f"[{finding.status.value}] {finding.summary} "
+                        f"[{finding.status.value}] [{finding.origin_kind.value}] "
+                        f"{finding.summary} "
                         f"Remediation: {finding.recommendation}"
                     )
                 },
@@ -116,12 +158,14 @@ def generate_sarif(
                 "partialFingerprints": {
                     "primaryLocationLineHash": finding.id,
                     "mmaudit/v1": finding.location_validation.content_hash or finding.id,
+                    "mmaudit/origin/v1": _origin_fingerprint(finding),
                 },
                 "properties": {
                     "confidence": finding.confidence,
                     "status": finding.status.value,
                     "cwe": finding.cwe,
                     "owasp": finding.owasp,
+                    **origin_properties,
                 },
             }
         )

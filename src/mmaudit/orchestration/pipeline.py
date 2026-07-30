@@ -102,6 +102,7 @@ from mmaudit.models.schemas import (
     AuditScopeAssessment,
     CandidateCrossExaminationDecision,
     CandidateFinding,
+    CandidateOriginKind,
     CandidateReproductionResolution,
     CompilationStatus,
     ContextPackage,
@@ -115,6 +116,7 @@ from mmaudit.models.schemas import (
     FalsificationBatch,
     FalsificationVerdict,
     Finding,
+    FindingOriginKind,
     FindingStatus,
     FormalResultKind,
     FormalToolRun,
@@ -203,6 +205,10 @@ from mmaudit.orchestration.context_manifest import (
     write_context_manifest,
 )
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
+from mmaudit.orchestration.execution_candidates import (
+    ExecutionCandidateBuildResult,
+    build_invariant_execution_candidates,
+)
 from mmaudit.orchestration.manifest import (
     build_run_evidence_manifest,
     canonical_sha256,
@@ -393,6 +399,14 @@ def _validated_finding_result(
         raise OpenRouterSchemaError(
             "candidate review completion was not bound to its exact source context"
         )
+    if any(
+        finding.origin_kind is not CandidateOriginKind.MODEL_REVIEW
+        or finding.execution_provenance is not None
+        for finding in result.findings
+    ):
+        raise OpenRouterSchemaError(
+            "model review attempted to claim host-owned deterministic execution origin"
+        )
     artifact = result.surface_review_artifact
     if artifact is None:
         if context.requested_model_surfaces:
@@ -453,6 +467,24 @@ def _candidate_origin_context_hashes(
 
     context = origin_packages.get(candidate_id)
     return context_hash_index([context]) if context is not None else {}
+
+
+def _candidate_origin_source_hashes(
+    origin_packages: dict[str, ContextPackage],
+    candidate: CandidateFinding,
+) -> dict[tuple[str, int, int], str]:
+    """Return only source hashes from the candidate's host-attested origin."""
+
+    if candidate.origin_kind is CandidateOriginKind.DETERMINISTIC_EXECUTION:
+        provenance = candidate.execution_provenance
+        if provenance is None:
+            return {}
+        return {
+            (location.path, location.start_line, location.end_line): location.content_hash
+            for location in provenance.source_locations
+            if location.content_hash is not None
+        }
+    return _candidate_origin_context_hashes(origin_packages, candidate.candidate_id)
 
 
 @dataclass(frozen=True)
@@ -751,6 +783,13 @@ class AuditPipeline:
         budget_halted = False
         candidates: list[CandidateFinding] = []
         candidate_origin_packages: dict[str, ContextPackage] = {}
+        pending_execution_candidates: list[CandidateFinding] = []
+        execution_candidates_integrated = False
+        execution_candidate_build = ExecutionCandidateBuildResult(
+            candidates=(),
+            rejected_counterexample_count=0,
+            limitations=(),
+        )
         verifications = VerificationBatch(decisions=[])
         decisions: dict[str, VerificationDecision] = {}
         cross_examinations: list[CandidateCrossExaminationDecision] = []
@@ -1367,6 +1406,28 @@ class AuditPipeline:
                 "results": [result.model_dump(mode="json") for result in invariant_executions],
             },
         )
+        execution_candidate_build = build_invariant_execution_candidates(
+            repository_root=discovery.root,
+            invariant_suite=solidity_invariants,
+            harnesses=invariant_harnesses,
+            property_corpus=property_corpus,
+            executions=invariant_executions,
+        )
+        pending_execution_candidates = list(execution_candidate_build.candidates)
+        if pending_execution_candidates and time_to_first_candidate_seconds is None:
+            time_to_first_candidate_seconds = time.monotonic() - run_started_monotonic
+        real_counterexamples = sum(
+            result.status is InvariantExecutionStatus.COUNTEREXAMPLE
+            and result.execution_evidence is ExecutionEvidenceKind.REAL
+            for result in invariant_executions
+        )
+        if execution_candidate_build.rejected_counterexample_count and real_counterexamples:
+            incomplete.extend(
+                f"execution-origin evidence rejected: {limitation}"
+                for limitation in execution_candidate_build.limitations
+            )
+            if terminal_code is ExitCode.SUCCESS:
+                terminal_code = ExitCode.INCOMPLETE
         if invariant_executions:
             solidity_coverage = build_solidity_coverage(
                 discovery=discovery,
@@ -2036,13 +2097,16 @@ class AuditPipeline:
                             terminal_code = ExitCode.MODEL_FAILURE
                 check_accounted_budget()
 
+            if pending_execution_candidates:
+                candidates.extend(pending_execution_candidates)
+                execution_candidates_integrated = True
             validations = {
                 candidate.candidate_id: validate_candidate(
                     discovery.root,
                     candidate,
-                    context_hashes=_candidate_origin_context_hashes(
+                    context_hashes=_candidate_origin_source_hashes(
                         candidate_origin_packages,
-                        candidate.candidate_id,
+                        candidate,
                     ),
                 )
                 for candidate in candidates
@@ -2582,9 +2646,9 @@ class AuditPipeline:
                 candidate.candidate_id: validate_candidate(
                     discovery.root,
                     candidate,
-                    context_hashes=_candidate_origin_context_hashes(
+                    context_hashes=_candidate_origin_source_hashes(
                         candidate_origin_packages,
-                        candidate.candidate_id,
+                        candidate,
                     ),
                 )
                 for candidate in candidates
@@ -2614,9 +2678,47 @@ class AuditPipeline:
                 if finding.status is FindingStatus.REJECTED:
                     rejected_findings.append(finding)
                 elif (
+                    finding.origin_kind is FindingOriginKind.DETERMINISTIC_EXECUTION
+                    or
                     SEVERITY_ORDER[finding.severity.value]
                     >= SEVERITY_ORDER[severity_threshold.value]
                 ):
+                    final_findings.append(finding)
+
+        if pending_execution_candidates and not execution_candidates_integrated:
+            candidates.extend(pending_execution_candidates)
+            validations.update(
+                {
+                    candidate.candidate_id: validate_candidate(
+                        discovery.root,
+                        candidate,
+                        context_hashes=_candidate_origin_source_hashes(
+                            candidate_origin_packages,
+                            candidate,
+                        ),
+                    )
+                    for candidate in pending_execution_candidates
+                }
+            )
+            execution_groups = group_candidates(pending_execution_candidates)
+            candidate_groups_count += len(execution_groups)
+            for group in execution_groups:
+                finding = merge_group(
+                    group,
+                    decisions={},
+                    validations=validations,
+                    scanner_findings=scanner_findings,
+                    judge=None,
+                )
+                finding = enforce_critical_evidence_cap(
+                    finding,
+                    require_formal_or_reproduction=(
+                        self.config.maximum_assurance.require_formal_or_reproduction_for_confirmed_critical
+                    ),
+                )
+                if finding.status is FindingStatus.REJECTED:
+                    rejected_findings.append(finding)
+                else:
                     final_findings.append(finding)
 
         assurance_high_critical_candidates = [
@@ -3972,7 +4074,7 @@ class AuditPipeline:
         write_json(
             run_dir / "candidate-findings.json",
             {
-                "schema_version": REPORT_SCHEMA_VERSION,
+                "schema_version": "1.1",
                 "findings": [candidate.model_dump(mode="json") for candidate in candidates],
             },
         )

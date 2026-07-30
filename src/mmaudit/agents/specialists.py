@@ -17,6 +17,8 @@ from mmaudit.constants import (
 )
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterSchemaError
 from mmaudit.models.schemas import (
+    CandidateFinding,
+    CandidateOriginKind,
     CandidateReviewBatch,
     ContextExecutionEvidence,
     ContextPackage,
@@ -753,25 +755,28 @@ class SpecialistFindingAgent:
                 )
                 for item in finding.evidence
             ]
+            stamped_candidate = finding.model_copy(
+                update={
+                    "candidate_id": f"cand-{stable}",
+                    "origin_kind": CandidateOriginKind.MODEL_REVIEW,
+                    "execution_provenance": None,
+                    "role": request_role,
+                    "model_family": family,
+                    "evidence": evidence,
+                    "model_votes": [
+                        ModelVote(
+                            role=request_role,
+                            requested_model=requested,
+                            returned_model=returned,
+                            family=family,
+                            verdict="proposed",
+                            rationale=finding.summary,
+                        )
+                    ],
+                }
+            )
             stamped.append(
-                finding.model_copy(
-                    update={
-                        "candidate_id": f"cand-{stable}",
-                        "role": request_role,
-                        "model_family": family,
-                        "evidence": evidence,
-                        "model_votes": [
-                            ModelVote(
-                                role=request_role,
-                                requested_model=requested,
-                                returned_model=returned,
-                                family=family,
-                                verdict="proposed",
-                                rationale=finding.summary,
-                            )
-                        ],
-                    }
-                )
+                CandidateFinding.model_validate(stamped_candidate.model_dump(mode="python"))
             )
         return FindingReviewResult(
             findings=tuple(stamped),

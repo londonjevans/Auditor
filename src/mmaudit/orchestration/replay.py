@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from enum import StrEnum
 from itertools import pairwise
 from pathlib import Path, PurePosixPath
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -24,6 +24,7 @@ from mmaudit.models.schemas import (
     REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT,
     REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS,
     CandidateFinding,
+    CandidateOriginKind,
     ExecutionEvidenceKind,
     FalsificationDecision,
     ForkRpcReadOnlyEgressEvidence,
@@ -418,8 +419,30 @@ class _InvariantExecutionArtifact(StrictModel):
 
 
 class _CandidateArtifact(StrictModel):
-    schema_version: Literal["1.0"]
+    schema_version: Literal["1.0", "1.1"]
     findings: list[CandidateFinding] = Field(max_length=100_000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def current_artifacts_declare_origin(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        version = value.get("schema_version")
+        raw_findings = value.get("findings")
+        if not isinstance(raw_findings, list):
+            return value
+        if version == "1.1" and any(
+            not isinstance(item, dict) or "origin_kind" not in item for item in raw_findings
+        ):
+            raise ValueError("candidate artifact 1.1 requires explicit origin on every candidate")
+        if version == "1.0" and any(
+            isinstance(item, dict)
+            and item.get("origin_kind")
+            == CandidateOriginKind.DETERMINISTIC_EXECUTION.value
+            for item in raw_findings
+        ):
+            raise ValueError("candidate artifact 1.0 cannot claim deterministic execution origin")
+        return value
 
     @model_validator(mode="after")
     def candidates_are_unique(self) -> _CandidateArtifact:
@@ -1243,6 +1266,37 @@ class _ReplayArtifacts(StrictModel):
         candidate_ids = {item.candidate_id for item in self.candidates.findings}
         if not {candidate_id for candidate_id, _name in specification_keys} <= candidate_ids:
             raise ValueError("saved test specifications reference missing candidates")
+        invariant_results = {
+            (item.invariant_id, item.harness_name): item
+            for item in self.invariant_results.results
+        }
+        harnesses = {
+            (item.invariant_id, item.name): item for item in self.invariant_results.harnesses
+        }
+        for candidate in self.candidates.findings:
+            if candidate.origin_kind is not CandidateOriginKind.DETERMINISTIC_EXECUTION:
+                continue
+            provenance = candidate.execution_provenance
+            if provenance is None:
+                raise ValueError("execution-origin candidate lacks typed provenance")
+            key = (provenance.invariant_id, provenance.harness_name)
+            result = invariant_results.get(key)
+            harness = harnesses.get(key)
+            if (
+                result is None
+                or harness is None
+                or result.status is not InvariantExecutionStatus.COUNTEREXAMPLE
+                or result.execution_evidence is not ExecutionEvidenceKind.REAL
+                or result.harness_spec_sha256 != provenance.harness_spec_sha256
+                or harness.specification_sha256() != provenance.harness_spec_sha256
+                or result.execution_observation_sha256
+                != provenance.execution_observation_sha256
+                or canonical_sha256(result.model_dump(mode="json"))
+                != provenance.execution_result_sha256
+            ):
+                raise ValueError(
+                    "execution-origin candidate differs from its saved invariant execution"
+                )
         if self.differential is not None and not self.differential_required:
             raise ValueError("loaded differential evidence must create a replay obligation")
         if self.differential is None and self.differential_required:

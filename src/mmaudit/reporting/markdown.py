@@ -132,6 +132,47 @@ def _status_qualification(status: FindingStatus) -> str:
     }[status]
 
 
+_ORIGIN_LABELS = {
+    "model_review": "Independent model review",
+    "deterministic_execution": "Deterministic execution",
+    "static_analyzer": "Static analyzer",
+}
+
+
+def _origin_label(finding: Finding) -> str:
+    return _ORIGIN_LABELS[finding.origin_kind.value]
+
+
+def _execution_origin_lines(finding: Finding) -> list[str]:
+    if finding.origin_kind.value != "deterministic_execution":
+        return []
+    lines = [
+        "This finding originated from deterministic execution and is not model-attributed.",
+        "",
+    ]
+    if finding.execution_provenance:
+        lines.extend(
+            [
+                "Execution provenance: "
+                + "; ".join(
+                    f"{_inline(provenance.producer)} / "
+                    f"SHA-256 {_inline(provenance.provenance_sha256[:12] + '…')}"
+                    for provenance in finding.execution_provenance
+                ),
+                "",
+            ]
+        )
+    if finding.model_votes:
+        lines.extend(
+            [
+                "Model contribution is limited to impact, exploitability, and remediation "
+                "analysis; it cannot alter the execution-bound identity or location.",
+                "",
+            ]
+        )
+    return lines
+
+
 def _effective_run_status(report: AuditReport) -> AuditRunStatus:
     if report.run_status is not None:
         return report.run_status
@@ -156,16 +197,23 @@ def _finding(finding: Finding, report: AuditReport) -> list[str]:
         f"{qualification} · Severity: **{finding.severity.value}** · "
         f"Confidence: **{finding.confidence:.2f}**",
         "",
+        f"Discovery origin: **{_origin_label(finding)}**",
+        "",
         f"Evidence strength: {_inline(finding.evidence_strength.value)} · "
         f"Reproduction: {_inline(finding.reproduction_state.value)}",
         "",
-        _text(finding.summary),
-        "",
-        f"Impact: {_text(finding.impact)}",
-        "",
-        "Locations:",
-        "",
     ]
+    lines.extend(_execution_origin_lines(finding))
+    lines.extend(
+        [
+            _text(finding.summary),
+            "",
+            f"Impact: {_text(finding.impact)}",
+            "",
+            "Locations:",
+            "",
+        ]
+    )
     lines.extend(
         f"- {_inline(location.path)}:{location.start_line}-{location.end_line}"
         + (f" ({_inline(location.symbol)})" if location.symbol else "")
@@ -263,6 +311,7 @@ def _finding(finding: Finding, report: AuditReport) -> list[str]:
 def render_markdown(report: AuditReport) -> str:
     counts = Counter(finding.severity.value for finding in report.findings)
     status_counts = Counter(finding.status.value for finding in report.findings)
+    origin_counts = Counter(finding.origin_kind.value for finding in report.findings)
     scanner_failures = [
         run for run in report.scanner_runs if run.status is not ScannerStatus.SUCCESS
     ]
@@ -311,6 +360,11 @@ def render_markdown(report: AuditReport) -> str:
         f"Audit profile: **{_text(report.audit_profile.value)}**. "
         f"Quality status: **{_text(report.quality_status.value)}**.",
         "",
+        "Finding discovery origins: "
+        f"deterministic execution={origin_counts['deterministic_execution']}, "
+        f"model review={origin_counts['model_review']}, "
+        f"static analyzer={origin_counts['static_analyzer']}.",
+        "",
     ]
     if report.maximum_assurance is not None:
         assurance = report.maximum_assurance
@@ -356,6 +410,10 @@ def render_markdown(report: AuditReport) -> str:
             "For Solidity findings, model agreement alone cannot produce `confirmed`; "
             "confirmation requires local reproduction, formal proof/counterexample, or "
             "strong deterministic analyzer evidence plus verifier acceptance.",
+            "",
+            "Discovery origin is independent of later model adjudication. Model roles cannot "
+            "create, suppress, or relocate an execution-originated finding; their contribution "
+            "is retained as bounded analysis and dissent.",
             "",
             "Severity totals: "
             + ", ".join(
@@ -1247,13 +1305,14 @@ def render_markdown(report: AuditReport) -> str:
             "## Rejected and disputed proposals",
             "",
             f"{len(report.rejected_findings)} candidate group(s) were rejected. Rejection details "
-            "and contributing model opinions remain in the JSON artifacts.",
+            "and origin-specific contributing evidence remain in the JSON artifacts.",
             "",
         ]
     )
     for finding in report.rejected_findings:
         lines.append(
-            f"- {_inline(finding.id)} — {_text(finding.title)}: {_text(finding.disagreement)}"
+            f"- {_inline(finding.id)} [{_text(_origin_label(finding))}] — "
+            f"{_text(finding.title)}: {_text(finding.disagreement)}"
         )
     lines.extend(
         [
