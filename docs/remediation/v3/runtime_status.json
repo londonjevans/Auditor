@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-07-30T22:46:08Z",
-  "candidate_commit": "9d70253f58f759ac2b6b930cc4a9c2efef21cf79",
-  "autorun_status": "ACTIVE",
-  "current_milestone": "operator_root_lineage_review_binding",
-  "current_ticket": "V3-LINEAGE-001",
-  "last_checkpoint_commit": "9d70253f58f759ac2b6b930cc4a9c2efef21cf79",
+  "updated_at": "2026-07-30T23:47:48Z",
+  "candidate_commit": "fa79b33936a4459a1f6cbe17106532d1552f504c",
+  "autorun_status": "PAUSED_BY_OPERATOR",
+  "current_milestone": "paused_between_ticket_boundaries",
+  "current_ticket": "NONE",
+  "last_checkpoint_commit": "fa79b33936a4459a1f6cbe17106532d1552f504c",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,

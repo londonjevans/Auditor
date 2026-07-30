@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: ACTIVE
-CURRENT_MILESTONE: Operator root-lineage review binding
-CURRENT_TICKET: V3-LINEAGE-001 (PARTIAL; provider-free implementation complete, checkpoint pending)
+AUTORUN_STATUS: PAUSED_BY_OPERATOR
+CURRENT_MILESTONE: Paused at a clean ticket boundary
+CURRENT_TICKET: NONE (V3-LINEAGE-001 checkpointed; V3-EFFORT-001 remains QUEUED)
 LAST_COMPLETED_TICKET: V3-EXECORIGIN-001
-NEXT_ACTION: Review the final diff and tracked-artifact/secret scope, then create and push the isolated V3-LINEAGE-001 checkpoint.
-LAST_COMMAND: `.venv/bin/pytest -q tests/unit/test_read_only_rpc_bridge.py` (local-loopback permission only)
-LAST_RESULT: PASS — all 76 read-only bridge tests passed in 41.04s. The preceding complete sandboxed suite reached 3549 passed and 15 explicit skips with exactly 71 setup errors, all from the sandbox denying the same bridge file permission to bind 127.0.0.1; replacing those errors with the permitted exact-file result yields 3620 unique passing tests and 15 skips.
+NEXT_ACTION: On operator resume, mark V3-EFFORT-001 IN_PROGRESS and begin its provider-free configuration and evidence slice; V3-TOKENS-001 is COMPLETE.
+LAST_COMMAND: `git commit -m "Bind model lineage reviews safely"`
+LAST_RESULT: PASS — isolated V3-LINEAGE-001 implementation checkpoint `fa79b33936a4459a1f6cbe17106532d1552f504c` was created after the full validation and independent review gates; the operator then requested a pause before the next ticket.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 9d70253f58f759ac2b6b930cc4a9c2efef21cf79
+LAST_CHECKPOINT_COMMIT: fa79b33936a4459a1f6cbe17106532d1552f504c
 
 ## 2026-07-30 — V3-LINEAGE-001
 
