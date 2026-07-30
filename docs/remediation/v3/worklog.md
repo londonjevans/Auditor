@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: ACTIVE
+AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Current model catalogue discovery and drift detection
-CURRENT_TICKET: V3-MODELREFRESH-001 (IN_PROGRESS; discovery/diff portion)
+CURRENT_TICKET: V3-MODELREFRESH-001 (IN_PROGRESS; paused at safe boundary)
 LAST_COMPLETED_TICKET: V3-EXECORIGIN-001
-NEXT_ACTION: Checkpoint the routed-catalog grammar correction and retry one authenticated metadata-only refresh against that corrected exact commit.
-LAST_COMMAND: `.venv/bin/pytest -q`
-LAST_RESULT: PASS — `3544 passed, 11 skipped in 500.97s`. Every skip names an explicit external-integration prerequisite. Two non-fatal cleanup warnings concerned already-restricted temporary `clean-anvil/toolchain` paths.
+NEXT_ACTION: On operator resume, implement the local fail-closed endpoint-identity normalization for shared provider tags with distinct endpoint slugs, add synthetic regressions, and validate locally. Do not make a third authenticated refresh attempt in this ticket.
+LAST_COMMAND: `.venv/bin/mmaudit models refresh --candidate-registry config/models.candidates.toml --secrets-env-file .env --output-dir /private/tmp/mmaudit-model-refresh-validation.flYYiq/output --soft-max-age-hours 30 --hard-max-age-hours 72 --pricing-tolerance-fraction 0.05 --no-color`
+LAST_RESULT: FAIL-CLOSED (exit 4, no completion and zero usage records) — the second authenticated metadata-only assay reached normalization and rejected current provider metadata because the ZDR catalogue contains shared route labels. A non-raw diagnostic identified `ModelRefreshValidationError: ZDR catalogue contains duplicate exact routes`. Per the no-progress rule, no third provider refresh will be attempted in this ticket.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: ebd8f9cad0a5905e5237ac9f56476b59c1b714a6
+LAST_CHECKPOINT_COMMIT: ddf2d2d2df947b77da53fc55968cc67eba9917e1
 
 ## 2026-07-30 — V3-MODELREFRESH-001
 
@@ -120,6 +120,21 @@ LAST_CHECKPOINT_COMMIT: ebd8f9cad0a5905e5237ac9f56476b59c1b714a6
   fail closed. The correction passed `250` focused tests plus affected Ruff, mypy, and
   generated-schema verification. The complete suite then passed `3544` tests with `11` explicit
   external-integration skips in `500.97s`.
+- **Second authenticated metadata assay:** The exact command recorded in `LAST_COMMAND` ran
+  against source checkpoint `ddf2d2d2df947b77da53fc55968cc67eba9917e1` and failed closed with
+  exit `4`. It issued metadata GETs only, created zero usage records, and made no completion
+  request. One non-raw diagnostic isolated the distinct normalization incompatibility:
+  `ModelRefreshValidationError: ZDR catalogue contains duplicate exact routes`. Current provider
+  metadata can contain multiple routes sharing a tag while retaining distinct endpoint slugs;
+  collapsing the full `(tag, slug)` identity to one label is therefore ambiguous. No raw payload,
+  credential, Authorization data, or provider-controlled value was persisted in this worklog.
+- **No-progress and pause boundary:** Two materially different authenticated refresh attempts
+  have now failed closed on distinct provider-shape incompatibilities. A third provider attempt
+  is prohibited for this ticket. At `2026-07-30T20:22:44Z`, the operator requested a pause; the
+  read-only endpoint-identity review was stopped and no implementation edit had begun. Resume
+  with local deterministic normalization that preserves the complete route identity, rejects
+  genuinely ambiguous candidate bindings, and grants ZDR only to an exact reconciled
+  counterpart. Add synthetic regressions and run local gates before checkpointing.
 - **Remaining partial work:** The scheduled workflow does not yet retrieve a durable prior
   snapshot or bind a real production selection; the audit pipeline does not consume the refresh
   freshness artifact. Automatic benchmark reservation/execution, refreshed-price runtime
