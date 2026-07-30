@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 360e3c0fbb5d2e892e220633462cb40e54cb1518
+LAST_CHECKPOINT_COMMIT: 937d97e1d337305ac56cd792fe0d6c2b8bd50674
 
 ## 2026-07-30 — V3-CALIBRATE-001
 
@@ -93,6 +93,8 @@ LAST_CHECKPOINT_COMMIT: 360e3c0fbb5d2e892e220633462cb40e54cb1518
   operator lineage review and role-specific effort controls, expand the frozen judgment corpus,
   resolve the two-campaign policy lifecycle, then execute a real non-dispositive calibration and
   freeze the measured v2 policy before any qualification campaign.
+- **Implementation checkpoint:** `937d97e1d337305ac56cd792fe0d6c2b8bd50674`
+  (`Add evidence-bound model calibration`).
 
 ## 2026-07-30 — V3-CI-001
 

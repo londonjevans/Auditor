@@ -719,7 +719,8 @@ are invisible to source review by construction.
 - **Validation:** The authority-hardened focused matrix passed `130` tests. Ruff formatting and
   checking passed, strict mypy passed all `152` source files, release-schema generation verified,
   JSON/diff integrity passed, and the full suite passed `3464` tests with `11` explicit
-  external-prerequisite skips in `781.73s`.
+  external-prerequisite skips in `781.73s`. The implementation checkpoint is
+  `937d97e1d337305ac56cd792fe0d6c2b8bd50674`.
 - **Remaining acceptance blockers:** No real calibration campaign has run and the frozen v1
   policy remains unchanged. The current corpus has only two cases for most judgment dimensions;
   all frozen candidates lack approved root lineages and omit literal verifier/judge declarations;

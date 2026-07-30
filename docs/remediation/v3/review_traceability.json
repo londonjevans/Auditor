@@ -159,6 +159,7 @@
         "Final v2 qualification and production resolution require live calibration and calibrated-policy authority; raw calibration and campaign capability registration paths are not module-reachable.",
         "Implementation: src/mmaudit/models/calibration.py, src/mmaudit/models/qualification.py, src/mmaudit/models/qualification_workflow.py, src/mmaudit/benchmark/model_portfolio.py, and src/mmaudit/cli.py; published schemas: schemas/model_calibration.schema.json and schemas/model_qualification.schema.json.",
         "Synthetic/local tests: tests/unit/test_model_calibration.py, tests/unit/test_model_calibration_cli.py, tests/unit/test_qualification_policy_calibration.py, tests/unit/test_role_qualification.py, and tests/unit/test_candidate_benchmark_campaign.py. The exact joined acceptance command passed 130 tests in 317.29 seconds; the full local suite passed 3464 tests with 11 explicit prerequisite skips.",
+        "Source implementation checkpoint: 937d97e1d337305ac56cd792fe0d6c2b8bd50674.",
         "No exact production model is currently qualified."
       ],
       "remaining_proof": "Refresh candidates, approve independent lineages, expand judgment denominators, bind per-role reasoning effort, execute real calibration, freeze its measured policy, and complete staged real role/whole-protocol qualification."
