@@ -12,11 +12,20 @@ import pytest
 from mmaudit.config import ReproductionConfig, SmartContractsConfig
 from mmaudit.models.openrouter import safe_headers
 from mmaudit.models.schemas import (
+    AnalysisState,
     AttackerCapability,
     AttackerCapabilityPolicy,
+    AuditedSuiteAssertionStatus,
+    AuditedSuiteCoverage,
+    AuditedSuiteCoverageGap,
+    AuditedSuiteCoverageGapKind,
+    AuditedSuiteStatementStatus,
+    AuditedSuiteSurfaceCoverage,
     AuditQualityStatus,
     AuditReport,
     AuditRunStatus,
+    CoverageMetric,
+    CoverageProvenance,
     CrossChainMessageCapability,
     EconomicMetrics,
     EconomicSimulationKind,
@@ -35,6 +44,8 @@ from mmaudit.models.schemas import (
     Location,
     LocationValidation,
     MinimumAnalysisFloor,
+    ModelReviewCoverage,
+    ModelReviewSurfaceKind,
     RepositoryCodeExecutionState,
     RepositoryFile,
     RepositoryMap,
@@ -49,6 +60,7 @@ from mmaudit.models.schemas import (
     Severity,
     SharePriceBoundaryEvidence,
     SolidityCoverage,
+    SolidityEntityKind,
     TransactionOrderingCapability,
     VerificationTest,
 )
@@ -57,7 +69,13 @@ from mmaudit.orchestration.pipeline import (
     _scanner_findings_for_report,
 )
 from mmaudit.orchestration.run_status import minimum_analysis_floor_quality_gate
-from mmaudit.reporting.json_report import stable_json
+from mmaudit.privacy import (
+    EffectivePrivacyPolicyEvidence,
+    EndpointPolicyClass,
+    PrivacyProfile,
+    PrivacySourceClassification,
+)
+from mmaudit.reporting.json_report import stable_json, write_json
 from mmaudit.reporting.markdown import render_markdown
 from mmaudit.reporting.sarif import generate_sarif
 from mmaudit.scanners.base import (
@@ -563,7 +581,7 @@ def test_foundry_repository_suite_rejects_source_changed_after_pipeline_freeze(
         "contract PortfolioTest { function testUnit() public {} }\n",
         encoding="utf-8",
     )
-    output = root / "custom-output"
+    output = root / ".mmaudit"
     frozen_sha256 = scanner_workspace_sha256(root, output)
     (root / "src").mkdir()
     (root / "src" / "Late.sol").write_text("contract Late {}\n", encoding="utf-8")
@@ -1111,7 +1129,7 @@ def test_scanner_trust_pin_mismatch_blocks_target_execution(tmp_path: Path) -> N
 
     result = scanner.run(
         tmp_path,
-        tmp_path / "private-trust-mismatch",
+        tmp_path / ".mmaudit" / "private-trust-mismatch",
         2,
         backend=_PassthroughIsolation(),
         expected_version="0.0.0",
@@ -1143,7 +1161,7 @@ def test_injected_scanner_backend_cannot_self_assert_real(tmp_path: Path) -> Non
 
     result = scanner.run(
         tmp_path,
-        tmp_path / "private-self-asserted",
+        tmp_path / ".mmaudit" / "private-self-asserted",
         2,
         backend=_SelfAssertedRealIsolation(),
     )
@@ -1275,7 +1293,7 @@ def test_scanner_workspace_withholds_environment_files(tmp_path: Path) -> None:
         "('.env', 'id_rsa', 'mnemonic.txt', 'wallet.json', "
         "'.ENV.PROD', 'WALLET.PEM', 'ID_ED25519')))"
     )
-    private = tmp_path / "private-env"
+    private = tmp_path / ".mmaudit" / "private-env"
 
     result = scanner.run(
         tmp_path,
@@ -1296,7 +1314,7 @@ def test_real_subprocess_timeout_is_bounded(tmp_path: Path) -> None:
     scanner = _SyntheticProcessScanner("import time; time.sleep(2)")
     result = scanner.run(
         tmp_path,
-        tmp_path / "private-timeout",
+        tmp_path / ".mmaudit" / "private-timeout",
         0.05,
         backend=_PassthroughIsolation(),
     )
@@ -1307,7 +1325,7 @@ def test_real_subprocess_output_is_bounded(tmp_path: Path) -> None:
     scanner = _SyntheticProcessScanner("print('x' * 10000)", output_limit=100)
     result = scanner.run(
         tmp_path,
-        tmp_path / "private-output",
+        tmp_path / ".mmaudit" / "private-output",
         2,
         backend=_PassthroughIsolation(),
     )
@@ -1325,7 +1343,7 @@ def test_poisoned_scanner_shape_becomes_failed_result(tmp_path: Path, monkeypatc
     monkeypatch.setattr(scanner, "parse", invalid_parse)
     result = scanner.run(
         tmp_path,
-        tmp_path / "private-invalid",
+        tmp_path / ".mmaudit" / "private-invalid",
         2,
         backend=_PassthroughIsolation(),
     )
@@ -1439,6 +1457,42 @@ def _report(findings: list[Finding]) -> AuditReport:
         rejected_findings=[],
         metadata={"configured_models": {}},
     )
+
+
+def test_markdown_exposes_model_coverage_applicability_classification_and_limitations() -> None:
+    missing = CoverageMetric(
+        numerator=0,
+        denominator=0,
+        population=0,
+        percentage=None,
+        exclusions=[],
+        not_applicable_evidence=[],
+        confidence=1,
+        provenance=[CoverageProvenance.MODEL_REVIEW],
+        failures=["critical classification evidence was incomplete"],
+        state=AnalysisState.NOT_ANALYZED,
+        detail="Synthetic fail-closed model-review coverage.",
+    )
+    model_coverage = ModelReviewCoverage(
+        applicable=False,
+        critical_classification_complete=False,
+        surfaces=[],
+        overall=missing,
+        by_kind={kind: missing for kind in ModelReviewSurfaceKind},
+        critical=missing,
+        critical_gate_passed=False,
+        limitations=[
+            "audited-suite critical classification was incomplete",
+        ],
+    )
+    report = _report([]).model_copy(update={"model_review_coverage": model_coverage})
+
+    rendered = render_markdown(report)
+
+    assert "- Coverage applicable: False" in rendered
+    assert "- Critical-surface classification complete: False" in rendered
+    assert "Model-review coverage limitations:" in rendered
+    assert "audited-suite critical classification was incomplete" in rendered
 
 
 def test_markdown_distinguishes_status_and_escapes_html() -> None:
@@ -1557,26 +1611,56 @@ def test_markdown_does_not_present_degraded_empty_run_as_safe() -> None:
 
 
 def test_markdown_labels_consent_free_synthetic_zdr_policy_accurately() -> None:
-    report = _report([_finding()])
-    report = report.model_copy(
-        update={
-            "privacy": {
-                **report.privacy,
-                "profile": "SYNTHETIC_BENCHMARK",
-                "effective_policy": {
-                    "privacy_profile": "SYNTHETIC_BENCHMARK",
-                    "require_zdr": True,
-                    "evidence_sha256": "a" * 64,
-                    "source_sha256": "b" * 64,
-                    "source_classification": "SYNTHETIC_COMMITTED",
-                    "permitted_model_ids": ["example/model"],
-                    "permitted_provider_endpoints": ["example-provider"],
-                    "consent_sha256": None,
-                    "limitations": [],
-                },
-            }
+    policy_payload = {
+        "schema_version": "1.0",
+        "privacy_profile": PrivacyProfile.SYNTHETIC_BENCHMARK,
+        "source_classification": PrivacySourceClassification.SYNTHETIC_COMMITTED,
+        "source_sha256": "b" * 64,
+        "source_provenance_sha256": "c" * 64,
+        "source_proof_kind": "PACKAGE_PINNED_SYNTHETIC",
+        "source_distribution_commit": None,
+        "source_distribution_scope": "tests/fixtures/synthetic",
+        "source_synthetic_declaration_sha256": "d" * 64,
+        "source_synthetic_declaration_entry_sha256": "e" * 64,
+        "require_zdr": True,
+        "data_collection": "deny",
+        "permitted_model_ids": ("example/model",),
+        "permitted_provider_endpoints": ("example-provider",),
+        "endpoint_policy_classes": (EndpointPolicyClass.ZDR,),
+        "endpoint_disclosures": (),
+        "consent_file_sha256": None,
+        "consent_file_size": None,
+        "consent_sha256": None,
+        "consent_issued_at": None,
+        "consent_expires_at": None,
+        "operator_reference_sha256": None,
+        "consent_maximum_cost_usd": None,
+        "requested_budget_usd": "1",
+        "limitations": (
+            "Synthetic or public benchmark source uses ZDR without retention consent.",
+        ),
+    }
+    policy = EffectivePrivacyPolicyEvidence.model_validate(
+        {
+            **policy_payload,
+            "evidence_sha256": hashlib.sha256(
+                json.dumps(
+                    policy_payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                    allow_nan=False,
+                ).encode("utf-8")
+            ).hexdigest(),
         }
     )
+    report_payload = _report([_finding()]).model_dump(mode="python")
+    report_payload["privacy"] = {
+        **report_payload["privacy"],
+        "profile": PrivacyProfile.SYNTHETIC_BENCHMARK.value,
+        "effective_policy": policy.model_dump(mode="json"),
+    }
+    report = AuditReport.model_validate(report_payload)
 
     rendered = render_markdown(report)
 
@@ -1620,6 +1704,131 @@ def test_markdown_prefers_typed_solidity_coverage_when_legacy_copy_matches() -> 
 
     assert report.effective_solidity_coverage() is report.solidity_coverage
     assert "- Projects discovered: 7" in render_markdown(report)
+
+
+def test_markdown_bounds_exact_audited_suite_gaps_and_keeps_them_out_of_sarif(
+    tmp_path: Path,
+) -> None:
+    surfaces: list[AuditedSuiteSurfaceCoverage] = []
+    gaps: list[AuditedSuiteCoverageGap] = []
+    for index in range(21):
+        entity_id = f"function:Vault{index:03d}.withdraw"
+        location = Location(
+            path=f"src/Vault{index:03d}.sol",
+            start_line=10 + index,
+            end_line=11 + index,
+            symbol="withdraw(uint256)",
+            content_hash=hashlib.sha256(entity_id.encode()).hexdigest(),
+        )
+        surfaces.append(
+            AuditedSuiteSurfaceCoverage(
+                entity_id=entity_id,
+                entity_kind=SolidityEntityKind.FUNCTION,
+                contract_name=f"Vault{index:03d}",
+                location=location,
+                critical=True,
+                statement_status=AuditedSuiteStatementStatus.NOT_ANALYZED,
+                assertion_status=AuditedSuiteAssertionStatus.NOT_ANALYZED,
+            )
+        )
+        kind = AuditedSuiteCoverageGapKind.ASSERTION_NOT_ANALYZED
+        gaps.append(
+            AuditedSuiteCoverageGap(
+                gap_id=AuditedSuiteCoverageGap.calculate_gap_id(entity_id, kind),
+                entity_id=entity_id,
+                entity_kind=SolidityEntityKind.FUNCTION,
+                location=location,
+                kind=kind,
+                assertion_status=AuditedSuiteAssertionStatus.NOT_ANALYZED,
+                detail="No repository-owned assertion-strength result covers this exact surface.",
+            )
+        )
+    gap_metric = CoverageMetric(
+        numerator=0,
+        denominator=len(surfaces),
+        population=len(surfaces),
+        percentage=0,
+        exclusions=[],
+        not_applicable_evidence=[],
+        confidence=1,
+        provenance=[CoverageProvenance.RUNTIME],
+        failures=["critical audited-source surfaces lack assertion evidence"],
+        state=AnalysisState.NOT_ANALYZED,
+        detail="Synthetic bounded-report audited-suite metric.",
+    )
+    contract_metric = CoverageMetric(
+        numerator=0,
+        denominator=0,
+        population=0,
+        percentage=None,
+        exclusions=[],
+        not_applicable_evidence=["no contract surface is in this focused report fixture"],
+        confidence=1,
+        provenance=[CoverageProvenance.RUNTIME],
+        failures=[],
+        state=AnalysisState.NOT_ANALYZED,
+        detail="Synthetic empty contract metric.",
+    )
+    audited_suite = AuditedSuiteCoverage(
+        contract_statement_coverage=contract_metric,
+        function_statement_coverage=gap_metric,
+        critical_function_assertion_coverage=gap_metric,
+        surfaces=surfaces,
+        gaps=gaps,
+        repository_tests_selected=5,
+        repository_tests_executed=4,
+        repository_tests_failed=1,
+        source_classification_complete=True,
+        critical_classification_complete=True,
+    )
+    coverage = SolidityCoverage(
+        tests_executed=4,
+        tests_failed=1,
+        audited_suite_coverage=audited_suite,
+        quality_metrics={
+            "audited_suite_contract_statement_coverage": contract_metric,
+            "audited_suite_function_statement_coverage": gap_metric,
+            "audited_suite_critical_function_assertion_coverage": gap_metric,
+        },
+    )
+    report = _report([]).model_copy(update={"solidity_coverage": coverage})
+
+    rendered = render_markdown(report)
+    rendered_gaps = sorted(gaps, key=lambda gap: gap.gap_id)[:20]
+    omitted_gap = sorted(gaps, key=lambda gap: gap.gap_id)[20]
+    first = rendered_gaps[0]
+
+    assert "Audited-suite coverage gaps — not vulnerability findings" in rendered
+    assert "never populate finding or SARIF results" in rendered
+    assert rendered.count("audited-suite-gap:") == 20
+    assert (
+        f"`{first.location.path}`:{first.location.start_line}-{first.location.end_line}" in rendered
+    )
+    assert f"`{first.location.symbol}`" in rendered
+    assert f"`{first.location.content_hash}`" in rendered
+    assert omitted_gap.gap_id not in rendered
+    assert "1 additional audited-suite coverage gap record(s)" in rendered
+    assert report.findings == []
+    sarif = generate_sarif(report.findings)
+    assert sarif["runs"][0]["tool"]["driver"]["rules"] == []
+    assert sarif["runs"][0]["results"] == []
+
+    assert report.solidity_coverage is not None
+    assert report.solidity_coverage.audited_suite_coverage is not None
+    tampered_gap = report.solidity_coverage.audited_suite_coverage.gaps[0]
+    object.__setattr__(
+        tampered_gap,
+        "location",
+        tampered_gap.location.model_copy(update={"content_hash": "f" * 64}),
+    )
+    with pytest.raises(ValueError, match="gap identity differs"):
+        render_markdown(report)
+    with pytest.raises(ValueError, match="gap identity differs"):
+        stable_json(report)
+    invalid_json = tmp_path / "invalid-final-findings.json"
+    with pytest.raises(ValueError, match="gap identity differs"):
+        write_json(invalid_json, report)
+    assert not invalid_json.exists()
 
 
 def test_markdown_falls_back_to_valid_legacy_solidity_coverage() -> None:

@@ -416,6 +416,7 @@ def _complete_model_coverage(
     )
     coverage = ModelReviewCoverage(
         applicable=True,
+        critical_classification_complete=True,
         minimum_critical_root_lineages=3,
         surfaces=[surface],
         overall=_model_metric(1, 1, "synthetic complete overall model coverage"),
@@ -1716,7 +1717,7 @@ def test_zero_critical_surface_denominator_cannot_pass_maximum_assurance(
         0,
         "synthetic empty critical-surface denominator",
     ).model_dump(mode="json")
-    coverage_payload["critical_gate_passed"] = True
+    coverage_payload["critical_gate_passed"] = False
     coverage = ModelReviewCoverage.model_validate(coverage_payload)
 
     assessment = MaximumAssuranceContract(config).evaluate(

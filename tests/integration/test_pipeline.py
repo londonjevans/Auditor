@@ -112,7 +112,11 @@ from mmaudit.privacy import (
     load_privacy_retention_consent,
 )
 from mmaudit.reporting.json_report import write_json
-from mmaudit.scanners.base import scanner_fingerprint, scanner_workspace_sha256
+from mmaudit.scanners.base import (
+    ScannerSourceIntegrityError,
+    scanner_fingerprint,
+    scanner_workspace_sha256,
+)
 from mmaudit.scanners.fork_matrix import repository_fork_matrix_timeout_budget_seconds
 from mmaudit.solidity.compile import CompilationRun
 from mmaudit.solidity.invariant_execution import FoundryInvariantRunner
@@ -138,6 +142,7 @@ class StaticScannerRunner:
         finding_line: int = 13,
         scanner_name: str = "semgrep",
         before_return: Callable[[], None] | None = None,
+        source_integrity_error: bool = False,
     ) -> None:
         self.status = status
         self.required = required
@@ -145,23 +150,31 @@ class StaticScannerRunner:
         self.finding_line = finding_line
         self.scanner_name = scanner_name
         self.before_return = before_return
+        self.source_integrity_error = source_integrity_error
         self.expected_repository_sha256: str | None = None
         self.repository_exclusion_root: Path | None = None
+        self.audited_relative_paths: tuple[str, ...] = ()
+        self.calls = 0
 
     async def run_all(
         self,
         root: Path,
         private_dir: Path,
         *,
+        audited_relative_paths: Sequence[str],
         skip_codeql: bool = False,
         allow_fork_probing: bool = False,
         projects: Sequence[SolidityProjectMetadata] = (),
         expected_repository_sha256: str | None = None,
         repository_exclusion_root: Path | None = None,
+        allow_custom_repository_exclusion: bool = False,
     ) -> list[ScannerRun]:
         del root, private_dir, skip_codeql, allow_fork_probing, projects
+        self.calls += 1
+        self.audited_relative_paths = tuple(audited_relative_paths)
         self.expected_repository_sha256 = expected_repository_sha256
         self.repository_exclusion_root = repository_exclusion_root
+        del allow_custom_repository_exclusion
         now = datetime.now(UTC)
         findings = []
         if self.status is ScannerStatus.SUCCESS:
@@ -191,6 +204,8 @@ class StaticScannerRunner:
             ]
         if self.before_return is not None:
             self.before_return()
+        if self.source_integrity_error:
+            raise ScannerSourceIntegrityError("synthetic scanner source custody failure")
         return [
             ScannerRun(
                 scanner=self.scanner_name,
@@ -4442,9 +4457,7 @@ async def test_pipeline_excludes_custom_in_repository_output_from_frozen_scanner
     nested_same_name.parent.mkdir(parents=True)
     nested_same_name.write_text("VALUE = 1\n", encoding="utf-8")
     scanner_runner = StaticScannerRunner()
-    config = config_factory(
-        scanners={"foundry_fork": {"enabled": True, "required": False}},
-    )
+    config = config_factory()
     pipeline = AuditPipeline(
         config,
         repo=vulnerable_repo,
@@ -4458,6 +4471,7 @@ async def test_pipeline_excludes_custom_in_repository_output_from_frozen_scanner
     assert scanner_runner.expected_repository_sha256 == scanner_workspace_sha256(
         vulnerable_repo,
         output,
+        allow_custom_private_exclusion=True,
     )
     repository_map = json.loads(
         (result.run_dir / "repository-map.json").read_text(encoding="utf-8")
@@ -4465,6 +4479,41 @@ async def test_pipeline_excludes_custom_in_repository_output_from_frozen_scanner
     discovered_paths = {item["path"] for item in repository_map["files"]}
     assert "src/custom-audit-output/keep.py" in discovered_paths
     assert not any(path.startswith("custom-audit-output/") for path in discovered_paths)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_rejects_preexisting_custom_output_as_a_source_exclusion(
+    config_factory,
+    vulnerable_repo: Path,
+) -> None:
+    output = vulnerable_repo / "custom-audit-output"
+    output.mkdir()
+    (output / "PotentialSource.sol").write_text(
+        "contract PotentialSource {}\n",
+        encoding="utf-8",
+    )
+    scanner_runner = StaticScannerRunner()
+    pipeline = AuditPipeline(
+        config_factory(
+            scanners={"foundry_fork": {"enabled": True, "required": False}},
+        ),
+        repo=vulnerable_repo,
+        output=output,
+        scanner_runner=scanner_runner,  # type: ignore[arg-type]
+    )
+
+    result = await pipeline.run(scanner_only=True)
+
+    assert scanner_runner.calls == 0
+    assert result.exit_code is ExitCode.INCOMPLETE
+    assert any(
+        "repository execution source identity could not be frozen before discovery" in limitation
+        for limitation in result.report.incomplete_reasons
+    )
+    assert any(
+        "audited source inventory is incompatible with scanner execution workspaces" in limitation
+        for limitation in result.report.incomplete_reasons
+    )
 
 
 @pytest.mark.asyncio
@@ -4490,6 +4539,38 @@ async def test_pipeline_external_output_ancestor_does_not_exclude_repository_sou
     assert scanner_runner.expected_repository_sha256 == expected_source
     assert scanner_runner.repository_exclusion_root == (
         vulnerable_repo.resolve(strict=True) / ".mmaudit"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_blocks_scanners_when_discovery_reincludes_excluded_source(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    explicitly_audited = vulnerable_repo / "vendor" / "ExplicitlyAudited.sol"
+    explicitly_audited.parent.mkdir()
+    explicitly_audited.write_text("contract ExplicitlyAudited {}\n", encoding="utf-8")
+    (vulnerable_repo / ".mmauditignore").write_text("!vendor/**\n", encoding="utf-8")
+    scanner_runner = StaticScannerRunner()
+    pipeline = AuditPipeline(
+        config_factory(),
+        repo=vulnerable_repo,
+        output=tmp_path / "output",
+        scanner_runner=scanner_runner,  # type: ignore[arg-type]
+    )
+
+    result = await pipeline.run(scanner_only=True)
+
+    repository_map = json.loads(
+        (result.run_dir / "repository-map.json").read_text(encoding="utf-8")
+    )
+    assert "vendor/ExplicitlyAudited.sol" in {item["path"] for item in repository_map["files"]}
+    assert scanner_runner.calls == 0
+    assert result.exit_code is ExitCode.INCOMPLETE
+    assert any(
+        "audited source inventory is incompatible with scanner execution workspaces" in limitation
+        for limitation in result.report.incomplete_reasons
     )
 
 
@@ -4529,11 +4610,9 @@ async def test_pipeline_freezes_scanner_source_before_discovery(
     result = await pipeline.run(scanner_only=True)
 
     assert result.exit_code is ExitCode.INCOMPLETE
-    assert scanner_runner.expected_repository_sha256 == expected_before_discovery
-    assert (
-        scanner_runner.repository_exclusion_root
-        == vulnerable_repo.resolve(strict=True) / ".mmaudit"
-    )
+    assert scanner_runner.calls == 0
+    assert scanner_runner.expected_repository_sha256 is None
+    assert scanner_runner.repository_exclusion_root is None
     assert scanner_workspace_sha256(vulnerable_repo, output) != expected_before_discovery
     assert any(
         "repository execution source changed during discovery" in limitation
@@ -4557,9 +4636,7 @@ async def test_pipeline_revalidates_frozen_source_after_scanner_execution(
         )
 
     scanner_runner = StaticScannerRunner(before_return=add_source_during_scanner)
-    config = config_factory(
-        scanners={"foundry_fork": {"enabled": True, "required": False}},
-    )
+    config = config_factory()
     pipeline = AuditPipeline(
         config,
         repo=vulnerable_repo,
@@ -4573,9 +4650,35 @@ async def test_pipeline_revalidates_frozen_source_after_scanner_execution(
     assert scanner_runner.expected_repository_sha256 == expected_source
     assert scanner_workspace_sha256(vulnerable_repo, output) != expected_source
     assert any(
-        "repository execution source changed during scanner execution" in limitation
+        "audited source changed during scanner execution" in limitation
         for limitation in result.report.incomplete_reasons
     )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_converts_scanner_source_custody_failure_to_incomplete(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    expected_source = scanner_workspace_sha256(vulnerable_repo)
+    scanner_runner = StaticScannerRunner(source_integrity_error=True)
+    pipeline = AuditPipeline(
+        config_factory(),
+        repo=vulnerable_repo,
+        output=tmp_path / "scanner-custody-failure-output",
+        scanner_runner=scanner_runner,  # type: ignore[arg-type]
+    )
+
+    result = await pipeline.run(scanner_only=True)
+
+    assert result.exit_code is ExitCode.INCOMPLETE
+    assert scanner_runner.expected_repository_sha256 == expected_source
+    assert any(
+        "audited source identity could not be preserved through scanner execution" in limitation
+        for limitation in result.report.incomplete_reasons
+    )
+    assert result.report.scanner_runs == []
 
 
 @pytest.mark.asyncio
@@ -4673,7 +4776,7 @@ async def test_pipeline_revalidates_frozen_source_after_repository_fork_matrix(
     assert len(matrix_runner.calls) == 1
     assert result.exit_code is ExitCode.INCOMPLETE
     assert any(
-        "repository execution source changed during scanner execution" in reason
+        "audited source changed during scanner execution" in reason
         for reason in result.report.incomplete_reasons
     )
     assert (

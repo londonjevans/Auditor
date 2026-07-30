@@ -265,7 +265,8 @@ from mmaudit.repository.privacy_provenance import (
     validate_privacy_source_provenance_observation,
 )
 from mmaudit.repository.redaction import SecretSafetyError
-from mmaudit.scanners.base import scanner_workspace_sha256
+from mmaudit.repository.workspace import audited_workspace_exclusion_root
+from mmaudit.scanners.base import ScannerSourceIntegrityError, scanner_workspace_sha256
 from mmaudit.scanners.clean_chain import TrustedCleanAnvilLauncher
 from mmaudit.scanners.fork_matrix import (
     ForkMatrixDependencies,
@@ -273,6 +274,9 @@ from mmaudit.scanners.fork_matrix import (
     repository_fork_matrix_timeout_budget_seconds,
 )
 from mmaudit.scanners.runner import ScannerRunner
+from mmaudit.scanners.runtime_evidence import (
+    validated_scanner_run_location_annotation_preserving_runtime_authority,
+)
 from mmaudit.solidity.compile import compile_solidity_projects
 from mmaudit.solidity.coverage import (
     build_solidity_coverage,
@@ -776,6 +780,20 @@ class AuditPipeline:
             output_relative_to_repo = None
         if output_relative_to_repo is not None and not output_relative_to_repo.parts:
             raise ValueError("output directory cannot be the repository root")
+        allow_custom_repository_exclusion = False
+        if (
+            output_relative_to_repo is not None
+            and audited_workspace_exclusion_root(output_relative_to_repo) is None
+            and not self.output.exists()
+        ):
+            self.output.mkdir(parents=True, exist_ok=False, mode=0o700)
+            try:
+                self.output.resolve(strict=True).relative_to(self.repo_input.resolve(strict=True))
+            except (OSError, ValueError) as exc:
+                raise ValueError(
+                    "custom in-repository output escaped its audited repository"
+                ) from exc
+            allow_custom_repository_exclusion = True
         run_id, run_dir = self._create_run_dir()
         if benchmark_verification is not None:
             write_json(
@@ -806,7 +824,7 @@ class AuditPipeline:
         final_findings: list[Finding] = []
         rejected_findings: list[Finding] = []
         post_judge_execution_severity_candidates: dict[str, CandidateFinding] = {}
-        scanner_runs: list[ScannerRun] = []
+        scanner_runs = []
         threat_model: ThreatModel | None = None
         threat_location_rejections: list[str] = []
         context_withheld_files = 0
@@ -851,6 +869,12 @@ class AuditPipeline:
         discovery: DiscoveryResult
         repository_execution_sha256: str | None = None
         repository_execution_exclusion_root: Path | None = None
+        scanner_source_exclusion_root = (
+            self.output.resolve(strict=True)
+            if output_relative_to_repo is not None
+            else self.repo_input.resolve(strict=True) / ".mmaudit"
+        )
+        scanner_source_sha256: str | None = None
         assurance_contract = MaximumAssuranceContract(
             self.config,
             require=require_maximum_assurance,
@@ -901,15 +925,12 @@ class AuditPipeline:
             and self.config.smart_contracts.repository_suite.foundry_include_tests
         )
         if repository_suite_identity_required:
-            repository_execution_exclusion_root = (
-                self.output.resolve(strict=True)
-                if output_relative_to_repo is not None
-                else self.repo_input.resolve(strict=True) / ".mmaudit"
-            )
+            repository_execution_exclusion_root = scanner_source_exclusion_root
             try:
                 repository_execution_sha256 = scanner_workspace_sha256(
                     self.repo_input,
                     repository_execution_exclusion_root,
+                    allow_custom_private_exclusion=allow_custom_repository_exclusion,
                 )
             except (OSError, ValueError) as exc:
                 incomplete.append(
@@ -929,6 +950,7 @@ class AuditPipeline:
                 post_discovery_repository_sha256 = scanner_workspace_sha256(
                     self.repo_input,
                     repository_execution_exclusion_root,
+                    allow_custom_private_exclusion=allow_custom_repository_exclusion,
                 )
             except (OSError, ValueError) as exc:
                 incomplete.append(
@@ -958,6 +980,35 @@ class AuditPipeline:
             scope_projects,
             self.config.scope.mode,
         )
+        solidity_source_contents_by_path = {
+            item.relative_path: item.content
+            for item in discovery.files
+            if item.language == "Solidity"
+        }
+        audited_scanner_paths = tuple(item.relative_path for item in discovery.files)
+        scanner_source_inventory_valid = True
+        try:
+            scanner_source_sha256 = scanner_workspace_sha256(
+                discovery.root,
+                scanner_source_exclusion_root,
+                audited_relative_paths=audited_scanner_paths,
+                allow_custom_private_exclusion=allow_custom_repository_exclusion,
+            )
+            if (
+                repository_execution_sha256 is not None
+                and scanner_source_sha256 != repository_execution_sha256
+            ):
+                raise ValueError(
+                    "audited scanner source inventory differs from the frozen repository identity"
+                )
+        except (OSError, ValueError) as exc:
+            scanner_source_inventory_valid = False
+            incomplete.append(
+                "audited source inventory is incompatible with scanner execution workspaces: "
+                f"{type(exc).__name__}"
+            )
+            if terminal_code is ExitCode.SUCCESS:
+                terminal_code = ExitCode.INCOMPLETE
         repository_map = build_repository_map(discovery, changed_since=changed_since)
         write_json(run_dir / "repository-map.json", repository_map)
         self.privacy_source_sha256 = _repository_source_scope_sha256(repository_map)
@@ -1305,20 +1356,31 @@ class AuditPipeline:
             },
         )
         self.logger.info("Running deterministic scanners", extra={"run_id": run_id})
-        scanner_runs = (
-            []
-            if preflight_blocked
-            else await self.scanner_runner.run_all(
-                discovery.root,
-                run_dir / "private" / "scanner-output",
-                skip_codeql=skip_codeql,
-                allow_fork_probing=allow_fork_probing,
-                projects=solidity_projects,
-                expected_repository_sha256=repository_execution_sha256,
-                repository_exclusion_root=repository_execution_exclusion_root,
-            )
-        )
-        if self.config.smart_contracts.repository_suite.fork_matrix_states:
+        if not preflight_blocked and scanner_source_inventory_valid:
+            assert scanner_source_sha256 is not None
+            try:
+                scanner_runs = await self.scanner_runner.run_all(
+                    discovery.root,
+                    run_dir / "private" / "scanner-output",
+                    audited_relative_paths=audited_scanner_paths,
+                    skip_codeql=skip_codeql,
+                    allow_fork_probing=allow_fork_probing,
+                    projects=solidity_projects,
+                    expected_repository_sha256=scanner_source_sha256,
+                    repository_exclusion_root=scanner_source_exclusion_root,
+                    allow_custom_repository_exclusion=allow_custom_repository_exclusion,
+                )
+            except ScannerSourceIntegrityError:
+                scanner_source_inventory_valid = False
+                incomplete.append(
+                    "audited source identity could not be preserved through scanner execution"
+                )
+                if terminal_code is ExitCode.SUCCESS:
+                    terminal_code = ExitCode.INCOMPLETE
+        if (
+            scanner_source_inventory_valid
+            and self.config.smart_contracts.repository_suite.fork_matrix_states
+        ):
             repository_suite_differential = await self._execute_repository_fork_matrix(
                 repository_root=discovery.root,
                 private_root=run_dir / "private" / "repository-fork-matrix",
@@ -1337,23 +1399,25 @@ class AuditPipeline:
                 incomplete.append(detail)
                 if terminal_code is ExitCode.SUCCESS:
                     terminal_code = ExitCode.INCOMPLETE
-        if repository_execution_sha256 is not None:
+        if scanner_source_sha256 is not None:
             try:
                 post_scanner_repository_sha256 = scanner_workspace_sha256(
                     discovery.root,
-                    repository_execution_exclusion_root,
+                    scanner_source_exclusion_root,
+                    audited_relative_paths=audited_scanner_paths,
+                    allow_custom_private_exclusion=allow_custom_repository_exclusion,
                 )
             except (OSError, ValueError) as exc:
                 incomplete.append(
-                    "repository execution source identity could not be revalidated after "
+                    "audited source identity could not be revalidated after "
                     f"scanner execution: {type(exc).__name__}"
                 )
                 if terminal_code is ExitCode.SUCCESS:
                     terminal_code = ExitCode.INCOMPLETE
             else:
-                if post_scanner_repository_sha256 != repository_execution_sha256:
+                if post_scanner_repository_sha256 != scanner_source_sha256:
                     incomplete.append(
-                        "repository execution source changed during scanner execution or "
+                        "audited source changed during scanner execution or "
                         "repository differential execution"
                     )
                     if terminal_code is ExitCode.SUCCESS:
@@ -1389,6 +1453,7 @@ class AuditPipeline:
             invariants=solidity_invariants,
             economic_simulations=economic_simulations,
             formal_runs=formal_runs,
+            expected_repository_sha256=repository_execution_sha256,
         )
         write_json(
             run_dir / "solidity-coverage.json",
@@ -1446,6 +1511,7 @@ class AuditPipeline:
                 invariant_executions=invariant_executions,
                 economic_simulations=economic_simulations,
                 formal_runs=formal_runs,
+                expected_repository_sha256=repository_execution_sha256,
             )
             write_json(
                 run_dir / "solidity-coverage.json",
@@ -1546,6 +1612,8 @@ class AuditPipeline:
             graphs=solidity_graphs,
             invariants=solidity_invariants,
             economic_simulations=economic_simulations,
+            audited_suite_coverage=solidity_coverage.audited_suite_coverage,
+            source_contents_by_path=solidity_source_contents_by_path,
         )
         minimum_critical_surface_lineages = (
             3 if self.config.profile is AuditProfile.MAXIMUM_ASSURANCE else 1
@@ -1553,23 +1621,39 @@ class AuditPipeline:
         model_surface_review_assignments = plan_model_surface_review_assignments(
             self.config,
             model_surface_requests,
+            index=solidity_index,
+            graphs=solidity_graphs,
+            invariants=solidity_invariants,
+            economic_simulations=economic_simulations,
+            audited_suite_coverage=solidity_coverage.audited_suite_coverage,
             minimum_critical_root_lineages=minimum_critical_surface_lineages,
+            source_contents_by_path=solidity_source_contents_by_path,
         )
         model_surface_assignment_gate = model_surface_assignment_feasibility_gate(
             self.config,
             index=solidity_index,
+            graphs=solidity_graphs,
+            invariants=solidity_invariants,
+            economic_simulations=economic_simulations,
+            audited_suite_coverage=solidity_coverage.audited_suite_coverage,
             requests=model_surface_requests,
             assignments=model_surface_review_assignments,
             required=bool(solidity_projects) and not scanner_only,
             minimum_critical_root_lineages=minimum_critical_surface_lineages,
+            source_contents_by_path=solidity_source_contents_by_path,
         )
         lower_profile_surface_gate = model_surface_assignment_feasibility_gate(
             self.config,
             index=solidity_index,
+            graphs=solidity_graphs,
+            invariants=solidity_invariants,
+            economic_simulations=economic_simulations,
+            audited_suite_coverage=solidity_coverage.audited_suite_coverage,
             requests=model_surface_requests,
             assignments=model_surface_review_assignments,
             required=bool(solidity_projects) and not scanner_only,
             minimum_critical_root_lineages=1,
+            source_contents_by_path=solidity_source_contents_by_path,
         )
         surface_downgrade_authorized = (
             self.config.profile is AuditProfile.MAXIMUM_ASSURANCE
@@ -2794,22 +2878,9 @@ class AuditPipeline:
                 solidity_coverage,
                 invariant_review,
             )
-            solidity_coverage = solidity_coverage.model_copy(
-                update={
-                    "tests_executed": sum(result.attempts for result in reproductions),
-                    "tests_failed": sum(
-                        1
-                        for result in reproductions
-                        if result.state
-                        not in {
-                            ReproductionState.REPRODUCED,
-                            ReproductionState.REPRODUCED_AND_MINIMIZED,
-                        }
-                    ),
-                    "reproduction_attempts": sum(
-                        1 for result in reproductions if result.attempts > 0
-                    ),
-                }
+            solidity_coverage = _record_reproduction_attempts(
+                solidity_coverage,
+                reproductions,
             )
         private_model_review_path = run_dir / "private" / "model-review-artifacts.json"
         write_json(
@@ -2845,6 +2916,8 @@ class AuditPipeline:
             graphs=solidity_graphs,
             invariants=solidity_invariants,
             economic_simulations=economic_simulations,
+            audited_suite_coverage=solidity_coverage.audited_suite_coverage,
+            source_contents_by_path=solidity_source_contents_by_path,
         )
         if solidity_coverage is not None:
             solidity_coverage = with_model_review_coverage(
@@ -2969,6 +3042,8 @@ class AuditPipeline:
             graphs=solidity_graphs,
             invariants=solidity_invariants,
             economic_simulations=economic_simulations,
+            audited_suite_coverage=solidity_coverage.audited_suite_coverage,
+            source_contents_by_path=solidity_source_contents_by_path,
         )
         if solidity_coverage is not None:
             solidity_coverage = with_model_review_coverage(
@@ -4483,40 +4558,9 @@ def _validated_threat_model(
 def _annotate_scanner_locations(root: Path, run: ScannerRun) -> ScannerRun:
     """Record deterministic validation without suppressing local-only evidence."""
 
-    findings: list[ScannerFinding] = []
-    for finding in run.findings:
-        locations = [
-            location
-            for location in finding.locations
-            if location.path != ".git" and not location.path.startswith(".git/")
-        ]
-        if not locations:
-            continue
-        validations = [
-            validate_location(root, location).model_dump(mode="json") for location in locations
-        ]
-        findings.append(
-            finding.model_copy(
-                update={
-                    "locations": locations,
-                    "metadata": {
-                        **finding.metadata,
-                        "location_validation": validations,
-                    },
-                }
-            )
-        )
-    updated = run.model_copy(
-        update={
-            "findings": findings,
-            "execution_observation_sha256": None,
-        }
-    )
-    return ScannerRun.model_validate(
-        {
-            **updated.model_dump(mode="json"),
-            "execution_observation_sha256": updated.expected_execution_observation_sha256(),
-        }
+    return validated_scanner_run_location_annotation_preserving_runtime_authority(
+        root,
+        run,
     )
 
 
@@ -5206,6 +5250,17 @@ def _build_candidate_reproduction_resolutions(
             )
         )
     return resolutions
+
+
+def _record_reproduction_attempts(
+    coverage: SolidityCoverage,
+    reproductions: list[ReproductionResult],
+) -> SolidityCoverage:
+    """Record candidate replay activity without replacing repository-suite evidence."""
+
+    payload = coverage.model_dump(mode="python")
+    payload["reproduction_attempts"] = sum(1 for result in reproductions if result.attempts > 0)
+    return SolidityCoverage.model_validate(payload)
 
 
 def _evaluate_quality_gates(

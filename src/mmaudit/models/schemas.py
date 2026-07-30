@@ -838,6 +838,7 @@ class ModelReviewSurfaceKind(StrEnum):
 
     CONTRACT = "contract"
     ENTRY_POINT = "entry_point"
+    INTERNAL_FUNCTION = "internal_function"
     PRIVILEGE_FUNCTION = "privilege_function"
     ASSET_FUNCTION = "asset_function"
     CALL = "call"
@@ -2628,6 +2629,13 @@ class CandidateBatch(StrictModel):
     findings: list[CandidateFinding]
 
 
+class ModelSurfaceReviewPriority(StrEnum):
+    """Deterministic scheduling priority without changing stable surface identity."""
+
+    STANDARD = "standard"
+    ELEVATED_COVERAGE_GAP = "elevated_coverage_gap"
+
+
 class ModelSurfaceReviewRequest(StrictModel):
     """One deterministic surface that a model is explicitly asked to review."""
 
@@ -2640,6 +2648,8 @@ class ModelSurfaceReviewRequest(StrictModel):
     allowed_locations: tuple[Location, ...] = Field(default_factory=tuple, max_length=100)
     allowed_symbols: tuple[str, ...] = Field(default_factory=tuple, max_length=100)
     invariant_considered: str = Field(min_length=1, max_length=1_000)
+    priority: ModelSurfaceReviewPriority = ModelSurfaceReviewPriority.STANDARD
+    coverage_gap_ids: tuple[str, ...] = Field(default_factory=tuple, max_length=100)
 
     @staticmethod
     def calculate_surface_id(kind: ModelReviewSurfaceKind, subject_id: str) -> str:
@@ -2698,6 +2708,15 @@ class ModelSurfaceReviewRequest(StrictModel):
             )
         return normalized
 
+    @field_validator("coverage_gap_ids")
+    @classmethod
+    def coverage_gap_ids_are_canonical(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if value != tuple(sorted(set(value))) or any(
+            re.fullmatch(r"audited-suite-gap:[0-9a-f]{64}", gap_id) is None for gap_id in value
+        ):
+            raise ValueError("coverage gap IDs must be canonical, unique, and sorted")
+        return value
+
     @model_validator(mode="after")
     def identity_and_evidence_are_explicit(self) -> ModelSurfaceReviewRequest:
         expected_surface_id = self.calculate_surface_id(self.kind, self.subject_id)
@@ -2705,6 +2724,12 @@ class ModelSurfaceReviewRequest(StrictModel):
             raise ValueError("model surface review request has an inconsistent stable ID")
         if not self.allowed_locations and not self.allowed_symbols:
             raise ValueError("model surface review request requires an allowed location or symbol")
+        if (self.priority is ModelSurfaceReviewPriority.ELEVATED_COVERAGE_GAP) != bool(
+            self.coverage_gap_ids
+        ):
+            raise ValueError(
+                "elevated coverage-gap priority requires gap IDs and standard priority forbids them"
+            )
         return self
 
 
@@ -9048,6 +9073,556 @@ class CoverageMetric(StrictModel):
         return self
 
 
+class AuditedSuiteStatementStatus(StrEnum):
+    """Entity-level statement-coverage state from the audited repository's own suite."""
+
+    NOT_ANALYZED = "not_analyzed"
+    INCONCLUSIVE = "inconclusive"
+    COVERED = "covered"
+    UNCOVERED = "uncovered"
+
+
+class AuditedSuiteAssertionStatus(StrEnum):
+    """Assertion-strength state; absence of evidence is never called weak."""
+
+    NOT_ANALYZED = "not_analyzed"
+    INCONCLUSIVE = "inconclusive"
+    ASSERTION_COVERED = "assertion_covered"
+    WEAK_ASSERTION = "weak_assertion"
+
+
+class AuditedSuiteMutationOutcome(StrEnum):
+    """Typed result of one applicable mutation challenged by the audited suite."""
+
+    KILLED = "killed"
+    SURVIVED = "survived"
+    INCONCLUSIVE = "inconclusive"
+
+
+class AuditedSuiteCoverageGapKind(StrEnum):
+    """Non-finding reason a critical audited source surface lacks assertion credit."""
+
+    ASSERTION_NOT_ANALYZED = "assertion_not_analyzed"
+    ASSERTION_INCONCLUSIVE = "assertion_inconclusive"
+    WEAK_ASSERTION = "weak_assertion"
+
+
+class AuditedSuiteMutationEvidence(StrictModel):
+    """Fully joined but unattested mutation result retained on one exact source surface."""
+
+    evidence_origin: Literal["planned_unattested"] = "planned_unattested"
+    property_id: str = Field(pattern=r"^prop-[0-9a-f]{24}$")
+    mutation_id: str = Field(pattern=r"^mut-[a-z0-9][a-z0-9-]{0,75}$")
+    outcome: AuditedSuiteMutationOutcome
+    plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_repository_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    mutation_specification_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    campaign_evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    observation_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    surface_binding_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> AuditedSuiteMutationEvidence:
+        """Construct output evidence only from a reconciled campaign join."""
+
+        if "evidence_sha256" in values:
+            raise ValueError("evidence_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, evidence_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"evidence_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "evidence_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @model_validator(mode="after")
+    def joined_evidence_is_hash_bound(self) -> AuditedSuiteMutationEvidence:
+        if self.outcome is not AuditedSuiteMutationOutcome.INCONCLUSIVE:
+            raise ValueError("unattested planned mutation evidence cannot carry a decisive outcome")
+        if self.observation_sha256 is None:
+            raise ValueError("joined mutation evidence requires an exact observation hash")
+        payload = self.model_dump(mode="json", exclude={"evidence_sha256"})
+        if self.evidence_sha256 != _canonical_model_sha256(payload):
+            raise ValueError("joined mutation evidence hash does not match its contents")
+        return self
+
+
+class AuditedSuiteMutationSurfaceEvidence(StrictModel):
+    """Self-hashed non-decisive binding from a planned mutation to one source function."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    entity_id: str = Field(min_length=1, max_length=500)
+    entity_kind: SolidityEntityKind
+    contract_name: str = Field(min_length=1, max_length=500)
+    location: Location
+    property_id: str = Field(pattern=r"^prop-[0-9a-f]{24}$")
+    mutation_id: str = Field(pattern=r"^mut-[a-z0-9][a-z0-9-]{0,75}$")
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> AuditedSuiteMutationSurfaceEvidence:
+        """Construct a join record whose digest covers every source and campaign binding."""
+
+        if "evidence_sha256" in values:
+            raise ValueError("evidence_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, evidence_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"evidence_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "evidence_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @model_validator(mode="after")
+    def surface_campaign_join_is_hash_bound(self) -> AuditedSuiteMutationSurfaceEvidence:
+        if self.entity_kind not in {
+            SolidityEntityKind.FUNCTION,
+            SolidityEntityKind.CONSTRUCTOR,
+        }:
+            raise ValueError("mutation surface evidence must bind an exact source function")
+        if self.location.content_hash is None or self.location.symbol is None:
+            raise ValueError("mutation surface evidence requires an exact hash-bound location")
+        payload = self.model_dump(mode="json", exclude={"evidence_sha256"})
+        if self.evidence_sha256 != _canonical_model_sha256(payload):
+            raise ValueError("mutation surface evidence hash does not match its contents")
+        return self
+
+
+class AuditedSuiteStatementObservation(StrictModel):
+    """One exact producer-emitted source statement and its execution disposition."""
+
+    statement_id: str = Field(pattern=r"^statement:[0-9a-f]{64}$")
+    location: Location
+    covered: bool
+
+    @model_validator(mode="after")
+    def location_is_exact(self) -> AuditedSuiteStatementObservation:
+        if self.location.content_hash is None or self.location.symbol is None:
+            raise ValueError("statement observation requires an exact hash-bound symbol location")
+        return self
+
+
+class AuditedSuiteStatementCoverageEvidence(StrictModel):
+    """Self-hashed statement declaration that cannot independently earn coverage credit."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    entity_id: str = Field(min_length=1, max_length=500)
+    entity_kind: SolidityEntityKind
+    contract_name: str = Field(min_length=1, max_length=500)
+    location: Location
+    statement_status: AuditedSuiteStatementStatus
+    statement_count: int = Field(ge=1, le=10_000_000)
+    covered_statement_count: int = Field(ge=0, le=10_000_000)
+    statements: list[AuditedSuiteStatementObservation] = Field(
+        min_length=1,
+        max_length=10_000_000,
+    )
+    repository_test_execution_sha256s: list[str] = Field(
+        min_length=1,
+        max_length=10_000,
+    )
+    source_repository_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    coverage_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    producer_name: Literal["mmaudit-audited-suite-coverage-normalizer"] = (
+        "mmaudit-audited-suite-coverage-normalizer"
+    )
+    producer_version: str = Field(min_length=1, max_length=1_000)
+    producer_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    tool_name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
+    tool_version: str = Field(min_length=1, max_length=1_000)
+    tool_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    execution_evidence: Literal[ExecutionEvidenceKind.REAL] = ExecutionEvidenceKind.REAL
+    machine_output_validated: Literal[True] = True
+    isolation_attestation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> AuditedSuiteStatementCoverageEvidence:
+        """Construct evidence whose digest covers every source and execution binding."""
+
+        if "evidence_sha256" in values:
+            raise ValueError("evidence_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, evidence_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"evidence_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "evidence_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @model_validator(mode="after")
+    def statement_result_is_concrete_and_hash_bound(
+        self,
+    ) -> AuditedSuiteStatementCoverageEvidence:
+        supported_kinds = {
+            SolidityEntityKind.CONTRACT,
+            SolidityEntityKind.INTERFACE,
+            SolidityEntityKind.LIBRARY,
+            SolidityEntityKind.FUNCTION,
+            SolidityEntityKind.CONSTRUCTOR,
+        }
+        if self.entity_kind not in supported_kinds:
+            raise ValueError("audited-suite statement evidence must bind a contract or function")
+        if self.location.content_hash is None or self.location.symbol is None:
+            raise ValueError(
+                "audited-suite statement evidence requires an exact hash-bound symbol location"
+            )
+        if self.repository_test_execution_sha256s != sorted(
+            set(self.repository_test_execution_sha256s)
+        ):
+            raise ValueError("statement evidence execution hashes must be unique and sorted")
+        statement_keys = [
+            (
+                statement.location.path,
+                statement.location.start_line,
+                statement.location.end_line,
+                statement.statement_id,
+            )
+            for statement in self.statements
+        ]
+        if statement_keys != sorted(set(statement_keys)):
+            raise ValueError("statement observations must be unique and canonically sorted")
+        if any(
+            statement.location.path != self.location.path
+            or statement.location.content_hash != self.location.content_hash
+            or statement.location.start_line < self.location.start_line
+            or statement.location.end_line > self.location.end_line
+            for statement in self.statements
+        ):
+            raise ValueError("statement observations must remain within their exact source entity")
+        expected_statement_count = len(self.statements)
+        expected_covered_count = sum(statement.covered for statement in self.statements)
+        if (
+            self.statement_count != expected_statement_count
+            or self.covered_statement_count != expected_covered_count
+        ):
+            raise ValueError("statement counts must be derived from exact observations")
+        expected_status = (
+            AuditedSuiteStatementStatus.COVERED
+            if expected_covered_count == expected_statement_count
+            else AuditedSuiteStatementStatus.UNCOVERED
+        )
+        if self.statement_status is not expected_status:
+            raise ValueError("statement status differs from concrete covered/total counts")
+        payload = self.model_dump(mode="json", exclude={"evidence_sha256"})
+        if self.evidence_sha256 != _canonical_model_sha256(payload):
+            raise ValueError("audited-suite statement evidence hash does not match its contents")
+        return self
+
+
+class AuditedSuiteSurfaceCoverage(StrictModel):
+    """Coverage evidence for one exact indexed audited-source entity."""
+
+    entity_id: str = Field(min_length=1, max_length=500)
+    entity_kind: SolidityEntityKind
+    contract_name: str = Field(min_length=1, max_length=500)
+    location: Location
+    critical: bool
+    statement_status: AuditedSuiteStatementStatus
+    assertion_status: AuditedSuiteAssertionStatus
+    statement_evidence_sha256s: list[str] = Field(default_factory=list, max_length=10_000)
+    repository_test_execution_sha256s: list[str] = Field(
+        default_factory=list,
+        max_length=10_000,
+    )
+    mutation_evidence: list[AuditedSuiteMutationEvidence] = Field(
+        default_factory=list,
+        max_length=10_000,
+    )
+
+    @model_validator(mode="after")
+    def entity_location_and_evidence_are_consistent(self) -> AuditedSuiteSurfaceCoverage:
+        supported_kinds = {
+            SolidityEntityKind.CONTRACT,
+            SolidityEntityKind.INTERFACE,
+            SolidityEntityKind.LIBRARY,
+            SolidityEntityKind.FUNCTION,
+            SolidityEntityKind.CONSTRUCTOR,
+        }
+        if self.entity_kind not in supported_kinds:
+            raise ValueError("audited-suite surface must be a contract or function entity")
+        if not isinstance(self.location, Location):
+            raise ValueError("audited-suite surface requires a validated location")
+        if self.location.content_hash is None or self.location.symbol is None:
+            raise ValueError("audited-suite surface requires an exact hash-bound symbol location")
+        for values, label in (
+            (self.statement_evidence_sha256s, "statement evidence"),
+            (self.repository_test_execution_sha256s, "repository test execution evidence"),
+        ):
+            if values != sorted(set(values)) or any(
+                re.fullmatch(r"[0-9a-f]{64}", value) is None for value in values
+            ):
+                raise ValueError(f"audited-suite {label} hashes must be unique and sorted")
+        if any(
+            not isinstance(evidence, AuditedSuiteMutationEvidence)
+            for evidence in self.mutation_evidence
+        ):
+            raise ValueError("audited-suite mutation evidence must be schema validated")
+        if (
+            self.entity_kind
+            in {
+                SolidityEntityKind.CONTRACT,
+                SolidityEntityKind.INTERFACE,
+                SolidityEntityKind.LIBRARY,
+            }
+            and self.mutation_evidence
+        ):
+            raise ValueError(
+                "contract-level audited-suite surfaces cannot inherit function mutation credit"
+            )
+        for evidence in self.mutation_evidence:
+            if (
+                AuditedSuiteMutationEvidence.model_validate(evidence.model_dump(mode="json"))
+                != evidence
+            ):
+                raise ValueError("audited-suite mutation evidence failed canonical revalidation")
+        mutation_keys = [
+            (
+                evidence.property_id,
+                evidence.mutation_id,
+                evidence.evidence_sha256,
+            )
+            for evidence in self.mutation_evidence
+        ]
+        if mutation_keys != sorted(set(mutation_keys)):
+            raise ValueError("audited-suite mutation evidence must be unique and sorted")
+        if self.statement_status is not AuditedSuiteStatementStatus.NOT_ANALYZED:
+            raise ValueError(
+                "statement coverage cannot be analyzed without a trusted normalizer boundary"
+            )
+        if self.statement_evidence_sha256s or self.repository_test_execution_sha256s:
+            raise ValueError("not-analyzed statement coverage cannot carry surface-level evidence")
+        mutation_outcomes = {evidence.outcome for evidence in self.mutation_evidence}
+        expected_assertion_status = (
+            AuditedSuiteAssertionStatus.NOT_ANALYZED
+            if not mutation_outcomes
+            else (
+                AuditedSuiteAssertionStatus.WEAK_ASSERTION
+                if AuditedSuiteMutationOutcome.SURVIVED in mutation_outcomes
+                else (
+                    AuditedSuiteAssertionStatus.INCONCLUSIVE
+                    if AuditedSuiteMutationOutcome.INCONCLUSIVE in mutation_outcomes
+                    else AuditedSuiteAssertionStatus.ASSERTION_COVERED
+                )
+            )
+        )
+        if self.assertion_status is not expected_assertion_status:
+            raise ValueError("assertion status must be derived from every joined mutation outcome")
+        return self
+
+
+class AuditedSuiteCoverageGap(StrictModel):
+    """Exact non-finding coverage gap for one critical audited-source surface."""
+
+    gap_id: str = Field(pattern=r"^audited-suite-gap:[0-9a-f]{64}$")
+    entity_id: str = Field(min_length=1, max_length=500)
+    entity_kind: SolidityEntityKind
+    location: Location
+    kind: AuditedSuiteCoverageGapKind
+    assertion_status: AuditedSuiteAssertionStatus
+    evidence_sha256s: list[str] = Field(default_factory=list, max_length=10_000)
+    detail: str = Field(min_length=1, max_length=1_000)
+    is_finding: Literal[False] = False
+
+    @staticmethod
+    def calculate_gap_id(entity_id: str, kind: AuditedSuiteCoverageGapKind) -> str:
+        digest = hashlib.sha256(f"{entity_id}\0{kind.value}".encode()).hexdigest()
+        return f"audited-suite-gap:{digest}"
+
+    @model_validator(mode="after")
+    def identity_and_disposition_are_consistent(self) -> AuditedSuiteCoverageGap:
+        if self.gap_id != self.calculate_gap_id(self.entity_id, self.kind):
+            raise ValueError("audited-suite coverage gap ID does not match its entity and kind")
+        if not isinstance(self.location, Location):
+            raise ValueError("audited-suite coverage gap requires a validated location")
+        if self.location.content_hash is None or self.location.symbol is None:
+            raise ValueError("audited-suite coverage gap requires an exact hash-bound location")
+        if self.evidence_sha256s != sorted(set(self.evidence_sha256s)) or any(
+            re.fullmatch(r"[0-9a-f]{64}", value) is None for value in self.evidence_sha256s
+        ):
+            raise ValueError("audited-suite gap evidence hashes must be unique and sorted")
+        expected_status = {
+            AuditedSuiteCoverageGapKind.ASSERTION_NOT_ANALYZED: (
+                AuditedSuiteAssertionStatus.NOT_ANALYZED
+            ),
+            AuditedSuiteCoverageGapKind.ASSERTION_INCONCLUSIVE: (
+                AuditedSuiteAssertionStatus.INCONCLUSIVE
+            ),
+            AuditedSuiteCoverageGapKind.WEAK_ASSERTION: (
+                AuditedSuiteAssertionStatus.WEAK_ASSERTION
+            ),
+        }[self.kind]
+        if self.assertion_status is not expected_status:
+            raise ValueError("audited-suite gap kind differs from its assertion status")
+        return self
+
+
+class AuditedSuiteCoverage(StrictModel):
+    """Source-only coverage and assertion-strength evidence from repository-owned tests."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    contract_statement_coverage: CoverageMetric
+    function_statement_coverage: CoverageMetric
+    critical_function_assertion_coverage: CoverageMetric
+    surfaces: list[AuditedSuiteSurfaceCoverage] = Field(default_factory=list, max_length=100_000)
+    gaps: list[AuditedSuiteCoverageGap] = Field(default_factory=list, max_length=100_000)
+    repository_tests_selected: int = Field(default=0, ge=0, le=100_000)
+    repository_tests_executed: int = Field(default=0, ge=0, le=100_000)
+    repository_tests_failed: int = Field(default=0, ge=0, le=100_000)
+    source_classification_complete: bool
+    critical_classification_complete: bool
+    limitations: list[str] = Field(default_factory=list, max_length=1_000)
+
+    @model_validator(mode="after")
+    def populations_gaps_and_runtime_counts_are_consistent(self) -> AuditedSuiteCoverage:
+        if any(
+            not isinstance(metric, CoverageMetric)
+            for metric in (
+                self.contract_statement_coverage,
+                self.function_statement_coverage,
+                self.critical_function_assertion_coverage,
+            )
+        ):
+            raise ValueError("audited-suite coverage metrics must be schema validated")
+        if any(not isinstance(surface, AuditedSuiteSurfaceCoverage) for surface in self.surfaces):
+            raise ValueError("audited-suite surfaces must be schema validated")
+        if any(not isinstance(gap, AuditedSuiteCoverageGap) for gap in self.gaps):
+            raise ValueError("audited-suite gaps must be schema validated")
+        for metric in (
+            self.contract_statement_coverage,
+            self.function_statement_coverage,
+            self.critical_function_assertion_coverage,
+        ):
+            if CoverageMetric.model_validate(metric.model_dump(mode="json")) != metric:
+                raise ValueError("audited-suite coverage metric failed canonical revalidation")
+        for surface in self.surfaces:
+            if (
+                AuditedSuiteSurfaceCoverage.model_validate(surface.model_dump(mode="json"))
+                != surface
+            ):
+                raise ValueError("audited-suite surface failed canonical revalidation")
+        for gap in self.gaps:
+            if AuditedSuiteCoverageGap.model_validate(gap.model_dump(mode="json")) != gap:
+                raise ValueError("audited-suite gap failed canonical revalidation")
+        surface_ids = [surface.entity_id for surface in self.surfaces]
+        if surface_ids != sorted(set(surface_ids)):
+            raise ValueError("audited-suite surfaces must be unique and sorted by entity ID")
+        contract_surfaces = [
+            surface
+            for surface in self.surfaces
+            if surface.entity_kind
+            in {
+                SolidityEntityKind.CONTRACT,
+                SolidityEntityKind.INTERFACE,
+                SolidityEntityKind.LIBRARY,
+            }
+        ]
+        function_surfaces = [
+            surface
+            for surface in self.surfaces
+            if surface.entity_kind
+            in {
+                SolidityEntityKind.FUNCTION,
+                SolidityEntityKind.CONSTRUCTOR,
+            }
+        ]
+        critical_surfaces = [surface for surface in self.surfaces if surface.critical]
+        expected_metrics = (
+            (
+                self.contract_statement_coverage,
+                contract_surfaces,
+                AuditedSuiteStatementStatus.COVERED,
+            ),
+            (
+                self.function_statement_coverage,
+                function_surfaces,
+                AuditedSuiteStatementStatus.COVERED,
+            ),
+        )
+        for metric, population, covered_status in expected_metrics:
+            if (metric.numerator, metric.denominator) != (
+                sum(surface.statement_status is covered_status for surface in population),
+                len(population),
+            ):
+                raise ValueError("audited-suite statement metric differs from its surfaces")
+        if (
+            self.critical_function_assertion_coverage.numerator,
+            self.critical_function_assertion_coverage.denominator,
+        ) != (
+            sum(
+                surface.assertion_status is AuditedSuiteAssertionStatus.ASSERTION_COVERED
+                for surface in critical_surfaces
+            ),
+            len(critical_surfaces),
+        ):
+            raise ValueError("audited-suite assertion metric differs from critical surfaces")
+        expected_gaps = {
+            surface.entity_id: _audited_suite_expected_gap_kind(surface.assertion_status)
+            for surface in critical_surfaces
+            if surface.assertion_status is not AuditedSuiteAssertionStatus.ASSERTION_COVERED
+        }
+        gap_keys = [(gap.entity_id, gap.kind.value) for gap in self.gaps]
+        if gap_keys != sorted(set(gap_keys)):
+            raise ValueError("audited-suite coverage gaps must be unique and sorted")
+        if {gap.entity_id: gap.kind for gap in self.gaps} != expected_gaps:
+            raise ValueError("audited-suite gaps must exactly cover unresolved critical surfaces")
+        surfaces_by_id = {surface.entity_id: surface for surface in critical_surfaces}
+        if any(
+            gap.entity_kind is not surfaces_by_id[gap.entity_id].entity_kind
+            or gap.location != surfaces_by_id[gap.entity_id].location
+            for gap in self.gaps
+        ):
+            raise ValueError("audited-suite gap identity differs from its critical surface")
+        for gap in self.gaps:
+            surface = surfaces_by_id[gap.entity_id]
+            expected_evidence_sha256s = sorted(
+                {
+                    *surface.statement_evidence_sha256s,
+                    *surface.repository_test_execution_sha256s,
+                    *(evidence.evidence_sha256 for evidence in surface.mutation_evidence),
+                }
+            )
+            if gap.evidence_sha256s != expected_evidence_sha256s:
+                raise ValueError(
+                    "audited-suite gap evidence must exactly equal its surface evidence"
+                )
+        if self.repository_tests_executed > self.repository_tests_selected:
+            raise ValueError("executed repository tests cannot exceed selected repository tests")
+        if self.repository_tests_failed > self.repository_tests_executed:
+            raise ValueError("failed repository tests cannot exceed executed repository tests")
+        if self.limitations != sorted(set(self.limitations)):
+            raise ValueError("audited-suite limitations must be unique and sorted")
+        if not self.source_classification_complete and not any(
+            limitation.startswith("source classification incomplete:")
+            for limitation in self.limitations
+        ):
+            raise ValueError("incomplete source classification requires an explicit limitation")
+        if not self.critical_classification_complete and not any(
+            limitation.startswith("critical classification incomplete:")
+            for limitation in self.limitations
+        ):
+            raise ValueError("incomplete critical classification requires an explicit limitation")
+        return self
+
+
+def _audited_suite_expected_gap_kind(
+    status: AuditedSuiteAssertionStatus,
+) -> AuditedSuiteCoverageGapKind:
+    return {
+        AuditedSuiteAssertionStatus.NOT_ANALYZED: (
+            AuditedSuiteCoverageGapKind.ASSERTION_NOT_ANALYZED
+        ),
+        AuditedSuiteAssertionStatus.INCONCLUSIVE: (
+            AuditedSuiteCoverageGapKind.ASSERTION_INCONCLUSIVE
+        ),
+        AuditedSuiteAssertionStatus.WEAK_ASSERTION: AuditedSuiteCoverageGapKind.WEAK_ASSERTION,
+    }[status]
+
+
 class ModelReviewEvidenceReference(StrictModel):
     """One normalized decision about whether a response record earns surface credit."""
 
@@ -9167,6 +9742,7 @@ class ModelReviewCoverage(StrictModel):
 
     schema_version: Literal["1.0"] = "1.0"
     applicable: bool
+    critical_classification_complete: bool
     minimum_critical_root_lineages: int = Field(default=3, ge=2, le=16)
     surfaces: list[ModelReviewSurface] = Field(default_factory=list)
     overall: CoverageMetric
@@ -9208,7 +9784,12 @@ class ModelReviewCoverage(StrictModel):
             len(critical_surfaces),
         ):
             raise ValueError("critical model-review metric does not match surfaces")
-        expected_gate = self.critical.numerator == self.critical.denominator
+        expected_gate = (
+            self.applicable
+            and self.critical_classification_complete
+            and self.critical.denominator > 0
+            and self.critical.numerator == self.critical.denominator
+        )
         if self.critical_gate_passed != expected_gate:
             raise ValueError("critical model-review gate does not match per-surface evidence")
         if self.limitations != sorted(set(self.limitations)):
@@ -9318,20 +9899,71 @@ class SolidityCoverage(StrictModel):
     tools_executed: list[str] = Field(default_factory=list)
     tools_unavailable: list[str] = Field(default_factory=list)
     tools_failed: list[str] = Field(default_factory=list)
-    tests_executed: int = 0
-    tests_failed: int = 0
+    tests_executed: int = Field(default=0, ge=0)
+    tests_failed: int = Field(default=0, ge=0)
     reproduction_attempts: int = 0
+    audited_suite_coverage: AuditedSuiteCoverage | None = None
     quality_metrics: dict[str, CoverageMetric] = Field(default_factory=dict)
     context_limitations: list[str] = Field(default_factory=list)
     excluded_paths: list[str] = Field(default_factory=list)
     project_configuration_assumptions: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def economic_template_keys_match_evidence(self) -> SolidityCoverage:
+    def nested_coverage_matches_top_level_counts(self) -> SolidityCoverage:
         if any(
             kind != evidence.kind for kind, evidence in self.economic_template_execution.items()
         ):
             raise ValueError("economic template coverage keys must match their evidence kind")
+        if self.tests_failed > self.tests_executed:
+            raise ValueError("failed Solidity tests cannot exceed executed Solidity tests")
+        audited_suite = (
+            AuditedSuiteCoverage.model_validate(self.audited_suite_coverage.model_dump(mode="json"))
+            if self.audited_suite_coverage is not None
+            else None
+        )
+        if audited_suite != self.audited_suite_coverage:
+            raise ValueError("nested audited-suite coverage failed canonical revalidation")
+        expected_test_counts = (
+            (
+                audited_suite.repository_tests_executed,
+                audited_suite.repository_tests_failed,
+            )
+            if audited_suite is not None
+            else (0, 0)
+        )
+        if (self.tests_executed, self.tests_failed) != expected_test_counts:
+            raise ValueError(
+                "top-level Solidity test counts must match nested audited-suite evidence"
+            )
+        audited_metric_keys = {
+            "audited_suite_contract_statement_coverage",
+            "audited_suite_function_statement_coverage",
+            "audited_suite_critical_function_assertion_coverage",
+        }
+        supplied_audited_metrics = {
+            key: self.quality_metrics[key]
+            for key in audited_metric_keys
+            if key in self.quality_metrics
+        }
+        expected_audited_metrics = (
+            {
+                "audited_suite_contract_statement_coverage": (
+                    audited_suite.contract_statement_coverage
+                ),
+                "audited_suite_function_statement_coverage": (
+                    audited_suite.function_statement_coverage
+                ),
+                "audited_suite_critical_function_assertion_coverage": (
+                    audited_suite.critical_function_assertion_coverage
+                ),
+            }
+            if audited_suite is not None
+            else {}
+        )
+        if supplied_audited_metrics != expected_audited_metrics:
+            raise ValueError(
+                "audited-suite quality metrics must exactly match nested audited-suite evidence"
+            )
         return self
 
 

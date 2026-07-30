@@ -11,7 +11,8 @@ from pydantic import BaseModel
 
 def stable_json(value: BaseModel | dict[str, Any] | list[Any]) -> str:
     if isinstance(value, BaseModel):
-        payload: Any = value.model_dump(mode="json")
+        validated = type(value).model_validate(value.model_dump(mode="python"))
+        payload: Any = validated.model_dump(mode="json")
     else:
         payload = value
     return (
@@ -27,5 +28,6 @@ def stable_json(value: BaseModel | dict[str, Any] | list[Any]) -> str:
 
 
 def write_json(path: Path, value: BaseModel | dict[str, Any] | list[Any]) -> None:
+    serialized = stable_json(value)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(stable_json(value), encoding="utf-8")
+    path.write_text(serialized, encoding="utf-8")

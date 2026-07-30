@@ -62,13 +62,16 @@ from mmaudit.orchestration.manifest import canonical_sha256
 
 COMMIT = "a" * 40
 PROPERTY_ID = "prop-" + ("a" * 24)
-MAXIMUM_ASSURANCE_GATE_NAMES = (
+BASE_GATE_NAMES = (
     "known_critical_recall",
     "safe_control_false_confirmations",
     "exact_ground_truth_locations",
     "repository_metrics_unmasked",
     "evidence_caps",
     "coverage_present",
+)
+MAXIMUM_ASSURANCE_GATE_NAMES = (
+    *BASE_GATE_NAMES,
     "maximum_assurance_complete",
     "maximum_assurance_repository_mutation_score",
     "maximum_assurance_semantic_coverage",
@@ -221,31 +224,27 @@ def _informational_rate(
     )
 
 
+def _unavailable_rate() -> BenchmarkRateMetric:
+    return BenchmarkRateMetric(
+        numerator=0,
+        denominator=0,
+        evaluated=0,
+        value=None,
+        state=BenchmarkMetricState.NOT_EVALUABLE,
+        threshold=1,
+        direction=BenchmarkMetricDirection.MINIMUM,
+        detail="Synthetic runtime evidence is deliberately unavailable.",
+    )
+
+
 def _benchmark_report() -> BenchmarkReport:
     manifest = _benchmark_manifest()
-    mutation_scorecard = score_mutation_outcomes(
-        property_corpus_hash="d" * 64,
-        expected_property_ids=[PROPERTY_ID],
-        property_repositories={PROPERTY_ID: "synthetic_repository"},
-        outcomes=[
-            MutationPropertyOutcome(
-                mutation_id="mut-accounting",
-                mutation_kind=MutationKind.ACCOUNTING_OPERATOR_REPLACEMENT,
-                property_id=PROPERTY_ID,
-                outcome=MutationTestOutcome.KILLED,
-                evidence_sha256="e" * 64,
-            )
-        ],
-        minimum_property_kill_score=1,
-    )
     report_input = BenchmarkReportInput(
         repository_id="synthetic_repository",
         status=BenchmarkReportInputStatus.USABLE,
         attempted=True,
         parsed=True,
         usable=True,
-        maximum_assurance_status="COMPLETE",
-        maximum_assurance_required_clauses=sorted(MAXIMUM_ASSURANCE_CORE_CLAUSES),
         detail="Synthetic report input is complete and eligible.",
     )
     coverage_metrics = {
@@ -270,6 +269,23 @@ def _benchmark_report() -> BenchmarkReport:
             "economic_templates_with_typed_harness",
         )
     }
+    coverage_metrics.update(
+        {
+            name: BenchmarkCoverageMetric(
+                numerator=0,
+                denominator=0,
+                evaluated=0,
+                percentage=None,
+                state=BenchmarkMetricState.NOT_EVALUABLE,
+                detail=f"Synthetic runtime coverage is unavailable for {name}.",
+            )
+            for name in (
+                "audited_suite_contract_statement_coverage",
+                "audited_suite_function_statement_coverage",
+                "audited_suite_critical_function_assertion_coverage",
+            )
+        }
+    )
     repository_metrics = BenchmarkRepositoryMetrics(
         repository_id="synthetic_repository",
         report_status=BenchmarkReportInputStatus.USABLE,
@@ -293,9 +309,6 @@ def _benchmark_report() -> BenchmarkReport:
         location_accuracy=1,
         vulnerable_cases_reproduced=3,
         reproduction_success_rate=1,
-        mutation_property_ids=[PROPERTY_ID],
-        mutation_kill_score=1,
-        mutation_gate_passed=True,
         evidence_cap_bypasses=0,
         model_only_findings_kept_below_confirmed=0,
         coverage_metrics=coverage_metrics,
@@ -327,7 +340,7 @@ def _benchmark_report() -> BenchmarkReport:
         reproduction_success_rate=_passing_rate(3, 3),
         symbolic_counterexample_success_rate=_informational_rate(1, 1),
         formal_property_mutation_score=_informational_rate(1, 1),
-        invariant_mutation_score=_passing_rate(),
+        invariant_mutation_score=_unavailable_rate(),
         contract_coverage=_passing_rate(),
         entry_point_coverage=_passing_rate(),
         privileged_function_coverage=_passing_rate(),
@@ -384,14 +397,14 @@ def _benchmark_report() -> BenchmarkReport:
             passed=True,
             detail=f"Synthetic abstract evidence passed {name}.",
         )
-        for name in MAXIMUM_ASSURANCE_GATE_NAMES
+        for name in BASE_GATE_NAMES
     ]
     return BenchmarkReport(
         schema_version="3.0",
         corpus_name=manifest.name,
         corpus_sha256=manifest.corpus_sha256,
         blinding=manifest.blinding,
-        profile=AuditProfile.MAXIMUM_ASSURANCE,
+        profile=AuditProfile.STANDARD,
         status="passed",
         reports_expected=1,
         reports_attempted=1,
@@ -446,7 +459,6 @@ def _benchmark_report() -> BenchmarkReport:
             ),
         ),
         metrics=metrics,
-        mutation_scorecard=mutation_scorecard,
         coverage_metrics=coverage_metrics,
         repository_metrics=[repository_metrics],
         case_results=case_results,
@@ -467,7 +479,7 @@ def _write_file_backed_components(
         else json.dumps(report, sort_keys=True)
     )
     contents = {
-        "mmaudit.toml": 'profile = "maximum-assurance"\n',
+        "mmaudit.toml": 'profile = "standard"\n',
         "prompt.md": "Synthetic defensive prompt.\n",
         "models.json": '{"lineage":"synthetic-a"}\n',
         "tools.json": '{"scanner":"synthetic","version":"1"}\n',
@@ -514,26 +526,43 @@ def _write_file_backed_certificate(
 def _invalid_report_payload(mutation: str) -> dict[str, Any]:
     payload = _benchmark_report().model_dump(mode="json")
     if mutation == "missing_gate":
-        payload["gates"] = [
-            gate
-            for gate in payload["gates"]
-            if gate["name"] != "maximum_assurance_real_model_calls"
-        ]
+        retained_gates = [gate for gate in payload["gates"] if gate["name"] != "evidence_caps"]
+        payload["gates"] = [*retained_gates, dict(retained_gates[0])]
     elif mutation == "missing_metric":
         del payload["metrics"]["model_review_coverage"]
     elif mutation == "failed_required_metric":
-        payload["metrics"]["model_review_coverage"] = {
-            "numerator": 0,
-            "denominator": 1,
-            "evaluated": 1,
-            "value": 0,
+        payload["active_findings"] = 4
+        payload["confirmed_findings"] = 4
+        payload["precision"] = 0.75
+        payload["metrics"]["all_finding_precision"] = {
+            "numerator": 3,
+            "denominator": 4,
+            "evaluated": 4,
+            "value": 0.75,
+            "state": "NOT_APPLICABLE",
+            "threshold": None,
+            "direction": "informational",
+            "detail": "Synthetic all-finding precision includes one unmatched finding.",
+        }
+        payload["metrics"]["confirmed_precision"] = {
+            "numerator": 3,
+            "denominator": 4,
+            "evaluated": 4,
+            "value": 0.75,
             "state": "FAIL",
             "threshold": 1,
             "direction": "minimum",
-            "detail": "Synthetic substantive review did not meet its threshold.",
+            "detail": "Synthetic confirmed precision did not meet its threshold.",
         }
     elif mutation == "zero_denominator_required_metric":
-        payload["metrics"]["model_review_coverage"] = {
+        for case in payload["case_results"]:
+            if case["variant"] == "vulnerable":
+                case["confirmed"] = False
+                case["confirmed_finding_ids"] = []
+        payload["confirmed_findings"] = 0
+        payload["confirmed_findings_matching_vulnerable_cases"] = 0
+        payload["precision"] = None
+        payload["metrics"]["confirmed_precision"] = {
             "numerator": 0,
             "denominator": 0,
             "evaluated": 0,
@@ -541,7 +570,7 @@ def _invalid_report_payload(mutation: str) -> dict[str, Any]:
             "state": "NOT_EVALUABLE",
             "threshold": 1,
             "direction": "minimum",
-            "detail": "Synthetic substantive review had no evaluable calls.",
+            "detail": "Synthetic confirmed precision had no evaluable findings.",
         }
     elif mutation == "incomplete_case_inventory":
         safe_case = next(case for case in payload["case_results"] if case["variant"] == "safe")
@@ -682,9 +711,9 @@ def test_file_backed_verification_attests_exact_loaded_passed_report(
         == hashlib.sha256((component_root / "benchmark-results.json").read_bytes()).hexdigest()
     )
     assert evidence.benchmark_report_status == "passed"
-    assert evidence.benchmark_report_gate_count == len(MAXIMUM_ASSURANCE_GATE_NAMES)
+    assert evidence.benchmark_report_gate_count == len(BASE_GATE_NAMES)
     assert evidence.benchmark_name == "Synthetic file-backed benchmark"
-    assert evidence.benchmark_profile is AuditProfile.MAXIMUM_ASSURANCE
+    assert evidence.benchmark_profile is AuditProfile.STANDARD
     assert evidence.benchmark_reports_expected == 1
     assert evidence.benchmark_reports_loaded == 1
     assert verification.certificate_sha256 == certificate.certificate_sha256
@@ -692,6 +721,61 @@ def test_file_backed_verification_attests_exact_loaded_passed_report(
         BenchmarkCertificateVerification.model_validate_json(verification.model_dump_json())
         == verification
     )
+
+
+def test_file_backed_certificate_rejects_unattested_maximum_mutation_credit(
+    tmp_path: Path,
+) -> None:
+    payload = _benchmark_report().model_dump(mode="json")
+    mutation_scorecard = score_mutation_outcomes(
+        property_corpus_hash="d" * 64,
+        expected_property_ids=[PROPERTY_ID],
+        property_repositories={PROPERTY_ID: "synthetic_repository"},
+        outcomes=[
+            MutationPropertyOutcome(
+                mutation_id="mut-accounting",
+                mutation_kind=MutationKind.ACCOUNTING_OPERATOR_REPLACEMENT,
+                property_id=PROPERTY_ID,
+                outcome=MutationTestOutcome.KILLED,
+                evidence_sha256="e" * 64,
+            )
+        ],
+        minimum_property_kill_score=1,
+    )
+    payload["profile"] = AuditProfile.MAXIMUM_ASSURANCE
+    payload["report_inputs"][0].update(
+        {
+            "maximum_assurance_status": "COMPLETE",
+            "maximum_assurance_required_clauses": sorted(MAXIMUM_ASSURANCE_CORE_CLAUSES),
+        }
+    )
+    payload["mutation_scorecard"] = mutation_scorecard.model_dump(mode="json")
+    payload["repository_metrics"][0].update(
+        {
+            "mutation_property_ids": [PROPERTY_ID],
+            "mutation_kill_score": 1,
+            "mutation_gate_passed": True,
+        }
+    )
+    payload["metrics"]["invariant_mutation_score"] = _passing_rate().model_dump(mode="json")
+    payload["gates"] = [
+        BenchmarkGate(
+            name=name,
+            state=BenchmarkMetricState.PASS,
+            passed=True,
+            detail=f"Synthetic claimed maximum-assurance gate {name}.",
+        ).model_dump(mode="json")
+        for name in MAXIMUM_ASSURANCE_GATE_NAMES
+    ]
+    component_root, inputs = _write_file_backed_components(tmp_path, payload)
+
+    with pytest.raises(ValueError, match="repository mutation metrics do not match"):
+        build_file_backed_benchmark_certificate(
+            component_root=component_root,
+            inputs=inputs,
+            repository_git_commit=COMMIT,
+            certificate_id="unattested-maximum-certificate",
+        )
 
 
 def test_file_backed_certificate_requires_exact_bound_corpus_case_inventory(

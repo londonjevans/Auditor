@@ -231,6 +231,7 @@ def _coverage(
     critical_numerator = int(critical and len(surface.root_lineages) >= 2)
     return ModelReviewCoverage(
         applicable=True,
+        critical_classification_complete=True,
         minimum_critical_root_lineages=2,
         surfaces=[surface],
         overall=_coverage_metric(1, 1, "synthetic overall review coverage"),
@@ -240,7 +241,9 @@ def _coverage(
             critical_denominator,
             "synthetic critical review coverage",
         ),
-        critical_gate_passed=critical_numerator == critical_denominator,
+        critical_gate_passed=(
+            critical_denominator > 0 and critical_numerator == critical_denominator
+        ),
         limitations=[],
     )
 
@@ -360,6 +363,8 @@ def test_exact_usage_reference_join_credits_valid_surface() -> None:
         == result.metrics.model_review_coverage.denominator
         == 2
     )
+    assert result.metrics.critical_model_review_coverage.denominator == 0
+    assert result.metrics.critical_model_review_coverage.state is BenchmarkMetricState.NOT_EVALUABLE
 
 
 def test_serialized_real_usage_without_runtime_authority_is_not_evaluable() -> None:

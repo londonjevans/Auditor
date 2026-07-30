@@ -137,6 +137,7 @@ class _FoundryTestObservation:
     machine_output_validated: bool
     machine_result_sha256: str | None = None
     summary: FoundryTestExecutionSummary | None = None
+    process_started: bool = False
 
 
 @dataclass(frozen=True)
@@ -579,6 +580,7 @@ class FoundryForkScanner(ScannerAdapter):
         workspace_copy_custody: ScannerWorkspaceCopyCustody | None = None
         compiler_path: Path | None = None
         repository_sha256: str | None = None
+        execution_integrity_valid = True
         repository_exclusion_root = self.repository_exclusion_root or private_dir
         repository_exclusion_path: str
         total_timeout = min(
@@ -623,6 +625,7 @@ class FoundryForkScanner(ScannerAdapter):
                 fuzz_seed=self.config.repository_suite.fuzz_seed,
                 repository_test_fork_rpc_scopes=test_fork_rpc_scopes,
                 repository_suite_workspace_custody=custody,
+                upstream_integrity_valid=execution_integrity_valid,
             )
 
         if not self.config.enabled:
@@ -1091,6 +1094,7 @@ class FoundryForkScanner(ScannerAdapter):
                     per_test=True,
                 )
             except FoundryInventoryOverflowError as exc:
+                execution_integrity_valid = False
                 terminal_status = ScannerStatus.FAILED
                 terminal_error = str(exc)
                 break
@@ -1099,10 +1103,12 @@ class FoundryForkScanner(ScannerAdapter):
             except OSError:
                 compiler_unchanged = False
             if not compiler_unchanged:
+                execution_integrity_valid = False
                 terminal_status = ScannerStatus.FAILED
                 terminal_error = "pinned Solidity compiler changed during repository execution"
                 break
             if outcome.scope is not None and outcome.scope.status.value != "validated":
+                execution_integrity_valid = False
                 terminal_status = ScannerStatus.FAILED
                 terminal_error = (
                     "Foundry repository test lacks validated pinned-origin RPC evidence"
@@ -1188,9 +1194,11 @@ class FoundryForkScanner(ScannerAdapter):
                     inventory_sha256=post_inventory.normalized_inventory_sha256,
                 )
                 if final_selection.selection_sha256 != selection.selection_sha256:
+                    execution_integrity_valid = False
                     terminal_status = ScannerStatus.FAILED
                     terminal_error = "repository fork-suite inventory changed during execution"
                 if not _foundry_inventory_semantics_match(inventory, post_inventory):
+                    execution_integrity_valid = False
                     terminal_status = ScannerStatus.FAILED
                     terminal_error = (
                         "repository fork-suite compiler evidence changed during execution"
@@ -1201,9 +1209,11 @@ class FoundryForkScanner(ScannerAdapter):
                     f"repository fork suite exceeded {total_timeout:.0f}s total timeout"
                 )
             except FoundryInventoryUnavailableError as exc:
+                execution_integrity_valid = False
                 terminal_status = ScannerStatus.UNAVAILABLE
                 terminal_error = str(exc)
             except FoundryInventoryTimeoutError as exc:
+                execution_integrity_valid = False
                 terminal_status = ScannerStatus.TIMED_OUT
                 terminal_error = str(exc)
             except (
@@ -1211,6 +1221,7 @@ class FoundryForkScanner(ScannerAdapter):
                 FoundryInventoryOverflowError,
                 RepositorySuiteSelectionError,
             ) as exc:
+                execution_integrity_valid = False
                 terminal_status = ScannerStatus.FAILED
                 terminal_error = str(exc)
         elif post_inventory is None:
@@ -1220,6 +1231,7 @@ class FoundryForkScanner(ScannerAdapter):
         if terminal_status is not ScannerStatus.TIMED_OUT:
             try:
                 if not _selection_sources_unchanged(root, selection, deadline=deadline):
+                    execution_integrity_valid = False
                     terminal_status = ScannerStatus.FAILED
                     terminal_error = "repository fork-suite source changed after selection"
                 final_fork = observe_pinned_fork_rpc(
@@ -1236,6 +1248,7 @@ class FoundryForkScanner(ScannerAdapter):
                 )
                 _remaining_deadline_seconds(deadline)
                 if final_fork != fork:
+                    execution_integrity_valid = False
                     terminal_status = ScannerStatus.FAILED
                     terminal_error = "configured loopback fork state changed during execution"
                 workspace_unchanged = (
@@ -1243,6 +1256,7 @@ class FoundryForkScanner(ScannerAdapter):
                 )
                 _remaining_deadline_seconds(deadline)
                 if not workspace_unchanged:
+                    execution_integrity_valid = False
                     terminal_status = ScannerStatus.FAILED
                     terminal_error = (
                         "disposable scanner workspace changed during repository execution"
@@ -1253,6 +1267,7 @@ class FoundryForkScanner(ScannerAdapter):
                 )
                 _remaining_deadline_seconds(deadline)
                 if not repository_unchanged:
+                    execution_integrity_valid = False
                     terminal_status = ScannerStatus.FAILED
                     terminal_error = (
                         "repository execution source changed during repository execution"
@@ -1263,12 +1278,15 @@ class FoundryForkScanner(ScannerAdapter):
                     f"repository fork suite exceeded {total_timeout:.0f}s total timeout"
                 )
             except ForkRpcUnavailableError:
+                execution_integrity_valid = False
                 terminal_status = ScannerStatus.UNAVAILABLE
                 terminal_error = "configured loopback fork RPC became unavailable after execution"
             except ForkRpcBindingError:
+                execution_integrity_valid = False
                 terminal_status = ScannerStatus.FAILED
                 terminal_error = "configured loopback fork identity changed after execution"
             except (OSError, ValueError):
+                execution_integrity_valid = False
                 terminal_status = ScannerStatus.FAILED
                 terminal_error = (
                     "repository or disposable scanner workspace could not be revalidated"
@@ -2640,6 +2658,7 @@ def _execute_foundry_test(
                 output_bytes=usage.bytes,
                 process_exit_code=return_code,
                 machine_output_validated=False,
+                process_started=process is not None,
             ),
             usage,
         )
@@ -2684,6 +2703,7 @@ def _execute_foundry_test(
                 output_bytes=output_bytes,
                 process_exit_code=return_code,
                 machine_output_validated=False,
+                process_started=process is not None,
             ),
             artifact_usage,
         )
@@ -2703,6 +2723,7 @@ def _execute_foundry_test(
                 output_bytes=output_bytes,
                 process_exit_code=return_code,
                 machine_output_validated=False,
+                process_started=process is not None,
             ),
             artifact_usage,
         )
@@ -2727,6 +2748,7 @@ def _execute_foundry_test(
                     output_bytes=output_bytes,
                     process_exit_code=return_code,
                     machine_output_validated=False,
+                    process_started=process is not None,
                 ),
                 artifact_usage,
             )
@@ -2752,6 +2774,7 @@ def _execute_foundry_test(
                 output_bytes=output_bytes,
                 process_exit_code=return_code,
                 machine_output_validated=False,
+                process_started=process is not None,
             ),
             artifact_usage,
         )
@@ -2776,6 +2799,7 @@ def _execute_foundry_test(
             ),
             machine_result_sha256=machine_result_sha256,
             summary=summary,
+            process_started=process is not None,
         ),
         artifact_usage,
     )
@@ -3317,6 +3341,164 @@ def _sealed_workspace_copy_evidence(
     )
 
 
+_NONQUALIFYING_RUNTIME_EVIDENCE_ERRORS = (
+    "compiler changed during repository execution",
+    "compiler evidence changed during execution",
+    "configured loopback fork identity changed",
+    "configured loopback fork RPC became unavailable",
+    "configured loopback fork state changed",
+    "disposable scanner workspace changed",
+    "evidence finalization failed",
+    "inventory changed during execution",
+    "isolation cleanup verification failed",
+    "lacks validated pinned-origin RPC evidence",
+    "repository execution source changed",
+    "repository or disposable scanner workspace could not be revalidated",
+    "source changed",
+    "workspace custody validation failed",
+)
+
+
+def _foundry_observations_support_real_execution(
+    *,
+    backend: ScannerIsolationBackend | None,
+    attestation: str | None,
+    status: ScannerStatus,
+    error: str | None,
+    selection: RepositorySuiteSelection | None,
+    observations: Sequence[_FoundryTestObservation],
+    fork: PinnedForkObservation | None,
+    executable_sha256: str | None,
+    version: str | None,
+    compiler_version: str | None,
+    compiler_sha256: str | None,
+    execution_policy: RepositorySuiteExecutionPolicy | None,
+    inventory: RepositorySuiteInventoryEvidence | None,
+    post_inventory: RepositorySuiteInventoryEvidence | None,
+    deadline_crossed: bool,
+    cleanup_succeeded: bool,
+    workspace_custody_valid: bool,
+    upstream_integrity_valid: bool,
+) -> bool:
+    """Recognize complete, identity-bound attempts independently of suite success."""
+
+    attempted_statuses = {
+        RepositoryTestExecutionStatus.PASSED,
+        RepositoryTestExecutionStatus.FAILED,
+        RepositoryTestExecutionStatus.REVERTED,
+        RepositoryTestExecutionStatus.ASSERTION_FAILED,
+        RepositoryTestExecutionStatus.TIMED_OUT,
+        RepositoryTestExecutionStatus.INVALID_OUTPUT,
+    }
+    machine_statuses = {
+        RepositoryTestExecutionStatus.PASSED,
+        RepositoryTestExecutionStatus.FAILED,
+        RepositoryTestExecutionStatus.REVERTED,
+        RepositoryTestExecutionStatus.ASSERTION_FAILED,
+    }
+    if (
+        backend is None
+        or isolation_execution_evidence(backend) is not ExecutionEvidenceKind.REAL
+        or attestation is None
+        or not cleanup_succeeded
+        or not workspace_custody_valid
+        or not upstream_integrity_valid
+        or status
+        not in {
+            ScannerStatus.SUCCESS,
+            ScannerStatus.FAILED,
+            ScannerStatus.TIMED_OUT,
+        }
+        or selection is None
+        or not selection.tests
+        or fork is None
+        or executable_sha256 is None
+        or version is None
+        or compiler_version is None
+        or compiler_sha256 is None
+        or execution_policy is None
+        or execution_policy.selection_sha256 != selection.selection_sha256
+        or execution_policy.tool_version != version
+        or execution_policy.tool_sha256 != executable_sha256
+        or execution_policy.compiler_version != compiler_version
+        or execution_policy.compiler_sha256 != compiler_sha256
+        or execution_policy.isolation_backend != str(getattr(backend, "name", ""))
+        or execution_policy.isolation_attestation_sha256 != attestation
+        or execution_policy.chain_id != fork.chain_id
+        or execution_policy.block_number != fork.block_number
+        or execution_policy.block_hash != fork.block_hash
+        or tuple(observation.descriptor.descriptor_sha256 for observation in observations)
+        != tuple(descriptor.descriptor_sha256 for descriptor in selection.tests)
+        or any(
+            observation.status not in attempted_statuses
+            or not observation.process_started
+            or observation.command_sha256 is None
+            or observation.output_sha256 is None
+            or (
+                observation.machine_output_validated is (observation.status not in machine_statuses)
+            )
+            or (
+                (observation.machine_result_sha256 is None)
+                is (observation.status in machine_statuses)
+            )
+            for observation in observations
+        )
+    ):
+        return False
+    if error is not None and any(
+        marker in error for marker in _NONQUALIFYING_RUNTIME_EVIDENCE_ERRORS
+    ):
+        return False
+    if status is ScannerStatus.SUCCESS and any(
+        observation.status not in machine_statuses for observation in observations
+    ):
+        return False
+    if status is ScannerStatus.FAILED and not any(
+        observation.status
+        in {
+            RepositoryTestExecutionStatus.FAILED,
+            RepositoryTestExecutionStatus.REVERTED,
+            RepositoryTestExecutionStatus.ASSERTION_FAILED,
+            RepositoryTestExecutionStatus.INVALID_OUTPUT,
+        }
+        for observation in observations
+    ):
+        return False
+    if status is ScannerStatus.TIMED_OUT and not (
+        deadline_crossed
+        or any(
+            observation.status is RepositoryTestExecutionStatus.TIMED_OUT
+            for observation in observations
+        )
+    ):
+        return False
+    if inventory is not None:
+        if (
+            inventory.execution_evidence is not ExecutionEvidenceKind.REAL
+            or inventory.repository_sha256 != selection.repository_sha256
+            or inventory.tool_version != version
+            or inventory.tool_sha256 != executable_sha256
+            or inventory.compiler_version != compiler_version
+            or inventory.compiler_sha256 != compiler_sha256
+            or inventory.isolation_backend != execution_policy.isolation_backend
+            or inventory.isolation_attestation_sha256 != attestation
+        ):
+            return False
+    elif selection.inventory_sha256 is not None:
+        return False
+    if post_inventory is not None and (
+        post_inventory.execution_evidence is not ExecutionEvidenceKind.REAL
+        or inventory is None
+        or not _foundry_inventory_semantics_match(inventory, post_inventory)
+    ):
+        return False
+    return not (
+        status is ScannerStatus.SUCCESS
+        and selection.inventory_sha256 is not None
+        and post_inventory is None
+    )
+
+
 def _finalize_foundry_repository_suite(
     *,
     root: Path,
@@ -3342,9 +3524,11 @@ def _finalize_foundry_repository_suite(
     repository_test_fork_rpc_scopes: Sequence[RepositoryTestForkRpcScopeEvidence] = (),
     repository_suite_workspace_copy: RepositorySuiteWorkspaceCopyEvidence | None = None,
     repository_suite_workspace_custody: ScannerWorkspaceCopyCustody | None = None,
+    upstream_integrity_valid: bool = True,
 ) -> ScannerRun:
     timeout_error = f"repository fork suite exceeded {total_timeout_seconds:.0f}s total timeout"
     cleanup_error = _cleanup_error(backend, private_dir)
+    workspace_custody_valid = True
     deadline_crossed = time.monotonic() >= deadline
     if deadline_crossed:
         status = ScannerStatus.TIMED_OUT
@@ -3372,6 +3556,7 @@ def _finalize_foundry_repository_suite(
                     selection=selection,
                 )
         except (OSError, ValueError) as exc:
+            workspace_custody_valid = False
             if status is not ScannerStatus.TIMED_OUT:
                 status = ScannerStatus.FAILED
                 error = (
@@ -3391,8 +3576,11 @@ def _finalize_foundry_repository_suite(
         RepositoryTestExecutionStatus.TIMED_OUT,
         RepositoryTestExecutionStatus.INVALID_OUTPUT,
     }
-    attempted = inventory is not None or any(
-        observation.status in attempted_statuses for observation in observations
+    attempted = any(
+        observation.status in attempted_statuses
+        and observation.command_sha256 is not None
+        and observation.output_sha256 is not None
+        for observation in observations
     )
     if execution_policy is not None and any(
         observation.duration_seconds > execution_policy.per_test_timeout_seconds
@@ -3415,17 +3603,26 @@ def _finalize_foundry_repository_suite(
         )
     )
     execution_evidence = (
-        isolation_execution_evidence(backend)
-        if (
-            status is ScannerStatus.SUCCESS
-            and attempted
-            and executable_sha256 is not None
-            and version is not None
-            and attestation is not None
-            and inventory is not None
-            and post_inventory is not None
-            and _foundry_inventory_semantics_match(inventory, post_inventory)
-            and not deadline_crossed
+        ExecutionEvidenceKind.REAL
+        if _foundry_observations_support_real_execution(
+            backend=backend,
+            attestation=attestation,
+            status=status,
+            error=error,
+            selection=selection,
+            observations=observations,
+            fork=fork,
+            executable_sha256=executable_sha256,
+            version=version,
+            compiler_version=compiler_version,
+            compiler_sha256=compiler_sha256,
+            execution_policy=execution_policy,
+            inventory=inventory,
+            post_inventory=post_inventory,
+            deadline_crossed=deadline_crossed,
+            cleanup_succeeded=cleanup_error is None,
+            workspace_custody_valid=workspace_custody_valid,
+            upstream_integrity_valid=upstream_integrity_valid,
         )
         else ExecutionEvidenceKind.UNVERIFIED
     )
@@ -3483,8 +3680,32 @@ def _finalize_foundry_repository_suite(
         error = timeout_error
         foundry_summary = None
         discard_manifest()
-        if execution_evidence is not ExecutionEvidenceKind.UNVERIFIED:
-            execution_evidence = ExecutionEvidenceKind.UNVERIFIED
+        refreshed_evidence = (
+            ExecutionEvidenceKind.REAL
+            if _foundry_observations_support_real_execution(
+                backend=backend,
+                attestation=attestation,
+                status=status,
+                error=error,
+                selection=selection,
+                observations=observations,
+                fork=fork,
+                executable_sha256=executable_sha256,
+                version=version,
+                compiler_version=compiler_version,
+                compiler_sha256=compiler_sha256,
+                execution_policy=execution_policy,
+                inventory=inventory,
+                post_inventory=post_inventory,
+                deadline_crossed=deadline_crossed,
+                cleanup_succeeded=cleanup_error is None,
+                workspace_custody_valid=workspace_custody_valid,
+                upstream_integrity_valid=upstream_integrity_valid,
+            )
+            else ExecutionEvidenceKind.UNVERIFIED
+        )
+        if execution_evidence is not refreshed_evidence:
+            execution_evidence = refreshed_evidence
             executions, findings = build_evidence(execution_evidence, error)
 
     def check_final_deadline() -> None:

@@ -1541,23 +1541,11 @@ def test_benchmark_serializes_demonstrated_human_comparison_claim(
 def _failed_benchmark_report(report: BenchmarkReport) -> BenchmarkReport:
     payload = report.model_dump(mode="json")
     payload["status"] = BenchmarkStatus.FAILED.value
-    payload["metrics"]["model_review_coverage"] = {
-        "numerator": 0,
-        "denominator": 1,
-        "evaluated": 1,
-        "value": 0,
-        "state": BenchmarkMetricState.FAIL.value,
-        "threshold": 1,
-        "direction": "minimum",
-        "detail": "Synthetic substantive review did not meet its threshold.",
-    }
-    substantive_gate = next(
-        gate
-        for gate in payload["gates"]
-        if gate["name"] == "maximum_assurance_substantive_model_review"
-    )
-    substantive_gate["state"] = BenchmarkMetricState.FAIL.value
-    substantive_gate["passed"] = False
+    payload["evidence_cap_bypasses"] = 1
+    payload["repository_metrics"][0]["evidence_cap_bypasses"] = 1
+    evidence_gate = next(gate for gate in payload["gates"] if gate["name"] == "evidence_caps")
+    evidence_gate["state"] = BenchmarkMetricState.FAIL.value
+    evidence_gate["passed"] = False
     return BenchmarkReport.model_validate(payload)
 
 
@@ -1762,9 +1750,10 @@ def test_benchmark_certify_cli_requires_passed_gates(tmp_path: Path) -> None:
     certificate_path, result = _certify(tmp_path, component_root, inputs_path)
 
     assert result.exit_code == ExitCode.CONFIGURATION
-    assert "benchmark report is not certifiable" in result.stdout
-    assert "benchmark status is failed, not passed" in result.stdout
-    assert "required benchmark gates" in result.stdout
+    normalized_stdout = " ".join(result.stdout.split())
+    assert "benchmark report is not certifiable" in normalized_stdout
+    assert "benchmark status is failed, not passed" in normalized_stdout
+    assert "required benchmark gates" in normalized_stdout
     assert not certificate_path.exists()
 
 
@@ -2198,9 +2187,10 @@ def test_run_benchmark_gate_rejects_current_failed_corpus_before_pipeline(
     )
 
     assert result.exit_code == ExitCode.CONFIGURATION
-    assert "benchmark report is not certifiable" in result.stdout
-    assert "failed, not passed" in result.stdout
-    assert "required benchmark gates did not pass" in result.stdout
+    normalized_stdout = " ".join(result.stdout.split())
+    assert "benchmark report is not certifiable" in normalized_stdout
+    assert "failed, not passed" in normalized_stdout
+    assert "required benchmark gates did not pass" in normalized_stdout
     assert not constructed
 
 

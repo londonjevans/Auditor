@@ -128,17 +128,20 @@ class _LocalScannerRunner:
     def __init__(self, runs: list[ScannerRun]) -> None:
         self.runs = runs
         self.calls = 0
+        self.audited_relative_paths: list[tuple[str, ...]] = []
 
     async def run_all(
         self,
         root: Path,
         private_dir: Path,
         *,
+        audited_relative_paths: Sequence[str],
         skip_codeql: bool = False,
         allow_fork_probing: bool = False,
         projects: Sequence[SolidityProjectMetadata] = (),
         expected_repository_sha256: str | None = None,
         repository_exclusion_root: Path | None = None,
+        allow_custom_repository_exclusion: bool = False,
     ) -> list[ScannerRun]:
         del (
             root,
@@ -146,9 +149,11 @@ class _LocalScannerRunner:
             projects,
             expected_repository_sha256,
             repository_exclusion_root,
+            allow_custom_repository_exclusion,
         )
         assert not skip_codeql
         assert not allow_fork_probing
+        self.audited_relative_paths.append(tuple(audited_relative_paths))
         self.calls += 1
         return self.runs
 
@@ -167,20 +172,26 @@ class _ForkAwareScannerRunner:
         self.allow_fork_probing: list[bool] = []
         self.expected_repository_sha256: list[str | None] = []
         self.repository_exclusion_root: list[Path | None] = []
+        self.audited_relative_paths: list[tuple[str, ...]] = []
+        self.allow_custom_repository_exclusion: list[bool] = []
 
     async def run_all(
         self,
         root: Path,
         private_dir: Path,
         *,
+        audited_relative_paths: Sequence[str],
         skip_codeql: bool = False,
         allow_fork_probing: bool = False,
         projects: Sequence[SolidityProjectMetadata] = (),
         expected_repository_sha256: str | None = None,
         repository_exclusion_root: Path | None = None,
+        allow_custom_repository_exclusion: bool = False,
     ) -> list[ScannerRun]:
         del root, private_dir, projects
         assert not skip_codeql
+        self.audited_relative_paths.append(tuple(audited_relative_paths))
+        self.allow_custom_repository_exclusion.append(allow_custom_repository_exclusion)
         self.allow_fork_probing.append(allow_fork_probing)
         self.expected_repository_sha256.append(expected_repository_sha256)
         self.repository_exclusion_root.append(repository_exclusion_root)
@@ -1252,6 +1263,7 @@ async def test_sealed_repository_suite_replay_acknowledges_fork_probing(
         private_dir=tmp_path / "private",
         projects=[],
         expected=[baseline],
+        audited_relative_paths=(),
     )
 
     assert scanner.allow_fork_probing == [True]
@@ -1298,6 +1310,7 @@ async def test_repository_suite_replay_ignores_volatility_but_retains_identities
         private_dir=tmp_path / "private",
         projects=[],
         expected=[baseline],
+        audited_relative_paths=(),
     )
 
     assert scanner.allow_fork_probing == [True]
@@ -1331,6 +1344,7 @@ async def test_repository_suite_replay_ignores_volatility_but_retains_identities
             private_dir=tmp_path / f"private-{identity}",
             projects=[],
             expected=[baseline],
+            audited_relative_paths=(),
         )
         statuses[identity] = identity_components[0].status
 
@@ -1352,7 +1366,11 @@ async def test_repository_suite_replay_reconstructs_custom_output_exclusion(
     output.mkdir()
     (repository / "src" / "Vault.sol").write_text("contract Vault {}", encoding="utf-8")
     (output / "prior-report.json").write_text('{"prior":true}', encoding="utf-8")
-    repository_sha256 = scanner_workspace_sha256(repository, output)
+    repository_sha256 = scanner_workspace_sha256(
+        repository,
+        output,
+        allow_custom_private_exclusion=True,
+    )
     assert repository_sha256 != scanner_workspace_sha256(
         repository,
         repository / ".mmaudit",
@@ -1370,10 +1388,12 @@ async def test_repository_suite_replay_reconstructs_custom_output_exclusion(
         private_dir=tmp_path / "private",
         projects=[],
         expected=[baseline],
+        audited_relative_paths=("src/Vault.sol",),
     )
 
     assert scanner.expected_repository_sha256 == [repository_sha256]
     assert scanner.repository_exclusion_root == [output]
+    assert scanner.allow_custom_repository_exclusion == [True]
     assert components[0].status is ReplayComponentStatus.MATCHED
 
 
@@ -1395,6 +1415,7 @@ async def test_repository_suite_replay_rejects_conflicting_exclusion_identities(
         private_dir=tmp_path / "private",
         projects=[],
         expected=[first, second],
+        audited_relative_paths=(),
     )
 
     assert scanner.allow_fork_probing == []
@@ -1415,6 +1436,7 @@ async def test_repository_suite_replay_rejects_source_identity_mismatch_before_e
         private_dir=tmp_path / "private",
         projects=[],
         expected=[baseline],
+        audited_relative_paths=(),
     )
 
     assert scanner.allow_fork_probing == []
@@ -1448,6 +1470,7 @@ async def test_repository_suite_replay_rejects_source_drift_during_execution(
         private_dir=tmp_path / "private",
         projects=[],
         expected=[baseline],
+        audited_relative_paths=("Vault.sol",),
     )
 
     assert scanner.allow_fork_probing == [True]
@@ -1535,6 +1558,7 @@ async def test_repository_differential_replays_as_a_separate_offline_component(
     assert orchestrator.invariant_runner is invariant
     assert orchestrator.reproduction_runner is reproduction
     assert orchestrator.differential_runner is differential
+    assert scanner.audited_relative_paths == [("src/Vault.sol",)]
     assert differential.repository_sha256s == [
         expected.matrix.repository_sha256 if expected.matrix is not None else ""
     ]
@@ -2076,6 +2100,7 @@ async def test_missing_configured_repository_differential_is_blocked_without_exe
         artifact_limitation="configured differential artifact is missing",
         expected_scanner_runs=[],
         observed_scanner_runs=[],
+        audited_relative_paths=(),
     )
 
     assert len(components) == 1

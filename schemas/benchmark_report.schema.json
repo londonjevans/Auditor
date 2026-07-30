@@ -898,7 +898,7 @@
       "type": "string"
     },
     "MutationKind": {
-      "description": "Required source-local classes used to challenge defensive properties.",
+      "description": "Implemented source-local classes used to challenge defensive properties.",
       "enum": [
         "access_control_guard_removal",
         "replay_state_update_removal",
@@ -949,6 +949,23 @@
       "additionalProperties": false,
       "description": "Per-property mutation quality evidence; aggregate scores cannot hide weak properties.",
       "properties": {
+        "applicability_plan_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Applicability Plan Sha256"
+        },
+        "evidence_origin": {
+          "$ref": "#/$defs/MutationScorecardEvidenceOrigin",
+          "default": "declarative"
+        },
         "expected_property_ids": {
           "items": {
             "type": "string"
@@ -1037,6 +1054,15 @@
       ],
       "title": "MutationScorecard",
       "type": "object"
+    },
+    "MutationScorecardEvidenceOrigin": {
+      "description": "Trust origin of mutation outcomes; neither member is runtime attestation.",
+      "enum": [
+        "declarative",
+        "planned_unattested"
+      ],
+      "title": "MutationScorecardEvidenceOrigin",
+      "type": "string"
     },
     "MutationTestOutcome": {
       "description": "Normalized result of challenging one property with one applicable mutation.",

@@ -324,7 +324,7 @@ def test_selection_hash_binds_non_test_source_changes(tmp_path: Path) -> None:
     assert before.selection_sha256 != after.selection_sha256
 
 
-def test_selection_excludes_custom_output_nested_under_test_directory(
+def test_selection_rejects_custom_output_that_would_hide_audited_tests(
     tmp_path: Path,
 ) -> None:
     _write(
@@ -339,17 +339,13 @@ def test_selection_excludes_custom_output_nested_under_test_directory(
         _contract("RogueTest", "function testRogue() public {}"),
     )
 
-    selection = select_foundry_repository_suite(
-        tmp_path,
-        [_project()],
-        _explicit_config(include_paths=("test/**/*.t.sol",)),
-        private_dir=output,
-    )
-
-    assert selection.candidate_file_count == 1
-    assert selection.candidate_test_count == 1
-    assert selection.repository_exclusion_path == "test/custom-audit-output"
-    assert [test.path for test in selection.tests] == ["test/Selected.t.sol"]
+    with pytest.raises(ValueError, match="shared audited-tree exclusion domain"):
+        select_foundry_repository_suite(
+            tmp_path,
+            [_project()],
+            _explicit_config(include_paths=("test/**/*.t.sol",)),
+            private_dir=output,
+        )
 
 
 def test_exact_bare_name_is_rejected_when_multiple_tests_match(tmp_path: Path) -> None:

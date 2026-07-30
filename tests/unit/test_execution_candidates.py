@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from mmaudit.config import RepositoryConfig, SmartContractsConfig
 from mmaudit.models.schemas import (
     AnalysisState,
     CandidateOriginKind,
@@ -24,10 +25,8 @@ from mmaudit.models.schemas import (
     Location,
     PropertyCorpus,
     Severity,
-    SolidityEntity,
     SolidityEntityKind,
     SolidityProvenance,
-    SoliditySymbolIndex,
     StatefulActionSpec,
 )
 from mmaudit.orchestration.execution_candidates import (
@@ -35,6 +34,10 @@ from mmaudit.orchestration.execution_candidates import (
     build_invariant_execution_candidates,
 )
 from mmaudit.orchestration.manifest import canonical_sha256
+from mmaudit.repository.discovery import discover_repository
+from mmaudit.repository.ignore import IgnoreMatcher
+from mmaudit.solidity.index import build_solidity_index
+from mmaudit.solidity.projects import discover_solidity_projects
 from mmaudit.solidity.properties import build_property_corpus
 
 
@@ -144,30 +147,22 @@ def _inputs(
         "}\n"
     )
     source.write_text(source_text, encoding="utf-8")
-    source_line = source_text.splitlines(keepends=True)[3]
-    location = Location(
-        path="src/Vault.sol",
-        start_line=4,
-        end_line=4,
-        symbol="deposit",
-        content_hash=_sha256(source_line),
+    discovery = discover_repository(repository, RepositoryConfig(), IgnoreMatcher())
+    projects = discover_solidity_projects(discovery, SmartContractsConfig())
+    index = build_solidity_index(discovery, projects, []).index
+    entity = next(
+        entity
+        for entity in index.entities
+        if entity.kind is SolidityEntityKind.FUNCTION
+        and entity.contract_name == "Vault"
+        and entity.name == "deposit"
     )
-    entity = SolidityEntity(
-        id="function:Vault:deposit",
-        kind=SolidityEntityKind.FUNCTION,
-        name="deposit",
-        contract_name="Vault",
-        path=location.path,
-        start_line=location.start_line,
-        end_line=location.end_line,
-        byte_start=72,
-        byte_end=130,
-        source_hash=location.content_hash,
-        provenance=SolidityProvenance.COMPILER,
-        confidence=1,
-        transformation="compiler_ast_entity",
-        visibility="external",
-        signature="deposit()",
+    location = Location(
+        path=entity.path,
+        start_line=entity.start_line,
+        end_line=entity.end_line,
+        symbol=entity.name,
+        content_hash=entity.source_hash,
     )
     invariant = InvariantSpec(
         id="inv-accounting",
@@ -224,11 +219,6 @@ def _inputs(
         depth=4,
         seed=7,
         assumptions=["Campaign starts from a clean synthetic deployment"],
-    )
-    index = SoliditySymbolIndex(
-        projects=[],
-        entities=[entity],
-        ast_sources=[location.path],
     )
     corpus = build_property_corpus(suite, index, [harness])
     assert len(corpus.properties) == 1

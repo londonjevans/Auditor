@@ -18,7 +18,11 @@ from mmaudit.benchmark.claims import (
     SuperiorityClaimStatus,
     evaluate_superiority_claim,
 )
-from mmaudit.benchmark.mutations import MutationScorecard, MutationTestOutcome
+from mmaudit.benchmark.mutations import (
+    MutationScorecard,
+    MutationScorecardEvidenceOrigin,
+    MutationTestOutcome,
+)
 from mmaudit.constants import SEVERITY_ORDER
 from mmaudit.models.schemas import (
     AuditProfile,
@@ -46,6 +50,9 @@ from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_path
 
 _MAXIMUM_ASSURANCE_REQUIRED_COVERAGE_METRICS = (
+    "audited_suite_contract_statement_coverage",
+    "audited_suite_function_statement_coverage",
+    "audited_suite_critical_function_assertion_coverage",
     "public_external_entry_points_reviewed",
     "external_calls_classified",
     "asset_flows_classified",
@@ -63,6 +70,9 @@ _BENCHMARK_REQUIRED_COVERAGE_METRICS = tuple(
             "high_value_paths_reviewed",
         }
     )
+)
+_RUNTIME_CREDITING_MUTATION_SCORECARD_ORIGINS: frozenset[MutationScorecardEvidenceOrigin] = (
+    frozenset()
 )
 _BASE_REQUIRED_GATE_NAMES = (
     "known_critical_recall",
@@ -1599,6 +1609,11 @@ def evaluate_benchmark(
 ) -> BenchmarkReport:
     """Calculate evidence-aware regression metrics from actual audit reports."""
 
+    mutation_scorecard = (
+        MutationScorecard.model_validate(mutation_scorecard.model_dump(mode="python"))
+        if mutation_scorecard is not None
+        else None
+    )
     repository_ids = {repository.repository_id for repository in manifest.repositories}
     unexpected_reports = sorted(set(reports) - repository_ids)
     if unexpected_reports:
@@ -1957,6 +1972,15 @@ def evaluate_benchmark(
             for item in normalized_inputs
             if item.status is not BenchmarkReportInputStatus.USABLE
         }
+        | (
+            {
+                "mutation scorecard is declarative or planned-unattested component "
+                "evidence and received no runtime mutation credit"
+            }
+            if mutation_scorecard is not None
+            and not _mutation_scorecard_has_runtime_credit(mutation_scorecard)
+            else set()
+        )
     )
     repository_gate_state = _repository_gate_state(repository_metrics)
     safe_gate_state = _combine_states(
@@ -2201,6 +2225,7 @@ def evaluate_benchmark(
 
 
 def write_benchmark_report(path: Path, report: BenchmarkReport) -> None:
+    report = BenchmarkReport.model_validate(report.model_dump(mode="python"))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -2414,6 +2439,8 @@ def _repository_mutation_projection(
     )
     if not property_ids:
         return [], None, None
+    if not _mutation_scorecard_has_runtime_credit(scorecard):
+        return property_ids, None, False
     property_scores = {score.property_id: score for score in scorecard.property_scores}
     outcomes = [outcome for outcome in scorecard.outcomes if outcome.property_id in property_ids]
     kill_score = _bounded_ratio(
@@ -3050,9 +3077,13 @@ def _model_reference_matches_usage(
 def _mutation_rate_metric(
     scorecard: MutationScorecard | None,
 ) -> BenchmarkRateMetric:
-    if scorecard is None or not scorecard.outcomes:
+    if (
+        scorecard is None
+        or not scorecard.outcomes
+        or not _mutation_scorecard_has_runtime_credit(scorecard)
+    ):
         return _unavailable_metric(
-            "typed invariant mutation scorecard is unavailable",
+            "runtime-attested typed invariant mutation scorecard is unavailable",
             direction=BenchmarkMetricDirection.MINIMUM,
             threshold=1,
         )
@@ -3226,7 +3257,11 @@ def _mutation_gate_state(
     report_inputs: list[BenchmarkReportInput],
     passed: bool,
 ) -> BenchmarkMetricState:
-    if scorecard is None or not scorecard.outcomes:
+    if (
+        scorecard is None
+        or not scorecard.outcomes
+        or not _mutation_scorecard_has_runtime_credit(scorecard)
+    ):
         return BenchmarkMetricState.NOT_EVALUABLE
     if any(not item.usable for item in report_inputs):
         return BenchmarkMetricState.INCONCLUSIVE
@@ -3390,6 +3425,8 @@ def _weak_maximum_assurance_mutation_properties(
 ) -> list[str]:
     if scorecard is None:
         return []
+    if not _mutation_scorecard_has_runtime_credit(scorecard):
+        return list(scorecard.expected_property_ids)
     return [
         score.property_id
         for score in scorecard.property_scores
@@ -3398,3 +3435,13 @@ def _weak_maximum_assurance_mutation_properties(
         or score.kill_score is None
         or score.kill_score < MAXIMUM_ASSURANCE_MINIMUM_PROPERTY_KILL_SCORE
     ]
+
+
+def _mutation_scorecard_has_runtime_credit(scorecard: MutationScorecard) -> bool:
+    """Credit only explicitly supported runtime-attested origins.
+
+    No such origin exists until a production runner can bind execution custody
+    independently from caller-authored serialized evidence.
+    """
+
+    return scorecard.evidence_origin in _RUNTIME_CREDITING_MUTATION_SCORECARD_ORIGINS

@@ -618,10 +618,29 @@ are invisible to source review by construction.
   `src/mmaudit/solidity/coverage.py`, `src/mmaudit/orchestration/model_coverage.py`,
   reporting, regressions.
 - **Dependencies:** `V3-EXECORIGIN-001`; reuse `V3-MUTATION-001` work where already built.
-- **Status:** `IN_PROGRESS`
-- **Current action:** Inventory existing audited-suite coverage, mutation,
-  indexed surface, and model-priority evidence; reproduce the smallest missing
-  denominator or assertion-strength join before changing production behavior.
+- **Status:** `PARTIAL`
+- **Validated result:** Source-only audited contract/function denominators,
+  source-hash-bound non-finding gaps, conservative critical classification,
+  per-graph/invariant/economic applicability, and elevated model-review routing
+  are typed and reportable. Repository-suite credit now requires an immutable
+  built-in Foundry producer body, a live process-sealed isolation backend, exact
+  runtime evidence, and current source identity. Ordinary scanners retain
+  no-follow source custody from the post-discovery digest through all concurrent
+  executions. Mutation applicability, observations, scoring, restoration, and
+  disposal are fail-closed and non-crediting when planned, mocked, malformed, or
+  incomplete. Ruff format/check, strict mypy over 150 source files, release-schema
+  regeneration, and the loopback-enabled full suite passed, ending with `3334
+  passed, 11 skipped in 478.51s`.
+- **Remaining limitations:** Production does not yet emit trusted statement
+  coverage, and no decisive production mutation executor or real mutation kill
+  artifact ran. The portable same-UID final-directory cleanup race still requires
+  an isolation boundary that makes the retained parent namespace inaccessible.
+  A real Foundry run with an arbitrary custom in-repository output exclusion fails
+  safely until that exact exclusion is supported by its producer path. No real
+  rootless-isolation execution is newly claimed.
+- **Next action:** Operator-requested pause boundary. On resume, continue with
+  `V3-CI-001`; retain this ticket as `PARTIAL` until trusted statement coverage
+  and the real `V3-MUTATION-001` execution path provide non-mock runtime evidence.
 
 ## V3-CI-001 — Continuous integration execution mode
 

@@ -12,6 +12,7 @@ import stat
 import subprocess
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -38,7 +39,12 @@ from mmaudit.models.schemas import (
     Severity,
 )
 from mmaudit.repository.ignore import normalize_relative_path
-from mmaudit.repository.secrets import is_sensitive_workspace_path
+from mmaudit.repository.workspace import (
+    audited_workspace_bindings_sha256,
+    audited_workspace_exclusion_root,
+    audited_workspace_relative_excluded,
+    require_audited_workspace_paths_included,
+)
 
 _MAX_WORKSPACE_ENTRIES = 100_000
 _MAX_WORKSPACE_FILES = 100_000
@@ -46,26 +52,6 @@ _MAX_WORKSPACE_FILE_BYTES = 100_000_000
 _MAX_WORKSPACE_BYTES = 2 * 1024**3
 _MAX_WORKSPACE_DEPTH = 128
 _WORKSPACE_READ_BYTES = 1024 * 1024
-_EXCLUDED_WORKSPACE_DIRECTORIES = frozenset(
-    {
-        ".git",
-        ".mmaudit",
-        ".next",
-        ".venv",
-        "__pycache__",
-        "artifacts",
-        "broadcast",
-        "build",
-        "cache",
-        "coverage",
-        "dist",
-        "node_modules",
-        "out",
-        "target",
-        "vendor",
-        "venv",
-    }
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,15 +108,7 @@ class _ScannerWorkspaceInventory:
         ]
 
     def sha256(self) -> str:
-        return hashlib.sha256(
-            json.dumps(
-                self.bindings(),
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-                allow_nan=False,
-            ).encode("utf-8")
-        ).hexdigest()
+        return audited_workspace_bindings_sha256(self.bindings())
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +142,78 @@ class ScannerWorkspaceCopyObservation:
 
 
 @dataclass(slots=True)
+class ScannerWorkspaceSourceCustody:
+    """Retain and later revalidate one exact no-follow source inventory."""
+
+    _source_root: Path
+    _source_private_dir: Path
+    _allow_custom_source_private_exclusion: bool
+    _source_fd: int
+    _source_before: _ScannerWorkspaceInventory
+    _closed: bool = False
+
+    @property
+    def closed(self) -> bool:
+        """Report whether the retained source descriptor has been released."""
+
+        return self._closed
+
+    @property
+    def source_inventory_sha256_before(self) -> str:
+        """Return the canonical audited source digest captured at acquisition."""
+
+        return self._source_before.sha256()
+
+    def finalize(self) -> str:
+        """Revalidate exact source identity and bytes, then close custody."""
+
+        if self._closed:
+            raise ValueError("scanner workspace source custody is already closed")
+        primary_error: BaseException | None = None
+        try:
+            _require_retained_workspace_root(
+                self._source_root,
+                self._source_fd,
+                self._source_before.root_identity,
+                label="source",
+            )
+            source_after = _build_scanner_workspace_inventory_from_descriptor(
+                self._source_root,
+                self._source_fd,
+                self._source_private_dir,
+                allow_custom_private_exclusion=(self._allow_custom_source_private_exclusion),
+            )
+            _require_retained_workspace_root(
+                self._source_root,
+                self._source_fd,
+                self._source_before.root_identity,
+                label="source",
+            )
+            if not _workspace_inventory_identity_stable(self._source_before, source_after):
+                raise ValueError("scanner workspace source inventory changed during custody")
+            return source_after.sha256()
+        except BaseException as exc:
+            primary_error = exc
+            raise
+        finally:
+            try:
+                self.close()
+            except OSError:
+                if primary_error is None:
+                    raise
+
+    def close(self) -> None:
+        """Idempotently release the retained source descriptor."""
+
+        if self._closed:
+            return
+        self._closed = True
+        source_fd = self._source_fd
+        self._source_fd = -1
+        os.close(source_fd)
+
+
+@dataclass(slots=True)
 class ScannerWorkspaceCopyCustody:
     """Retain no-follow source/workspace root custody until final validation."""
 
@@ -171,6 +221,7 @@ class ScannerWorkspaceCopyCustody:
     _workspace_root: Path
     _workspace_parent_root: Path
     _source_private_dir: Path
+    _allow_custom_source_private_exclusion: bool
     _source_fd: int
     _workspace_fd: int
     _workspace_parent_fd: int
@@ -231,6 +282,7 @@ class ScannerWorkspaceCopyCustody:
                 self._source_root,
                 self._source_fd,
                 self._source_private_dir,
+                allow_custom_private_exclusion=(self._allow_custom_source_private_exclusion),
             )
             workspace_after = _build_scanner_workspace_inventory_from_descriptor(
                 self._workspace_root,
@@ -322,6 +374,10 @@ class ScannerIsolationBackend(Protocol):
         private_dir: Path,
         rpc_port: int,
     ) -> list[str]: ...
+
+
+class ScannerSourceIntegrityError(RuntimeError):
+    """Scanner execution could not preserve the frozen audited source identity."""
 
 
 def scanner_fingerprint(
@@ -420,6 +476,60 @@ class ScannerAdapter(ABC):
         backend: ScannerIsolationBackend | None = None,
         expected_version: str | None = None,
         expected_sha256: str | None = None,
+    ) -> ScannerRun:
+        """Run with the compatibility boundary used by direct adapter callers."""
+
+        return self._run(
+            root,
+            private_dir,
+            timeout_seconds,
+            backend=backend,
+            expected_version=expected_version,
+            expected_sha256=expected_sha256,
+        )
+
+    def run_source_bound(
+        self,
+        root: Path,
+        private_dir: Path,
+        timeout_seconds: float,
+        *,
+        backend: ScannerIsolationBackend | None = None,
+        expected_version: str | None = None,
+        expected_sha256: str | None = None,
+        expected_repository_sha256: str,
+        audited_relative_paths: Sequence[str],
+        repository_exclusion_root: Path | None = None,
+        allow_custom_repository_exclusion: bool = False,
+    ) -> ScannerRun:
+        """Run against a copy proven equal to one frozen audited inventory."""
+
+        return self._run(
+            root,
+            private_dir,
+            timeout_seconds,
+            backend=backend,
+            expected_version=expected_version,
+            expected_sha256=expected_sha256,
+            expected_repository_sha256=expected_repository_sha256,
+            audited_relative_paths=audited_relative_paths,
+            repository_exclusion_root=repository_exclusion_root,
+            allow_custom_repository_exclusion=allow_custom_repository_exclusion,
+        )
+
+    def _run(
+        self,
+        root: Path,
+        private_dir: Path,
+        timeout_seconds: float,
+        *,
+        backend: ScannerIsolationBackend | None = None,
+        expected_version: str | None = None,
+        expected_sha256: str | None = None,
+        expected_repository_sha256: str | None = None,
+        audited_relative_paths: Sequence[str] = (),
+        repository_exclusion_root: Path | None = None,
+        allow_custom_repository_exclusion: bool = False,
     ) -> ScannerRun:
         """Run in a copied workspace and fail closed without hardened isolation."""
 
@@ -539,11 +649,34 @@ class ScannerAdapter(ABC):
                 )
         workspace = private_dir / "workspace"
         try:
-            copy_scanner_workspace(root, workspace, private_dir)
+            copy_custody = copy_scanner_workspace_with_custody(
+                root,
+                workspace,
+                repository_exclusion_root or private_dir,
+                audited_relative_paths=audited_relative_paths,
+                allow_custom_private_exclusion=allow_custom_repository_exclusion,
+            )
+            copy_observation = copy_custody.finalize()
         except (OSError, ValueError) as exc:
+            if expected_repository_sha256 is not None:
+                raise ScannerSourceIntegrityError(
+                    "scanner source copy failed its frozen inventory validation"
+                ) from exc
             return finish(
                 ScannerStatus.FAILED,
                 error=f"could not create isolated scanner workspace: {type(exc).__name__}",
+            )
+        if expected_repository_sha256 is not None and any(
+            observed != expected_repository_sha256
+            for observed in (
+                copy_observation.source_inventory_sha256_before,
+                copy_observation.source_inventory_sha256_after,
+                copy_observation.workspace_inventory_sha256_after_copy,
+                copy_observation.workspace_inventory_sha256_after_execution,
+            )
+        ):
+            raise ScannerSourceIntegrityError(
+                "isolated scanner workspace differs from the frozen audited source"
             )
         raw_path = private_dir / f"{self.name}.json"
         error_path = private_dir / f"{self.name}.stderr.txt"
@@ -744,10 +877,23 @@ def scanner_trust_pin_error(
     return None
 
 
-def copy_scanner_workspace(root: Path, workspace: Path, private_dir: Path) -> None:
+def copy_scanner_workspace(
+    root: Path,
+    workspace: Path,
+    private_dir: Path,
+    *,
+    audited_relative_paths: Sequence[str | Path | PurePosixPath] = (),
+    allow_custom_private_exclusion: bool = False,
+) -> None:
     """Copy exactly one bounded, pruned, no-follow source inventory."""
 
-    custody = copy_scanner_workspace_with_custody(root, workspace, private_dir)
+    custody = copy_scanner_workspace_with_custody(
+        root,
+        workspace,
+        private_dir,
+        audited_relative_paths=audited_relative_paths,
+        allow_custom_private_exclusion=allow_custom_private_exclusion,
+    )
     custody.finalize()
 
 
@@ -755,9 +901,14 @@ def copy_scanner_workspace_with_custody(
     root: Path,
     workspace: Path,
     private_dir: Path,
+    *,
+    audited_relative_paths: Sequence[str | Path | PurePosixPath] = (),
+    allow_custom_private_exclusion: bool = False,
 ) -> ScannerWorkspaceCopyCustody:
     """Exclusively copy one audited inventory and retain both root descriptors."""
 
+    require_audited_workspace_paths_included(audited_relative_paths)
+    required_paths = _normalized_audited_workspace_paths(audited_relative_paths)
     source_root, source_identity = _openable_workspace_root(root)
     source_fd = _open_workspace_directory(source_root)
     workspace_fd = -1
@@ -769,7 +920,9 @@ def copy_scanner_workspace_with_custody(
             source_root,
             source_fd,
             private_dir,
+            allow_custom_private_exclusion=allow_custom_private_exclusion,
         )
+        _require_audited_paths_in_inventory(source_inventory, required_paths)
         (
             workspace_root,
             workspace_fd,
@@ -806,6 +959,7 @@ def copy_scanner_workspace_with_custody(
             _workspace_root=workspace_root,
             _workspace_parent_root=workspace_parent_root,
             _source_private_dir=private_dir,
+            _allow_custom_source_private_exclusion=allow_custom_private_exclusion,
             _source_fd=source_fd,
             _workspace_fd=workspace_fd,
             _workspace_parent_fd=workspace_parent_fd,
@@ -828,11 +982,98 @@ def copy_scanner_workspace_with_custody(
                 raise
 
 
-def scanner_workspace_sha256(root: Path, private_dir: Path | None = None) -> str:
+def retain_scanner_workspace_source_custody(
+    root: Path,
+    private_dir: Path | None = None,
+    *,
+    audited_relative_paths: Sequence[str | Path | PurePosixPath] = (),
+    allow_custom_private_exclusion: bool = False,
+) -> ScannerWorkspaceSourceCustody:
+    """Capture an exact source inventory and retain its no-follow root descriptor."""
+
+    require_audited_workspace_paths_included(audited_relative_paths)
+    required_paths = _normalized_audited_workspace_paths(audited_relative_paths)
+    source_root, source_identity = _openable_workspace_root(root)
+    source_fd = _open_workspace_directory(source_root)
+    try:
+        _require_workspace_identity(os.fstat(source_fd), source_identity)
+        exclusion_root = private_dir if private_dir is not None else source_root / ".mmaudit"
+        source_inventory = _build_scanner_workspace_inventory_from_descriptor(
+            source_root,
+            source_fd,
+            exclusion_root,
+            allow_custom_private_exclusion=allow_custom_private_exclusion,
+        )
+        _require_audited_paths_in_inventory(source_inventory, required_paths)
+        return ScannerWorkspaceSourceCustody(
+            _source_root=source_root,
+            _source_private_dir=exclusion_root,
+            _allow_custom_source_private_exclusion=allow_custom_private_exclusion,
+            _source_fd=source_fd,
+            _source_before=source_inventory,
+        )
+    except BaseException:
+        os.close(source_fd)
+        raise
+
+
+def scanner_workspace_sha256(
+    root: Path,
+    private_dir: Path | None = None,
+    *,
+    audited_relative_paths: Sequence[str | Path | PurePosixPath] = (),
+    allow_custom_private_exclusion: bool = False,
+) -> str:
     """Hash the exact bounded, non-secret tree copied into scanner workspaces."""
 
+    require_audited_workspace_paths_included(audited_relative_paths)
+    required_paths = _normalized_audited_workspace_paths(audited_relative_paths)
     exclusion_root = private_dir if private_dir is not None else root / ".mmaudit"
-    return _build_scanner_workspace_inventory(root, exclusion_root).sha256()
+    inventory = _build_scanner_workspace_inventory(
+        root,
+        exclusion_root,
+        allow_custom_private_exclusion=allow_custom_private_exclusion,
+    )
+    _require_audited_paths_in_inventory(inventory, required_paths)
+    return inventory.sha256()
+
+
+def scanner_workspace_file_sha256(
+    root: Path,
+    relative_path: str | Path | PurePosixPath,
+    private_dir: Path | None = None,
+) -> str:
+    """Hash one included regular file through the scanner's no-follow inventory."""
+
+    normalized = normalize_relative_path(str(relative_path))
+    if normalized in {"", "."}:
+        raise ValueError("scanner workspace file path must identify a file")
+    require_audited_workspace_paths_included((normalized,))
+    exclusion_root = private_dir if private_dir is not None else root / ".mmaudit"
+    inventory = _build_scanner_workspace_inventory(root, exclusion_root)
+    for item in inventory.files:
+        if item.relative_path == normalized:
+            return item.sha256
+    raise ValueError("scanner workspace file is absent from the audited inventory")
+
+
+def _normalized_audited_workspace_paths(
+    relative_paths: Sequence[str | Path | PurePosixPath],
+) -> tuple[str, ...]:
+    return tuple(sorted({normalize_relative_path(str(relative)) for relative in relative_paths}))
+
+
+def _require_audited_paths_in_inventory(
+    inventory: _ScannerWorkspaceInventory,
+    required_paths: tuple[str, ...],
+) -> None:
+    available = {item.relative_path for item in inventory.files}
+    missing = sorted(set(required_paths) - available)
+    if missing:
+        raise ValueError(
+            "explicit audited source path is absent from the execution inventory: "
+            + ", ".join(missing[:20])
+        )
 
 
 def scanner_workspace_exclusion_path(
@@ -852,6 +1093,8 @@ def scanner_workspace_exclusion_path(
 def _build_scanner_workspace_inventory(
     root: Path,
     private_dir: Path,
+    *,
+    allow_custom_private_exclusion: bool = False,
 ) -> _ScannerWorkspaceInventory:
     """Inventory a pruned tree through retained no-follow directory descriptors."""
 
@@ -863,6 +1106,7 @@ def _build_scanner_workspace_inventory(
             repository_root,
             root_fd,
             private_dir,
+            allow_custom_private_exclusion=allow_custom_private_exclusion,
         )
     finally:
         os.close(root_fd)
@@ -872,11 +1116,17 @@ def _build_scanner_workspace_inventory_from_descriptor(
     repository_root: Path,
     root_fd: int,
     private_dir: Path,
+    *,
+    allow_custom_private_exclusion: bool = False,
 ) -> _ScannerWorkspaceInventory:
     """Inventory through an already-custodied no-follow root descriptor."""
 
     root_identity = _WorkspaceIdentity.from_stat(os.fstat(root_fd))
-    private_relative = _workspace_private_relative(repository_root, private_dir)
+    private_relative = _workspace_private_relative(
+        repository_root,
+        private_dir,
+        allow_custom_private_exclusion=allow_custom_private_exclusion,
+    )
     directories: list[_WorkspaceDirectory] = []
     files: list[_WorkspaceFile] = []
     entries_seen = 0
@@ -1167,6 +1417,8 @@ def _openable_workspace_root(root: Path) -> tuple[Path, _WorkspaceIdentity]:
 def _workspace_private_relative(
     repository_root: Path,
     private_dir: Path,
+    *,
+    allow_custom_private_exclusion: bool = False,
 ) -> tuple[str, ...] | None:
     private_root = private_dir.parent.resolve(strict=False) / private_dir.name
     try:
@@ -1177,7 +1429,15 @@ def _workspace_private_relative(
     parts = PurePosixPath(normalized).parts
     if not parts:
         raise ValueError("scanner private directory may not be the repository root")
-    return parts
+    exclusion_root = audited_workspace_exclusion_root(normalized)
+    if exclusion_root is None:
+        if allow_custom_private_exclusion:
+            return parts
+        raise ValueError(
+            "scanner private directory inside the repository must remain within "
+            "the shared audited-tree exclusion domain"
+        )
+    return PurePosixPath(exclusion_root).parts
 
 
 def _workspace_relative_excluded(
@@ -1189,9 +1449,7 @@ def _workspace_relative_excluded(
     parts = PurePosixPath(relative).parts
     if private_relative is not None and parts[: len(private_relative)] == private_relative:
         return True
-    if any(part.lower() in _EXCLUDED_WORKSPACE_DIRECTORIES for part in parts):
-        return True
-    return is_sensitive_workspace_path(relative, is_dir=is_dir)
+    return audited_workspace_relative_excluded(relative, is_dir=is_dir)
 
 
 def _hash_workspace_file(

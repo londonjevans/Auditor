@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from mmaudit.models.schemas import (
     AnalysisState,
+    AuditedSuiteCoverage,
     CoverageExclusion,
     CoverageMetric,
     CoverageProvenance,
@@ -22,6 +23,8 @@ from mmaudit.models.schemas import (
     InvariantExecutionStatus,
     InvariantTemplate,
     RepositoryCodeExecutionState,
+    ReproductionResult,
+    ReproductionState,
     ScannerRun,
     ScannerStatus,
     SolidityCompilationResult,
@@ -33,7 +36,10 @@ from mmaudit.models.schemas import (
     SoliditySymbolIndex,
 )
 from mmaudit.orchestration.context import ContextBuilder, render_context
-from mmaudit.orchestration.pipeline import _coverage_quality_gate
+from mmaudit.orchestration.pipeline import (
+    _coverage_quality_gate,
+    _record_reproduction_attempts,
+)
 from mmaudit.repository.chunking import line_range_hash
 from mmaudit.repository.discovery import discover_repository
 from mmaudit.repository.ignore import IgnoreMatcher
@@ -128,6 +134,108 @@ def test_detects_foundry_project_metadata(tmp_path: Path, config_factory) -> Non
     assert project.optimizer_runs == 200
     assert project.evm_version == "paris"
     assert project.build_command[:2] == ["forge", "build"]
+
+
+def test_candidate_reproduction_preserves_audited_repository_suite_counts() -> None:
+    def not_analyzed_metric(detail: str) -> CoverageMetric:
+        return CoverageMetric(
+            numerator=0,
+            denominator=0,
+            population=0,
+            percentage=None,
+            exclusions=[],
+            not_applicable_evidence=[],
+            confidence=0,
+            provenance=[CoverageProvenance.RUNTIME],
+            failures=["audited source inventory was not available"],
+            state=AnalysisState.NOT_ANALYZED,
+            detail=detail,
+        )
+
+    contract_metric = not_analyzed_metric("No audited contract statements were analyzed.")
+    function_metric = not_analyzed_metric("No audited function statements were analyzed.")
+    assertion_metric = not_analyzed_metric("No critical function assertions were analyzed.")
+    audited_suite = AuditedSuiteCoverage(
+        contract_statement_coverage=contract_metric,
+        function_statement_coverage=function_metric,
+        critical_function_assertion_coverage=assertion_metric,
+        repository_tests_selected=9,
+        repository_tests_executed=7,
+        repository_tests_failed=2,
+        source_classification_complete=True,
+        critical_classification_complete=True,
+    )
+    coverage = SolidityCoverage(
+        tests_executed=7,
+        tests_failed=2,
+        audited_suite_coverage=audited_suite,
+        quality_metrics={
+            "audited_suite_contract_statement_coverage": contract_metric,
+            "audited_suite_function_statement_coverage": function_metric,
+            "audited_suite_critical_function_assertion_coverage": assertion_metric,
+        },
+    )
+    reproduction = ReproductionResult(
+        candidate_id="candidate-reproduction-accounting",
+        test_name="SyntheticCandidateReplay",
+        state=ReproductionState.NOT_REPRODUCED,
+        specification_sha256="a" * 64,
+        attempts=3,
+    )
+
+    updated = _record_reproduction_attempts(coverage, [reproduction])
+
+    assert updated.reproduction_attempts == 1
+    assert updated.tests_executed == audited_suite.repository_tests_executed == 7
+    assert updated.tests_failed == audited_suite.repository_tests_failed == 2
+    assert updated.audited_suite_coverage == audited_suite
+
+
+def test_candidate_reproduction_revalidates_audited_suite_count_binding() -> None:
+    def not_analyzed_metric(detail: str) -> CoverageMetric:
+        return CoverageMetric(
+            numerator=0,
+            denominator=0,
+            population=0,
+            percentage=None,
+            exclusions=[],
+            not_applicable_evidence=[],
+            confidence=0,
+            provenance=[CoverageProvenance.RUNTIME],
+            failures=["audited source inventory was not available"],
+            state=AnalysisState.NOT_ANALYZED,
+            detail=detail,
+        )
+
+    metric = not_analyzed_metric("No audited source surface was analyzed.")
+    nested = AuditedSuiteCoverage(
+        contract_statement_coverage=metric,
+        function_statement_coverage=metric,
+        critical_function_assertion_coverage=metric,
+        repository_tests_selected=9,
+        repository_tests_executed=7,
+        repository_tests_failed=2,
+        source_classification_complete=True,
+        critical_classification_complete=True,
+    )
+    coverage = SolidityCoverage(
+        tests_executed=7,
+        tests_failed=2,
+        audited_suite_coverage=nested,
+        quality_metrics={
+            "audited_suite_contract_statement_coverage": metric,
+            "audited_suite_function_statement_coverage": metric,
+            "audited_suite_critical_function_assertion_coverage": metric,
+        },
+    )
+    bypassed = coverage.model_copy(
+        update={
+            "audited_suite_coverage": nested.model_copy(update={"repository_tests_executed": 6})
+        }
+    )
+
+    with pytest.raises(ValidationError, match="top-level Solidity test counts"):
+        _record_reproduction_attempts(bypassed, [])
 
 
 def test_detects_hardhat_project_metadata(tmp_path: Path, config_factory) -> None:
@@ -1999,6 +2107,32 @@ def test_minimal_erc4626_like_vault_discovers_donation_inflation_invariant(
         for location in invariant.locations
     )
     assert all(invariant.provenance is SolidityProvenance.HEURISTIC for invariant in donation)
+
+
+def test_fallback_indexed_public_vault_state_still_binds_donation_invariant(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    root = _copy_fixture(tmp_path, "maximum_assurance_protocol")
+    config = config_factory()
+    discovery = discover_repository(root, config.repository, IgnoreMatcher())
+    projects = discover_solidity_projects(discovery, config.smart_contracts)
+    build = build_solidity_index(discovery, projects, [])
+    graphs = build_solidity_graphs(discovery, build)
+    suite = discover_invariants(discovery, build.index, graphs, config.invariants)
+
+    donation = [
+        invariant
+        for invariant in suite.invariants
+        if invariant.template is InvariantTemplate.DONATION_INFLATION_RESISTANCE
+    ]
+
+    assert donation
+    assert any(
+        location.path == "src/InflationVault.sol"
+        for invariant in donation
+        for location in invariant.locations
+    )
 
 
 def test_slither_normalization(vulnerable_repo: Path, tmp_path: Path) -> None:

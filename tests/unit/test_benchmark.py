@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from mmaudit.benchmark.claims import SuperiorityClaimStatus
 from mmaudit.benchmark.engine import (
@@ -27,6 +28,7 @@ from mmaudit.benchmark.mutations import (
     MutationKind,
     MutationPropertyOutcome,
     MutationScorecard,
+    MutationScorecardEvidenceOrigin,
     MutationTestOutcome,
     score_mutation_outcomes,
 )
@@ -254,6 +256,28 @@ def _passing_mutation_scorecard() -> MutationScorecard:
         ],
         minimum_property_kill_score=1,
     )
+
+
+def _planned_unattested_mutation_scorecard() -> MutationScorecard:
+    scorecard = score_mutation_outcomes(
+        property_corpus_hash="d" * 64,
+        expected_property_ids=[PROPERTY_A, PROPERTY_B],
+        property_repositories={
+            PROPERTY_A: "maximum_assurance_protocol",
+            PROPERTY_B: "economic_erc4626",
+        },
+        outcomes=[
+            _mutation_outcome(PROPERTY_A, "mut-accounting-a", MutationTestOutcome.INCONCLUSIVE),
+            _mutation_outcome(PROPERTY_B, "mut-accounting-b", MutationTestOutcome.INCONCLUSIVE),
+        ],
+        minimum_property_kill_score=1,
+    )
+    payload = scorecard.model_dump(mode="python")
+    payload.update(
+        evidence_origin=MutationScorecardEvidenceOrigin.PLANNED_UNATTESTED,
+        applicability_plan_sha256="e" * 64,
+    )
+    return MutationScorecard.model_validate(payload)
 
 
 def test_benchmark_measures_recall_safe_controls_and_evidence_caps() -> None:
@@ -561,7 +585,17 @@ def test_maximum_assurance_benchmark_requires_semantic_coverage_metrics() -> Non
         mutation_scorecard=_passing_mutation_scorecard(),
     )
     assert report.status is BenchmarkStatus.INCOMPLETE
-    assert {gate.name: gate.passed for gate in report.gates}["maximum_assurance_semantic_coverage"]
+    initial_semantic_gate = {gate.name: gate for gate in report.gates}[
+        "maximum_assurance_semantic_coverage"
+    ]
+    assert not initial_semantic_gate.passed
+    for name in (
+        "audited_suite_contract_statement_coverage",
+        "audited_suite_function_statement_coverage",
+        "audited_suite_critical_function_assertion_coverage",
+    ):
+        assert report.coverage_metrics[name].state is BenchmarkMetricState.NOT_EVALUABLE
+        assert name in initial_semantic_gate.detail
 
     first_repository = next(iter(reports))
     solidity_coverage = reports[first_repository].solidity_coverage
@@ -590,7 +624,7 @@ def test_maximum_assurance_benchmark_requires_semantic_coverage_metrics() -> Non
     assert "asset_flows_classified" in failed["maximum_assurance_semantic_coverage"]
 
 
-def test_maximum_assurance_property_mutation_gate_passes_and_serializes(
+def test_declarative_mutation_scorecard_cannot_satisfy_maximum_assurance_and_serializes(
     tmp_path: Path,
 ) -> None:
     manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
@@ -599,29 +633,117 @@ def test_maximum_assurance_property_mutation_gate_passes_and_serializes(
         repository_id: _complete_maximum(report)
         for repository_id, report in _reports_by_repository(vulnerable).items()
     }
+    scorecard = _passing_mutation_scorecard()
+    assert scorecard.evidence_origin is MutationScorecardEvidenceOrigin.DECLARATIVE
+    assert scorecard.gate_passed
+
     result = evaluate_benchmark(
         manifest,
         reports,
         profile=AuditProfile.MAXIMUM_ASSURANCE,
-        mutation_scorecard=_passing_mutation_scorecard(),
+        mutation_scorecard=scorecard,
     )
 
     assert result.status is BenchmarkStatus.INCOMPLETE
     assert result.mutation_scorecard is not None
     assert result.mutation_scorecard.gate_passed
     assert {item.repository_id: item.mutation_kill_score for item in result.repository_metrics} == {
-        "economic_erc4626": 1,
-        "maximum_assurance_protocol": 1,
+        "economic_erc4626": None,
+        "maximum_assurance_protocol": None,
     }
+    assert all(item.mutation_gate_passed is False for item in result.repository_metrics)
+    assert result.metrics.invariant_mutation_score.state is BenchmarkMetricState.NOT_EVALUABLE
+    gates = {item.name: item for item in result.gates}
+    for gate_name in (
+        "maximum_assurance_repository_mutation_score",
+        "maximum_assurance_property_mutation_score",
+    ):
+        assert gates[gate_name].state is BenchmarkMetricState.NOT_EVALUABLE
+        assert not gates[gate_name].passed
+    assert PROPERTY_A in gates["maximum_assurance_property_mutation_score"].detail
+    assert PROPERTY_B in gates["maximum_assurance_property_mutation_score"].detail
+
     tampered = result.model_dump(mode="json")
     tampered["repository_metrics"][0]["mutation_kill_score"] = 0
     with pytest.raises(ValueError, match="repository mutation metrics"):
         BenchmarkReport.model_validate(tampered)
-    gate = {item.name: item for item in result.gates}["maximum_assurance_property_mutation_score"]
-    assert gate.passed
     output = tmp_path / "benchmark.json"
     write_benchmark_report(output, result)
     assert BenchmarkReport.model_validate_json(output.read_text(encoding="utf-8")) == result
+
+
+def test_planned_unattested_mutation_scorecard_cannot_satisfy_maximum_assurance() -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
+    reports = {
+        repository_id: _complete_maximum(report)
+        for repository_id, report in _reports_by_repository(vulnerable).items()
+    }
+    scorecard = _planned_unattested_mutation_scorecard()
+    assert scorecard.evidence_origin is MutationScorecardEvidenceOrigin.PLANNED_UNATTESTED
+    assert not scorecard.gate_passed
+    assert all(
+        outcome.outcome is MutationTestOutcome.INCONCLUSIVE for outcome in scorecard.outcomes
+    )
+
+    result = evaluate_benchmark(
+        manifest,
+        reports,
+        profile=AuditProfile.MAXIMUM_ASSURANCE,
+        mutation_scorecard=scorecard,
+    )
+
+    assert result.status is BenchmarkStatus.INCOMPLETE
+    assert result.metrics.invariant_mutation_score.state is BenchmarkMetricState.NOT_EVALUABLE
+    assert all(item.mutation_kill_score is None for item in result.repository_metrics)
+    assert all(item.mutation_gate_passed is False for item in result.repository_metrics)
+    gates = {item.name: item for item in result.gates}
+    for gate_name in (
+        "maximum_assurance_repository_mutation_score",
+        "maximum_assurance_property_mutation_score",
+    ):
+        assert gates[gate_name].state is BenchmarkMetricState.NOT_EVALUABLE
+        assert not gates[gate_name].passed
+    assert BenchmarkReport.model_validate(result.model_dump(mode="python")) == result
+
+
+def test_forged_runtime_mutation_origin_is_rejected_before_evaluation_or_write(
+    tmp_path: Path,
+) -> None:
+    manifest = load_manifest(ROOT / "benchmarks" / "corpus" / "manifest.json")
+    vulnerable = [case for case in manifest.cases if case.variant == "vulnerable"]
+    reports = {
+        repository_id: _complete_maximum(report)
+        for repository_id, report in _reports_by_repository(vulnerable).items()
+    }
+    declarative = _passing_mutation_scorecard()
+    forged = declarative.model_copy(update={"evidence_origin": "runtime_attested"})
+
+    with (
+        pytest.warns(UserWarning, match="PydanticSerializationUnexpectedValue"),
+        pytest.raises(ValidationError),
+    ):
+        evaluate_benchmark(
+            manifest,
+            reports,
+            profile=AuditProfile.MAXIMUM_ASSURANCE,
+            mutation_scorecard=forged,
+        )
+
+    valid = evaluate_benchmark(
+        manifest,
+        reports,
+        profile=AuditProfile.MAXIMUM_ASSURANCE,
+        mutation_scorecard=declarative,
+    )
+    forged_report = valid.model_copy(update={"mutation_scorecard": forged})
+    output = tmp_path / "forged-benchmark.json"
+    with (
+        pytest.warns(UserWarning, match="PydanticSerializationUnexpectedValue"),
+        pytest.raises(ValidationError),
+    ):
+        write_benchmark_report(output, forged_report)
+    assert not output.exists()
 
 
 def test_surviving_mutation_blocks_maximum_assurance() -> None:

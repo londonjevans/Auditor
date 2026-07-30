@@ -24,6 +24,7 @@ from mmaudit.models.schemas import (
 from mmaudit.solidity.formal import compare_dynamic_engine_outcomes
 
 _MAX_EXECUTION_ORIGIN_DISPOSITION_ROWS = 20
+_MAX_AUDITED_SUITE_COVERAGE_GAP_ROWS = 20
 
 
 def _clean(value: str) -> str:
@@ -240,6 +241,95 @@ def _execution_origin_disposition_lines(report: AuditReport) -> list[str]:
     return lines
 
 
+def _audited_suite_coverage_gap_lines(coverage: dict[str, object]) -> list[str]:
+    """Render bounded source-bound test-quality gaps as non-finding evidence."""
+
+    def count(field: str) -> int:
+        value = coverage.get(field, 0)
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    raw_gaps = coverage.get("gaps", [])
+    gaps = (
+        sorted(
+            (gap for gap in raw_gaps if isinstance(gap, dict)),
+            key=lambda gap: str(gap.get("gap_id", "")),
+        )
+        if isinstance(raw_gaps, list)
+        else []
+    )
+    lines = [
+        "### Audited-suite coverage gaps — not vulnerability findings",
+        "",
+        "These rows identify audited-source test-quality gaps only. They are not "
+        "vulnerability findings and never populate finding or SARIF results.",
+        "",
+        f"- Repository tests selected: {count('repository_tests_selected')}",
+        f"- Repository tests executed: {count('repository_tests_executed')}",
+        f"- Repository tests failed: {count('repository_tests_failed')}",
+        "- Audited-source classification complete: "
+        f"{coverage.get('source_classification_complete') is True}",
+        "- Critical-surface classification complete: "
+        f"{coverage.get('critical_classification_complete') is True}",
+        f"- Exact critical-surface coverage gaps: {len(gaps)}",
+        "",
+    ]
+    raw_limitations = coverage.get("limitations", [])
+    limitations = (
+        [str(limitation) for limitation in raw_limitations]
+        if isinstance(raw_limitations, list)
+        else []
+    )
+    if limitations:
+        lines.extend(
+            [
+                "Audited-suite classification limitations:",
+                "",
+                *[f"- {_text(limitation)}" for limitation in limitations[:20]],
+                "",
+            ]
+        )
+    if not gaps:
+        lines.extend(["No audited-suite critical-surface coverage gaps were recorded.", ""])
+        return lines
+
+    lines.extend(
+        [
+            "| Gap ID | Kind | Entity | Exact location | Symbol | Source SHA-256 | "
+            "Assertion state | Evidence |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for gap in gaps[:_MAX_AUDITED_SUITE_COVERAGE_GAP_ROWS]:
+        location = gap.get("location", {})
+        if not isinstance(location, dict):
+            location = {}
+        path = str(location.get("path", "unknown"))
+        start_line = int(location.get("start_line", 0))
+        end_line = int(location.get("end_line", start_line))
+        symbol = str(location.get("symbol") or "not available")
+        source_hash = str(location.get("content_hash") or "not available")
+        lines.append(
+            f"| {_inline(str(gap.get('gap_id', 'unknown')))} | "
+            f"{_inline(str(gap.get('kind', 'unknown')))} | "
+            f"{_inline(str(gap.get('entity_id', 'unknown')))} | "
+            f"{_inline(path)}:{start_line}-{end_line} | "
+            f"{_inline(symbol)} | {_inline(source_hash)} | "
+            f"{_inline(str(gap.get('assertion_status', 'unknown')))} | "
+            f"{_text(str(gap.get('detail', 'no detail')))} |"
+        )
+    omitted = len(gaps) - _MAX_AUDITED_SUITE_COVERAGE_GAP_ROWS
+    if omitted > 0:
+        lines.extend(
+            [
+                "",
+                f"{omitted} additional audited-suite coverage gap record(s) remain in the "
+                "typed JSON report.",
+            ]
+        )
+    lines.append("")
+    return lines
+
+
 def _effective_run_status(report: AuditReport) -> AuditRunStatus:
     if report.run_status is not None:
         return report.run_status
@@ -376,6 +466,7 @@ def _finding(finding: Finding, report: AuditReport) -> list[str]:
 
 
 def render_markdown(report: AuditReport) -> str:
+    report = AuditReport.model_validate(report.model_dump(mode="python"))
     counts = Counter(finding.severity.value for finding in report.findings)
     status_counts = Counter(finding.status.value for finding in report.findings)
     origin_counts = Counter(finding.origin_kind.value for finding in report.findings)
@@ -665,6 +756,9 @@ def render_markdown(report: AuditReport) -> str:
             for _, field_name in semantic_summaries
         ):
             lines.append("")
+        audited_suite_coverage = solidity_coverage.get("audited_suite_coverage")
+        if isinstance(audited_suite_coverage, dict):
+            lines.extend(_audited_suite_coverage_gap_lines(audited_suite_coverage))
         limitations = [
             *solidity_coverage.get("context_limitations", []),
             *solidity_coverage.get("graph_warnings", []),
@@ -790,6 +884,9 @@ def render_markdown(report: AuditReport) -> str:
             [
                 "## Model review surface coverage",
                 "",
+                f"- Coverage applicable: {model_coverage.applicable}",
+                "- Critical-surface classification complete: "
+                f"{model_coverage.critical_classification_complete}",
                 f"- Surfaces reviewed: {model_coverage.overall.numerator}/"
                 f"{model_coverage.overall.denominator}",
                 f"- Critical surfaces with at least "
@@ -797,6 +894,19 @@ def render_markdown(report: AuditReport) -> str:
                 f"{model_coverage.critical.numerator}/{model_coverage.critical.denominator}",
                 f"- Critical-surface gate passed: {model_coverage.critical_gate_passed}",
                 "",
+            ]
+        )
+        if model_coverage.limitations:
+            lines.extend(
+                [
+                    "Model-review coverage limitations:",
+                    "",
+                    *[f"- {_text(limitation)}" for limitation in model_coverage.limitations[:20]],
+                    "",
+                ]
+            )
+        lines.extend(
+            [
                 "| Surface | Kind | Critical | Credited response records | "
                 "Successful roles | Root lineages |",
                 "| --- | --- | --- | ---: | --- | --- |",

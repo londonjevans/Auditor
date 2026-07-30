@@ -11,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from mmaudit.models.schemas import (
+    AuditQualityStatus,
     AuditReport,
     CandidateFinding,
     CandidateOriginKind,
@@ -23,6 +24,8 @@ from mmaudit.models.schemas import (
     FindingStatus,
     InvariantExecutionCandidateProvenance,
     InvariantExecutionOriginDisposition,
+    InvariantExecutionResult,
+    InvariantSuite,
     Location,
     LocationValidation,
     ModelVote,
@@ -38,8 +41,21 @@ from mmaudit.orchestration.consensus import (
     merge_group,
 )
 from mmaudit.orchestration.pipeline import _scanner_findings_for_report
+from mmaudit.orchestration.run_status import (
+    assess_minimum_analysis_floor,
+    minimum_analysis_floor_quality_gate,
+)
 from mmaudit.reporting.markdown import render_markdown
 from mmaudit.reporting.sarif import generate_sarif
+from tests.unit.test_execution_candidates import (
+    _build as _build_execution_candidates,
+)
+from tests.unit.test_execution_candidates import (
+    _inputs as _execution_inputs,
+)
+from tests.unit.test_execution_candidates import (
+    _reseal_execution,
+)
 
 
 def _provenance() -> InvariantExecutionCandidateProvenance:
@@ -323,13 +339,123 @@ def _report(
     )
 
 
+def _execution_runtime(
+    tmp_path: Path,
+) -> tuple[InvariantSuite, InvariantExecutionResult, InvariantExecutionCandidateProvenance]:
+    repository, suite, harness, corpus, execution = _execution_inputs(tmp_path)
+    build = _build_execution_candidates(repository, suite, harness, corpus, execution)
+    assert len(build.candidates) == 1
+    provenance = build.candidates[0].execution_provenance
+    assert provenance is not None
+    return suite, execution, provenance
+
+
+def _rejected_execution_finding(
+    provenance: InvariantExecutionCandidateProvenance,
+) -> Finding:
+    payload = _execution_finding(provenance).model_dump(mode="python")
+    payload.update(
+        {
+            "status": FindingStatus.REJECTED,
+            "disagreement": "Synthetic evidence did not survive validation.",
+            "location_validation": LocationValidation(
+                valid=False,
+                errors=["Synthetic source-location validation rejected this candidate."],
+            ).model_dump(mode="python"),
+        }
+    )
+    return Finding.model_validate(payload)
+
+
+def _current_execution_report(
+    findings: list[Finding],
+    *,
+    rejected_findings: list[Finding] | None = None,
+    invariants: InvariantSuite | None = None,
+    invariant_executions: list[InvariantExecutionResult] | None = None,
+    dispositions: list[InvariantExecutionOriginDisposition] | None = None,
+) -> AuditReport:
+    repository = _report([]).repository
+    floor = assess_minimum_analysis_floor(
+        repository=repository,
+        compilations=[],
+        scanner_runs=[],
+        usage=[],
+        required_model_roles=[],
+        coverage_metrics={},
+        solidity_applicable=False,
+        static_analysis_applicable=True,
+        model_review_applicable=False,
+        scanner_only=True,
+    )
+    execution_dispositions = dispositions or []
+    rejected_dispositions = [
+        disposition
+        for disposition in execution_dispositions
+        if disposition.kind is ExecutionOriginDispositionKind.REJECTED
+    ]
+    incomplete_reasons = sorted(
+        {
+            *floor.limitations,
+            *(
+                [
+                    "execution-origin evidence rejected: "
+                    + min(
+                        rejected_dispositions,
+                        key=lambda disposition: disposition.execution_index,
+                    ).rejection_detail
+                ]
+                if rejected_dispositions
+                else []
+            ),
+        }
+    )
+    return AuditReport(
+        schema_version="1.2",
+        run_id="run-execution-origin-reporting",
+        generated_at=datetime.now(UTC),
+        completed=False,
+        incomplete_reasons=incomplete_reasons,
+        repository=repository,
+        configuration_hash="configuration-hash",
+        model_configuration_hash="model-configuration-hash",
+        privacy={
+            "code_egress_enabled": False,
+            "require_zdr": True,
+            "redact_secrets": True,
+            "store_raw_prompts": False,
+            "store_raw_responses": False,
+        },
+        scanner_runs=[],
+        usage=[],
+        budget_usd=0,
+        accounted_cost_usd=0,
+        findings=findings,
+        rejected_findings=rejected_findings or [],
+        quality_status=AuditQualityStatus.FAILED,
+        run_status=floor.run_status,
+        minimum_analysis_floor=floor,
+        quality_gates=[minimum_analysis_floor_quality_gate(floor)],
+        invariants=invariants,
+        invariant_executions=invariant_executions or [],
+        execution_origin_dispositions=execution_dispositions,
+        metadata={
+            "configured_models": {},
+            "scanner_only": True,
+            "solidity": {"projects": [], "compilation": []},
+        },
+    )
+
+
 def _sarif_result(finding: Finding) -> tuple[dict[str, object], dict[str, object]]:
     run = generate_sarif([finding])["runs"][0]
     return run["tool"]["driver"]["rules"][0], run["results"][0]
 
 
-def test_markdown_distinguishes_originated_and_rejected_runtime_origins() -> None:
-    provenance = _provenance()
+def test_markdown_distinguishes_originated_and_rejected_runtime_origins(
+    tmp_path: Path,
+) -> None:
+    suite, execution, provenance = _execution_runtime(tmp_path / "originated")
     originated = InvariantExecutionOriginDisposition(
         execution_index=0,
         invariant_id=provenance.invariant_id,
@@ -339,17 +465,26 @@ def test_markdown_distinguishes_originated_and_rejected_runtime_origins() -> Non
         candidate_id=f"exec-{provenance.provenance_sha256[:24]}",
         execution_provenance=provenance,
     )
-    rejected = InvariantExecutionOriginDisposition(
-        execution_index=1,
+    rejected_execution = _reseal_execution(
+        execution,
         invariant_id="invariant-rejected-source",
         harness_name="Rejected | Harness",
-        execution_result_sha256="c" * 64,
+    )
+    rejected = InvariantExecutionOriginDisposition(
+        execution_index=1,
+        invariant_id=rejected_execution.invariant_id,
+        harness_name=rejected_execution.harness_name,
+        execution_result_sha256=rejected_execution.canonical_result_sha256(),
         kind=ExecutionOriginDispositionKind.REJECTED,
         rejection_category=ExecutionOriginRejectionCategory.SOURCE_BINDING,
         rejection_detail="Current source <changed> | exact location no longer validates.",
     )
-    report = _report([]).model_copy(
-        update={"execution_origin_dispositions": [originated, rejected]}
+    report = _current_execution_report(
+        [],
+        rejected_findings=[_rejected_execution_finding(provenance)],
+        invariants=suite,
+        invariant_executions=[execution, rejected_execution],
+        dispositions=[originated, rejected],
     )
 
     markdown = render_markdown(report)
@@ -372,20 +507,34 @@ def test_markdown_distinguishes_originated_and_rejected_runtime_origins() -> Non
     assert sarif["results"] == []
 
 
-def test_execution_origin_disposition_markdown_is_bounded() -> None:
+def test_execution_origin_disposition_markdown_is_bounded(tmp_path: Path) -> None:
+    suite, base_execution, _ = _execution_runtime(tmp_path / "bounded")
+    executions = [
+        _reseal_execution(
+            base_execution,
+            invariant_id=f"invariant-bounded-{index:03d}",
+            harness_name=f"BoundedHarness{index:03d}",
+        )
+        for index in range(25)
+    ]
     dispositions = [
         InvariantExecutionOriginDisposition(
             execution_index=index,
-            invariant_id=f"invariant-bounded-{index:03d}",
-            harness_name=f"BoundedHarness{index:03d}",
-            execution_result_sha256=f"{index + 1:064x}",
+            invariant_id=execution.invariant_id,
+            harness_name=execution.harness_name,
+            execution_result_sha256=execution.canonical_result_sha256(),
             kind=ExecutionOriginDispositionKind.REJECTED,
             rejection_category=ExecutionOriginRejectionCategory.RUNTIME_EVIDENCE,
             rejection_detail=f"bounded-marker-{index:03d}",
         )
-        for index in range(25)
+        for index, execution in enumerate(executions)
     ]
-    report = _report([]).model_copy(update={"execution_origin_dispositions": dispositions})
+    report = _current_execution_report(
+        [],
+        invariants=suite,
+        invariant_executions=executions,
+        dispositions=dispositions,
+    )
 
     markdown = render_markdown(report)
 
@@ -398,14 +547,31 @@ def test_execution_origin_disposition_markdown_is_bounded() -> None:
     assert "5 additional disposition record(s) remain in the JSON forensic artifacts." in markdown
 
 
-def test_markdown_and_sarif_distinguish_all_discovery_origins() -> None:
+def test_markdown_and_sarif_distinguish_all_discovery_origins(tmp_path: Path) -> None:
+    suite, execution, provenance = _execution_runtime(tmp_path)
     findings = [
         _review_finding(FindingOriginKind.MODEL_REVIEW),
-        _execution_finding(_provenance()),
+        _execution_finding(provenance),
         _review_finding(FindingOriginKind.STATIC_ANALYZER),
     ]
+    disposition = InvariantExecutionOriginDisposition(
+        execution_index=0,
+        invariant_id=provenance.invariant_id,
+        harness_name=provenance.harness_name,
+        execution_result_sha256=provenance.execution_result_sha256,
+        kind=ExecutionOriginDispositionKind.ORIGINATED,
+        candidate_id=f"exec-{provenance.provenance_sha256[:24]}",
+        execution_provenance=provenance,
+    )
 
-    markdown = render_markdown(_report(findings))
+    markdown = render_markdown(
+        _current_execution_report(
+            findings,
+            invariants=suite,
+            invariant_executions=[execution],
+            dispositions=[disposition],
+        )
+    )
 
     assert (
         "Finding discovery origins: deterministic execution=1, model review=1, static analyzer=1."
@@ -475,11 +641,29 @@ def test_scanner_report_conversion_preserves_static_analyzer_origin(tmp_path: Pa
     assert result["properties"]["findingOrigin"] == FindingOriginKind.STATIC_ANALYZER.value
 
 
-def test_execution_reporting_retains_nonmodel_attribution_and_origin_identity() -> None:
-    provenance = _provenance()
+def test_execution_reporting_retains_nonmodel_attribution_and_origin_identity(
+    tmp_path: Path,
+) -> None:
+    suite, execution, provenance = _execution_runtime(tmp_path)
     finding = _execution_finding(provenance, model_commentary=True)
+    disposition = InvariantExecutionOriginDisposition(
+        execution_index=0,
+        invariant_id=provenance.invariant_id,
+        harness_name=provenance.harness_name,
+        execution_result_sha256=provenance.execution_result_sha256,
+        kind=ExecutionOriginDispositionKind.ORIGINATED,
+        candidate_id=f"exec-{provenance.provenance_sha256[:24]}",
+        execution_provenance=provenance,
+    )
 
-    markdown = render_markdown(_report([finding]))
+    markdown = render_markdown(
+        _current_execution_report(
+            [finding],
+            invariants=suite,
+            invariant_executions=[execution],
+            dispositions=[disposition],
+        )
+    )
     rule, result = _sarif_result(finding)
 
     assert "Discovery origin: **Deterministic execution**" in markdown
@@ -609,7 +793,10 @@ def test_mixed_model_commentary_cannot_control_execution_group_or_evidence() -> 
     assert result["properties"]["executionProvenanceSha256s"] == [provenance.provenance_sha256]
 
 
-def test_rejected_markdown_uses_origin_neutral_wording_and_sarif_omits_results() -> None:
+def test_rejected_markdown_uses_origin_neutral_wording_and_sarif_omits_results(
+    tmp_path: Path,
+) -> None:
+    suite, execution, provenance = _execution_runtime(tmp_path)
     rejected = [
         finding.model_copy(
             update={
@@ -619,12 +806,29 @@ def test_rejected_markdown_uses_origin_neutral_wording_and_sarif_omits_results()
         )
         for finding in (
             _review_finding(FindingOriginKind.MODEL_REVIEW),
-            _execution_finding(_provenance()),
+            _rejected_execution_finding(provenance),
             _review_finding(FindingOriginKind.STATIC_ANALYZER),
         )
     ]
+    disposition = InvariantExecutionOriginDisposition(
+        execution_index=0,
+        invariant_id=provenance.invariant_id,
+        harness_name=provenance.harness_name,
+        execution_result_sha256=provenance.execution_result_sha256,
+        kind=ExecutionOriginDispositionKind.ORIGINATED,
+        candidate_id=f"exec-{provenance.provenance_sha256[:24]}",
+        execution_provenance=provenance,
+    )
 
-    markdown = render_markdown(_report([], rejected_findings=rejected))
+    markdown = render_markdown(
+        _current_execution_report(
+            [],
+            rejected_findings=rejected,
+            invariants=suite,
+            invariant_executions=[execution],
+            dispositions=[disposition],
+        )
+    )
 
     assert (
         "3 candidate group(s) were rejected. Rejection details and origin-specific "

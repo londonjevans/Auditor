@@ -18,6 +18,8 @@ from mmaudit.models.schemas import (
     SolidityGraphEdge,
     SolidityGraphKind,
     SolidityGraphSet,
+    SolidityProjectMetadata,
+    SolidityProjectType,
     SolidityProvenance,
     SoliditySymbolIndex,
 )
@@ -71,7 +73,13 @@ def _edge(graph: SolidityGraphKind, source_id: str, target_id: str) -> SolidityG
 
 def _base_inputs() -> tuple[SoliditySymbolIndex, SolidityGraphSet]:
     index = SoliditySymbolIndex(
-        projects=[],
+        projects=[
+            SolidityProjectMetadata(
+                project_type=SolidityProjectType.FOUNDRY,
+                project_root=".",
+                source_directories=["src"],
+            )
+        ],
         entities=[
             _entity("function:one", "one"),
             _entity("function:two", "two"),
@@ -101,19 +109,21 @@ def _base_coverage(
     index: SoliditySymbolIndex,
     graphs: SolidityGraphSet,
 ) -> SolidityCoverage:
+    source_paths = sorted({entity.path for entity in index.entities})
     discovery = DiscoveryResult(
         root=Path("."),
-        files=(
+        files=tuple(
             DiscoveredFile(
-                absolute_path=Path("src/Synthetic.sol"),
-                relative_path="src/Synthetic.sol",
+                absolute_path=Path(path),
+                relative_path=path,
                 content="contract Synthetic {}",
                 size=21,
                 lines=1,
                 sha256=_HASH,
                 language="Solidity",
-                categories=("source",),
-            ),
+                categories=(("test",) if path.startswith("test/") else ("source",)),
+            )
+            for path in source_paths
         ),
         omitted=(),
         changed_paths=frozenset(),
@@ -121,7 +131,7 @@ def _base_coverage(
     )
     return build_solidity_coverage(
         discovery=discovery,
-        projects=[],
+        projects=index.projects,
         compilations=[],
         index=index,
         graphs=graphs,
@@ -165,6 +175,7 @@ def _review_coverage(*surfaces: ModelReviewSurface) -> ModelReviewCoverage:
     )
     return ModelReviewCoverage(
         applicable=True,
+        critical_classification_complete=True,
         surfaces=surface_list,
         overall=_metric(
             sum(surface.reviewed for surface in surface_list),
@@ -177,7 +188,9 @@ def _review_coverage(*surfaces: ModelReviewSurface) -> ModelReviewCoverage:
             len(critical_surfaces),
             "critical review coverage",
         ),
-        critical_gate_passed=critical_reviewed == len(critical_surfaces),
+        critical_gate_passed=(
+            bool(critical_surfaces) and critical_reviewed == len(critical_surfaces)
+        ),
     )
 
 
@@ -258,6 +271,96 @@ def test_one_explicit_reviewed_function_updates_only_that_function() -> None:
     assert projected.quality_metrics["high_value_paths_reviewed"].denominator == 1
 
 
+def test_review_metrics_exclude_test_functions_with_explicit_population_evidence() -> None:
+    index, graphs = _base_inputs()
+    project = index.projects[0].model_copy(update={"test_directories": ["test"]})
+    test_function = _entity("function:test_helper", "testHelper").model_copy(
+        update={
+            "contract_name": "SyntheticTest",
+            "path": "test/Synthetic.t.sol",
+        }
+    )
+    index = index.model_copy(
+        update={
+            "projects": [project],
+            "entities": [*index.entities, test_function],
+            "ast_sources": [*index.ast_sources, test_function.path],
+        }
+    )
+    test_edges = [
+        _edge(kind, test_function.id, f"test:{kind.value}").model_copy(
+            update={"path": test_function.path}
+        )
+        for kind in (
+            SolidityGraphKind.PRIVILEGE,
+            SolidityGraphKind.STATE_WRITE,
+            SolidityGraphKind.SENSITIVE_REACHABILITY,
+        )
+    ]
+    graphs = graphs.model_copy(update={"edges": [*graphs.edges, *test_edges]})
+    coverage = _base_coverage(index, graphs)
+
+    for name, expected_denominator in {
+        "public_external_entry_points_reviewed": 2,
+        "privileged_entry_points_reviewed": 1,
+        "state_writing_functions_reviewed": 1,
+        "high_value_paths_reviewed": 1,
+    }.items():
+        metric = coverage.quality_metrics[name]
+        assert metric.denominator == expected_denominator
+        assert metric.population == expected_denominator + 1
+        assert [exclusion.subject for exclusion in metric.exclusions] == [test_function.id]
+
+    projected = with_model_review_coverage(
+        coverage,
+        index,
+        _review_coverage(
+            _surface("function:one", credited=True),
+            _surface("function:two", credited=True),
+        ),
+        graphs,
+    )
+    for name in _MODEL_REVIEW_METRICS:
+        metric = projected.quality_metrics[name]
+        assert metric.numerator == metric.denominator
+        assert metric.failures == []
+        assert [exclusion.subject for exclusion in metric.exclusions] == [test_function.id]
+
+
+def test_incomplete_source_partition_cannot_pass_full_source_review_credit() -> None:
+    index, graphs = _base_inputs()
+    test_function = _entity("function:test_helper", "testHelper").model_copy(
+        update={
+            "contract_name": "SyntheticTest",
+            "path": "test/Synthetic.t.sol",
+        }
+    )
+    index = index.model_copy(
+        update={
+            "entities": [*index.entities, test_function],
+            "ast_sources": [*index.ast_sources, test_function.path],
+        }
+    )
+    coverage = _base_coverage(index, graphs)
+    assert coverage.audited_suite_coverage is not None
+    assert not coverage.audited_suite_coverage.source_classification_complete
+
+    projected = with_model_review_coverage(
+        coverage,
+        index,
+        _review_coverage(
+            _surface("function:one", credited=True),
+            _surface("function:two", credited=True),
+        ),
+        graphs,
+    )
+    metric = projected.quality_metrics["public_external_entry_points_reviewed"]
+    assert metric.numerator == metric.denominator == 2
+    assert metric.state is AnalysisState.NOT_ANALYZED
+    assert metric.failures
+    assert any("source classification incomplete" in failure for failure in metric.failures)
+
+
 def test_not_reviewed_reference_does_not_earn_function_credit() -> None:
     index, graphs = _base_inputs()
     coverage = _base_coverage(index, graphs)
@@ -283,3 +386,32 @@ def test_initial_review_metrics_use_substantive_review_provenance() -> None:
         assert CoverageProvenance.MODEL_REVIEW in metric.provenance
         assert CoverageProvenance.MODEL_CONTEXT not in metric.provenance
         assert "validated substantive model reviews" in metric.detail
+
+
+def test_graph_review_metric_fails_closed_when_exact_graph_kind_was_not_analyzed() -> None:
+    index, graphs = _base_inputs()
+    graphs = graphs.model_copy(
+        update={
+            "analyzed_graphs": [
+                kind for kind in graphs.analyzed_graphs if kind is not SolidityGraphKind.STATE_WRITE
+            ]
+        }
+    )
+    coverage = _base_coverage(index, graphs)
+    initial = coverage.quality_metrics["state_writing_functions_reviewed"]
+
+    assert initial.denominator == 1
+    assert initial.state is AnalysisState.NOT_ANALYZED
+    assert initial.not_applicable_evidence == []
+    assert "state_write graph kind was not analyzed" in initial.failures
+
+    projected = with_model_review_coverage(
+        coverage,
+        index,
+        _review_coverage(_surface("function:two", credited=True)),
+        graphs,
+    )
+    reviewed = projected.quality_metrics["state_writing_functions_reviewed"]
+    assert reviewed.numerator == reviewed.denominator == 1
+    assert reviewed.state is AnalysisState.NOT_ANALYZED
+    assert "state_write graph kind was not analyzed" in reviewed.failures

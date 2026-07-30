@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from mmaudit.config import AuditConfig, ModelLineageConfig, model_lineage_index
 from mmaudit.constants import SPECIALIST_INVESTIGATOR_ROLES
 from mmaudit.models.schemas import (
     AnalysisState,
+    AuditedSuiteCoverage,
     AuditProfile,
     ContextPackage,
     CoverageMetric,
@@ -24,6 +25,7 @@ from mmaudit.models.schemas import (
     ModelReviewSurface,
     ModelReviewSurfaceKind,
     ModelSurfaceReviewArtifact,
+    ModelSurfaceReviewPriority,
     ModelSurfaceReviewRecord,
     ModelSurfaceReviewRequest,
     ModelSurfaceReviewStatus,
@@ -41,6 +43,13 @@ from mmaudit.orchestration.model_review_evidence import (
     model_review_context_sha256,
     model_surface_review_excerpt_validation_failures,
     model_surface_review_record_validation_failures,
+)
+from mmaudit.solidity.coverage import (
+    bind_economic_plan_to_audited_entities,
+    bind_invariant_to_audited_entities,
+    critical_graph_edge_is_exact,
+    exact_test_entity_ids,
+    partition_audited_source_entities,
 )
 
 _CALL_GRAPHS = frozenset(
@@ -95,6 +104,7 @@ class _SurfaceSeed:
 
 _BASE_REVIEW_ROLES = frozenset({"source_audit", "business_logic", "configuration"})
 _SPECIALIST_REVIEW_ROLES = frozenset(f"specialist:{role}" for role in SPECIALIST_INVESTIGATOR_ROLES)
+_COVERAGE_GAP_HUNTER_ROLE = "specialist:false_negative_hunter"
 _CREDITABLE_REVIEW_STATUSES = frozenset(
     {
         ModelSurfaceReviewStatus.CANDIDATE,
@@ -114,25 +124,94 @@ def build_model_review_coverage(
     invariants: InvariantSuite | None,
     economic_simulations: list[EconomicSimulationPlan],
     minimum_critical_root_lineages: int = 3,
+    audited_suite_coverage: AuditedSuiteCoverage | None = None,
+    source_contents_by_path: dict[str, str] | None = None,
 ) -> ModelReviewCoverage:
     """Credit only explicit, validated per-surface response records."""
 
+    source_contents_by_path = _copy_source_contents(source_contents_by_path)
+    index, graphs, invariants, economic_simulations = _reconstruct_surface_inputs(
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=economic_simulations,
+    )
+    audited_suite_coverage = _reconstruct_audited_suite_coverage(audited_suite_coverage)
     limitations: set[str] = set()
     if index is None:
         limitations.add(
             "Solidity symbol index was unavailable; model surface coverage was not analyzed"
         )
+    audited_source_classification_complete = (
+        audited_suite_coverage is None or audited_suite_coverage.source_classification_complete
+    )
+    audited_critical_classification_complete = audited_suite_coverage is not None and (
+        audited_suite_coverage.critical_classification_complete
+        and _critical_classification_inputs_complete(
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=economic_simulations,
+            source_contents_by_path=source_contents_by_path,
+        )
+    )
+    if audited_suite_coverage is None:
+        limitations.add(
+            "audited-suite coverage was unavailable; critical model-review classification "
+            "was not analyzed"
+        )
+    elif not audited_source_classification_complete:
+        limitations.update(audited_suite_coverage.limitations)
+        limitations.add(
+            "audited-suite source classification was incomplete; "
+            "model surface coverage was not analyzed"
+        )
+    elif audited_suite_coverage is not None and not audited_critical_classification_complete:
+        limitations.update(audited_suite_coverage.limitations)
+        limitations.add(
+            "audited-suite critical classification was incomplete; critical model-review "
+            "completion was not analyzed and exact coverage gaps remain conservatively elevated"
+        )
+    source_partition = (
+        partition_audited_source_entities(index=index, projects=index.projects)
+        if index is not None
+        else None
+    )
+    if source_partition is not None and not source_partition.classification_complete:
+        limitations.update(source_partition.limitations)
     seeds = (
         _surface_inventory(
             index=index,
             graphs=graphs,
             invariants=invariants,
             economic_simulations=economic_simulations,
+            source_contents_by_path=source_contents_by_path,
         )
-        if index is not None
+        if (
+            index is not None
+            and source_partition is not None
+            and source_partition.classification_complete
+            and audited_source_classification_complete
+        )
         else []
     )
-    requests = _requests_from_seeds(seeds)
+    seeds = _with_audited_suite_criticality(seeds, audited_suite_coverage)
+    requests = _requests_from_seeds(
+        seeds,
+        coverage_gap_ids_by_entity=(
+            _validated_coverage_gap_ids_by_entity(
+                index=index,
+                graphs=graphs,
+                invariants=invariants,
+                economic_simulations=economic_simulations,
+                seeds=seeds,
+                audited_suite_coverage=audited_suite_coverage,
+                source_contents_by_path=source_contents_by_path,
+            )
+            if audited_suite_coverage is not None
+            else {}
+        ),
+    )
     references = _review_evidence_references(
         config,
         requests=requests,
@@ -153,12 +232,26 @@ def build_model_review_coverage(
         ),
         key=lambda surface: surface.surface_id,
     )
-    applicable = index is not None
+    applicable = (
+        index is not None
+        and source_partition is not None
+        and source_partition.classification_complete
+        and audited_source_classification_complete
+    )
+    inapplicable_reason = (
+        "Solidity symbol index was unavailable"
+        if index is None
+        else next(
+            iter(sorted(limitations)),
+            "audited-source classification was incomplete",
+        )
+    )
     overall = _coverage_metric(
         numerator=sum(surface.reviewed for surface in surfaces),
         surfaces=surfaces,
         applicable=applicable,
         detail="deterministic surfaces with at least one validated substantive model response",
+        inapplicable_reason=inapplicable_reason,
     )
     by_kind = {
         kind: _coverage_metric(
@@ -166,6 +259,7 @@ def build_model_review_coverage(
             surfaces=[surface for surface in surfaces if surface.kind is kind],
             applicable=applicable,
             detail=f"{kind.value} surfaces with validated substantive model responses",
+            inapplicable_reason=inapplicable_reason,
         )
         for kind in ModelReviewSurfaceKind
     }
@@ -177,21 +271,28 @@ def build_model_review_coverage(
     critical = _coverage_metric(
         numerator=critical_numerator,
         surfaces=critical_surfaces,
-        applicable=applicable,
+        applicable=applicable and audited_critical_classification_complete,
         detail=(
             "critical surfaces reviewed by at least "
             f"{minimum_critical_root_lineages} independent immutable root lineages"
         ),
         minimum_root_lineages=minimum_critical_root_lineages,
+        inapplicable_reason=inapplicable_reason,
     )
     return ModelReviewCoverage(
         applicable=applicable,
+        critical_classification_complete=audited_critical_classification_complete,
         minimum_critical_root_lineages=minimum_critical_root_lineages,
         surfaces=surfaces,
         overall=overall,
         by_kind=by_kind,
         critical=critical,
-        critical_gate_passed=critical.numerator == critical.denominator,
+        critical_gate_passed=(
+            applicable
+            and audited_critical_classification_complete
+            and critical.denominator > 0
+            and critical.numerator == critical.denominator
+        ),
         limitations=sorted(limitations),
     )
 
@@ -202,18 +303,56 @@ def build_model_surface_requests(
     graphs: SolidityGraphSet | None,
     invariants: InvariantSuite | None,
     economic_simulations: list[EconomicSimulationPlan],
+    audited_suite_coverage: AuditedSuiteCoverage | None = None,
+    source_contents_by_path: dict[str, str] | None = None,
 ) -> list[ModelSurfaceReviewRequest]:
     """Build the stable, deterministic request descriptors used by model reviewers."""
 
+    source_contents_by_path = _copy_source_contents(source_contents_by_path)
+    index, graphs, invariants, economic_simulations = _reconstruct_surface_inputs(
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=economic_simulations,
+    )
+    audited_suite_coverage = _reconstruct_audited_suite_coverage(audited_suite_coverage)
     if index is None:
+        if audited_suite_coverage is not None and audited_suite_coverage.gaps:
+            raise ValueError(
+                "audited-suite coverage gaps require a Solidity symbol index for exact binding"
+            )
         return []
+    source_partition = partition_audited_source_entities(index=index, projects=index.projects)
+    if not source_partition.classification_complete:
+        return []
+    if (
+        audited_suite_coverage is not None
+        and not audited_suite_coverage.source_classification_complete
+    ):
+        return []
+    seeds = _surface_inventory(
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=economic_simulations,
+        source_contents_by_path=source_contents_by_path,
+    )
+    seeds = _with_audited_suite_criticality(seeds, audited_suite_coverage)
     return _requests_from_seeds(
-        _surface_inventory(
-            index=index,
-            graphs=graphs,
-            invariants=invariants,
-            economic_simulations=economic_simulations,
-        )
+        seeds,
+        coverage_gap_ids_by_entity=(
+            _validated_coverage_gap_ids_by_entity(
+                index=index,
+                graphs=graphs,
+                invariants=invariants,
+                economic_simulations=economic_simulations,
+                seeds=seeds,
+                audited_suite_coverage=audited_suite_coverage,
+                source_contents_by_path=source_contents_by_path,
+            )
+            if audited_suite_coverage is not None
+            else {}
+        ),
     )
 
 
@@ -221,7 +360,13 @@ def plan_model_surface_review_assignments(
     config: AuditConfig,
     requests: list[ModelSurfaceReviewRequest],
     *,
+    index: SoliditySymbolIndex | None,
+    graphs: SolidityGraphSet | None,
+    invariants: InvariantSuite | None,
+    economic_simulations: list[EconomicSimulationPlan],
+    audited_suite_coverage: AuditedSuiteCoverage | None = None,
     minimum_critical_root_lineages: int = 3,
+    source_contents_by_path: dict[str, str] | None = None,
 ) -> dict[str, list[ModelSurfaceReviewRequest]]:
     """Distribute explicit review requests without treating aliases as independence.
 
@@ -231,14 +376,17 @@ def plan_model_surface_review_assignments(
     downstream coverage gate fails closed.
     """
 
-    roles = [
-        *_BASE_REVIEW_ROLES,
-        *(
-            f"specialist:{role}"
-            for role in sorted(SPECIALIST_INVESTIGATOR_ROLES)
-            if role in config.models.specialists
-        ),
-    ]
+    source_contents_by_path = _copy_source_contents(source_contents_by_path)
+    requests = _require_authoritative_request_inventory(
+        requests,
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=economic_simulations,
+        audited_suite_coverage=audited_suite_coverage,
+        source_contents_by_path=source_contents_by_path,
+    )
+    roles = _scheduled_model_surface_review_roles(config)
     lineage_by_model = model_lineage_index(config)
     approved_lineages = set(config.privacy.approved_model_lineages)
     candidates: list[tuple[str, str]] = []
@@ -260,13 +408,33 @@ def plan_model_surface_review_assignments(
 
     assignments: dict[str, list[ModelSurfaceReviewRequest]] = {role: [] for role in sorted(roles)}
     for request in sorted(requests, key=lambda item: item.surface_id):
+        if (
+            request.priority is ModelSurfaceReviewPriority.ELEVATED_COVERAGE_GAP
+            and not request.critical
+        ):
+            raise ValueError("coverage-gap priority is valid only for critical model surfaces")
         target = minimum_critical_root_lineages if request.critical else 1
         if not candidates:
             continue
         offset = int(request.surface_id.removeprefix("model-surface:")[:16], 16) % len(candidates)
         ordered_candidates = candidates[offset:] + candidates[:offset]
         selected_lineages: set[str] = set()
+        if request.priority is ModelSurfaceReviewPriority.ELEVATED_COVERAGE_GAP:
+            hunter = next(
+                (
+                    (role, root_lineage)
+                    for role, root_lineage in candidates
+                    if role == _COVERAGE_GAP_HUNTER_ROLE
+                ),
+                None,
+            )
+            if hunter is not None:
+                hunter_role, hunter_lineage = hunter
+                assignments[hunter_role].append(request)
+                selected_lineages.add(hunter_lineage)
         for role, root_lineage in ordered_candidates:
+            if len(selected_lineages) >= target:
+                break
             if root_lineage in selected_lineages:
                 continue
             assignments[role].append(request)
@@ -283,10 +451,15 @@ def model_surface_assignment_feasibility_gate(
     config: AuditConfig,
     *,
     index: SoliditySymbolIndex | None,
+    graphs: SolidityGraphSet | None,
+    invariants: InvariantSuite | None,
+    economic_simulations: list[EconomicSimulationPlan],
+    audited_suite_coverage: AuditedSuiteCoverage | None,
     requests: list[ModelSurfaceReviewRequest],
     assignments: dict[str, list[ModelSurfaceReviewRequest]],
     required: bool,
     minimum_critical_root_lineages: int = 3,
+    source_contents_by_path: dict[str, str] | None = None,
 ) -> QualityGateResult:
     """Prove the planned surface assignments are feasible before provider spend.
 
@@ -297,6 +470,7 @@ def model_surface_assignment_feasibility_gate(
 
     if minimum_critical_root_lineages < 1:
         raise ValueError("critical surface feasibility requires at least one root lineage")
+    source_contents_by_path = _copy_source_contents(source_contents_by_path)
     gate = "model_surface_assignment_feasibility"
     if index is None:
         return QualityGateResult(
@@ -305,6 +479,73 @@ def model_surface_assignment_feasibility_gate(
             passed=False,
             detail="Solidity symbol index was unavailable; assignment feasibility is unknown",
             state=AnalysisState.NOT_ANALYZED,
+        )
+    try:
+        index, graphs, invariants, economic_simulations = _reconstruct_surface_inputs(
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=economic_simulations,
+        )
+        audited_suite_coverage = _reconstruct_audited_suite_coverage(audited_suite_coverage)
+    except ValueError as exc:
+        return QualityGateResult(
+            gate=gate,
+            required=required,
+            passed=False,
+            detail=f"model-surface classification evidence failed validation: {exc}",
+            state=AnalysisState.ATTEMPTED_FAILED,
+        )
+    assert index is not None
+    if audited_suite_coverage is None:
+        return QualityGateResult(
+            gate=gate,
+            required=required,
+            passed=False,
+            detail=(
+                "audited-suite coverage was unavailable; assignment feasibility cannot "
+                "prove the critical-surface denominator"
+            ),
+            state=AnalysisState.NOT_ANALYZED,
+        )
+    if (
+        not audited_suite_coverage.source_classification_complete
+        or not audited_suite_coverage.critical_classification_complete
+        or not _critical_classification_inputs_complete(
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=economic_simulations,
+            source_contents_by_path=source_contents_by_path,
+        )
+    ):
+        return QualityGateResult(
+            gate=gate,
+            required=required,
+            passed=False,
+            detail=(
+                "audited-suite critical classification was incomplete or lacked exact "
+                "graph, invariant, economic, and source-partition evidence"
+            ),
+            state=AnalysisState.NOT_ANALYZED,
+        )
+    try:
+        requests = _require_authoritative_request_inventory(
+            requests,
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=economic_simulations,
+            audited_suite_coverage=audited_suite_coverage,
+            source_contents_by_path=source_contents_by_path,
+        )
+    except ValueError as exc:
+        return QualityGateResult(
+            gate=gate,
+            required=required,
+            passed=False,
+            detail=f"model-surface inventory failed authoritative revalidation: {exc}",
+            state=AnalysisState.ATTEMPTED_FAILED,
         )
     if not requests:
         return QualityGateResult(
@@ -324,15 +565,44 @@ def model_surface_assignment_feasibility_gate(
     invalid_assignments: set[str] = set()
     lineage_by_model = model_lineage_index(config)
     approved_lineages = set(config.privacy.approved_model_lineages)
-
-    for role, role_requests in sorted(assignments.items()):
-        root_lineage = _approved_registered_primary_lineage(
+    scheduled_roles = set(_scheduled_model_surface_review_roles(config))
+    coverage_gap_hunter_lineage = (
+        _approved_registered_primary_lineage(
             config,
-            role,
+            _COVERAGE_GAP_HUNTER_ROLE,
             lineage_by_model=lineage_by_model,
             approved_lineages=approved_lineages,
         )
+        if _COVERAGE_GAP_HUNTER_ROLE in scheduled_roles
+        else None
+    )
+    hunter_request_counts: dict[str, int] = {}
+
+    seen_role_surfaces: set[tuple[str, str]] = set()
+    for role, role_requests in sorted(assignments.items()):
+        role_is_scheduled = role in scheduled_roles
+        if not role_is_scheduled:
+            invalid_assignments.add(f"{role}:unscheduled-role")
+        root_lineage = (
+            _approved_registered_primary_lineage(
+                config,
+                role,
+                lineage_by_model=lineage_by_model,
+                approved_lineages=approved_lineages,
+            )
+            if role_is_scheduled
+            else None
+        )
         for assigned_request in role_requests:
+            role_surface = (role, assigned_request.surface_id)
+            if role_surface in seen_role_surfaces:
+                invalid_assignments.add(f"{role}:duplicate-surface:{assigned_request.surface_id}")
+                continue
+            seen_role_surfaces.add(role_surface)
+            if role == _COVERAGE_GAP_HUNTER_ROLE:
+                hunter_request_counts[assigned_request.surface_id] = (
+                    hunter_request_counts.get(assigned_request.surface_id, 0) + 1
+                )
             inventory_request = requests_by_id.get(assigned_request.surface_id)
             if inventory_request is None:
                 invalid_assignments.add(f"{role}:unknown-surface:{assigned_request.surface_id}")
@@ -341,9 +611,10 @@ def model_surface_assignment_feasibility_gate(
                 invalid_assignments.add(f"{role}:mismatched-surface:{assigned_request.surface_id}")
                 continue
             if root_lineage is None:
-                invalid_assignments.add(
-                    f"{role}:unapproved-or-unregistered-primary:{assigned_request.surface_id}"
-                )
+                if role_is_scheduled:
+                    invalid_assignments.add(
+                        f"{role}:unapproved-or-unregistered-primary:{assigned_request.surface_id}"
+                    )
                 continue
             assigned_lineages[assigned_request.surface_id].add(root_lineage)
 
@@ -357,7 +628,21 @@ def model_surface_assignment_feasibility_gate(
         if len(assigned_lineages[request.surface_id])
         < (minimum_critical_root_lineages if request.critical else 1)
     ]
-    passed = not duplicate_inventory_ids and not invalid_assignments and not underassigned
+    missing_priority_assignments = [
+        request.surface_id
+        for request in sorted(requests, key=lambda item: item.surface_id)
+        if (
+            coverage_gap_hunter_lineage is not None
+            and request.priority is ModelSurfaceReviewPriority.ELEVATED_COVERAGE_GAP
+            and hunter_request_counts.get(request.surface_id, 0) != 1
+        )
+    ]
+    passed = (
+        not duplicate_inventory_ids
+        and not invalid_assignments
+        and not underassigned
+        and not missing_priority_assignments
+    )
     return QualityGateResult(
         gate=gate,
         required=required,
@@ -368,12 +653,29 @@ def model_surface_assignment_feasibility_gate(
             f"noncritical={sum(not request.critical for request in requests)}; "
             f"underassigned={len(underassigned)}; "
             f"invalid_assignments={len(invalid_assignments)}; "
+            f"missing_priority_assignments={len(missing_priority_assignments)}; "
+            f"coverage_gap_hunter_available={int(coverage_gap_hunter_lineage is not None)}; "
             f"duplicate_inventory_ids={int(duplicate_inventory_ids)}; "
             "required_distinct_primary_root_lineages="
             f"critical:{minimum_critical_root_lineages},noncritical:1"
         ),
         state=AnalysisState.DETERMINISTIC if passed else AnalysisState.ATTEMPTED_FAILED,
     )
+
+
+def _scheduled_model_surface_review_roles(config: AuditConfig) -> tuple[str, ...]:
+    """Return only investigator roles the pipeline executes for the selected profile."""
+
+    specialists = (
+        (
+            f"specialist:{role}"
+            for role in SPECIALIST_INVESTIGATOR_ROLES
+            if role in config.models.specialists
+        )
+        if config.profile in {AuditProfile.DEEP, AuditProfile.MAXIMUM_ASSURANCE}
+        else ()
+    )
+    return tuple(sorted((*_BASE_REVIEW_ROLES, *specialists)))
 
 
 def model_review_critical_surface_gate(
@@ -404,6 +706,19 @@ def model_review_critical_surface_gate(
             state=AnalysisState.NOT_ANALYZED,
             artifacts=["model-review-coverage.json"],
         )
+    if not coverage.critical_classification_complete:
+        return QualityGateResult(
+            gate="critical_model_surface_review",
+            required=required,
+            passed=False,
+            detail=(
+                coverage.limitations[0]
+                if coverage.limitations
+                else "critical-surface classification was incomplete"
+            ),
+            state=AnalysisState.NOT_ANALYZED,
+            artifacts=["model-review-coverage.json"],
+        )
     return QualityGateResult(
         gate="critical_model_surface_review",
         required=required,
@@ -419,7 +734,10 @@ def model_review_critical_surface_gate(
 
 def _requests_from_seeds(
     seeds: list[_SurfaceSeed],
+    *,
+    coverage_gap_ids_by_entity: dict[str, tuple[str, ...]] | None = None,
 ) -> list[ModelSurfaceReviewRequest]:
+    gap_ids_by_entity = coverage_gap_ids_by_entity or {}
     requests = [
         ModelSurfaceReviewRequest(
             surface_id=_surface_id(seed.kind, seed.subject_id),
@@ -431,10 +749,35 @@ def _requests_from_seeds(
             allowed_locations=tuple(_sorted_locations(list(seed.locations))),
             allowed_symbols=seed.allowed_symbols,
             invariant_considered=seed.invariant_considered,
+            priority=(
+                ModelSurfaceReviewPriority.ELEVATED_COVERAGE_GAP
+                if gap_ids_by_entity.get(seed.subject_id)
+                else ModelSurfaceReviewPriority.STANDARD
+            ),
+            coverage_gap_ids=gap_ids_by_entity.get(seed.subject_id, ()),
         )
         for seed in seeds
     ]
     return sorted(requests, key=lambda request: request.surface_id)
+
+
+def _with_audited_suite_criticality(
+    seeds: list[_SurfaceSeed],
+    coverage: AuditedSuiteCoverage | None,
+) -> list[_SurfaceSeed]:
+    """Conservatively retain exact source criticality from audited-suite coverage."""
+
+    if coverage is None or coverage.critical_classification_complete:
+        return seeds
+    conservative_source_entity_ids = {surface.entity_id for surface in coverage.surfaces}
+    return [
+        (
+            replace(seed, critical=True)
+            if seed.subject_id in conservative_source_entity_ids and not seed.critical
+            else seed
+        )
+        for seed in seeds
+    ]
 
 
 def _review_evidence_references(
@@ -753,27 +1096,388 @@ def _record_validation_failures(
     return failures
 
 
+def _reconstruct_audited_suite_coverage(
+    coverage: AuditedSuiteCoverage | None,
+) -> AuditedSuiteCoverage | None:
+    """Revalidate mutable nested evidence at each public orchestration boundary."""
+
+    if coverage is None:
+        return None
+    return AuditedSuiteCoverage.model_validate(coverage.model_dump(mode="python"))
+
+
+def _copy_source_contents(
+    source_contents_by_path: dict[str, str] | None,
+) -> dict[str, str] | None:
+    """Copy ephemeral current-source evidence without placing it in typed artifacts."""
+
+    if source_contents_by_path is None:
+        return None
+    if any(
+        not isinstance(path, str) or not isinstance(content, str)
+        for path, content in source_contents_by_path.items()
+    ):
+        raise ValueError("current-source evidence must map string paths to string contents")
+    return dict(sorted(source_contents_by_path.items()))
+
+
+def _reconstruct_surface_inputs(
+    *,
+    index: SoliditySymbolIndex | None,
+    graphs: SolidityGraphSet | None,
+    invariants: InvariantSuite | None,
+    economic_simulations: list[EconomicSimulationPlan],
+) -> tuple[
+    SoliditySymbolIndex | None,
+    SolidityGraphSet | None,
+    InvariantSuite | None,
+    list[EconomicSimulationPlan],
+]:
+    """Revalidate every mutable deterministic input before deriving paid work."""
+
+    return (
+        (
+            SoliditySymbolIndex.model_validate(index.model_dump(mode="python"))
+            if index is not None
+            else None
+        ),
+        (
+            SolidityGraphSet.model_validate(graphs.model_dump(mode="python"))
+            if graphs is not None
+            else None
+        ),
+        (
+            InvariantSuite.model_validate(invariants.model_dump(mode="python"))
+            if invariants is not None
+            else None
+        ),
+        [
+            EconomicSimulationPlan.model_validate(plan.model_dump(mode="python"))
+            for plan in economic_simulations
+        ],
+    )
+
+
+def _require_authoritative_request_inventory(
+    requests: list[ModelSurfaceReviewRequest],
+    *,
+    index: SoliditySymbolIndex | None,
+    graphs: SolidityGraphSet | None,
+    invariants: InvariantSuite | None,
+    economic_simulations: list[EconomicSimulationPlan],
+    audited_suite_coverage: AuditedSuiteCoverage | None,
+    source_contents_by_path: dict[str, str] | None,
+) -> list[ModelSurfaceReviewRequest]:
+    """Reject caller-authored scheduling facts by rebuilding the host inventory."""
+
+    reconstructed = [
+        ModelSurfaceReviewRequest.model_validate(request.model_dump(mode="python"))
+        for request in requests
+    ]
+    authoritative = build_model_surface_requests(
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=economic_simulations,
+        audited_suite_coverage=audited_suite_coverage,
+        source_contents_by_path=source_contents_by_path,
+    )
+    if reconstructed != authoritative:
+        raise ValueError(
+            "supplied model-surface requests differ from the authoritative source inventory"
+        )
+    return authoritative
+
+
+def _validated_coverage_gap_ids_by_entity(
+    *,
+    index: SoliditySymbolIndex | None,
+    graphs: SolidityGraphSet | None,
+    invariants: InvariantSuite | None,
+    economic_simulations: list[EconomicSimulationPlan],
+    seeds: list[_SurfaceSeed],
+    audited_suite_coverage: AuditedSuiteCoverage | None,
+    source_contents_by_path: dict[str, str] | None,
+) -> dict[str, tuple[str, ...]]:
+    if audited_suite_coverage is None:
+        return {}
+    if not audited_suite_coverage.source_classification_complete:
+        return {}
+    if index is None:
+        raise ValueError(
+            "audited-suite coverage gaps require a Solidity symbol index for exact binding"
+        )
+    if audited_suite_coverage.critical_classification_complete and not (
+        _critical_classification_inputs_complete(
+            index=index,
+            graphs=graphs,
+            invariants=invariants,
+            economic_simulations=economic_simulations,
+            source_contents_by_path=source_contents_by_path,
+        )
+    ):
+        raise ValueError(
+            "audited-suite coverage claims complete critical classification without "
+            "complete graph, invariant, economic, and exact source-binding evidence"
+        )
+
+    entities_by_id = {entity.id: entity for entity in index.entities}
+    partition = partition_audited_source_entities(index=index, projects=index.projects)
+    if not partition.classification_complete:
+        raise ValueError("audited-suite coverage requires complete audited-source classification")
+    expected_entity_ids = {
+        *partition.contract_entity_ids,
+        *partition.function_entity_ids,
+    }
+    surfaces_by_id = {surface.entity_id: surface for surface in audited_suite_coverage.surfaces}
+    if set(surfaces_by_id) != expected_entity_ids:
+        raise ValueError(
+            "audited-suite coverage surface population differs from the audited-source partition"
+        )
+    surfaced_subject_ids = {seed.subject_id for seed in seeds}
+    critical_subject_ids = {seed.subject_id for seed in seeds if seed.critical}
+    for entity_id in sorted(expected_entity_ids):
+        entity = entities_by_id[entity_id]
+        surface = surfaces_by_id[entity_id]
+        expected_contract = entity.contract_name or (
+            entity.name if entity.kind in _CONTRACT_KINDS else "protocol"
+        )
+        if (
+            surface.entity_kind is not entity.kind
+            or surface.contract_name != expected_contract
+            or surface.location != _entity_location(entity)
+            or surface.critical != (entity_id in critical_subject_ids)
+        ):
+            raise ValueError(
+                "audited-suite coverage surface identity or criticality differs from "
+                f"the authoritative inventory: {entity_id}"
+            )
+    if not audited_suite_coverage.gaps:
+        return {}
+    gap_ids_by_entity: dict[str, list[str]] = {}
+    for gap in audited_suite_coverage.gaps:
+        gap_entity = entities_by_id.get(gap.entity_id)
+        if gap_entity is None or gap.entity_id not in surfaced_subject_ids:
+            raise ValueError(
+                f"audited-suite coverage gap references unknown audited surface {gap.entity_id}"
+            )
+        if gap_entity.kind is not gap.entity_kind:
+            raise ValueError(
+                f"audited-suite coverage gap kind differs from indexed entity {gap.entity_id}"
+            )
+        if _entity_location(gap_entity) != gap.location:
+            raise ValueError(
+                f"audited-suite coverage gap location/hash differs from index {gap.entity_id}"
+            )
+        if gap.entity_id not in critical_subject_ids:
+            raise ValueError(
+                f"audited-suite coverage gap is not independently critical {gap.entity_id}"
+            )
+        gap_ids_by_entity.setdefault(gap.entity_id, []).append(gap.gap_id)
+    return {
+        entity_id: tuple(sorted(gap_ids))
+        for entity_id, gap_ids in sorted(gap_ids_by_entity.items())
+    }
+
+
+def _critical_classification_inputs_complete(
+    *,
+    index: SoliditySymbolIndex | None,
+    graphs: SolidityGraphSet | None,
+    invariants: InvariantSuite | None,
+    economic_simulations: list[EconomicSimulationPlan],
+    source_contents_by_path: dict[str, str] | None,
+) -> bool:
+    if index is None or graphs is None or invariants is None:
+        return False
+    partition = partition_audited_source_entities(index=index, projects=index.projects)
+    if not partition.classification_complete:
+        return False
+    required_graphs = {
+        SolidityGraphKind.PRIVILEGE,
+        SolidityGraphKind.ASSET_FLOW,
+        SolidityGraphKind.SENSITIVE_REACHABILITY,
+    }
+    entities_by_id = {entity.id: entity for entity in index.entities}
+    audited_contract_ids = set(partition.contract_entity_ids)
+    audited_function_ids = set(partition.function_entity_ids)
+    audited_contract_keys = {
+        (entities_by_id[entity_id].path, entities_by_id[entity_id].name)
+        for entity_id in audited_contract_ids
+    }
+    audited_state_ids = {
+        entity.id
+        for entity in index.entities
+        if entity.kind in _STATE_KINDS
+        and entity.contract_name is not None
+        and (entity.path, entity.contract_name) in audited_contract_keys
+    }
+    audited_entity_ids = audited_contract_ids | audited_function_ids | audited_state_ids
+    test_entity_ids = exact_test_entity_ids(index=index, projects=index.projects)
+    test_function_ids = {
+        entity.id
+        for entity in index.entities
+        if entity.id in test_entity_ids
+        and entity.kind
+        in {
+            SolidityEntityKind.FUNCTION,
+            SolidityEntityKind.CONSTRUCTOR,
+        }
+    }
+    invariant_bindings = [
+        (
+            invariant,
+            bind_invariant_to_audited_entities(
+                invariant=invariant,
+                entities=index.entities,
+                audited_entity_ids=audited_entity_ids,
+                exact_test_entity_ids=test_entity_ids,
+                source_contents_by_path=source_contents_by_path,
+            ),
+        )
+        for invariant in invariants.invariants
+    ]
+    invariant_binding_incomplete = any(binding.invalid for _, binding in invariant_bindings)
+    invariant_bindings_by_id = {invariant.id: binding for invariant, binding in invariant_bindings}
+    economic_binding_incomplete = any(
+        bind_economic_plan_to_audited_entities(
+            plan=plan,
+            entities=index.entities,
+            audited_entity_ids=audited_entity_ids,
+            exact_test_entity_ids=test_entity_ids,
+            invariant_bindings_by_id=invariant_bindings_by_id,
+            source_contents_by_path=source_contents_by_path,
+        ).invalid
+        for plan in economic_simulations
+    )
+    critical_graph_edges = [edge for edge in graphs.edges if edge.graph in required_graphs]
+    graph_binding_incomplete = any(
+        (
+            edge.source_id not in audited_function_ids | test_function_ids
+            or not critical_graph_edge_is_exact(
+                edge,
+                entities_by_id=entities_by_id,
+                audited_function_ids=(
+                    audited_function_ids
+                    if edge.source_id in audited_function_ids
+                    else test_function_ids
+                ),
+                source_contents_by_path=source_contents_by_path,
+            )
+        )
+        for edge in critical_graph_edges
+    )
+    return (
+        required_graphs <= set(graphs.analyzed_graphs)
+        and not graph_binding_incomplete
+        and not invariant_binding_incomplete
+        and not economic_binding_incomplete
+    )
+
+
 def _surface_inventory(
     *,
     index: SoliditySymbolIndex,
     graphs: SolidityGraphSet | None,
     invariants: InvariantSuite | None,
     economic_simulations: list[EconomicSimulationPlan],
+    source_contents_by_path: dict[str, str] | None,
 ) -> list[_SurfaceSeed]:
     entities_by_id = {entity.id: entity for entity in index.entities}
-    edges = list(graphs.edges) if graphs is not None else []
+    partition = partition_audited_source_entities(index=index, projects=index.projects)
+    if not partition.classification_complete:
+        return []
+    audited_contract_ids = set(partition.contract_entity_ids)
+    audited_function_ids = set(partition.function_entity_ids)
+    audited_contract_keys = {
+        (entity.path, entity.name) for entity in index.entities if entity.id in audited_contract_ids
+    }
+    audited_contract_keys.update(
+        (entity.path, entity.contract_name)
+        for entity in index.entities
+        if entity.id in audited_function_ids and entity.contract_name is not None
+    )
+    audited_state_ids = {
+        entity.id
+        for entity in index.entities
+        if entity.kind in _STATE_KINDS
+        and entity.contract_name is not None
+        and (entity.path, entity.contract_name) in audited_contract_keys
+    }
+    audited_entity_ids = audited_contract_ids | audited_function_ids | audited_state_ids
+    test_entity_ids = exact_test_entity_ids(index=index, projects=index.projects)
+    edges = [
+        edge
+        for edge in (graphs.edges if graphs is not None else [])
+        if edge.source_id in audited_function_ids
+        and edge.path == entities_by_id[edge.source_id].path
+        and entities_by_id[edge.source_id].start_line <= edge.start_line
+        and edge.end_line <= entities_by_id[edge.source_id].end_line
+        and (edge.target_id not in entities_by_id or edge.target_id in audited_entity_ids)
+        and (
+            source_contents_by_path is None
+            or critical_graph_edge_is_exact(
+                edge,
+                entities_by_id=entities_by_id,
+                audited_function_ids=audited_function_ids,
+                source_contents_by_path=source_contents_by_path,
+            )
+        )
+    ]
+    invariant_bindings = [
+        (
+            invariant,
+            bind_invariant_to_audited_entities(
+                invariant=invariant,
+                entities=index.entities,
+                audited_entity_ids=audited_entity_ids,
+                exact_test_entity_ids=test_entity_ids,
+                source_contents_by_path=source_contents_by_path,
+            ),
+        )
+        for invariant in (invariants.invariants if invariants is not None else [])
+    ]
+    audited_invariants = [invariant for invariant, binding in invariant_bindings if binding.audited]
+    invariant_bindings_by_id = {invariant.id: binding for invariant, binding in invariant_bindings}
+    audited_economic_bindings = [
+        (
+            plan,
+            bind_economic_plan_to_audited_entities(
+                plan=plan,
+                entities=index.entities,
+                audited_entity_ids=audited_entity_ids,
+                exact_test_entity_ids=test_entity_ids,
+                invariant_bindings_by_id=invariant_bindings_by_id,
+                source_contents_by_path=source_contents_by_path,
+            ),
+        )
+        for plan in economic_simulations
+    ]
+    audited_economic_entity_ids = {
+        entity_id
+        for _, binding in audited_economic_bindings
+        if binding.audited
+        for entity_id in binding.entity_ids
+    }
     privilege_sources = _edge_sources(edges, SolidityGraphKind.PRIVILEGE)
     asset_sources = _edge_sources(edges, SolidityGraphKind.ASSET_FLOW)
     sensitive_sources = _edge_sources(edges, SolidityGraphKind.SENSITIVE_REACHABILITY)
     invariant_entity_ids = {
         entity_id
-        for invariant in (invariants.invariants if invariants is not None else [])
-        for entity_id in invariant.entity_ids
+        for _, binding in invariant_bindings
+        if binding.audited
+        for entity_id in binding.entity_ids
     }
     critical_function_ids = (
-        privilege_sources | asset_sources | sensitive_sources | invariant_entity_ids
+        privilege_sources
+        | asset_sources
+        | sensitive_sources
+        | (invariant_entity_ids & audited_function_ids)
+        | (audited_economic_entity_ids & audited_function_ids)
     )
-    critical_state_ids = {
+    critical_state_ids = (
+        (invariant_entity_ids | audited_economic_entity_ids) & audited_state_ids
+    ) | {
         edge.target_id
         for edge in edges
         if edge.graph
@@ -784,22 +1488,37 @@ def _surface_inventory(
         }
         and edge.source_id in critical_function_ids
     }
-    if invariants is not None:
+    if audited_invariants:
         invariant_state_names = {
-            name for invariant in invariants.invariants for name in invariant.state_variables
+            name for invariant in audited_invariants for name in invariant.state_variables
         }
         critical_state_ids.update(
             entity.id
             for entity in index.entities
-            if entity.kind in _STATE_KINDS and entity.name in invariant_state_names
+            if entity.id in audited_state_ids and entity.name in invariant_state_names
         )
-    critical_contracts = {
-        (entity.path, entity.contract_name)
-        for entity in index.entities
-        if entity.id in critical_function_ids and entity.contract_name
+    audited_contract_ids_by_key = {
+        (entities_by_id[entity_id].path, entities_by_id[entity_id].name): entity_id
+        for entity_id in audited_contract_ids
     }
+    critical_contract_ids = (
+        invariant_entity_ids | audited_economic_entity_ids
+    ) & audited_contract_ids
+    for entity_id in critical_function_ids | critical_state_ids:
+        entity = entities_by_id[entity_id]
+        if entity.contract_name is None:
+            continue
+        contract_id = audited_contract_ids_by_key.get((entity.path, entity.contract_name))
+        if contract_id is not None:
+            critical_contract_ids.add(contract_id)
     seeds: list[_SurfaceSeed] = []
     for entity in index.entities:
+        if entity.kind in _CONTRACT_KINDS and entity.id not in audited_contract_ids:
+            continue
+        if entity.kind in _FUNCTION_KINDS and entity.id not in audited_function_ids:
+            continue
+        if entity.kind in _STATE_KINDS and entity.id not in audited_state_ids:
+            continue
         location = (_entity_location(entity),)
         if entity.kind in _CONTRACT_KINDS:
             seeds.append(
@@ -807,7 +1526,7 @@ def _surface_inventory(
                     kind=ModelReviewSurfaceKind.CONTRACT,
                     subject_id=entity.id,
                     label=entity.name,
-                    critical=(entity.path, entity.name) in critical_contracts,
+                    critical=entity.id in critical_contract_ids,
                     locations=location,
                     contract=entity.name,
                     allowed_symbols=tuple(sorted({entity.id, entity.name})),
@@ -823,6 +1542,17 @@ def _surface_inventory(
             seeds.append(
                 _entity_surface(
                     ModelReviewSurfaceKind.ENTRY_POINT,
+                    entity,
+                    critical=entity.id in critical_function_ids,
+                )
+            )
+        if entity.kind is SolidityEntityKind.FUNCTION and entity.visibility not in {
+            "public",
+            "external",
+        }:
+            seeds.append(
+                _entity_surface(
+                    ModelReviewSurfaceKind.INTERNAL_FUNCTION,
                     entity,
                     critical=entity.id in critical_function_ids,
                 )
@@ -890,8 +1620,8 @@ def _surface_inventory(
                 ),
             )
         )
-    if invariants is not None:
-        for invariant in invariants.invariants:
+    if audited_invariants:
+        for invariant in audited_invariants:
             seeds.append(
                 _SurfaceSeed(
                     kind=ModelReviewSurfaceKind.INVARIANT,
@@ -916,14 +1646,14 @@ def _surface_inventory(
         invariant_templates = sorted(
             {
                 invariant.template.value
-                for invariant in invariants.invariants
+                for invariant in audited_invariants
                 if invariant.template is not None
             }
         )
         for template in invariant_templates:
             template_invariants = [
                 invariant
-                for invariant in invariants.invariants
+                for invariant in audited_invariants
                 if invariant.template is not None and invariant.template.value == template
             ]
             seeds.append(
@@ -970,17 +1700,18 @@ def _surface_inventory(
                     invariant_considered=(f"Assess preservation of invariant template {template}."),
                 )
             )
-    for template in sorted({plan.kind.value for plan in economic_simulations if plan.applicable}):
+    audited_economic_simulations = [
+        plan for plan, binding in audited_economic_bindings if binding.audited
+    ]
+    for template in sorted({plan.kind.value for plan in audited_economic_simulations}):
         template_plans = [
-            plan for plan in economic_simulations if plan.applicable and plan.kind.value == template
+            plan for plan in audited_economic_simulations if plan.kind.value == template
         ]
         linked_invariant_ids = {
             invariant_id for plan in template_plans for invariant_id in plan.invariant_ids
         }
         linked_invariants = [
-            invariant
-            for invariant in (invariants.invariants if invariants is not None else [])
-            if invariant.id in linked_invariant_ids
+            invariant for invariant in audited_invariants if invariant.id in linked_invariant_ids
         ]
         seeds.append(
             _SurfaceSeed(
@@ -1073,6 +1804,7 @@ def _coverage_metric(
     applicable: bool,
     detail: str,
     minimum_root_lineages: int | None = None,
+    inapplicable_reason: str = "Solidity symbol index was unavailable",
 ) -> CoverageMetric:
     denominator = len(surfaces)
     if denominator:
@@ -1093,7 +1825,7 @@ def _coverage_metric(
         failures = []
         not_applicable_evidence = ["no deterministic surfaces of this category were discovered"]
     else:
-        failures = ["Solidity symbol index was unavailable"]
+        failures = [inapplicable_reason]
         not_applicable_evidence = []
     return CoverageMetric(
         numerator=numerator,

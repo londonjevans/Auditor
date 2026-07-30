@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: ACTIVE
-CURRENT_MILESTONE: Audited-suite coverage and assertion strength
-CURRENT_TICKET: V3-TESTQUALITY-001
+AUTORUN_STATUS: PAUSED_BY_OPERATOR
+CURRENT_MILESTONE: Audited-suite coverage and assertion strength — partial checkpoint
+CURRENT_TICKET: V3-TESTQUALITY-001 (PARTIAL; PAUSED)
 LAST_COMPLETED_TICKET: V3-EXECORIGIN-001
-NEXT_ACTION: Inventory the existing coverage, mutation, indexed-surface, model-priority, and report evidence; reproduce the smallest missing concrete denominator or assertion-strength join before implementation.
-LAST_COMMAND: `git commit -m "Close execution-origin evidence obligations"`
-LAST_RESULT: PASS — isolated validated implementation checkpoint `7db592e572d2065703ec78808bf35bfefbe62151` contains only the V3-EXECORIGIN production and regression changes.
+NEXT_ACTION: On operator resume, begin V3-CI-001. Revisit V3-TESTQUALITY-001 only when a trusted statement-coverage producer, decisive real V3-MUTATION-001 executor, and the required inaccessible-parent isolation boundary are available; do not promote mock or planned evidence.
+LAST_COMMAND: `.venv/bin/ruff format . && .venv/bin/ruff check . && .venv/bin/mypy && .venv/bin/python scripts/generate_release_schemas.py && git diff --check`
+LAST_RESULT: PASS — 362 files were already formatted, Ruff passed, strict mypy passed 150 source files, release schemas regenerated without drift, and diff integrity passed. Immediately before this command, the complete loopback-enabled suite passed `3334` tests with `11` explicit external-prerequisite skips in `478.51s`.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,368 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 7db592e572d2065703ec78808bf35bfefbe62151
+LAST_CHECKPOINT_COMMIT: PENDING_VALIDATED_V3_TESTQUALITY_CHECKPOINT
+
+## 2026-07-30 — V3-TESTQUALITY-001
+
+- **Status:** `IN_PROGRESS`.
+- **Goal continuation:** Autorun resumed from the preserved operator pause after
+  re-reading the complete 1,417-line product-completion objective, repository
+  instructions, current queue/worklog, Git status, and affected diff. Work
+  remains bounded to the four recorded focused regressions and the current
+  ticket's fail-closed validation; no paid provider, network, secret, public
+  RPC, wallet, signing, broadcast, or external-target operation is in scope.
+- **Focused repair slice:** Standard profile assignment and feasibility now
+  share a scheduled-role inventory and reject injected unscheduled specialists;
+  deep/max profiles retain configured coverage-gap hunter routing. The
+  mutation capture-failure regression installs its `os.open` race only after
+  descriptor-root preflight. The forged mutation-origin benchmark regression
+  explicitly expects only the two Pydantic serializer warnings caused by its
+  deliberately invalid low-level model copy. Independently focused results
+  were `36`, `54`, and `23` passing tests respectively; affected Ruff and
+  strict model-coverage mypy checks passed.
+- **Joined focused closure:** The five-file joined suite passed `221` tests in
+  `3.76s`. Ruff passed after formatting one affected file, strict mypy passed
+  eight affected source files, release schemas regenerated and verified
+  synchronized, and the maximum-assurance synthetic pipeline plus infeasible
+  pre-spend assignment regressions passed `2` tests in `13.63s`. Two inherited
+  stale temporary-tree cleanup warnings remain unrelated to this ticket.
+- **Expanded regression discovery:** The broader benchmark, context,
+  model-review, specialist, reporting, and pipeline matrix produced `28 failed,
+  705 passed in 106.93s`. The failures cluster into two stale test builders
+  that no longer satisfy non-vacuous audited-suite/mutation and critical-review
+  gates, plus one execution-origin integration severity mismatch. The
+  fail-closed production validators remain unchanged while each shared cause
+  is being diagnosed.
+- **Acceptance audit:** Production currently cannot emit credited statement
+  coverage or decisive runtime mutation evidence. The Foundry suite adapter
+  emits selected/executed/failed test evidence but no trusted executable-
+  statement artifact; pipeline calls supply neither statement nor mutation
+  inputs. Current mutation execution is an adapter protocol exercised only by
+  mock tests, and all persisted/planned scorecards remain non-crediting.
+  Therefore this ticket cannot honestly be marked `COMPLETE`: structural
+  denominators, exact nonfinding gaps, elevated priority, and disposable
+  custody are implemented, while real statement production is unimplemented
+  and decisive mutation execution remains assigned to `V3-MUTATION-001`.
+- **Expanded-cluster correction:** The certificate mechanism's positive
+  file-backed fixture now uses a valid standard-profile report with mutation
+  evidence explicitly not evaluable; a separate maximum-assurance negative
+  proves caller-authored declarative kill evidence cannot be certified. The
+  synthetic benchmark model-review helper no longer treats an empty critical
+  denominator as a pass. In production, incomplete critical classification
+  now suppresses coverage-gap priority and the independent critical gate
+  without suppressing all ordinary source review; incomplete source
+  classification still fails preflight. The exact correction matrix passed
+  `88` tests in `2.37s`, with affected Ruff green.
+- **Expanded regression closure:** The exact 18-file benchmark, context,
+  model-review, reporting, Solidity, and pipeline matrix passed `735` tests in
+  `110.45s`. Affected Ruff, strict mypy over eight source files, release-schema
+  generation/checking, and the synthetic maximum-assurance integration were
+  green before the final adversarial review.
+- **Final adversarial evidence findings:** Independent review found that
+  caller-authored `ScannerRun` values could claim REAL isolated repository-suite
+  execution, timed-out/invalid executions were omitted from the failure count,
+  wholly unexecuted metrics still advertised runtime provenance, scanner and
+  mutation repository digests used different exclusion/Unicode domains, a
+  final cleanup name swap could leave an owned mutation inode linked, and
+  contract-level criticality/source denominators could diverge from the
+  function-level inventory. These are implementation defects, not successful
+  runtime evidence, and the ticket remains `IN_PROGRESS`.
+- **Evidence-integrity repair in progress:** Repository-suite credit now uses a
+  process-local weak-reference authority bound to the exact fully validated
+  scanner object and its canonical digest; serialization, ordinary copying,
+  mutation, and injected non-exact adapters cannot inherit it. Location
+  annotation explicitly preserves authority only from its trusted source
+  object. A shared audited-tree policy now aligns scanner and mutation hashes,
+  including Unicode paths and every excluded output directory. Descriptor-held
+  mutation disposal rescans the bounded parent after final removal and fails
+  closed if the owned inode remains linked under any name.
+- **Focused evidence so far:** The mutation cleanup suite passed `55` tests;
+  the combined scanner-workspace/mutation digest suite passed `60`; affected
+  Ruff and mypy passed; and the first scanner authority-adjacent regression
+  slice passed `2` tests. These are local defensive regressions. No statement
+  coverage producer, decisive real mutation executor, provider call, secret,
+  public RPC, wallet, signing, broadcast, or external target was used or
+  credited.
+- **Expanded matrix after evidence repair:** The 20-file affected benchmark,
+  assurance, context, model-review, scanner, Solidity, reporting, and pipeline
+  matrix passed `752` tests in `106.68s`. This demonstrates regression
+  compatibility only; it does not override the independent adversarial
+  findings below.
+- **Mutation follow-up:** Disposal now performs a bounded recursive
+  private-root scan after final removal, so moving the retained owned inode
+  beneath another private-root child cannot be mislabeled disposed. Shared
+  admission now rejects source directories deeper than the scanner/cleanup
+  limit of 128. The exact mutation/workspace suite passed `62` tests in
+  `0.76s`, affected Ruff passed, strict mypy passed, and diff integrity is
+  clean. Portable name-based final-directory removal still cannot atomically
+  compare inode identity and remove the name; the simulated substitution path
+  fails closed but can remove an empty replacement before detection. Do not
+  claim the stronger “only the descriptor-held child can ever be removed”
+  property until a suitable platform primitive or isolated-parent guarantee
+  is implemented.
+- **Adversarial runtime-authority findings:** The current process registry is
+  not acceptable for completion: its attester is directly callable with any
+  schema-valid self-authored run, and its derivation helper can transplant
+  authority to an unrelated valid run. Production Foundry finalization also
+  labels only an all-success scanner run REAL, making the new timeout and
+  invalid-output accounting unreachable from the actual producer; repeated
+  qualifying runs use inconsistent descriptor/execution deduplication.
+  Authority must be bound to an exact built-in producer invocation and a live
+  sealed isolation backend, and annotation propagation must permit only the
+  findings/digest delta.
+- **Adversarial coverage findings:** Critical contracts currently receive no
+  assertion gap or elevated routing; omitted audited coverage can bypass
+  critical-classification completeness; symbolic or stale/unverifiable
+  invariant, graph, and applicable economic-plan bindings can disappear from
+  denominators; graph-kind absence can become a clean 0/0 metric; and Markdown
+  hides applicability/classification limitations. These are material
+  fail-closed defects and remain unimplemented at this pause boundary.
+- **Operator pause boundary:** All workers are stopped and no command is
+  running. The worktree is intentionally uncommitted because the current
+  ticket has known material review findings despite green regression tests.
+  No provider call, secret access, network operation, public RPC, wallet,
+  signing, broadcast, external target, commit, or push occurred in this slice.
+- **Operator pause boundary (current):** Autorun is `PAUSED_BY_OPERATOR`.
+  All review workers are stopped and no command is running. The current
+  implementation and regression changes remain intentionally uncommitted
+  because the latest focused suite is red (`4 failed, 216 passed, 1 warning`).
+  `git diff --check` passed at the pause boundary. No provider call, network
+  operation, secret access, commit, or push occurred during this final slice.
+- **Operator pause (latest):** Execution paused at the operator's request after
+  joined focused validation. All subagents are stopped, no command is running,
+  and the intentionally uncommitted worktree remains preserved for resumption.
+  No provider call, secret access, network operation, commit, or push occurred
+  during this resumed slice.
+- **Operator pause:** Parallel coverage/schema and mutation-evidence work was
+  interrupted at a clean tool boundary on 2026-07-30. The worktree is
+  intentionally uncommitted and must be reconciled and revalidated before any
+  completion or checkpoint claim.
+- **Defensive objective:** Measure the audited repository's own test coverage
+  over exact indexed source contracts/functions, preserve honest mutation
+  denominators and disposable-workspace custody, and elevate exact uncovered
+  critical surfaces for model review without creating vulnerability findings.
+- **Starting checkpoint:** Synchronized SSH-published state commit
+  `0ce4e43f` follows validated implementation checkpoint
+  `7db592e572d2065703ec78808bf35bfefbe62151`. No provider, secret, public RPC,
+  wallet, signing, broadcast, external target, reservation, or paid operation
+  is in scope for this ticket.
+- **Inventory reproduction:** `build_solidity_coverage` never consumes
+  repository-suite selections or executions, and the later
+  `tests_executed/tests_failed` projection counts candidate reproductions
+  instead of repository-owned tests. Against the existing synthetic Foundry
+  fixture, the symbol index contains `3` contracts and `5` functions, while
+  only `2` contracts and `3` functions are audited source; the remaining test
+  contract and two test functions currently pollute both coverage and critical
+  model-surface inventories. No audited-suite assertion metric or exact gap
+  exists.
+- **Mutation reproduction:** The current five source-local transformations have
+  deterministic apply/revert and one real compile-only synthetic integration,
+  but no repository test/property executes against a mutant. Unit/CLI
+  scorecards hand-construct `KILLED` outcomes, and one claimed kill can yield a
+  passing denominator of one without an independently declared applicability
+  plan. `exact_restoration` hashes exclude generated output directories and
+  leaves the owned workspace present, so it cannot be used as disposal
+  evidence.
+- **Bounded implementation slices:** Add typed source-only audited-suite
+  surfaces and non-finding gaps; require independently declared mutation
+  applicability and typed execution identity before kill credit; remove owned
+  mutation workspaces on success and failure; then bind exact critical gaps to
+  elevated model-review assignments and bounded Markdown/JSON reporting.
+  `V3-MUTATION-001` remains separately queued for the full eleven-class real
+  portfolio and receives no completion credit here.
+- **Operator pause:** Autorun is `PAUSED_BY_OPERATOR` during the first two
+  implementation slices. The coverage and mutation workers were interrupted;
+  the model-priority worker had completed only a read-only inventory. The
+  preserved worktree contains changes to `schemas.py`, `coverage.py`,
+  `mutations.py`, their two focused unit-test files, and this worklog. No
+  focused green validation, ticket completion, checkpoint commit, or SSH push
+  is claimed for this partial state.
+- **Exact resume point:** Review the interrupted production diffs for complete
+  definitions and fail-closed validators, repair any partially written code,
+  run `tests/unit/test_audited_suite_coverage.py` and
+  `tests/unit/test_mutations.py`, and record the actual results before
+  proceeding to the model-review priority join.
+- **Goal continuation:** Autorun resumed from the preserved pause state after
+  re-reading the operator objective, repository queue/worklog, Git status, and
+  complete affected diff. Review confirmed that the coverage implementation is
+  substantially present while the mutation campaign still references missing
+  descriptor-relative disposal helpers. Two disjoint workers resumed only
+  those interrupted slices; the model-priority join remains deliberately
+  unopened until both focused suites pass.
+- **Audited-suite coverage slice:** Source/test partitioning now reports exact
+  indexed populations, denominators, and exclusions; test harness contracts and
+  functions cannot enter audited-source coverage. Exact critical
+  assertion-strength gaps are source-hash-bound non-findings. Statement credit
+  requires a self-hashed, entity-bound record joined to successful REAL,
+  isolated, hash-valid repository-test execution; tampered, unknown, vacuous,
+  or mismatched evidence fails closed. Mutation outcomes remain `NOT_ANALYZED`
+  until the separately typed campaign evidence is mapped to exact source
+  entities, so arbitrary kill-shaped hashes receive no credit.
+- **Coverage validation:** The exact combined Ruff, strict-mypy, focused
+  coverage/Solidity/mutation test, and scoped-diff command recorded in
+  the prior worklog state passed: `75 passed in 3.96s`. Full schema
+  reconstruction now rejects forged `model_construct` scanner evidence before
+  it can affect statement credit or suite counts; the positive test uses sealed
+  descriptor, selection, execution-policy, execution, and scanner evidence.
+  This proves the local typed
+  coverage boundary, not a production statement-coverage adapter or a real
+  mutation campaign.
+- **Mutation custody and denominator slice:** A self-hashed applicability plan
+  independently declares every property/mutation/test denominator member and
+  binds the approved executor, isolation policy, source, and exact suite
+  inventory. Kill credit is derived only from matching REAL, compiled,
+  isolated, same-suite baseline-pass/mutant-fail observations after source
+  preservation, exact restoration, and disposal succeed; missing, mocked,
+  unavailable, timed-out, invalid, mismatched, corrupt, or incomplete evidence
+  remains inconclusive. Campaigns run only under an operator-owned private
+  child with descriptor-relative no-follow custody, bounded enumeration and
+  deletion, failure cleanup, pre-existing-name refusal, and symlink-target
+  preservation.
+- **Mutation validation:** Ruff passed after formatting one assigned file;
+  `PYTHONDONTWRITEBYTECODE=1 .venv/bin/pytest -q -p no:cacheprovider
+  tests/unit/test_mutations.py` passed `35` tests in `0.53s`; strict mypy passed
+  `mutations.py`; and the exact benchmark/report/mutation command in
+  `LAST_COMMAND` passed `60` tests in `0.73s`. These are typed and mocked-adapter
+  tests, not a real audited-suite mutation execution or kill artifact.
+- **Independent pause review:** Read-only adversarial review found that the
+  campaign scorer does not reconstruct typed plans/campaigns at its public
+  boundary, so validator-bypassed copies can alter denominator or kill credit.
+  It also found that the provisional surface mutation record is not yet bound
+  to a validated campaign/property/source/entity join. Additional gaps are:
+  fake-adapter unit observations must never be described as real execution;
+  incomplete graph/invariant or project classification can collapse or pollute
+  denominators; statement counts are not yet parsed from a trusted production
+  artifact; renamed campaign custody can leave the descriptor-held copy
+  undisposed; and gap evidence hashes are not cross-bound to the credited
+  surface evidence. The ticket remains `IN_PROGRESS`; none of these findings
+  has been repaired or credited during the pause transition.
+- **Pause boundary:** All workers are stopped, `git diff --check` passes, and
+  the cohesive ticket remains uncommitted. Resume at the scorer reconstruction
+  boundary and typed mutation-to-surface join before model-priority/reporting
+  work. No provider call, secret access, public RPC, wallet, signing,
+  broadcast, external target, reservation, or paid operation occurred.
+- **Mutation evidence closure after resume:** Public campaign and score
+  boundaries now reconstruct every typed plan, campaign, and nested
+  observation. Planned campaigns are always labeled
+  `PLANNED_UNATTESTED` and remain `INCONCLUSIVE`; there is no public receipt,
+  token, factory, or caller-supplied path to decisive runtime mutation credit.
+  Persisted/self-hashed declarations and all fake adapters remain
+  non-crediting, and no production REAL executor or mutation kill is claimed.
+  Descriptor-held trees are erased by inode after a safe rename while an
+  unrelated replacement name remains untouched.
+- **Mutation closure validation:** Affected Ruff passed; strict mypy passed
+  `mutations.py`; the focused mutation suite passed `44` tests in `0.55s`; and
+  the benchmark/report/mutation matrix in `LAST_COMMAND` passed `69` tests in
+  `0.77s`. These are local typed and mock-only regressions, not real mutation
+  execution evidence.
+- **Reproduction-accounting correction:** Candidate replay activity now updates
+  only `reproduction_attempts`; it cannot overwrite the audited repository
+  suite's `tests_executed` or `tests_failed`. The focused regression preserves
+  `7` executed and `2` failed repository tests while recording one candidate
+  replay activity; `tests/unit/test_solidity.py` passed `34` tests in `1.98s`,
+  with affected Ruff, strict mypy, and diff checks green.
+- **Runtime-authority repair:** The public repository-suite attester was
+  removed. Process authority now requires the exact built-in Foundry
+  invocation and the same live, process-sealed isolation backend before and
+  after execution and during later validation. Hardhat, serialized values,
+  named impostors, reconstructed backends, mutated runs, and unrelated
+  derivations cannot inherit authority. Only an exact copy or constrained
+  source-location annotation projection may retain it. Complete invoked
+  timeout and invalid-output observations can retain honest REAL evidence;
+  preflight, launch, fallback, cleanup, source/inventory integrity, and
+  unisolated failures remain UNVERIFIED. This is synthetic regression
+  evidence only; no real isolation integration was executed or claimed.
+- **Runtime-authority validation:** `.venv/bin/pytest -q
+  tests/unit/test_runtime_evidence.py
+  tests/unit/test_foundry_execution_hardening.py
+  tests/unit/test_scanners_reporting.py` passed `160` tests in `4.42s`;
+  `.venv/bin/ruff check src/mmaudit/scanners/runtime_evidence.py
+  src/mmaudit/scanners/runner.py src/mmaudit/scanners/foundry.py
+  tests/unit/test_runtime_evidence.py` passed; and `.venv/bin/mypy --strict
+  src/mmaudit/scanners/runtime_evidence.py src/mmaudit/scanners/runner.py
+  src/mmaudit/scanners/foundry.py` passed three source files. Two inherited
+  pytest temporary-directory cleanup warnings remain.
+- **Mutation custody and digest hardening:** Scanner and mutation repository
+  hashes now bind one versioned audited-tree exclusion domain. Arbitrary
+  in-repository scanner output exclusions fail closed instead of hiding
+  audited source. The mutation private root must retain the exact operator
+  owner and mode `0700`; widening access fails disposal and preserves source.
+  Declarative and mocked campaigns remain non-decisive. POSIX exposes no
+  portable atomic inode-conditional directory removal: a same-UID actor that
+  can mutate the retained parent namespace can still race the final
+  name-based `rmdir`. Decisive real execution therefore still requires an
+  isolation boundary that makes that namespace inaccessible; this limitation
+  is explicit and is not represented as atomic cleanup.
+- **Mutation custody validation:** `.venv/bin/pytest -q
+  tests/unit/test_mutations.py tests/unit/test_scanner_workspace.py
+  tests/unit/test_scanners_reporting.py` passed `163` tests in `3.37s`;
+  the declarative/mock/planned subset passed `23` with `34` deselected in
+  `0.99s`; and the adjacent Foundry/repository-suite/replay matrix passed
+  `116` tests in `10.80s`. Ruff format/check passed eight affected files,
+  strict mypy passed the three production files, and `git diff --check`
+  passed. Two inherited pytest temporary-directory cleanup warnings remain.
+- **Final runtime-authority correction:** The production authority now captures
+  the exact unbound built-in Foundry repository-suite producer body and the
+  isolation provenance and source-location validators when its private
+  registry is constructed. Later rebinding of the public dispatcher, producer
+  body, or provenance globals is ignored. The captured body retains the
+  producer's descriptor-held workspace-custody finalization contract. An
+  independent synthetic authority exists only inside tests and cannot mint
+  receipts recognized by production consumers. The negative rebinding
+  regression and the broader runtime/coverage matrix passed `38` and `253`
+  tests respectively; Ruff and scoped strict mypy passed.
+- **Ordinary-scanner source custody:** Pipeline now passes the exact
+  post-discovery audited inventory digest to every ordinary scanner. The runner
+  retains a no-follow source descriptor across all concurrent tasks, each
+  built-in ordinary adapter copies and verifies that exact inventory, all task
+  outcomes are awaited, and source drift or root replacement raises a typed
+  integrity error that pipeline records as `INCOMPLETE`. Offline replay freezes
+  and revalidates the same inventory. The exact custody slice passed `9`
+  tests, the scanner/workspace/replay matrix passed `197`, and the
+  pipeline/execution-origin matrix passed `72` with one explicit hardened-
+  isolation prerequisite skip. Ruff, scoped strict mypy, and diff integrity
+  passed.
+- **Current-source and fallback-index closure:** Model surface requests,
+  assignment, feasibility, and accepted review coverage now share ephemeral
+  exact source bytes; stale or missing source conservatively blocks critical
+  credit, and raw source is not serialized. Runtime and mutation evidence from
+  another repository receives no audited-suite credit. A synthetic fallback-
+  indexed vault with exact `deposit`, `totalAssets`, and `balanceOf` surfaces
+  now receives the existing bound accounting invariant instead of leaving an
+  applicable economic plan unbound. The focused source-bound model slice
+  passed `67` tests, the fallback-index invariant slice passed `2`, and both
+  formerly failing pipeline regressions passed.
+- **Full-suite diagnosis and closure:** The first sandboxed full run produced
+  `3247 passed, 15 skipped, 7 failed, 71 errors in 408.81s`. Every error was a
+  denied numeric-loopback listener in the read-only RPC bridge tests. The seven
+  failures were stale test builders: two benchmark CLI fixtures and five
+  execution-origin report fixtures. They were updated to construct internally
+  consistent current-schema evidence without weakening any product validator;
+  their complete files passed `81` tests. Rerunning `.venv/bin/pytest -q` with
+  explicit local-loopback permission passed `3334` tests with `11` explicit
+  unavailable external-prerequisite skips in `478.51s`. Paid provider tests
+  remained disabled.
+- **Final local release gate:** `.venv/bin/ruff format .` reported `362 files
+  left unchanged`; `.venv/bin/ruff check .` passed; `.venv/bin/mypy` passed
+  `150` source files; `.venv/bin/python scripts/generate_release_schemas.py`
+  completed without schema drift; and `git diff --check` passed. Two inherited
+  pytest temporary-tree cleanup warnings remain and do not alter results.
+- **Honest disposition:** `V3-TESTQUALITY-001` is `PARTIAL`. Exact source
+  denominators, conservative critical gaps, elevated review routing,
+  producer-bound runtime receipts, source custody, and fail-closed mutation
+  declarations/custody are implemented. Production still emits no trusted
+  statement-coverage record and ran no decisive real mutation campaign. The
+  same-UID final-directory cleanup race requires an isolation boundary that
+  makes the retained parent namespace inaccessible. A real Foundry run using
+  an arbitrary custom in-repository output exclusion fails safely rather than
+  silently weakening identity. No real rootless isolation, new model call,
+  secret access, public RPC, wallet, signing, broadcast, or external target was
+  used or credited.
+- **Operator pause boundary:** Autorun is `PAUSED_BY_OPERATOR`. The validated
+  cohesive checkpoint will be committed and pushed over SSH. On resume,
+  continue with `V3-CI-001`; retain this ticket as `PARTIAL` until its remaining
+  real-evidence prerequisites exist.
 
 ## 2026-07-30 — V3-OMISSION-001
 

@@ -74,7 +74,12 @@ from mmaudit.orchestration.verification import (
 from mmaudit.reporting.json_report import stable_json
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_name
-from mmaudit.scanners.base import ScannerIsolationBackend, scanner_workspace_sha256
+from mmaudit.repository.workspace import audited_workspace_exclusion_root
+from mmaudit.scanners.base import (
+    ScannerIsolationBackend,
+    ScannerSourceIntegrityError,
+    scanner_workspace_sha256,
+)
 from mmaudit.scanners.clean_chain import TrustedCleanAnvilLauncher
 from mmaudit.scanners.fork_matrix import (
     REPOSITORY_FORK_MATRIX_RETURN_CLEANUP_RESERVE_SECONDS,
@@ -244,11 +249,13 @@ class ScannerReplayRunner(Protocol):
         root: Path,
         private_dir: Path,
         *,
+        audited_relative_paths: Sequence[str],
         skip_codeql: bool = False,
         allow_fork_probing: bool = False,
         projects: Sequence[SolidityProjectMetadata] = (),
         expected_repository_sha256: str | None = None,
         repository_exclusion_root: Path | None = None,
+        allow_custom_repository_exclusion: bool = False,
     ) -> list[ScannerRun]: ...
 
 
@@ -350,7 +357,9 @@ def _configured_replay_isolation_backend(config: AuditConfig) -> ScannerIsolatio
 def _repository_suite_replay_identity(
     repository: Path,
     expected: Sequence[ScannerRun],
-) -> tuple[str | None, Path | None]:
+    *,
+    audited_relative_paths: Sequence[str],
+) -> tuple[str | None, Path | None, bool]:
     """Reconstruct and verify one unambiguous frozen repository-suite identity."""
 
     identities = {
@@ -362,7 +371,7 @@ def _repository_suite_replay_identity(
         if (selection := run.repository_suite_selection) is not None
     }
     if not identities:
-        return None, None
+        return None, None, False
     if len(identities) != 1:
         raise ValueError("repository suite replay identities conflict")
 
@@ -374,9 +383,18 @@ def _repository_suite_replay_identity(
         exclusion_root.absolute().relative_to(repository.absolute())
     except ValueError as exc:
         raise ValueError("repository suite replay exclusion leaves the repository") from exc
-    if scanner_workspace_sha256(repository, exclusion_root) != expected_sha256:
+    allow_custom_repository_exclusion = audited_workspace_exclusion_root(relative_exclusion) is None
+    if (
+        scanner_workspace_sha256(
+            repository,
+            exclusion_root,
+            audited_relative_paths=audited_relative_paths,
+            allow_custom_private_exclusion=allow_custom_repository_exclusion,
+        )
+        != expected_sha256
+    ):
         raise ValueError("repository suite replay source differs from its frozen identity")
-    return expected_sha256, exclusion_root
+    return expected_sha256, exclusion_root, allow_custom_repository_exclusion
 
 
 class _ScannerArtifact(StrictModel):
@@ -571,6 +589,7 @@ class OfflineReplayOrchestrator:
                     private_dir=private / "scanners",
                     projects=artifacts.projects.projects,
                     expected=artifacts.scanners.runs,
+                    audited_relative_paths=tuple(binding.path for binding in manifest.sources),
                     observed_runs=observed_scanner_runs,
                 )
             )
@@ -584,6 +603,7 @@ class OfflineReplayOrchestrator:
                     artifact_limitation=artifacts.differential_limitation,
                     expected_scanner_runs=artifacts.scanners.runs,
                     observed_scanner_runs=observed_scanner_runs,
+                    audited_relative_paths=tuple(binding.path for binding in manifest.sources),
                 )
             )
             components.extend(
@@ -721,6 +741,7 @@ class OfflineReplayOrchestrator:
         private_dir: Path,
         projects: list[SolidityProjectMetadata],
         expected: list[ScannerRun],
+        audited_relative_paths: tuple[str, ...],
         observed_runs: list[ScannerRun] | None = None,
     ) -> list[OfflineReplayComponent]:
         if not expected:
@@ -731,7 +752,22 @@ class OfflineReplayOrchestrator:
             (
                 expected_repository_sha256,
                 repository_exclusion_root,
-            ) = _repository_suite_replay_identity(repository, expected)
+                allow_custom_repository_exclusion,
+            ) = _repository_suite_replay_identity(
+                repository,
+                expected,
+                audited_relative_paths=audited_relative_paths,
+            )
+            frozen_scanner_source_sha256 = (
+                scanner_workspace_sha256(
+                    repository,
+                    repository_exclusion_root,
+                    audited_relative_paths=audited_relative_paths,
+                    allow_custom_private_exclusion=allow_custom_repository_exclusion,
+                )
+                if expected_repository_sha256 is None
+                else expected_repository_sha256
+            )
             fork_acknowledged = any(
                 item.scanner in {"foundry_fork", "hardhat_fork"}
                 and item.repository_suite_selection is not None
@@ -741,21 +777,26 @@ class OfflineReplayOrchestrator:
             observed = await self.scanner_runner.run_all(
                 repository,
                 private_dir,
+                audited_relative_paths=audited_relative_paths,
                 skip_codeql=False,
                 allow_fork_probing=fork_acknowledged,
                 projects=projects,
-                expected_repository_sha256=expected_repository_sha256,
+                expected_repository_sha256=frozen_scanner_source_sha256,
                 repository_exclusion_root=repository_exclusion_root,
+                allow_custom_repository_exclusion=allow_custom_repository_exclusion,
             )
             if observed_runs is not None:
                 observed_runs.extend(observed)
             if (
-                expected_repository_sha256 is not None
-                and repository_exclusion_root is not None
-                and scanner_workspace_sha256(repository, repository_exclusion_root)
-                != expected_repository_sha256
+                scanner_workspace_sha256(
+                    repository,
+                    repository_exclusion_root,
+                    audited_relative_paths=audited_relative_paths,
+                    allow_custom_private_exclusion=allow_custom_repository_exclusion,
+                )
+                != frozen_scanner_source_sha256
             ):
-                raise ValueError("repository execution source changed during scanner replay")
+                raise ScannerSourceIntegrityError("audited source changed during scanner replay")
         except (OSError, RuntimeError, ValueError) as exc:
             return [
                 _blocked_component(
@@ -828,6 +869,7 @@ class OfflineReplayOrchestrator:
         artifact_limitation: str | None,
         expected_scanner_runs: list[ScannerRun],
         observed_scanner_runs: list[ScannerRun],
+        audited_relative_paths: tuple[str, ...],
     ) -> list[OfflineReplayComponent]:
         """Replay a state matrix separately from the qualifying scanner portfolio."""
 
@@ -895,12 +937,19 @@ class OfflineReplayOrchestrator:
                 )
             ]
         try:
-            expected_repository_sha256, repository_exclusion_root = (
-                _repository_suite_replay_identity(repository, expected_scanner_runs)
+            (
+                expected_repository_sha256,
+                repository_exclusion_root,
+                allow_custom_repository_exclusion,
+            ) = _repository_suite_replay_identity(
+                repository,
+                expected_scanner_runs,
+                audited_relative_paths=audited_relative_paths,
             )
         except (OSError, RuntimeError, ValueError):
             expected_repository_sha256 = None
             repository_exclusion_root = None
+            allow_custom_repository_exclusion = False
         expected_baselines = [
             run
             for run in expected_scanner_runs
@@ -963,7 +1012,12 @@ class OfflineReplayOrchestrator:
                 current_value.model_dump(mode="json")
             )
             if (
-                scanner_workspace_sha256(repository, repository_exclusion_root)
+                scanner_workspace_sha256(
+                    repository,
+                    repository_exclusion_root,
+                    audited_relative_paths=audited_relative_paths,
+                    allow_custom_private_exclusion=allow_custom_repository_exclusion,
+                )
                 != expected_repository_sha256
             ):
                 raise ValueError("repository changed during differential replay")

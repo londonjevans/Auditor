@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from mmaudit.benchmark.engine import BenchmarkReport
 from mmaudit.models.qualification import ModelQualificationArtifact
 from mmaudit.orchestration.context_manifest import ContextManifest
 from mmaudit.privacy import PrivacyRetentionConsent
@@ -24,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_ROOT = ROOT / "schemas"
 SCHEMA_BASE = "https://mmaudit.local/schemas"
 MODELS: dict[str, type[BaseModel]] = {
+    "benchmark_report.schema.json": BenchmarkReport,
     "context_manifest.schema.json": ContextManifest,
     "model_qualification.schema.json": ModelQualificationArtifact,
     "privacy_retention_consent.schema.json": PrivacyRetentionConsent,
@@ -37,6 +39,7 @@ MODELS: dict[str, type[BaseModel]] = {
     "release_static_evidence.schema.json": StaticReleaseEvidence,
 }
 TITLE_OVERRIDES = {
+    "benchmark_report.schema.json": "mmaudit benchmark report",
     "model_qualification.schema.json": "mmaudit model qualification artifact",
 }
 

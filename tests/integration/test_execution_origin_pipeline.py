@@ -67,20 +67,24 @@ class _NoScannerRunner(ScannerRunner):
         root: Path,
         private_dir: Path,
         *,
+        audited_relative_paths: Sequence[str],
         skip_codeql: bool = False,
         allow_fork_probing: bool = False,
         projects: Sequence[SolidityProjectMetadata] = (),
         expected_repository_sha256: str | None = None,
         repository_exclusion_root: Path | None = None,
+        allow_custom_repository_exclusion: bool = False,
     ) -> list[ScannerRun]:
         del (
             root,
             private_dir,
+            audited_relative_paths,
             skip_codeql,
             allow_fork_probing,
             projects,
             expected_repository_sha256,
             repository_exclusion_root,
+            allow_custom_repository_exclusion,
         )
         return []
 

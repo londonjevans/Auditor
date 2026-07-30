@@ -1131,26 +1131,27 @@ def _erc4626_contract_evidence(
         {entity.contract_name for entity in entities if entity.contract_name is not None}
     )
     evidence: list[tuple[str, list[SolidityEntity]]] = []
-    required_signatures = (
-        "deposit(uint256,address)",
-        "totalAssets()",
-        "balanceOf(address)",
-    )
     for contract_name in contract_names:
-        contract_entities = [
-            entity
-            for entity in entities
-            if entity.contract_name == contract_name and entity.visibility in {"public", "external"}
+        contract_entities = sorted(
+            [entity for entity in entities if entity.contract_name == contract_name],
+            key=lambda item: (item.path, item.start_line, item.end_line, item.id),
+        )
+        callable_entities = [
+            entity for entity in contract_entities if entity.visibility in {"public", "external"}
         ]
         by_signature = {
-            entity.signature: entity for entity in contract_entities if entity.signature is not None
+            entity.signature: entity for entity in callable_entities if entity.signature is not None
         }
-        if not all(signature in by_signature for signature in required_signatures):
+        by_name = {entity.name.lower(): entity for entity in contract_entities}
+        deposit = by_signature.get("deposit(uint256,address)")
+        total_assets = by_signature.get("totalAssets()") or by_name.get("totalassets")
+        balance_of = by_signature.get("balanceOf(address)") or by_name.get("balanceof")
+        if deposit is None or total_assets is None or balance_of is None:
             continue
         evidence.append(
             (
                 contract_name,
-                [by_signature[signature] for signature in required_signatures],
+                [deposit, total_assets, balance_of],
             )
         )
     return evidence
