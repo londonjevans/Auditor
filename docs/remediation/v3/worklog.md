@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: ACTIVE
+AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Execution-originated candidate consensus
 CURRENT_TICKET: V3-EXECORIGIN-001
 LAST_COMPLETED_TICKET: V3-OMISSION-001
-NEXT_ACTION: Reproduce the execution-candidate origin gap, inspect consensus/pipeline/report evidence boundaries, then add one typed location-validated execution-originated candidate path and defensive regressions.
-LAST_COMMAND: git commit -m "Bound context omission evidence"
-LAST_RESULT: PASS — isolated V3-OMISSION-001 checkpoint 14391ba7234aba3adfb1e3eb4159e5950754d833 created from the validated clean index.
+NEXT_ACTION: Resume V3-EXECORIGIN-001 from the read-only architecture review; add the typed execution provenance boundary and expected-red defensive regressions before production edits.
+LAST_COMMAND: Interrupt the two active read-only V3-EXECORIGIN review agents after the operator pause request.
+LAST_RESULT: PASS — both active review agents stopped; no V3-EXECORIGIN production implementation had begun and the worktree was clean.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -273,6 +273,12 @@ LAST_CHECKPOINT_COMMIT: 14391ba7234aba3adfb1e3eb4159e5950754d833
   typed origin flow with exact source-location and no-model-attribution
   regressions. No provider, secret, public RPC, wallet, signing, broadcast, or
   paid operation is in scope.
+- **Operator pause:** At `2026-07-30T04:26:20Z`, both active read-only review
+  agents were interrupted before implementation began. Their completed
+  architecture observations remain available in the conversation state; no
+  production source or test file changed, and no provider, secret, network,
+  wallet, signing, broadcast, or paid operation occurred. Resume from the
+  typed provenance and authority-boundary regression design.
 
 ## 2026-07-30 — V3-FIXTURE-001
 
