@@ -59,8 +59,10 @@ from mmaudit.models.schemas import (
     AuditRunStatus,
     ScannerStatus,
 )
+from mmaudit.orchestration.ci import CIJobStatus
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
 from mmaudit.orchestration.manifest import canonical_sha256
+from mmaudit.orchestration.pipeline import PipelineResult
 from mmaudit.privacy import PrivacyProfile
 from tests.conftest import base_config_data, model_registry_entry
 from tests.qualification_support import synthetic_release_observation
@@ -86,6 +88,33 @@ def _patch_loaded_audit_config(
     monkeypatch.setattr(
         "mmaudit.cli.load_config_with_provenance",
         lambda _path, **_kwargs: loaded,
+    )
+
+
+def _synthetic_ci_pipeline_result(
+    tmp_path: Path,
+    status: CIJobStatus,
+) -> PipelineResult:
+    comparison = (
+        None
+        if status is CIJobStatus.NO_BASELINE
+        else SimpleNamespace(
+            new_finding_ids=(),
+            unchanged_finding_ids=(),
+            coverage_regressions=(),
+        )
+    )
+    report: Any = SimpleNamespace(findings=())
+    ci_state: Any = SimpleNamespace(
+        job_status=status,
+        comparison=comparison,
+        evidence=SimpleNamespace(findings=()),
+    )
+    return PipelineResult(
+        report=report,
+        run_dir=tmp_path / "synthetic-run",
+        exit_code=ExitCode.SUCCESS,
+        ci_state=ci_state,
     )
 
 
@@ -142,6 +171,7 @@ def test_help_lists_required_commands() -> None:
         "models",
         "snapshot",
         "scan",
+        "ci",
         "run",
         "explain",
         "benchmark",
@@ -173,6 +203,271 @@ def test_run_help_lists_explicit_privacy_authorization_options() -> None:
     assert "--privacy-profile" in result.stdout
     assert "--retention-consent" in result.stdout
     assert "--privacy-source-classification" in result.stdout
+
+
+def test_ci_help_has_no_provider_or_secret_controls() -> None:
+    result = runner.invoke(app, ["ci", "--help"], env={"COLUMNS": "300"})
+
+    assert result.exit_code == 0
+    assert "--changed-since" in result.stdout
+    assert "--baseline-run" in result.stdout
+    for forbidden in (
+        "--secrets-env-file",
+        "--allow-code-egress",
+        "--cost-ledger",
+        "--model-qualification",
+        "--privacy-profile",
+        "--retention-consent",
+    ):
+        assert forbidden not in result.stdout
+
+
+def test_ci_requires_changed_since_before_pipeline_construction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    constructed = False
+
+    class SyntheticPipeline:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            nonlocal constructed
+            constructed = True
+
+    _patch_loaded_audit_config(monkeypatch, config_factory())
+    monkeypatch.setattr("mmaudit.cli.AuditPipeline", SyntheticPipeline)
+
+    result = runner.invoke(
+        app,
+        [
+            "ci",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--repo",
+            str(_synthetic_run_repository(tmp_path)),
+            "--output",
+            str(tmp_path / "audit-output"),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "changed-since" in result.stdout
+    assert not constructed
+
+
+def test_ci_is_structurally_provider_free_and_enables_hardened_suite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    config = config_factory()
+    repository = _synthetic_run_repository(tmp_path)
+    observed: dict[str, Any] = {}
+
+    class SyntheticPipeline:
+        def __init__(self, effective_config: AuditConfig, **kwargs: object) -> None:
+            observed["config"] = effective_config
+            observed["constructor"] = kwargs
+
+        async def run(self, **kwargs: object) -> PipelineResult:
+            observed["run"] = kwargs
+            return _synthetic_ci_pipeline_result(tmp_path, CIJobStatus.NO_BASELINE)
+
+    def forbidden_secret_load(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("CI must not load operator secrets")
+
+    async def forbidden_qualification_load(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("CI must not load model qualification")
+
+    def forbidden_privacy_consent_load(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("CI must not load provider privacy consent")
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "synthetic-ci-canary")
+    monkeypatch.setenv(
+        "MMAUDIT_SECRETS_ENV_FILE",
+        str(tmp_path / "must-not-be-read.env"),
+    )
+    _patch_loaded_audit_config(monkeypatch, config)
+    monkeypatch.setattr("mmaudit.cli.AuditPipeline", SyntheticPipeline)
+    monkeypatch.setattr("mmaudit.cli.load_operator_secrets", forbidden_secret_load)
+    monkeypatch.setattr(
+        "mmaudit.cli._load_audit_production_qualification",
+        forbidden_qualification_load,
+    )
+    monkeypatch.setattr(
+        "mmaudit.cli._load_audit_privacy_consent",
+        forbidden_privacy_consent_load,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ci",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--repo",
+            str(repository),
+            "--output",
+            str(tmp_path / "audit-output"),
+            "--changed-since",
+            "a" * 40,
+            "--skip-codeql",
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.SUCCESS, result.stdout
+    effective = observed["config"]
+    assert isinstance(effective, AuditConfig)
+    assert effective.smart_contracts.enabled
+    assert effective.smart_contracts.compile
+    assert not effective.smart_contracts.allow_network
+    assert effective.reproduction.require_hardened_isolation
+    assert effective.scanners.foundry_fork.enabled
+    assert effective.scanners.hardhat_fork.enabled
+    constructor = observed["constructor"]
+    assert isinstance(constructor, dict)
+    assert constructor["cost_ledger"] is None
+    assert constructor["api_key"] == ""
+    assert constructor["production_qualification"] is None
+    assert constructor["privacy_consent_observation"] is None
+    run_options = observed["run"]
+    assert isinstance(run_options, dict)
+    assert run_options["ci_mode"] is True
+    assert run_options["scanner_only"] is True
+    assert run_options["allow_code_egress"] is False
+    assert run_options["ci_baseline"] is None
+
+
+def test_ci_loads_baseline_against_exact_changed_since_and_forwards_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    repository = _synthetic_run_repository(tmp_path)
+    baseline_run = tmp_path / "trusted-baseline"
+    changed_since = "0123456789abcdef0123456789abcdef01234567"
+    loaded_baseline = object()
+    observed: dict[str, Any] = {}
+
+    def load_baseline(
+        path: Path,
+        *,
+        expected_repository_git_commit: str,
+    ) -> object:
+        observed["baseline_path"] = path
+        observed["expected_repository_git_commit"] = expected_repository_git_commit
+        return loaded_baseline
+
+    class SyntheticPipeline:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        async def run(self, **kwargs: object) -> PipelineResult:
+            observed["run"] = kwargs
+            return _synthetic_ci_pipeline_result(tmp_path, CIJobStatus.CLEAN)
+
+    _patch_loaded_audit_config(monkeypatch, config_factory())
+    monkeypatch.setattr("mmaudit.cli.load_ci_baseline_bundle", load_baseline)
+    monkeypatch.setattr("mmaudit.cli.AuditPipeline", SyntheticPipeline)
+
+    result = runner.invoke(
+        app,
+        [
+            "ci",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--repo",
+            str(repository),
+            "--output",
+            str(tmp_path / "audit-output"),
+            "--changed-since",
+            changed_since,
+            "--baseline-run",
+            str(baseline_run),
+            "--skip-codeql",
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.SUCCESS, result.stdout
+    assert observed["baseline_path"] == baseline_run
+    assert observed["expected_repository_git_commit"] == changed_since
+    run_options = observed["run"]
+    assert isinstance(run_options, dict)
+    assert run_options["changed_since"] == changed_since
+    assert run_options["ci_baseline"] is loaded_baseline
+
+
+def test_non_ci_command_rejects_baseline_before_loading_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline_loaded = False
+
+    def forbidden_baseline_load(*_args: object, **_kwargs: object) -> None:
+        nonlocal baseline_loaded
+        baseline_loaded = True
+
+    monkeypatch.setattr("mmaudit.cli.load_ci_baseline_bundle", forbidden_baseline_load)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--baseline-run",
+            str(tmp_path / "baseline"),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "No such option: --baseline-run" in result.output
+    assert not baseline_loaded
+
+
+@pytest.mark.parametrize(
+    "status",
+    [CIJobStatus.ANALYSIS_FAILED, CIJobStatus.COVERAGE_REGRESSION],
+)
+def test_ci_returns_incomplete_for_fail_closed_evidence_status(
+    status: CIJobStatus,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Any,
+) -> None:
+    repository = _synthetic_run_repository(tmp_path)
+
+    class SyntheticPipeline:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        async def run(self, **_kwargs: object) -> PipelineResult:
+            return _synthetic_ci_pipeline_result(tmp_path, status)
+
+    _patch_loaded_audit_config(monkeypatch, config_factory())
+    monkeypatch.setattr("mmaudit.cli.AuditPipeline", SyntheticPipeline)
+
+    result = runner.invoke(
+        app,
+        [
+            "ci",
+            "--config",
+            str(tmp_path / "synthetic.toml"),
+            "--repo",
+            str(repository),
+            "--output",
+            str(tmp_path / "audit-output"),
+            "--changed-since",
+            "a" * 40,
+            "--skip-codeql",
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.INCOMPLETE, result.stdout
+    assert f"CI status: {status.value}" in result.stdout
 
 
 def test_configured_frontier_profile_cannot_implicitly_authorize_consent(

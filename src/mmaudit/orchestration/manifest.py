@@ -1231,7 +1231,11 @@ def validate_manifest_artifacts(
                 raise ValueError(f"{artifact_name} differs from the final report")
 
 
-def _configuration_bindings(config: AuditConfig) -> list[ManifestHashBinding]:
+def build_manifest_configuration_bindings(
+    config: AuditConfig,
+) -> list[ManifestHashBinding]:
+    """Reconstruct the exact full and model configuration binding inventory."""
+
     return [
         ManifestHashBinding(
             identifier="config/full",
@@ -1244,6 +1248,10 @@ def _configuration_bindings(config: AuditConfig) -> list[ManifestHashBinding]:
             details={"configured_roles": str(6 + len(config.models.specialists))},
         ),
     ]
+
+
+def _configuration_bindings(config: AuditConfig) -> list[ManifestHashBinding]:
+    return build_manifest_configuration_bindings(config)
 
 
 def _prompt_bindings(report: AuditReport) -> list[ManifestHashBinding]:
@@ -1449,10 +1457,12 @@ def _qualification_bindings(
     return sorted(bindings, key=lambda item: item.identifier)
 
 
-def _tool_bindings(
+def build_manifest_tool_bindings(
     config: AuditConfig,
     report: AuditReport,
 ) -> list[ManifestHashBinding]:
+    """Reconstruct the exact configured and observed tool binding inventory."""
+
     bindings = [
         _binding(
             "configured/scanners",
@@ -1494,6 +1504,15 @@ def _tool_bindings(
             )
         )
     return sorted(bindings, key=lambda item: item.identifier)
+
+
+def _tool_bindings(
+    config: AuditConfig,
+    report: AuditReport,
+) -> list[ManifestHashBinding]:
+    """Retain the internal verifier seam while sharing the exact public reconstruction."""
+
+    return build_manifest_tool_bindings(config, report)
 
 
 def _compiler_bindings(

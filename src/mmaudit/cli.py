@@ -139,6 +139,7 @@ from mmaudit.orchestration.certification import (
     certify_maximum_assurance_run,
     write_maximum_assurance_certification,
 )
+from mmaudit.orchestration.ci import LoadedCIBaseline, load_ci_baseline_bundle
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger, CostLedgerError
 from mmaudit.orchestration.manifest import (
     RunEvidenceManifest,
@@ -1826,6 +1827,92 @@ def scan_command(
     )
 
 
+@app.command("ci")
+def ci_command(
+    config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
+    repo: Annotated[Path | None, typer.Option("--repo")] = None,
+    output: Annotated[Path | None, typer.Option("--output")] = None,
+    changed_since: Annotated[
+        str | None,
+        typer.Option(
+            "--changed-since",
+            help="Exact trusted comparison revision used only for prioritization.",
+        ),
+    ] = None,
+    baseline_run: Annotated[
+        Path | None,
+        typer.Option(
+            "--baseline-run",
+            help="Absolute manifest-bound three-file CI baseline bundle for comparison.",
+        ),
+    ] = None,
+    skip_codeql: Annotated[bool, typer.Option("--skip-codeql")] = False,
+    fail_on: Annotated[Severity | None, typer.Option("--fail-on")] = Severity.HIGH,
+    verbose: Annotated[bool, typer.Option("--verbose")] = False,
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Run provider-free deterministic pull-request analysis with fail-closed suites."""
+
+    if changed_since is None:
+        Console(no_color=no_color).print(
+            "[red]mmaudit failed safely:[/red] CI requires --changed-since."
+        )
+        raise typer.Exit(ExitCode.CONFIGURATION)
+    _execute_audit(
+        config_path=config_path,
+        secrets_env_file=None,
+        repo=repo,
+        output=output,
+        budget_usd=None,
+        cost_ledger=None,
+        model_qualification_bundle=None,
+        model_qualification_policy=None,
+        model_qualification_release_bindings=None,
+        model_qualification_release_source_root=None,
+        model_qualification_corpus=None,
+        model_qualification_ground_truth=None,
+        max_files=None,
+        max_file_bytes=None,
+        max_context_bytes=None,
+        concurrency=None,
+        severity_threshold=Severity.INFORMATIONAL,
+        fail_on=fail_on,
+        scanner_only=True,
+        skip_codeql=skip_codeql,
+        allow_code_egress=False,
+        require_zdr=False,
+        privacy_profile=None,
+        retention_consent=None,
+        privacy_source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
+        profile=None,
+        scope=None,
+        require_complete_scope=None,
+        require_maximum_assurance=False,
+        allow_maximum_assurance_downgrade=False,
+        min_model_families=None,
+        min_specialist_agents=None,
+        require_reproduction_for_critical=None,
+        require_formal_or_reproduction_for_confirmed_critical=None,
+        benchmark_gate=False,
+        benchmark_certificate=None,
+        benchmark_component_root=None,
+        benchmark_repository_commit=None,
+        solidity=True,
+        compile_solidity=True,
+        run_slither=True,
+        allow_network=False,
+        framework=None,
+        project_root=None,
+        allow_fork_probing=True,
+        fork_rpc_url_env=None,
+        changed_since=changed_since,
+        verbose=verbose,
+        no_color=no_color,
+        ci_mode=True,
+        ci_baseline_run=baseline_run,
+    )
+
+
 @app.command("run")
 def run_command(
     config_path: ConfigOption = Path(DEFAULT_CONFIG_NAME),
@@ -2634,10 +2721,32 @@ def _execute_audit(
     changed_since: str | None,
     verbose: bool,
     no_color: bool,
+    ci_mode: bool = False,
+    ci_baseline_run: Path | None = None,
 ) -> None:
     operator_secrets = OperatorSecrets()
     pipeline: AuditPipeline | None = None
     try:
+        if ci_mode and (
+            not scanner_only
+            or secrets_env_file is not None
+            or budget_usd is not None
+            or cost_ledger is not None
+            or model_qualification_bundle is not None
+            or model_qualification_policy is not None
+            or model_qualification_release_bindings is not None
+            or model_qualification_release_source_root is not None
+            or model_qualification_corpus is not None
+            or model_qualification_ground_truth is not None
+            or allow_code_egress
+            or retention_consent is not None
+            or allow_network
+        ):
+            raise ConfigError("CI mode rejects provider, secret, egress, and network controls")
+        if ci_mode and changed_since is None:
+            raise ConfigError("CI mode requires --changed-since")
+        if ci_baseline_run is not None and not ci_mode:
+            raise ConfigError("--baseline-run is accepted only by CI mode")
         loaded_config = load_config_with_provenance(config_path)
         resolved_cost_ledger = cost_ledger.resolve() if cost_ledger is not None else None
         cli_overrides = _audit_config_overrides(
@@ -2668,6 +2777,7 @@ def _execute_audit(
             framework=framework,
             project_root=project_root,
             fork_rpc_url_env=fork_rpc_url_env,
+            ci_mode=ci_mode,
         )
         config = cli_overrides.apply(loaded_config.effective_config)
         qualification_inputs_supplied = _validate_audit_production_qualification_inputs(
@@ -2749,6 +2859,13 @@ def _execute_audit(
                 "benchmark certificate inputs require --benchmark-gate or a configured gate"
             )
         repo_path = _repo_path(config, config_path, repo)
+        ci_baseline: LoadedCIBaseline | None = None
+        if ci_baseline_run is not None:
+            assert changed_since is not None
+            ci_baseline = load_ci_baseline_bundle(
+                ci_baseline_run,
+                expected_repository_git_commit=changed_since,
+            )
         if scanner_only:
             if retention_consent is not None:
                 raise ConfigError(
@@ -2796,9 +2913,27 @@ def _execute_audit(
                 allow_maximum_assurance_downgrade=None,
                 benchmark_verification=benchmark_verification,
                 benchmark_repository_git_commit=benchmark_repository_commit,
+                ci_mode=ci_mode,
+                ci_baseline=ci_baseline,
             )
         )
-        Console(no_color=no_color).print(f"Reports: {result.run_dir}")
+        local_console = Console(no_color=no_color)
+        local_console.print(f"Reports: {result.run_dir}")
+        if ci_mode:
+            ci_state = result.ci_state
+            if ci_state is None:
+                local_console.print("[red]CI status: ANALYSIS_FAILED; state artifact missing[/red]")
+            else:
+                comparison = ci_state.comparison
+                local_console.print(
+                    "CI status: "
+                    f"{ci_state.job_status.value}; "
+                    f"new={len(comparison.new_finding_ids) if comparison else len(ci_state.evidence.findings)}; "
+                    f"unchanged={len(comparison.unchanged_finding_ids) if comparison else 0}; "
+                    f"coverage_regressions="
+                    f"{len(comparison.coverage_regressions) if comparison else 0}"
+                )
+            raise typer.Exit(result.exit_for_ci(fail_on))
         raise typer.Exit(result.exit_for_findings(fail_on))
     except typer.Exit:
         raise
@@ -2879,6 +3014,7 @@ def _audit_config_overrides(
     framework: Literal["auto", "foundry", "hardhat", "mixed", "plain"] | None = None,
     project_root: str | None = None,
     fork_rpc_url_env: str | None = None,
+    ci_mode: bool = False,
 ) -> AuditConfigOverrides:
     if require_maximum_assurance and allow_maximum_assurance_downgrade:
         raise ConfigError(
@@ -2923,13 +3059,17 @@ def _audit_config_overrides(
         ),
         "maximum_assurance.benchmark_gate": True if benchmark_gate else None,
         "models.minimum_distinct_families": min_model_families,
-        "smart_contracts.enabled": solidity,
-        "smart_contracts.compile": compile_solidity,
-        "smart_contracts.allow_network": True if allow_network else None,
+        "smart_contracts.enabled": True if ci_mode else solidity,
+        "smart_contracts.compile": True if ci_mode else compile_solidity,
+        "smart_contracts.allow_network": False if ci_mode else (True if allow_network else None),
+        "smart_contracts.require_local_fork_rpc": True if ci_mode else None,
         "smart_contracts.framework": framework,
         "smart_contracts.project_root": project_root,
         "smart_contracts.fork_rpc_url_env": fork_rpc_url_env,
         "scanners.slither.enabled": True if run_slither else None,
+        "scanners.foundry_fork.enabled": True if ci_mode else None,
+        "scanners.hardhat_fork.enabled": True if ci_mode else None,
+        "reproduction.require_hardened_isolation": True if ci_mode else None,
     }
     if require_maximum_assurance:
         values["maximum_assurance.require"] = True

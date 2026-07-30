@@ -181,6 +181,19 @@ from mmaudit.orchestration.assurance import (
     is_qualifying_real_foundry_portfolio,
 )
 from mmaudit.orchestration.budgets import BudgetExhaustedError, BudgetManager
+from mmaudit.orchestration.ci import (
+    CI_STATE_FILENAME,
+    CIJobStatus,
+    CIRepositorySuiteStatus,
+    CIRunState,
+    LoadedCIBaseline,
+    build_ci_evidence_from_report,
+    build_ci_repository_suite_evidence,
+    build_ci_run_state,
+    ci_producer_sha256,
+    deterministic_ci_coverage_metrics,
+    deterministic_ci_policy_sha256,
+)
 from mmaudit.orchestration.consensus import (
     HOST_EXECUTION_ANALYSIS_LINK_SOURCE,
     CandidateGroup,
@@ -505,6 +518,7 @@ class PipelineResult:
     report: AuditReport
     run_dir: Path
     exit_code: ExitCode
+    ci_state: CIRunState | None = None
 
     def exit_for_findings(self, fail_on: Severity | None) -> ExitCode:
         if self.exit_code is not ExitCode.SUCCESS or fail_on is None:
@@ -517,6 +531,20 @@ class PipelineResult:
         ):
             return ExitCode.FINDINGS
         return ExitCode.SUCCESS
+
+    def exit_for_ci(self, fail_on: Severity | None) -> ExitCode:
+        """Apply CI evidence gates without weakening ordinary audit exits."""
+
+        if self.exit_code is not ExitCode.SUCCESS:
+            return self.exit_code
+        if self.ci_state is None:
+            return ExitCode.INCOMPLETE
+        if self.ci_state.job_status in {
+            CIJobStatus.ANALYSIS_FAILED,
+            CIJobStatus.COVERAGE_REGRESSION,
+        }:
+            return ExitCode.INCOMPLETE
+        return self.exit_for_findings(fail_on)
 
 
 def _repository_source_scope_sha256(repository_map: RepositoryMap) -> str:
@@ -649,6 +677,8 @@ class AuditPipeline:
         allow_maximum_assurance_downgrade: bool | None = None,
         benchmark_verification: BenchmarkCertificateVerification | None = None,
         benchmark_repository_git_commit: str | None = None,
+        ci_mode: bool = False,
+        ci_baseline: LoadedCIBaseline | None = None,
     ) -> PipelineResult:
         """Execute one audit and always clear provider credentials afterward."""
 
@@ -666,6 +696,8 @@ class AuditPipeline:
                 allow_maximum_assurance_downgrade=allow_maximum_assurance_downgrade,
                 benchmark_verification=benchmark_verification,
                 benchmark_repository_git_commit=benchmark_repository_git_commit,
+                ci_mode=ci_mode,
+                ci_baseline=ci_baseline,
             )
         finally:
             self.api_key = ""
@@ -693,6 +725,8 @@ class AuditPipeline:
         allow_maximum_assurance_downgrade: bool | None = None,
         benchmark_verification: BenchmarkCertificateVerification | None = None,
         benchmark_repository_git_commit: str | None = None,
+        ci_mode: bool = False,
+        ci_baseline: LoadedCIBaseline | None = None,
     ) -> PipelineResult:
         # A pipeline object may be reused for a later scanner-only run.  Derived
         # privacy state is run-local and must never survive that boundary.
@@ -719,6 +753,21 @@ class AuditPipeline:
                 if self.privacy_consent_observation is not None
                 else None
             ),
+        )
+        if ci_mode and (
+            not scanner_only
+            or allow_code_egress
+            or refresh_models
+            or self.client is not None
+            or self.cost_ledger is not None
+            or self.api_key
+        ):
+            raise ValueError("CI mode is provider-free scanner-only execution")
+        if ci_baseline is not None and not ci_mode:
+            raise ValueError("CI baseline evidence is accepted only in CI mode")
+        ci_producer_digest = ci_producer_sha256() if ci_mode else None
+        ci_policy_digest = (
+            deterministic_ci_policy_sha256(self.config, run_options) if ci_mode else None
         )
         if not scanner_only and self.client is None and self.cost_ledger is None:
             raise ValueError("provider audits require an explicit existing cumulative cost ledger")
@@ -3296,6 +3345,26 @@ class AuditPipeline:
             )
             terminal_code = ExitCode.INCOMPLETE
 
+        if ci_mode:
+            ci_suite = build_ci_repository_suite_evidence(
+                projects=solidity_projects,
+                scanner_runs=scanner_runs,
+            )
+            ci_execution_failures: list[str] = []
+            if scanner_source_sha256 is None:
+                ci_execution_failures.append(
+                    "CI scanner workspace identity could not be established"
+                )
+            if ci_suite.status is CIRepositorySuiteStatus.FAILED:
+                ci_execution_failures.extend(
+                    f"CI repository suite failed: {failure}" for failure in ci_suite.failures
+                )
+            for failure in ci_execution_failures:
+                if failure not in incomplete:
+                    incomplete.append(failure)
+            if ci_execution_failures and terminal_code is ExitCode.SUCCESS:
+                terminal_code = ExitCode.INCOMPLETE
+
         failed_required_pre_floor = [
             gate for gate in quality_gates if gate.required and not gate.passed
         ]
@@ -3334,7 +3403,9 @@ class AuditPipeline:
             usage=model_credit_usage,
             required_model_roles=(ANALYSIS_ROLES if model_review_applicable else ()),
             coverage_metrics=(
-                solidity_coverage.quality_metrics if solidity_coverage is not None else {}
+                deterministic_ci_coverage_metrics(solidity_coverage.quality_metrics)
+                if ci_mode and solidity_coverage is not None
+                else (solidity_coverage.quality_metrics if solidity_coverage is not None else {})
             ),
             solidity_applicable=bool(solidity_projects),
             static_analysis_applicable=bool(solidity_projects) or scanner_only,
@@ -3376,7 +3447,23 @@ class AuditPipeline:
                 else ()
             ),
         )
-
+        ci_metadata: dict[str, Any] | None = None
+        if ci_mode:
+            assert ci_producer_digest is not None
+            assert ci_policy_digest is not None
+            ci_metadata = {
+                "schema_version": "1.0",
+                "enabled": True,
+                "scanner_workspace_sha256": scanner_source_sha256,
+                "producer_sha256": ci_producer_digest,
+                "deterministic_policy_sha256": ci_policy_digest,
+                "baseline_state_sha256": (
+                    ci_baseline.state.state_sha256 if ci_baseline is not None else None
+                ),
+                "baseline_manifest_sha256": (
+                    ci_baseline.manifest.manifest_sha256 if ci_baseline is not None else None
+                ),
+            }
         report = self._build_report(
             run_id=run_id,
             generated_at=datetime.now(UTC),
@@ -3429,7 +3516,60 @@ class AuditPipeline:
             maximum_assurance=maximum_assurance,
             report_quality_review=report_quality_review,
             context_manifest=context_manifest,
+            ci_metadata=ci_metadata,
         )
+        ci_state: CIRunState | None = None
+        if ci_mode:
+            assert ci_producer_digest is not None
+            ci_evidence = build_ci_evidence_from_report(
+                report=report,
+                config=self.config,
+                run_options=run_options,
+                scanner_workspace_sha256=scanner_source_sha256,
+                projects=solidity_projects,
+                producer_sha256=ci_producer_digest,
+            )
+            ci_state = build_ci_run_state(
+                ci_evidence,
+                baseline=(ci_baseline.state if ci_baseline is not None else None),
+                baseline_manifest_sha256=(
+                    ci_baseline.manifest.manifest_sha256 if ci_baseline is not None else None
+                ),
+            )
+            report_metadata = dict(report.metadata)
+            report_ci_metadata = dict(report_metadata["ci"])
+            comparison = ci_state.comparison
+            report_ci_metadata.update(
+                {
+                    "job_status": ci_state.job_status.value,
+                    "analysis_failures": list(ci_state.analysis_failures),
+                    "new_findings": (
+                        len(comparison.new_finding_ids)
+                        if comparison is not None
+                        else len(ci_state.evidence.findings)
+                    ),
+                    "unchanged_findings": (
+                        len(comparison.unchanged_finding_ids) if comparison is not None else 0
+                    ),
+                    "resolved_findings": (
+                        len(comparison.resolved_finding_ids) if comparison is not None else 0
+                    ),
+                    "coverage_regressions": (
+                        len(comparison.coverage_regressions) if comparison is not None else 0
+                    ),
+                    "whole_run_reuse_eligible": (
+                        comparison.whole_run_reuse_eligible if comparison is not None else False
+                    ),
+                    "historical_evidence_use": "comparison_only_after_current_execution",
+                }
+            )
+            report_metadata["ci"] = report_ci_metadata
+            report = AuditReport.model_validate(
+                {
+                    **report.model_dump(mode="python"),
+                    "metadata": report_metadata,
+                }
+            )
         log_handler.flush()
         self._write_artifacts(
             run_dir=run_dir,
@@ -3455,10 +3595,16 @@ class AuditPipeline:
             falsifications=falsifications,
             run_options=run_options,
             context_manifest=context_manifest,
+            ci_state=ci_state,
         )
         self.logger.removeHandler(log_handler)
         log_handler.close()
-        return PipelineResult(report=report, run_dir=run_dir, exit_code=terminal_code)
+        return PipelineResult(
+            report=report,
+            run_dir=run_dir,
+            exit_code=terminal_code,
+            ci_state=ci_state,
+        )
 
     async def _execute_invariant_harnesses(
         self,
@@ -3886,6 +4032,7 @@ class AuditPipeline:
         maximum_assurance: MaximumAssuranceAssessment,
         report_quality_review: ReportQualityReview | None,
         context_manifest: ContextManifest,
+        ci_metadata: dict[str, Any] | None,
     ) -> AuditReport:
         fork_probing_enabled = self.config.smart_contracts.enabled and (
             self.config.smart_contracts.allow_fork_probing or allow_fork_probing
@@ -4004,6 +4151,7 @@ class AuditPipeline:
                 "raw_material_stored": (
                     self.config.privacy.store_raw_prompts or self.config.privacy.store_raw_responses
                 ),
+                **({"ci": ci_metadata} if ci_metadata is not None else {}),
                 "smart_contracts": {
                     "detected": bool(solidity_projects),
                     "enabled": self.config.smart_contracts.enabled,
@@ -4168,6 +4316,7 @@ class AuditPipeline:
         falsifications: FalsificationBatch,
         run_options: AuditRunOptions,
         context_manifest: ContextManifest,
+        ci_state: CIRunState | None,
     ) -> None:
         write_context_manifest(
             run_dir / "context-manifest.json",
@@ -4347,6 +4496,8 @@ class AuditPipeline:
                 incomplete_reasons=report.incomplete_reasons,
             ),
         )
+        if ci_state is not None:
+            write_json(run_dir / CI_STATE_FILENAME, ci_state)
         traceability = build_traceability_matrix(report.repository.git_commit)
         runtime_artifacts = {path.name for path in run_dir.iterdir() if path.is_file()} | {
             "maximum_assurance_traceability.json",
@@ -4410,6 +4561,7 @@ class AuditPipeline:
             "scope-assessment.json",
             "prior-audit-comparison.json",
             "reproduction-results.json",
+            CI_STATE_FILENAME,
             "maximum_assurance_traceability.json",
             "run-evidence-manifest.json",
         ):

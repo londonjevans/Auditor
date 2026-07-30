@@ -600,19 +600,64 @@ report.
 
 ## CI
 
-`.github/workflows/mmaudit.yml` is a secure example. It uses minimal default `contents: read`
-permissions, isolates `security-events: write` to the SARIF job, has concurrency and timeouts, pins
-third-party actions to commit SHAs, and does not pass the OpenRouter secret to any pull-request job.
-All pull requests receive scanner-only analysis; model-assisted runs are limited to trusted scheduled
-or manually dispatched revisions of the default branch. Add:
+`.github/workflows/mmaudit.yml` is the provider-free deterministic path. Pull requests, default-branch
+pushes, and manual invocations all call `mmaudit ci`, which is structurally scanner-only and cannot
+schedule model roles. The workflow file has no provider-secret reference. Checkout uses full Git
+history so `--changed-since` can prioritize the exact base revision without reducing the complete
+coverage denominator.
 
-1. a reviewed, non-secret `mmaudit.toml` with explicit current model IDs;
-2. the repository secret `OPENROUTER_API_KEY`;
-3. any preinstalled scanner setup appropriate to the runner.
+Default-branch runs may save a successful, integrity-checked prior run as a candidate CI baseline.
+Pull requests can restore only the cache namespace for their trusted base commit. Admission requires
+a deterministic-and-quality-gate success marker bound to that exact commit and semantic validation
+of the prior manifest, findings, CI state, complete scanner-workspace hash, effective configuration,
+run status, and producer identities; otherwise `mmaudit ci` runs fresh. Cache publication occurs only
+after public evidence upload and final gate propagation. A run whose quality, audit, artifact
+integrity, or semantic baseline validation failed is never saved as an admissible cache. A cached
+run is a comparison-only optimization candidate, never current execution evidence by declaration.
+The cache contains only the original self-hashed manifest plus its bound `final-findings.json` and
+`ci-state.json`; its commit admission marker sits outside that three-file bundle. The bundle loader
+rejects extra files and revalidates the selected bindings and cross-artifact semantics. The workflow
+never caches `private/`, logs, raw scanner output, or the complete run directory.
 
-SARIF upload is best effort because GitHub code scanning can be unavailable; local artifacts remain
-authoritative. Review upstream action release notes and update each pinned SHA by verifying the
-corresponding signed/tagged release. Do not replace pins with mutable branch names.
+Repository-owned Foundry or Hardhat suites remain subject to mmaudit's configured hardened-isolation
+policy. CI does not fall back to executing those suites directly on the host. Missing tools,
+unsupported projects, or unavailable isolation are reported as unavailable/incomplete and can fail
+the configured gate; they are never presented as successful execution. The example installs
+Bubblewrap for networkless local engines, but Bubblewrap does not supply isolated loopback. An
+applicable fork suite that requires a pinned local RPC therefore fails closed until the operator
+configures an approved rootless backend with that capability. The hosted workflow currently
+provisions Bubblewrap and mmaudit itself, not the complete pinned Solidity compiler, Slither,
+Foundry, Hardhat, or complementary engine portfolio. Projects that require an unprovisioned tool
+therefore remain an explicit external CI execution-stack blocker and fail closed; availability is
+not reported as execution.
+
+The audit exit code is captured so artifact observation, integrity verification, public artifact
+upload, and eligible SARIF upload still run. The final step then propagates the audit or evidence
+failure. Same-repository pull requests can upload SARIF through the isolated `upload-sarif` job,
+which has no checkout or shell step. Fork pull requests normally lack `security-events: write`, so
+their always-attempted `mmaudit-scanner-reports` artifact is the explicit fallback. Private evidence
+and raw model material are never included in that artifact. Each audit writes to a new
+`RUNNER_TEMP` directory rather than the checkout. After exactly one run is discovered and verified,
+the workflow copies a fixed allowlist of manifest-bound public files into a separate fresh staging
+directory. Artifact upload addresses only that directory, never a checkout glob. SARIF upload
+addresses one exact manifest-bound `audit-results.sarif`; a companion validation marker binds its
+hash to the run ID and manifest. This staging remains independent of the finding severity exit, so
+valid evidence is retained when the audit gate fails because it found an unsafe condition.
+
+Provider access is isolated in `.github/workflows/mmaudit-model.yml`. It has no pull-request trigger,
+runs only for scheduled or manually selected default-branch revisions, and requires approval through
+the named `mmaudit-provider` environment. The example performs an exact-provider preflight; it does
+not imply that paid model review ran. GitHub cannot encode environment protection settings in this
+file: before storing a credential, configure that environment in repository settings with required
+reviewers and a default-branch deployment rule. Commit a reviewed, non-secret `mmaudit.toml` on the
+default branch and configure `OPENROUTER_API_KEY` only in that protected environment before enabling
+the preflight.
+
+Both workflows use minimal default `contents: read` permissions, explicit timeouts and concurrency,
+and commit-pinned third-party actions. SARIF remains best effort because GitHub code scanning can be
+unavailable; the uploaded public evidence remains the portable result. Review upstream action
+release notes and verify signed/tagged releases before changing a pin. Never replace pins with
+mutable branch names.
 
 ## Auditor self-threat model
 

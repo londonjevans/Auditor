@@ -229,8 +229,11 @@
             "repository.max_walk_entries",
             "reproduction.expected_chain_id",
             "reproduction.pinned_block_number",
+            "reproduction.require_hardened_isolation",
             "reproduction.rootless_container_image",
             "reproduction.rootless_container_runtime",
+            "scanners.foundry_fork.enabled",
+            "scanners.hardhat_fork.enabled",
             "scanners.slither.enabled",
             "scope.mode",
             "scope.require_complete",
@@ -241,7 +244,8 @@
             "smart_contracts.fork_rpc_url_env",
             "smart_contracts.foundry_match_path",
             "smart_contracts.framework",
-            "smart_contracts.project_root"
+            "smart_contracts.project_root",
+            "smart_contracts.require_local_fork_rpc"
           ]
         },
         "value": {
@@ -279,12 +283,16 @@
                 "prior_audit.required",
                 "privacy.allow_code_egress",
                 "privacy.require_zdr",
+                "reproduction.require_hardened_isolation",
+                "scanners.foundry_fork.enabled",
+                "scanners.hardhat_fork.enabled",
                 "scanners.slither.enabled",
                 "scope.require_complete",
                 "smart_contracts.allow_fork_probing",
                 "smart_contracts.allow_network",
                 "smart_contracts.compile",
-                "smart_contracts.enabled"
+                "smart_contracts.enabled",
+                "smart_contracts.require_local_fork_rpc"
               ]
             },
             "value": {
@@ -373,7 +381,7 @@
       "properties": {
         "entries": {
           "type": "array",
-          "maxItems": 40,
+          "maxItems": 44,
           "items": {
             "$ref": "#/$defs/auditConfigOverride"
           }

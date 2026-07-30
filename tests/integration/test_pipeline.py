@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
+import subprocess
 import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
@@ -12,6 +14,7 @@ from typing import Any
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from mmaudit.agents.specialists import build_specialist_execution_records
 from mmaudit.benchmark.certificate import (
@@ -20,7 +23,12 @@ from mmaudit.benchmark.certificate import (
     CertificateVerificationStatus,
     FileBackedBenchmarkVerificationEvidence,
 )
-from mmaudit.config import configured_model_ids
+from mmaudit.config import (
+    AuditConfig,
+    AuditConfigOverrides,
+    canonical_audit_config_json,
+    configured_model_ids,
+)
 from mmaudit.constants import ALL_SPECIALIST_ROLES, ExitCode
 from mmaudit.isolation.dependencies import dependency_tree_sha256
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterRequestLimitError
@@ -79,8 +87,15 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.models.usage import UsageLedger
 from mmaudit.operator_secrets import load_operator_secrets
+from mmaudit.orchestration import ci as ci_module
 from mmaudit.orchestration.assurance import AssuranceRuntime, MaximumAssuranceContract
 from mmaudit.orchestration.budgets import BudgetManager
+from mmaudit.orchestration.ci import (
+    CIJobStatus,
+    CIRunState,
+    load_ci_baseline,
+    load_ci_baseline_bundle,
+)
 from mmaudit.orchestration.context_manifest import (
     context_manifest_report_binding,
     load_context_manifest,
@@ -223,6 +238,145 @@ class StaticScannerRunner:
         if self.required and runs[0].status is not ScannerStatus.SUCCESS:
             return [f"semgrep: {runs[0].status.value}"]
         return []
+
+
+class SyntheticValidatedScannerRunner(StaticScannerRunner):
+    """Emit schema-valid synthetic runtime evidence for CI artifact integration tests."""
+
+    async def run_all(self, *args: Any, **kwargs: Any) -> list[ScannerRun]:
+        runs = await super().run_all(*args, **kwargs)
+        run = runs[0].model_copy(
+            update={
+                "execution_evidence": ExecutionEvidenceKind.REAL,
+                "command": ["/trusted/synthetic-scanner", "--machine-output"],
+                "executable_sha256": "1" * 64,
+                "raw_output_path": "synthetic-scanner/output.json",
+                "raw_output_sha256": hashlib.sha256(b"{}").hexdigest(),
+                "raw_output_bytes": 2,
+                "process_exit_code": 0,
+                "isolation_backend": "bubblewrap",
+                "isolation_attestation_sha256": "2" * 64,
+                "machine_output_validated": True,
+            }
+        )
+        return [
+            ScannerRun.model_validate(
+                {
+                    **run.model_dump(mode="json"),
+                    "execution_observation_sha256": (run.expected_execution_observation_sha256()),
+                }
+            )
+        ]
+
+
+class SyntheticTwoValidatedScannerRunner(SyntheticValidatedScannerRunner):
+    """Emit a second successful deterministic scanner for coverage-baseline tests."""
+
+    async def run_all(self, *args: Any, **kwargs: Any) -> list[ScannerRun]:
+        runs = await super().run_all(*args, **kwargs)
+        second = runs[0].model_copy(
+            update={
+                "scanner": "gitleaks",
+                "findings": [],
+                "command": ["/trusted/synthetic-gitleaks", "--machine-output"],
+                "executable_sha256": "3" * 64,
+                "raw_output_path": "synthetic-gitleaks/output.json",
+                "execution_observation_sha256": None,
+            }
+        )
+        second = ScannerRun.model_validate(
+            {
+                **second.model_dump(mode="json"),
+                "execution_observation_sha256": (second.expected_execution_observation_sha256()),
+            }
+        )
+        return [*runs, second]
+
+
+def _commit_synthetic_repository(repository: Path) -> str:
+    """Create one local commit without consulting host Git configuration."""
+
+    executable = shutil.which("git")
+    if executable is None:
+        pytest.fail("Git is required for the CI baseline integration regression")
+    environment = {
+        "PATH": str(Path(executable).resolve(strict=True).parent),
+        "LANG": "C.UTF-8",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+
+    def run_git(*arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [executable, "-C", str(repository), *arguments],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=environment,
+        )
+
+    run_git("init", "--quiet")
+    run_git("add", "--all")
+    run_git(
+        "-c",
+        "user.name=Corrovera CI Test",
+        "-c",
+        "user.email=ci-test@invalid.example",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "-m",
+        "Synthetic CI baseline",
+    )
+    return run_git("rev-parse", "HEAD").stdout.strip()
+
+
+def _replace_manifest_bound_report(run_dir: Path, report: AuditReport) -> None:
+    """Replace the public report and reseal only its manifest file binding."""
+
+    report_path = run_dir / "final-findings.json"
+    write_json(report_path, report)
+    manifest_path = run_dir / "run-evidence-manifest.json"
+    manifest = RunEvidenceManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+    payload = manifest.model_dump(mode="json")
+    report_bytes = report_path.read_bytes()
+    report_binding = next(
+        binding for binding in payload["artifacts"] if binding["path"] == report_path.name
+    )
+    report_binding["sha256"] = hashlib.sha256(report_bytes).hexdigest()
+    report_binding["size"] = len(report_bytes)
+    payload["manifest_sha256"] = canonical_sha256(
+        {key: value for key, value in payload.items() if key != "manifest_sha256"}
+    )
+    write_run_evidence_manifest(
+        manifest_path,
+        RunEvidenceManifest.model_validate(payload),
+    )
+
+
+def _copy_ci_public_bundle(run_dir: Path, destination: Path) -> Path:
+    destination.mkdir()
+    for name in (
+        "ci-state.json",
+        "final-findings.json",
+        "run-evidence-manifest.json",
+    ):
+        shutil.copyfile(run_dir / name, destination / name)
+    return destination.resolve(strict=True)
+
+
+def _write_resealed_ci_manifest(path: Path, payload: dict[str, Any]) -> None:
+    payload["manifest_sha256"] = canonical_sha256(
+        {key: value for key, value in payload.items() if key != "manifest_sha256"}
+    )
+    write_run_evidence_manifest(
+        path,
+        RunEvidenceManifest.model_validate(payload),
+    )
 
 
 class StaticRepositoryForkMatrixRunner:
@@ -4965,3 +5119,612 @@ async def test_reused_pipeline_does_not_leak_provider_privacy_state_into_scanner
     )
     assert scanner_metadata["privacy"]["effective_policy"] is None
     assert scanner_metadata["privacy"]["source_provenance"] is None
+
+
+@pytest.mark.asyncio
+async def test_ci_pipeline_emits_manifest_bound_state_that_round_trips(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    commit = _commit_synthetic_repository(vulnerable_repo)
+    output = tmp_path / "ci-output"
+    pipeline = AuditPipeline(
+        config_factory(scanners={"semgrep": {"enabled": True, "required": True}}),
+        repo=vulnerable_repo,
+        output=output,
+        scanner_runner=SyntheticValidatedScannerRunner(),  # type: ignore[arg-type]
+    )
+
+    result = await pipeline.run(
+        scanner_only=True,
+        changed_since=commit,
+        ci_mode=True,
+    )
+
+    assert result.ci_state is not None
+    assert result.ci_state.job_status is CIJobStatus.NEW_FINDINGS
+    persisted = CIRunState.model_validate_json(
+        (result.run_dir / "ci-state.json").read_text(encoding="utf-8")
+    )
+    assert persisted == result.ci_state
+    manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    validate_manifest_artifacts(manifest, result.run_dir)
+    state_binding = next(
+        artifact for artifact in manifest.artifacts if artifact.path == "ci-state.json"
+    )
+    state_bytes = (result.run_dir / "ci-state.json").read_bytes()
+    assert state_binding.sha256 == hashlib.sha256(state_bytes).hexdigest()
+    assert state_binding.size == len(state_bytes)
+
+    loaded = load_ci_baseline(
+        result.run_dir.resolve(strict=True),
+        expected_repository_git_commit=commit,
+    )
+    assert loaded.state == persisted
+    assert loaded.manifest == manifest
+    assert loaded.report == result.report
+
+
+@pytest.mark.asyncio
+async def test_ci_public_baseline_bundle_is_exact_and_excludes_private_artifacts(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    commit = _commit_synthetic_repository(vulnerable_repo)
+    result = await AuditPipeline(
+        config_factory(scanners={"semgrep": {"enabled": True, "required": True}}),
+        repo=vulnerable_repo,
+        output=tmp_path / "ci-public-bundle-output",
+        scanner_runner=SyntheticValidatedScannerRunner(),  # type: ignore[arg-type]
+    ).run(
+        scanner_only=True,
+        changed_since=commit,
+        ci_mode=True,
+    )
+    bundle = tmp_path / "ci-public-bundle"
+    bundle.mkdir()
+    names = (
+        "ci-state.json",
+        "final-findings.json",
+        "run-evidence-manifest.json",
+    )
+    for name in names:
+        shutil.copyfile(result.run_dir / name, bundle / name)
+
+    loaded = load_ci_baseline_bundle(
+        bundle.resolve(strict=True),
+        expected_repository_git_commit=commit,
+    )
+
+    assert loaded.state == result.ci_state
+    assert tuple(sorted(path.name for path in bundle.iterdir())) == names
+    assert not (bundle / "private").exists()
+
+    (bundle / "unexpected.json").write_text("{}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="unexpected or unsafe member"):
+        load_ci_baseline_bundle(
+            bundle.resolve(strict=True),
+            expected_repository_git_commit=commit,
+        )
+
+
+@pytest.mark.parametrize(
+    ("variant", "error"),
+    [
+        ("effective_configuration", "effective configuration differs"),
+        ("repository_root", "repository root identity differs"),
+        ("configuration_binding", "configuration bindings differ"),
+        ("tool_binding", "tool bindings differ"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_ci_public_bundle_rejects_resealed_manifest_projection_mismatch(
+    variant: str,
+    error: str,
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    commit = _commit_synthetic_repository(vulnerable_repo)
+    result = await AuditPipeline(
+        config_factory(scanners={"semgrep": {"enabled": True, "required": True}}),
+        repo=vulnerable_repo,
+        output=tmp_path / f"ci-manifest-{variant}-output",
+        scanner_runner=SyntheticValidatedScannerRunner(),  # type: ignore[arg-type]
+    ).run(
+        scanner_only=True,
+        changed_since=commit,
+        ci_mode=True,
+    )
+    bundle = _copy_ci_public_bundle(
+        result.run_dir,
+        tmp_path / f"ci-manifest-{variant}-bundle",
+    )
+    manifest_path = bundle / "run-evidence-manifest.json"
+    manifest = RunEvidenceManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+    payload = manifest.model_dump(mode="json")
+
+    if variant == "effective_configuration":
+        run_configuration = payload["run_configuration"]
+        assert isinstance(run_configuration, dict)
+        file_payload = json.loads(run_configuration["file_configuration_json"])
+        file_payload["reporting"]["markdown"] = not file_payload["reporting"]["markdown"]
+        file_config = AuditConfig.model_validate(file_payload)
+        environment_overrides = AuditConfigOverrides.model_validate(
+            run_configuration["environment_overrides"]
+        )
+        cli_overrides = AuditConfigOverrides.model_validate(run_configuration["cli_overrides"])
+        effective = cli_overrides.apply(environment_overrides.apply(file_config))
+        run_configuration["file_configuration_json"] = canonical_audit_config_json(file_config)
+        run_configuration["file_config_sha256"] = file_config.stable_hash()
+        run_configuration["effective_configuration_json"] = canonical_audit_config_json(effective)
+        run_configuration["effective_config_sha256"] = effective.stable_hash()
+        run_configuration["model_config_sha256"] = effective.model_hash()
+        run_configuration["invocation_sha256"] = canonical_sha256(
+            {
+                "environment_overrides_sha256": run_configuration["environment_overrides_sha256"],
+                "cli_overrides_sha256": run_configuration["cli_overrides_sha256"],
+                "run_options_sha256": run_configuration["run_options_sha256"],
+                "effective_config_sha256": run_configuration["effective_config_sha256"],
+                "requested_profile": run_configuration["requested_profile"],
+                "achieved_profile": run_configuration["achieved_profile"],
+            }
+        )
+    elif variant == "repository_root":
+        payload["repository_root_name"] = "forged-root-name"
+    elif variant == "configuration_binding":
+        payload["bindings"]["configuration"][0]["sha256"] = "f" * 64
+    else:
+        scanner_binding = next(
+            binding
+            for binding in payload["bindings"]["tools"]
+            if binding["identifier"].startswith("scanner/")
+        )
+        scanner_binding["sha256"] = "f" * 64
+
+    _write_resealed_ci_manifest(manifest_path, payload)
+
+    with pytest.raises(ValueError, match=error):
+        load_ci_baseline_bundle(
+            bundle,
+            expected_repository_git_commit=commit,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("changed_since", "forged-base", "changed-since metadata differs"),
+        ("model_configuration_hash", "f" * 64, "model configuration differs"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_ci_public_bundle_rejects_resealed_report_manifest_projection_mismatch(
+    field: str,
+    value: str,
+    error: str,
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    commit = _commit_synthetic_repository(vulnerable_repo)
+    result = await AuditPipeline(
+        config_factory(scanners={"semgrep": {"enabled": True, "required": True}}),
+        repo=vulnerable_repo,
+        output=tmp_path / f"ci-report-{field}-output",
+        scanner_runner=SyntheticValidatedScannerRunner(),  # type: ignore[arg-type]
+    ).run(
+        scanner_only=True,
+        changed_since=commit,
+        ci_mode=True,
+    )
+    bundle = _copy_ci_public_bundle(
+        result.run_dir,
+        tmp_path / f"ci-report-{field}-bundle",
+    )
+    report_payload = result.report.model_dump(mode="python")
+    if field == "changed_since":
+        report_payload["repository"] = result.report.repository.model_copy(
+            update={"changed_since": value}
+        )
+    else:
+        report_payload[field] = value
+    tampered_report = AuditReport.model_validate(report_payload)
+    _replace_manifest_bound_report(bundle, tampered_report)
+
+    with pytest.raises(ValueError, match=error):
+        load_ci_baseline_bundle(
+            bundle,
+            expected_repository_git_commit=commit,
+        )
+
+
+@pytest.mark.asyncio
+async def test_ci_public_bundle_rejects_root_replacement_during_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    commit = _commit_synthetic_repository(vulnerable_repo)
+    result = await AuditPipeline(
+        config_factory(scanners={"semgrep": {"enabled": True, "required": True}}),
+        repo=vulnerable_repo,
+        output=tmp_path / "ci-root-swap-output",
+        scanner_runner=SyntheticValidatedScannerRunner(),  # type: ignore[arg-type]
+    ).run(
+        scanner_only=True,
+        changed_since=commit,
+        ci_mode=True,
+    )
+    bundle = _copy_ci_public_bundle(result.run_dir, tmp_path / "ci-root-swap-bundle")
+    retired = tmp_path / "ci-root-swap-retired"
+    original_read = ci_module._read_ci_bundle_member_at
+    replaced = False
+
+    def read_and_replace(
+        root_descriptor: int,
+        name: str,
+        *,
+        max_bytes: int,
+    ) -> ci_module._CIBundleMemberObservation:
+        nonlocal replaced
+        observation = original_read(
+            root_descriptor,
+            name,
+            max_bytes=max_bytes,
+        )
+        if not replaced:
+            replaced = True
+            bundle.rename(retired)
+            shutil.copytree(retired, bundle)
+        return observation
+
+    monkeypatch.setattr(ci_module, "_read_ci_bundle_member_at", read_and_replace)
+
+    with pytest.raises(ValueError, match="bundle root changed"):
+        load_ci_baseline_bundle(
+            bundle,
+            expected_repository_git_commit=commit,
+        )
+
+
+@pytest.mark.asyncio
+async def test_ci_public_bundle_rejects_member_replacement_during_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    commit = _commit_synthetic_repository(vulnerable_repo)
+    result = await AuditPipeline(
+        config_factory(scanners={"semgrep": {"enabled": True, "required": True}}),
+        repo=vulnerable_repo,
+        output=tmp_path / "ci-member-swap-output",
+        scanner_runner=SyntheticValidatedScannerRunner(),  # type: ignore[arg-type]
+    ).run(
+        scanner_only=True,
+        changed_since=commit,
+        ci_mode=True,
+    )
+    bundle = _copy_ci_public_bundle(result.run_dir, tmp_path / "ci-member-swap-bundle")
+    replacement = tmp_path / "replacement-ci-state.json"
+    original_read = ci_module._read_ci_bundle_member_at
+    replaced = False
+
+    def read_and_replace(
+        root_descriptor: int,
+        name: str,
+        *,
+        max_bytes: int,
+    ) -> ci_module._CIBundleMemberObservation:
+        nonlocal replaced
+        observation = original_read(
+            root_descriptor,
+            name,
+            max_bytes=max_bytes,
+        )
+        if name == "ci-state.json" and not replaced:
+            replaced = True
+            replacement.write_bytes(observation.data)
+            replacement.replace(bundle / name)
+        return observation
+
+    monkeypatch.setattr(ci_module, "_read_ci_bundle_member_at", read_and_replace)
+
+    with pytest.raises(ValueError, match=r"bundle (?:root|member) changed"):
+        load_ci_baseline_bundle(
+            bundle,
+            expected_repository_git_commit=commit,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "forged_value"),
+    [
+        ("schema_version", "9.9"),
+        ("enabled", False),
+        ("scanner_workspace_sha256", "c" * 64),
+        ("producer_sha256", "d" * 64),
+        ("deterministic_policy_sha256", "e" * 64),
+        ("job_status", "CLEAN"),
+        ("analysis_failures", ["forged analysis success projection"]),
+        ("new_findings", 999),
+        ("unchanged_findings", 999),
+        ("resolved_findings", 999),
+        ("coverage_regressions", 999),
+        ("whole_run_reuse_eligible", True),
+        ("baseline_state_sha256", "a" * 64),
+        ("baseline_manifest_sha256", "b" * 64),
+        ("historical_evidence_use", "forged_current_execution_credit"),
+        ("forged_extra_projection", "not_emitted_by_the_ci_pipeline"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_ci_report_or_baseline_rejects_resealed_state_projection_mismatch(
+    field: str,
+    forged_value: object,
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    commit = _commit_synthetic_repository(vulnerable_repo)
+    pipeline = AuditPipeline(
+        config_factory(scanners={"semgrep": {"enabled": True, "required": True}}),
+        repo=vulnerable_repo,
+        output=tmp_path / "ci-projection-output",
+        scanner_runner=SyntheticValidatedScannerRunner(),  # type: ignore[arg-type]
+    )
+    result = await pipeline.run(
+        scanner_only=True,
+        changed_since=commit,
+        ci_mode=True,
+    )
+    metadata = dict(result.report.metadata)
+    ci_metadata = dict(metadata["ci"])
+    ci_metadata[field] = forged_value
+    metadata["ci"] = ci_metadata
+    report_payload = {
+        **result.report.model_dump(mode="python"),
+        "metadata": metadata,
+    }
+    if field == "enabled":
+        with pytest.raises(
+            ValidationError,
+            match="minimum-floor coverage claims conflict",
+        ):
+            AuditReport.model_validate(report_payload)
+        return
+    tampered_report = AuditReport.model_validate(report_payload)
+    _replace_manifest_bound_report(result.run_dir, tampered_report)
+    resealed_manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    validate_manifest_artifacts(resealed_manifest, result.run_dir)
+
+    with pytest.raises(
+        ValueError,
+        match="CI baseline scanner workspace identity is absent from the report",
+    ):
+        load_ci_baseline(
+            result.run_dir.resolve(strict=True),
+            expected_repository_git_commit=commit,
+        )
+
+
+@pytest.mark.asyncio
+async def test_ci_baseline_rejects_resealed_report_source_inventory_mismatch(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    commit = _commit_synthetic_repository(vulnerable_repo)
+    result = await AuditPipeline(
+        config_factory(scanners={"semgrep": {"enabled": True, "required": True}}),
+        repo=vulnerable_repo,
+        output=tmp_path / "ci-source-inventory-output",
+        scanner_runner=SyntheticValidatedScannerRunner(),  # type: ignore[arg-type]
+    ).run(
+        scanner_only=True,
+        changed_since=commit,
+        ci_mode=True,
+    )
+    repository_files = list(result.report.repository.files)
+    repository_files[0] = repository_files[0].model_copy(
+        update={"size": repository_files[0].size + 1}
+    )
+    tampered_report = AuditReport.model_validate(
+        {
+            **result.report.model_dump(mode="python"),
+            "repository": result.report.repository.model_copy(update={"files": repository_files}),
+        }
+    )
+    _replace_manifest_bound_report(result.run_dir, tampered_report)
+
+    with pytest.raises(ValueError, match="sources differ from the final report"):
+        load_ci_baseline(
+            result.run_dir.resolve(strict=True),
+            expected_repository_git_commit=commit,
+        )
+
+
+@pytest.mark.asyncio
+async def test_ci_baseline_rejects_shared_manifest_inode(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    commit = _commit_synthetic_repository(vulnerable_repo)
+    result = await AuditPipeline(
+        config_factory(scanners={"semgrep": {"enabled": True, "required": True}}),
+        repo=vulnerable_repo,
+        output=tmp_path / "ci-shared-manifest-output",
+        scanner_runner=SyntheticValidatedScannerRunner(),  # type: ignore[arg-type]
+    ).run(
+        scanner_only=True,
+        changed_since=commit,
+        ci_mode=True,
+    )
+    os.link(
+        result.run_dir / "run-evidence-manifest.json",
+        result.run_dir / "shared-manifest-copy.json",
+    )
+
+    with pytest.raises(ValueError, match="bounded unshared regular file"):
+        load_ci_baseline(
+            result.run_dir.resolve(strict=True),
+            expected_repository_git_commit=commit,
+        )
+
+
+@pytest.mark.asyncio
+async def test_ci_baseline_rejects_exact_commit_mismatch(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    commit = _commit_synthetic_repository(vulnerable_repo)
+    pipeline = AuditPipeline(
+        config_factory(scanners={"semgrep": {"enabled": True, "required": True}}),
+        repo=vulnerable_repo,
+        output=tmp_path / "ci-commit-output",
+        scanner_runner=SyntheticValidatedScannerRunner(),  # type: ignore[arg-type]
+    )
+    result = await pipeline.run(
+        scanner_only=True,
+        changed_since=commit,
+        ci_mode=True,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="repository commit differs from changed-since",
+    ):
+        load_ci_baseline(
+            result.run_dir.resolve(strict=True),
+            expected_repository_git_commit="0" * 40,
+        )
+
+
+@pytest.mark.asyncio
+async def test_ci_coverage_regression_is_not_admissible_as_next_baseline(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    commit = _commit_synthetic_repository(vulnerable_repo)
+    config = config_factory(
+        scanners={
+            "semgrep": {"enabled": True, "required": True},
+            "gitleaks": {"enabled": True, "required": False},
+        }
+    )
+    baseline_result = await AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=tmp_path / "ci-coverage-baseline",
+        scanner_runner=SyntheticTwoValidatedScannerRunner(),  # type: ignore[arg-type]
+    ).run(
+        scanner_only=True,
+        changed_since=commit,
+        ci_mode=True,
+    )
+    baseline = load_ci_baseline(
+        baseline_result.run_dir.resolve(strict=True),
+        expected_repository_git_commit=commit,
+    )
+    current = await AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=tmp_path / "ci-coverage-current",
+        scanner_runner=SyntheticValidatedScannerRunner(),  # type: ignore[arg-type]
+    ).run(
+        scanner_only=True,
+        changed_since=commit,
+        ci_mode=True,
+        ci_baseline=baseline,
+    )
+
+    assert current.ci_state is not None
+    assert current.ci_state.job_status is CIJobStatus.COVERAGE_REGRESSION
+    assert current.exit_for_ci(None) is ExitCode.INCOMPLETE
+    with pytest.raises(ValueError, match="unresolved coverage regression"):
+        load_ci_baseline(
+            current.run_dir.resolve(strict=True),
+            expected_repository_git_commit=commit,
+        )
+
+
+@pytest.mark.asyncio
+async def test_ci_pipeline_fails_closed_when_applicable_repository_suite_is_unavailable(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    repository = _foundry_repo(tmp_path, patched=True)
+    commit = _commit_synthetic_repository(repository)
+    runner = SyntheticValidatedScannerRunner(
+        finding_path="src/Vault.sol",
+        finding_line=20,
+    )
+    pipeline = AuditPipeline(
+        config_factory(
+            scanners={
+                "semgrep": {"enabled": True, "required": True},
+                "foundry_fork": {"enabled": True, "required": False},
+            },
+        ),
+        repo=repository,
+        output=tmp_path / "ci-suite-output",
+        scanner_runner=runner,  # type: ignore[arg-type]
+    )
+
+    result = await pipeline.run(
+        scanner_only=True,
+        changed_since=commit,
+        allow_fork_probing=True,
+        ci_mode=True,
+    )
+
+    assert result.ci_state is not None
+    assert result.ci_state.job_status is CIJobStatus.ANALYSIS_FAILED
+    assert any(
+        failure.startswith("foundry_fork:missing:") for failure in result.ci_state.analysis_failures
+    )
+    assert result.exit_for_ci(None) is not ExitCode.SUCCESS
+    assert result.report.run_status in {
+        AuditRunStatus.INCOMPLETE,
+        AuditRunStatus.FAILED,
+    }
+    manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    validate_manifest_artifacts(manifest, result.run_dir)
+
+
+@pytest.mark.asyncio
+async def test_non_ci_pipeline_emits_no_ci_state(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "ordinary-output"
+    pipeline = AuditPipeline(
+        config_factory(scanners={"semgrep": {"enabled": True, "required": True}}),
+        repo=vulnerable_repo,
+        output=output,
+        scanner_runner=SyntheticValidatedScannerRunner(),  # type: ignore[arg-type]
+    )
+
+    result = await pipeline.run(scanner_only=True)
+
+    assert result.ci_state is None
+    assert not (result.run_dir / "ci-state.json").exists()
+    assert not (output / "latest" / "ci-state.json").exists()
+    manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    assert "ci-state.json" not in {artifact.path for artifact in manifest.artifacts}

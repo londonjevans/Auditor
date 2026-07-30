@@ -5,12 +5,12 @@ The objective source has SHA-256
 Do not record credentials, raw private prompts, or raw provider completions here.
 
 AUTORUN_STATUS: PAUSED_BY_OPERATOR
-CURRENT_MILESTONE: Audited-suite coverage and assertion strength — partial checkpoint
-CURRENT_TICKET: V3-TESTQUALITY-001 (PARTIAL; PAUSED)
+CURRENT_MILESTONE: Operator pause after continuous-integration code closure
+CURRENT_TICKET: NONE (V3-CI-001 is PARTIAL; V3-CALIBRATE-001 has not started)
 LAST_COMPLETED_TICKET: V3-EXECORIGIN-001
-NEXT_ACTION: On operator resume, begin V3-CI-001. Revisit V3-TESTQUALITY-001 only when a trusted statement-coverage producer, decisive real V3-MUTATION-001 executor, and the required inaccessible-parent isolation boundary are available; do not promote mock or planned evidence.
-LAST_COMMAND: `.venv/bin/ruff format . && .venv/bin/ruff check . && .venv/bin/mypy && .venv/bin/python scripts/generate_release_schemas.py && git diff --check`
-LAST_RESULT: PASS — 362 files were already formatted, Ruff passed, strict mypy passed 150 source files, release schemas regenerated without drift, and diff integrity passed. Immediately before this command, the complete loopback-enabled suite passed `3334` tests with `11` explicit external-prerequisite skips in `478.51s`.
+NEXT_ACTION: On operator resume, begin V3-CALIBRATE-001. Retain V3-CI-001 as PARTIAL until its digest-pinned hosted compiler/scanner/test/rootless-isolation stack executes successfully.
+LAST_COMMAND: `.venv/bin/pytest -q` (numeric local-loopback enabled; external network and paid-provider execution disabled)
+LAST_RESULT: PASS — the complete suite passed `3434` tests with `11` explicit prerequisite skips in `511.50s`. The earlier isolated invariant timeout is retained as failed evidence; its exact three-case and complete `78`-test file both passed before this green rerun. Paid-provider execution remains disabled.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,106 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: b7e820ea3fa2f90740fa88733f952e44bda1a598
+LAST_CHECKPOINT_COMMIT: d93454b89ec629d4381106a6d1625c910440d15c
+
+## 2026-07-30 — V3-CI-001
+
+- **Status:** `IN_PROGRESS`.
+- **Defensive objective:** Make pull-request analysis structurally model-free and secret-free,
+  retain evidence after fail-closed exits, execute applicable repository-owned tests only through
+  hardened isolation, and compare current deterministic evidence with a source- and
+  producer-bound prior run.
+- **Starting evidence:** The existing workflow's scanner job does not receive the provider key and
+  calls the scanner-only command, but it neither executes the configured fork suite nor passes a
+  changed-since base. Its artifact observation and upload steps run only after audit success, and
+  the isolated SARIF job explicitly excludes pull requests. The repository has replay and
+  qualification journals, but no general CI resume artifact. Existing run-manifest verification is
+  not a safe cache oracle because it validates the prior scoped source list rather than
+  rediscovering the complete current scanner workspace or re-resolving intended producer
+  identities.
+- **Exact next safe action:** Add typed CI state/comparison models and regressions proving that
+  source additions, source drift, producer/config drift, unavailable isolation, secret/model
+  workflow references, and reduced coverage cannot receive reuse or unchanged credit.
+- **Implementation slice preserved at operator pause:** Typed CI evidence, comparison, repository
+  suite, baseline loading, pipeline artifact emission, CLI execution mode, provider-free pull-request
+  workflow, trusted provider workflow, README guidance, and focused unit coverage are present but
+  uncommitted and remain under review. The last focused CI-state run passed `19` tests; the workflow
+  slice passed `7` tests plus YAML and shell-syntax checks. These are intermediate results, not
+  ticket acceptance.
+- **Outstanding adversarial review findings:** Normalize volatile location-validation timestamps;
+  require valid host location annotations; bind unchanged findings to the complete scanner
+  workspace; reject incomplete or failed states from whole-run reuse and cache admission; validate
+  all report-to-state summary projections; enforce scanner/finding attribution; and annotate the
+  typed test helper return. A failed default-branch result must not poison the next baseline cache.
+- **Pause state:** `PAUSED_BY_OPERATOR`. All subagents were stopped or already complete. No
+  checkpoint commit was created because this ticket is not yet coherent or validated.
+- **Resumed implementation evidence:** Host location-validation records are normalized without
+  volatile timestamps, invalid or misattributed scanner findings become explicit analysis
+  failures, unchanged credit requires the complete workspace/source tree, and whole-run
+  equivalence binds semantic tool output, finding, coverage, and suite evidence. CI minimum-floor
+  coverage now excludes model/formal/invariant obligations that cannot apply to the structurally
+  provider-free scanner-only mode while preserving the complete forensic coverage artifact.
+  Scanner-only CI remains explicitly `DEGRADED`, never a full-audit `COMPLETE` claim.
+- **Focused results after resume:** CI-state Ruff and strict mypy passed; `30` CI-state tests
+  passed. The four pipeline acceptance tests passed in `8.25s`; the seven CLI-focused tests and
+  eight workflow tests passed independently. Workflow YAML, every shell block, and cache-admission
+  ordering were also validated. No provider, secret, paid call, public RPC, wallet, signing,
+  broadcast, or external-target operation occurred.
+- **Second operator pause:** `PAUSED_BY_OPERATOR`. The joined validation produced exactly one
+  failure and `270` passes in `158.66s`; the failure was a stale published run-evidence manifest
+  schema after four CI override paths were added. The schema synchronization edit is preserved,
+  but no acceptance rerun or checkpoint commit has occurred. Both active independent review agents
+  were stopped at this safe boundary.
+- **Second resumed validation:** The published-schema focus passed `2` tests, the full joined
+  CI/config/manifest/run-status/schema/pipeline matrix passed `271` tests in `126.62s`, Ruff
+  formatting left `365` files unchanged, Ruff checking passed, strict mypy passed `151` source
+  files, and generated release schemas verified synchronized. The ordinary full suite reached
+  `3318 passed, 15 skipped`; all `71` setup errors were the same managed-sandbox denial while
+  binding a numeric-loopback test listener. That environmental result is not recorded as a green
+  full suite and requires the established loopback-enabled validation mode after code closure.
+- **Independent adversarial defects reproduced:** A non-qualifying scanner declaration could
+  receive reusable CI credit; scanner invocation drift was not bound; reduced repository-suite
+  selection could remain `CLEAN`; extra report CI-projection keys and a contradictory report source
+  inventory were admitted; wildcard failure artifacts could include checkout decoys; and the cache
+  staged the complete run including `private/`. Three new integration assays produced the expected
+  pre-fix result `3 failed, 9 passed in 7.72s`. The workflow also lacks a provisioned, pinned,
+  loopback-capable external execution stack, so positive real suite execution remains an explicit
+  technical integration limitation rather than release evidence.
+- **Final core correction:** CI tool reuse now delegates to the canonical qualifying real-scanner
+  gate and retains adapter-normalized successful finding exits. Repository-suite state binds
+  selected and executed test descriptor identities, so an equal-count replacement is a coverage
+  regression. Invocation hashing no longer treats unproven `.mmaudit`, `src/mmaudit`,
+  `runs/private`, `tmp`, `_temp`, or `runs/workspace` lexical names as volatile, and distinguishes
+  default from explicit loopback ports. The focused core suite passed `48` tests; an independent
+  read-only review found no remaining blocker in these three invariants.
+- **Projection and snapshot correction:** Public baseline admission now joins effective and model
+  configuration, repository root, changed-since, audit profile, and exact configured/observed tool
+  bindings across state, report, and reconstructable manifest. The exact three-file bundle is
+  captured beneath held no-follow directory descriptors, then re-observed through both the held
+  and current root before parsing captured bytes. Coherently resealed configuration/root/tool/report
+  projections and same-byte root/member replacements now fail closed. The expanded focused matrix
+  passed `84` tests. FIFO substitution cannot block because both bundle and full-admission reads
+  require `O_NOFOLLOW|O_NONBLOCK`; exact inventory rejects after at most four entries. Independent
+  post-fix projection, snapshot, manifest-compatibility, workflow, and core reviews found no
+  remaining material blocker.
+- **Final validation:** The joined CI/CLI/config/manifest/schema/run-status/pipeline matrix passed
+  `312` tests in `116.20s`. `.venv/bin/ruff format .` left `365` files unchanged,
+  `.venv/bin/ruff check .` passed, strict `.venv/bin/mypy` passed all `151` source files,
+  release-schema generation exited successfully, and `git diff --check` passed. The final
+  `.venv/bin/pytest -q` run passed `3434` tests with `11` explicit prerequisite skips in
+  `511.50s`. The prior isolated timeout remains recorded rather than overwritten; its exact
+  three-case rerun and complete `78`-test file passed before the green full rerun.
+- **Disposition:** `PARTIAL`. All safe implementation, adversarial regression, evidence-binding,
+  serialization, workflow, and validation work in this ticket is complete. The hosted workflow
+  still does not provision or execute the complete digest-pinned compiler, Slither,
+  Foundry/Hardhat, rootless-isolation, and local-loopback stack. Applicable unavailable execution
+  fails closed, but positive real fork-suite execution is `BLOCKED_TECHNICAL` and is not claimed.
+- **Secret/artifact review:** The final changed-file scan found only five deliberately synthetic
+  `sk-or-v1-...` canaries in defensive tests; no real credential pattern or generated runtime
+  artifact was added. `.env` was not read. The worktree contains only the recorded source,
+  workflow, schema, documentation, and test changes.
+- **Pause state:** `PAUSED_BY_OPERATOR`. V3-CALIBRATE-001 has not started. The current cohesive
+  ticket state is ready for its isolated local checkpoint and SSH push.
 
 ## 2026-07-30 — V3-TESTQUALITY-001
 

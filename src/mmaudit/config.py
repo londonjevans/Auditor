@@ -1572,8 +1572,11 @@ _AUDIT_OVERRIDE_VALUE_TYPES: dict[str, tuple[type[object], ...]] = {
     "repository.max_walk_entries": (int,),
     "reproduction.expected_chain_id": (int,),
     "reproduction.pinned_block_number": (int,),
+    "reproduction.require_hardened_isolation": (bool,),
     "reproduction.rootless_container_image": (str,),
     "reproduction.rootless_container_runtime": (str,),
+    "scanners.foundry_fork.enabled": (bool,),
+    "scanners.hardhat_fork.enabled": (bool,),
     "scanners.slither.enabled": (bool,),
     "scope.mode": (str,),
     "scope.require_complete": (bool,),
@@ -1585,6 +1588,7 @@ _AUDIT_OVERRIDE_VALUE_TYPES: dict[str, tuple[type[object], ...]] = {
     "smart_contracts.foundry_match_path": (str,),
     "smart_contracts.framework": (str,),
     "smart_contracts.project_root": (str,),
+    "smart_contracts.require_local_fork_rpc": (bool,),
 }
 _AUDIT_OVERRIDE_PATHS = frozenset(_AUDIT_OVERRIDE_VALUE_TYPES)
 

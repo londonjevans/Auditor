@@ -9031,6 +9031,20 @@ class CoverageExclusion(StrictModel):
     provenance: CoverageProvenance
 
 
+CI_DETERMINISTIC_COVERAGE_METRIC_IDS: frozenset[str] = frozenset(
+    {
+        "asset_flows_classified",
+        "compilation_completion",
+        "compiler_contracts_indexed",
+        "dependency_resolution",
+        "external_calls_classified",
+        "scanner_completion",
+        "solidity_files_indexed",
+        "storage_variables_modelled",
+    }
+)
+
+
 class CoverageMetric(StrictModel):
     """One independently auditable coverage dimension; never a context-free score."""
 
@@ -11181,6 +11195,13 @@ class AuditReport(StrictModel):
 
         coverage = self.effective_solidity_coverage()
         coverage_metrics = coverage.quality_metrics if coverage is not None else {}
+        ci_metadata = self.metadata.get("ci")
+        if scanner_only and isinstance(ci_metadata, dict) and ci_metadata.get("enabled") is True:
+            coverage_metrics = {
+                metric_id: metric
+                for metric_id, metric in coverage_metrics.items()
+                if metric_id in CI_DETERMINISTIC_COVERAGE_METRIC_IDS
+            }
         coverage_ids = sorted(coverage_metrics)
         coverage_valid = bool(coverage_ids) and all(
             not metric.failures and (metric.denominator > 0 or bool(metric.not_applicable_evidence))

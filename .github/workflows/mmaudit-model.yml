@@ -1,0 +1,99 @@
+name: mmaudit trusted provider checks
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload_reports:
+        description: Retain any non-secret provider diagnostics
+        required: true
+        default: true
+        type: boolean
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mmaudit-provider-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  provider-check:
+    name: Trusted default-branch provider preflight
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: mmaudit-provider
+    env:
+      HAS_PROVIDER_KEY: ${{ secrets.OPENROUTER_API_KEY != '' }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        if: env.HAS_PROVIDER_KEY == 'true'
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        if: env.HAS_PROVIDER_KEY == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Require the protected provider credential
+        if: env.HAS_PROVIDER_KEY != 'true'
+        run: |
+          echo "The protected mmaudit-provider environment has no provider credential."
+          exit 78
+      - name: Install mmaudit
+        if: env.HAS_PROVIDER_KEY == 'true'
+        run: python -m pip install .
+      - name: Prepare explicit operator secret file
+        if: env.HAS_PROVIDER_KEY == 'true'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          umask 077
+          secret_file="$(mktemp "$RUNNER_TEMP/mmaudit-operator-secrets.XXXXXX.env")"
+          printf 'OPENROUTER_API_KEY=%s\n' "$OPENROUTER_API_KEY" > "$secret_file"
+          chmod 600 "$secret_file"
+          printf 'MMAUDIT_SECRETS_ENV_FILE=%s\n' "$secret_file" >> "$GITHUB_ENV"
+      - name: Validate exact provider configuration
+        if: env.HAS_PROVIDER_KEY == 'true'
+        run: |
+          test -f mmaudit.toml
+          mmaudit doctor \
+            --config mmaudit.toml \
+            --secrets-env-file "$MMAUDIT_SECRETS_ENV_FILE" \
+            --repo . \
+            --output .mmaudit \
+            --allow-code-egress \
+            --no-color
+          mmaudit models check \
+            --config mmaudit.toml \
+            --secrets-env-file "$MMAUDIT_SECRETS_ENV_FILE" \
+            --no-color
+      - name: Record paid-execution boundary
+        if: env.HAS_PROVIDER_KEY == 'true'
+        run: >-
+          echo "This workflow validates the protected exact-provider boundary only.
+          Paid reviews require an operator-owned persistent ledger and explicit
+          provider-test opt-in; they are not inferred from this preflight."
+      - name: Remove operator secret file
+        if: env.HAS_PROVIDER_KEY == 'true' && always()
+        run: |
+          if [[ -n "${MMAUDIT_SECRETS_ENV_FILE:-}" && -f "$MMAUDIT_SECRETS_ENV_FILE" ]]; then
+            rm -f -- "$MMAUDIT_SECRETS_ENV_FILE"
+          fi
+      - name: Upload non-secret provider diagnostics
+        if: >-
+          always() &&
+          env.HAS_PROVIDER_KEY == 'true' &&
+          (github.event_name != 'workflow_dispatch' || inputs.upload_reports)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mmaudit-provider-diagnostics
+          path: |
+            .mmaudit/doctor.json
+            .mmaudit/model-check.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7

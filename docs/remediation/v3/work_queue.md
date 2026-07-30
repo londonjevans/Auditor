@@ -655,7 +655,24 @@ are invisible to source review by construction.
 - **Files expected to change:** `src/mmaudit/cli.py`, `.github/workflows/mmaudit.yml`,
   orchestration resume state, documentation, regressions.
 - **Dependencies:** `V3-FORKSUITE-001`.
-- **Status:** `QUEUED`
+- **Status:** `PARTIAL`
+- **Starting evidence:** The prior pull-request workflow omitted changed-since
+  prioritization, applicable isolated repository-suite execution, failure-path artifact
+  observation, and resumable state bound to the complete scanner workspace and producer.
+- **Current result:** The provider-free `mmaudit ci` path, hardened workflow, manifest-bound
+  deterministic state, semantic baseline admission, source/tool/finding/coverage comparison,
+  exact three-artifact baseline capture, and fail-closed repository-suite evidence are
+  implemented. The joined ticket matrix passed `312` tests, Ruff formatting/checking and strict
+  mypy passed, and the final complete suite passed `3434` tests with `11` explicit external
+  prerequisite skips. No provider, secret, paid call, public RPC, wallet, signing, broadcast, or
+  external-target operation occurred.
+- **Remaining blocker:** The hosted workflow does not provision or execute the complete
+  digest-pinned compiler, Slither, Foundry/Hardhat, rootless-isolation, and local-loopback stack.
+  Applicable unavailable execution fails closed, but positive real fork-suite execution on that
+  runner is `BLOCKED_TECHNICAL`; it remains assigned to `V3-ENGINES-001`,
+  `V3-HARDHAT-001`, and the existing fork-suite integration work.
+- **Next action:** Operator-requested pause boundary. On resume, begin `V3-CALIBRATE-001`;
+  retain this ticket as `PARTIAL` until the positive hosted execution prerequisite is proven.
 
 ## V3-CALIBRATE-001 — Evidence-derived qualification thresholds
 
