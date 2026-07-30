@@ -5,12 +5,12 @@ The objective source has SHA-256
 Do not record credentials, raw private prompts, or raw provider completions here.
 
 AUTORUN_STATUS: ACTIVE
-CURRENT_MILESTONE: Current model catalogue discovery and drift detection
-CURRENT_TICKET: V3-MODELREFRESH-001 (PARTIAL; checkpoint pending)
+CURRENT_MILESTONE: Operator root-lineage review binding
+CURRENT_TICKET: V3-LINEAGE-001 (IN_PROGRESS; provider-free review binding)
 LAST_COMPLETED_TICKET: V3-EXECORIGIN-001
-NEXT_ACTION: Create and push the isolated `V3-MODELREFRESH-001` checkpoint, record its hash, then transition immediately to provider-free `V3-LINEAGE-001`. Do not make a third authenticated refresh attempt in this ticket.
-LAST_COMMAND: `.venv/bin/pytest -q`
-LAST_RESULT: PASS — the final corrected tree passed 3602 tests with 11 explicit external-prerequisite skips in 505.06s. The paid-provider test remained disabled. Two inherited temporary-tree cleanup warnings were non-failing. No provider call, secret access, network request, or spend occurred.
+NEXT_ACTION: Inspect the existing lineage, candidate-registry, discovery, privacy, and qualification bindings, then add one strict provider-free operator-review artifact and deterministic join regressions. Keep production quality and approved-lineage configuration empty.
+LAST_COMMAND: `git commit -m "Harden model catalogue refresh"`
+LAST_RESULT: PASS — isolated `V3-MODELREFRESH-001` checkpoint `9d70253f58f759ac2b6b930cc4a9c2efef21cf79` created with 26 intended files; the worktree was clean immediately afterward.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: b95dcd610209b102a65b57b027e2d6ac12083d41
+LAST_CHECKPOINT_COMMIT: 9d70253f58f759ac2b6b930cc4a9c2efef21cf79
 
 ## 2026-07-30 — V3-MODELREFRESH-001
 
@@ -237,8 +237,27 @@ LAST_CHECKPOINT_COMMIT: b95dcd610209b102a65b57b027e2d6ac12083d41
   automatic benchmark execution, lineage re-evaluation, or promotion path. No completion,
   provider call, secret access, public RPC, target access, wallet, signing, broadcast, or spend
   occurred in the final provider-free implementation slice.
-- **Checkpoint action:** Create the cohesive local checkpoint, record and push it through the SSH
-  remote, then begin the provider-free reviewed-lineage binding in `V3-LINEAGE-001`.
+- **Validated checkpoint:** `9d70253f58f759ac2b6b930cc4a9c2efef21cf79`. Push it through
+  the SSH remote with the following transition record, then continue the provider-free
+  reviewed-lineage binding in `V3-LINEAGE-001`.
+
+## 2026-07-30 — V3-LINEAGE-001 continuation
+
+- **Status:** `IN_PROGRESS` (provider-free reviewed-lineage binding).
+- **Defensive objective:** Bind an explicit operator lineage decision to exact refreshed candidate
+  evidence without inferring lineage from vendor labels or inventing qualification-derived quality.
+- **Starting checkpoint:** `9d70253f58f759ac2b6b930cc4a9c2efef21cf79`.
+- **Starting evidence:** An operator decision record exists, but it is documentary and deliberately
+  not copied into the obsolete frozen candidate registry. Production quality fields and
+  `privacy.approved_model_lineages` remain empty, so private-source egress remains fail-closed.
+- **Current safe slice:** Inspect and reuse the existing lineage review, candidate registry,
+  discovery, privacy, and qualification abstractions. Implement a strict, hash-bound,
+  provider-free review artifact and exact candidate-evidence join with synthetic local
+  regressions. Do not perform another provider refresh, access an operator secret, populate
+  qualification-derived quality, or activate production source egress.
+- **Exact next safe action:** Map the current typed lineage and registry validation paths, then add
+  failing tests for incomplete, conflicting, duplicate, stale, and non-current review decisions
+  before implementing the join.
 
 ## 2026-07-30 — V3-CALIBRATE-001
 

@@ -748,7 +748,7 @@ are invisible to source review by construction.
 - **Dependencies:** None beyond current `HEAD` for the decision itself. A refreshed candidate
   registry can bind the operator review before calibration; the production
   `ModelLineageConfig` binding additionally requires qualification output.
-- **Status:** `PARTIAL`
+- **Status:** `IN_PROGRESS`
 - **Operator decision recorded:** `docs/remediation/v3/model_lineage_review.md` authorises
   eight root lineages — anthropic, openai, google, x-ai, moonshotai, deepseek, z-ai, minimax —
   with per-model derivation evidence from catalogue `hugging_face_id` and HuggingFace
@@ -761,9 +761,14 @@ are invisible to source review by construction.
   Therefore `approved_model_lineages` stays empty and production source egress stays fail-closed
   until qualification completes. The reviewed lineage decision must first be joined to the
   refreshed candidates for calibration; do not hand-author production quality entries early.
-- **Next action:** Re-run discovery under `V3-MODELREFRESH-001`, bind the reviewed lineage
-  decisions to the refreshed candidate registry before calibration, then use real calibration and
-  `V3-QUALIFY-001` outputs to populate production lineage quality fields.
+- **Current scope:** Build the provider-free, typed, hash-bound join between an operator-reviewed
+  lineage decision and exact refreshed candidate evidence. The join must reject missing,
+  conflicting, duplicate, stale, or non-current model decisions and preserve all existing
+  fail-closed source-egress gates.
+- **Next action:** Inspect existing lineage, candidate-registry, discovery, privacy, and
+  qualification bindings; add a strict review artifact and deterministic synthetic regressions.
+  Do not populate production quality fields or `approved_model_lineages`, and do not perform
+  another provider refresh in this slice.
 
 ## V3-INTAKE-001 — Untrusted client repository intake
 

@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-07-30T07:38:23Z",
-  "candidate_commit": "7db592e572d2065703ec78808bf35bfefbe62151",
+  "updated_at": "2026-07-30T22:46:08Z",
+  "candidate_commit": "9d70253f58f759ac2b6b930cc4a9c2efef21cf79",
   "autorun_status": "ACTIVE",
-  "current_milestone": "audited_suite_coverage_and_assertion_strength",
-  "current_ticket": "V3-TESTQUALITY-001",
-  "last_checkpoint_commit": "7db592e572d2065703ec78808bf35bfefbe62151",
+  "current_milestone": "operator_root_lineage_review_binding",
+  "current_ticket": "V3-LINEAGE-001",
+  "last_checkpoint_commit": "9d70253f58f759ac2b6b930cc4a9c2efef21cf79",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,
