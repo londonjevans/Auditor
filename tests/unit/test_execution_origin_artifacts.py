@@ -9,8 +9,10 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from mmaudit.constants import ANALYSIS_ROLES
 from mmaudit.models.schemas import (
     AuditReport,
+    AuditRunStatus,
     CandidateFinding,
     CandidateFindingArtifact,
     CandidateOriginKind,
@@ -19,6 +21,7 @@ from mmaudit.models.schemas import (
     ExecutionOriginDispositionKind,
     ExecutionOriginRejectionCategory,
     Finding,
+    FindingStatus,
     FoundryInvariantHarnessSpec,
     InvariantExecutionCandidateProvenance,
     InvariantExecutionOriginDisposition,
@@ -26,15 +29,19 @@ from mmaudit.models.schemas import (
     InvariantExecutionResult,
     InvariantSuite,
     Location,
+    LocationValidation,
     PropertyCorpus,
     RepositoryMap,
     ReproductionResolutionKind,
+    ReproductionResult,
+    ReproductionState,
     Severity,
     VerificationTest,
 )
 from mmaudit.orchestration.manifest import _validate_report_artifact_consistency
 from mmaudit.orchestration.replay import _ReplayArtifacts
 from mmaudit.reporting.json_report import write_json
+from tests.unit import test_run_status as run_status_fixtures
 from tests.unit.test_execution_candidate_schema import (
     _execution_candidate,
     _execution_finding,
@@ -241,6 +248,7 @@ def _write_manifest_inputs(
     ]
     | None = None,
     dispositions: list[InvariantExecutionOriginDisposition] | None = None,
+    candidate_resolutions: list[CandidateReproductionResolution] | None = None,
 ) -> Path:
     root = tmp_path.resolve()
     write_json(
@@ -264,6 +272,18 @@ def _write_manifest_inputs(
         InvariantExecutionOriginDispositionArtifact(dispositions=dispositions or []).model_dump(
             mode="json"
         ),
+    )
+    write_json(
+        root / "reproduction-results.json",
+        {
+            "schema_version": "1.0",
+            "test_specifications": [],
+            "results": [],
+            "candidate_resolutions": [
+                resolution.model_dump(mode="json") for resolution in (candidate_resolutions or [])
+            ],
+            "falsification_decisions": [],
+        },
     )
     if execution_runtime is not None:
         suite, harness, corpus, execution = execution_runtime
@@ -312,14 +332,60 @@ def _manifest_execution_fixture(
         candidates=[candidate.model_dump(mode="json")],
         execution_runtime=(suite, harness, corpus, execution),
         dispositions=list(build.dispositions),
+        candidate_resolutions=[
+            CandidateReproductionResolution(
+                candidate_id=candidate.candidate_id,
+                kind=ReproductionResolutionKind.INCONCLUSIVE,
+                detail="post-judgment impact remained unresolved",
+            )
+        ],
     )
     report = _report_shell(
-        findings=[_execution_finding(provenance)],
+        findings=[
+            _execution_finding(provenance).model_copy(update={"status": FindingStatus.NEEDS_REVIEW})
+        ],
         invariants=suite,
         invariant_executions=[execution],
         execution_origin_dispositions=list(build.dispositions),
     )
     return root, report, candidate, provenance
+
+
+def _current_report_payload(
+    report: AuditReport,
+    *,
+    complete: bool,
+) -> dict[str, object]:
+    if complete:
+        scanner = run_status_fixtures._real_scanner()
+        usage = [run_status_fixtures._usage(role) for role in ANALYSIS_ROLES]
+        floor = run_status_fixtures._assessment(
+            scanner_runs=[scanner],
+            usage=usage,
+            required_model_roles=ANALYSIS_ROLES,
+        )
+        payload = run_status_fixtures._typed_report_payload(
+            floor=floor,
+            scanner_runs=[scanner],
+            usage=usage,
+            coverage=run_status_fixtures._coverage(),
+        )
+    else:
+        floor = run_status_fixtures._assessment(required_model_roles=ANALYSIS_ROLES)
+        payload = run_status_fixtures._typed_report_payload(
+            floor=floor,
+            scanner_runs=[],
+            usage=[],
+            coverage=run_status_fixtures._coverage(),
+        )
+    payload.update(
+        {
+            "invariants": report.invariants,
+            "invariant_executions": report.invariant_executions,
+            "execution_origin_dispositions": report.execution_origin_dispositions,
+        }
+    )
+    return payload
 
 
 def test_candidate_artifact_preserves_legacy_1_0_and_explicit_1_1_model_candidates() -> None:
@@ -645,6 +711,227 @@ def test_manifest_binds_execution_candidate_to_exact_final_finding(tmp_path: Pat
     root, report, _candidate, _provenance_record = _manifest_execution_fixture(tmp_path)
 
     _validate_report_artifact_consistency(root, report)
+
+
+def test_current_report_rejects_complete_active_rejected_execution_splice(
+    tmp_path: Path,
+) -> None:
+    _root, report, candidate, _provenance_record = _manifest_execution_fixture(tmp_path)
+    assert candidate.severity is Severity.INFORMATIONAL
+    rejected_high = report.findings[0].model_copy(
+        update={
+            "severity": Severity.HIGH,
+            "status": FindingStatus.REJECTED,
+        }
+    )
+    payload = _current_report_payload(report, complete=True)
+    payload.update({"findings": [rejected_high], "rejected_findings": []})
+
+    with pytest.raises(
+        ValidationError,
+        match="findings inventory cannot contain rejected findings",
+    ):
+        AuditReport.model_validate(payload)
+
+
+def test_current_report_rejects_nonrejected_finding_spliced_into_rejected_inventory(
+    tmp_path: Path,
+) -> None:
+    _root, report, _candidate, _provenance_record = _manifest_execution_fixture(tmp_path)
+    payload = _current_report_payload(report, complete=True)
+    payload.update({"findings": [], "rejected_findings": report.findings})
+
+    with pytest.raises(
+        ValidationError,
+        match="rejected-findings inventory may contain only rejected findings",
+    ):
+        AuditReport.model_validate(payload)
+
+
+def test_current_report_accepts_active_and_invalid_rejected_execution_shapes(
+    tmp_path: Path,
+) -> None:
+    _root, report, _candidate, _provenance_record = _manifest_execution_fixture(tmp_path)
+    active = report.findings[0].model_copy(update={"status": FindingStatus.CONFIRMED})
+    active_payload = _current_report_payload(report, complete=True)
+    active_payload.update({"findings": [active], "rejected_findings": []})
+    assert AuditReport.model_validate(active_payload).findings == [active]
+
+    rejected = report.findings[0].model_copy(
+        update={
+            "status": FindingStatus.REJECTED,
+            "location_validation": LocationValidation(
+                valid=False,
+                errors=["synthetic current-source location rejection"],
+            ),
+        }
+    )
+    rejected_payload = _current_report_payload(report, complete=False)
+    rejected_payload.update({"findings": [], "rejected_findings": [rejected]})
+    validated = AuditReport.model_validate(rejected_payload)
+    assert validated.rejected_findings == [rejected]
+    assert validated.run_status is not AuditRunStatus.COMPLETE
+
+
+def test_current_report_rejects_valid_location_or_complete_execution_rejection(
+    tmp_path: Path,
+) -> None:
+    _root, report, _candidate, _provenance_record = _manifest_execution_fixture(tmp_path)
+    valid_location_rejection = report.findings[0].model_copy(
+        update={"status": FindingStatus.REJECTED}
+    )
+    invalid_location_rejection = valid_location_rejection.model_copy(
+        update={
+            "location_validation": LocationValidation(
+                valid=False,
+                errors=["synthetic current-source location rejection"],
+            )
+        }
+    )
+
+    valid_location_payload = _current_report_payload(report, complete=False)
+    valid_location_payload.update({"findings": [], "rejected_findings": [valid_location_rejection]})
+    with pytest.raises(
+        ValidationError,
+        match="rejected execution-origin finding requires invalid source-location evidence",
+    ):
+        AuditReport.model_validate(valid_location_payload)
+
+    complete_payload = _current_report_payload(report, complete=True)
+    complete_payload.update({"findings": [], "rejected_findings": [invalid_location_rejection]})
+    with pytest.raises(
+        ValidationError,
+        match="rejected execution-origin finding requires a non-complete report",
+    ):
+        AuditReport.model_validate(complete_payload)
+
+
+@pytest.mark.parametrize("schema_version", ["1.0", "1.1"])
+def test_legacy_report_preserves_unpartitioned_finding_inventories(schema_version: str) -> None:
+    rejected = Finding(
+        id="legacy-rejected-finding",
+        title="Legacy rejected finding",
+        status=FindingStatus.REJECTED,
+        severity=Severity.LOW,
+        confidence=0,
+        summary="Legacy reports did not type their active and rejected inventories.",
+        impact="The legacy finding was rejected.",
+        location_validation=LocationValidation(
+            valid=False,
+            errors=["synthetic legacy location rejection"],
+        ),
+    )
+    payload = _report_shell().model_dump(mode="python")
+    payload.update({"schema_version": schema_version, "findings": [rejected]})
+
+    validated = AuditReport.model_validate(payload)
+
+    assert validated.findings == [rejected]
+
+
+def test_manifest_rejects_post_judge_execution_elevation_with_accepted_status(
+    tmp_path: Path,
+) -> None:
+    root, report, _candidate, _provenance_record = _manifest_execution_fixture(tmp_path)
+    elevated = report.findings[0].model_copy(update={"status": FindingStatus.CONFIRMED})
+    tampered_report = report.model_copy(update={"findings": [elevated]})
+
+    with pytest.raises(
+        ValueError,
+        match="post-judgment execution severity elevation cannot retain an accepted status",
+    ):
+        _validate_report_artifact_consistency(root, tampered_report)
+
+
+def test_manifest_rejects_post_judge_execution_elevation_without_terminal_resolution(
+    tmp_path: Path,
+) -> None:
+    root, report, _candidate, _provenance_record = _manifest_execution_fixture(tmp_path)
+    write_json(
+        root / "reproduction-results.json",
+        {
+            "schema_version": "1.0",
+            "test_specifications": [],
+            "results": [],
+            "candidate_resolutions": [],
+            "falsification_decisions": [],
+        },
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="high/critical candidate obligations require terminal candidate resolutions",
+    ):
+        _validate_report_artifact_consistency(root, report)
+
+
+def test_manifest_rejects_post_judge_execution_elevation_on_complete_report(
+    tmp_path: Path,
+) -> None:
+    root, report, _candidate, _provenance_record = _manifest_execution_fixture(tmp_path)
+    tampered_report = report.model_copy(
+        update={
+            "completed": True,
+            "run_status": AuditRunStatus.COMPLETE,
+        }
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="post-judgment execution severity elevation requires a non-complete report",
+    ):
+        _validate_report_artifact_consistency(root, tampered_report)
+
+
+def test_manifest_rejects_reproduced_resolution_without_qualifying_result(
+    tmp_path: Path,
+) -> None:
+    root, report, candidate, _provenance_record = _manifest_execution_fixture(tmp_path)
+    write_json(
+        root / "reproduction-results.json",
+        {
+            "schema_version": "1.0",
+            "test_specifications": [],
+            "results": [],
+            "candidate_resolutions": [
+                CandidateReproductionResolution(
+                    candidate_id=candidate.candidate_id,
+                    kind=ReproductionResolutionKind.REPRODUCED,
+                    evidence_refs=["reproduction:" + ("a" * 64)],
+                    detail="forged reproduced resolution",
+                ).model_dump(mode="json")
+            ],
+            "falsification_decisions": [],
+        },
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="reproduced resolution is not exactly bound to qualifying results",
+    ):
+        _validate_report_artifact_consistency(root, report)
+
+
+def test_manifest_requires_exact_report_reproduction_results(tmp_path: Path) -> None:
+    root, report, candidate, _provenance_record = _manifest_execution_fixture(tmp_path)
+    tampered_report = report.model_copy(
+        update={
+            "reproductions": [
+                ReproductionResult(
+                    candidate_id=candidate.candidate_id,
+                    test_name="UnserializedReproduction",
+                    state=ReproductionState.NOT_ATTEMPTED,
+                    specification_sha256="b" * 64,
+                )
+            ]
+        }
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"reproduction-results\.json differs from final report reproductions",
+    ):
+        _validate_report_artifact_consistency(root, tampered_report)
 
 
 def test_manifest_allows_incomplete_harness_rejection_without_candidate(

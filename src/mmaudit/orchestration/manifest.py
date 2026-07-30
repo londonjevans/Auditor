@@ -24,15 +24,25 @@ from mmaudit.constants import ALL_MODEL_ROLES, VERSION
 from mmaudit.models.schemas import (
     AuditProfile,
     AuditReport,
+    AuditRunStatus,
     CandidateFindingArtifact,
     CandidateOriginKind,
+    CandidateReproductionResolution,
     ExecutionOriginDispositionKind,
+    FalsificationDecision,
     FindingOriginKind,
+    FindingStatus,
     FoundryInvariantHarnessSpec,
+    GeneratedFoundryTestSpec,
     InvariantExecutionOriginDispositionArtifact,
     InvariantExecutionResult,
     MaximumAssuranceStatus,
     PropertyCorpus,
+    ReproductionIntegrityStatus,
+    ReproductionResolutionKind,
+    ReproductionResult,
+    ReproductionState,
+    Severity,
     StrictModel,
 )
 from mmaudit.models.token_planning import PromptAllocationCategory, RequestTokenPlan
@@ -237,6 +247,35 @@ class RunEvidenceManifest(StrictModel):
         expected_manifest = canonical_sha256(self.model_dump(mode="json", exclude=exclusions))
         if self.manifest_sha256 != expected_manifest:
             raise ValueError("manifest self-hash does not match its canonical contents")
+        return self
+
+
+class _ManifestReproductionArtifact(StrictModel):
+    """Typed reproduction evidence needed for cross-artifact manifest validation."""
+
+    schema_version: Literal["1.0"]
+    test_specifications: list[GeneratedFoundryTestSpec] = Field(max_length=100_000)
+    results: list[ReproductionResult] = Field(max_length=100_000)
+    candidate_resolutions: list[CandidateReproductionResolution] = Field(
+        default_factory=list,
+        max_length=100_000,
+    )
+    falsification_decisions: list[FalsificationDecision] = Field(
+        default_factory=list,
+        max_length=100_000,
+    )
+
+    @model_validator(mode="after")
+    def tests_results_and_resolutions_are_unique(self) -> _ManifestReproductionArtifact:
+        specification_keys = [(item.candidate_id, item.name) for item in self.test_specifications]
+        result_keys = [(item.candidate_id, item.test_name) for item in self.results]
+        if len(specification_keys) != len(set(specification_keys)):
+            raise ValueError("reproduction test specifications must be unique")
+        if len(result_keys) != len(set(result_keys)):
+            raise ValueError("reproduction results must be unique")
+        resolution_ids = [item.candidate_id for item in self.candidate_resolutions]
+        if resolution_ids != sorted(set(resolution_ids)):
+            raise ValueError("candidate reproduction resolutions must be unique and sorted")
         return self
 
 
@@ -493,6 +532,124 @@ def validate_report_privacy_consistency(
             raise ValueError("provider usage privacy routing disagrees with report evidence")
 
 
+def _validate_reproduction_candidate_obligations(
+    *,
+    report: AuditReport,
+    candidate_artifact: CandidateFindingArtifact,
+    execution_candidate_ids: set[str],
+    reproduction_artifact: _ManifestReproductionArtifact,
+) -> None:
+    """Bind terminal candidate obligations to typed reproduction evidence."""
+
+    if reproduction_artifact.results != report.reproductions:
+        raise ValueError("reproduction-results.json differs from final report reproductions")
+    if reproduction_artifact.falsification_decisions != report.falsification_decisions:
+        raise ValueError(
+            "reproduction-results.json differs from final report falsification decisions"
+        )
+
+    specification_keys = {
+        (item.candidate_id, item.name) for item in reproduction_artifact.test_specifications
+    }
+    result_keys = {(item.candidate_id, item.test_name) for item in reproduction_artifact.results}
+    if result_keys != specification_keys:
+        raise ValueError("reproduction results do not exactly cover test specifications")
+
+    candidates_by_id = {
+        candidate.candidate_id: candidate for candidate in candidate_artifact.findings
+    }
+    candidate_ids = set(candidates_by_id)
+    if not {candidate_id for candidate_id, _name in specification_keys} <= candidate_ids:
+        raise ValueError("reproduction test specifications reference missing candidates")
+
+    resolution_ids = {
+        resolution.candidate_id for resolution in reproduction_artifact.candidate_resolutions
+    }
+    if not resolution_ids <= candidate_ids:
+        raise ValueError("candidate reproduction resolutions reference missing candidates")
+    for resolution in reproduction_artifact.candidate_resolutions:
+        candidate = candidates_by_id[resolution.candidate_id]
+        if (
+            candidate.severity not in {Severity.HIGH, Severity.CRITICAL}
+            and candidate.origin_kind is not CandidateOriginKind.DETERMINISTIC_EXECUTION
+        ):
+            raise ValueError(
+                "candidate reproduction resolutions may only adjudicate high/critical "
+                "or execution-origin candidates"
+            )
+
+    high_critical_candidate_ids = {
+        candidate.candidate_id
+        for candidate in candidate_artifact.findings
+        if candidate.severity in {Severity.HIGH, Severity.CRITICAL}
+    }
+    high_critical_execution_ids: set[str] = set()
+    post_judgment_execution_ids: set[str] = set()
+    accepted_statuses = {
+        FindingStatus.CONFIRMED,
+        FindingStatus.STRONGLY_SUPPORTED,
+        FindingStatus.HIGH_CONFIDENCE,
+        FindingStatus.PLAUSIBLE,
+    }
+    for finding in [*report.findings, *report.rejected_findings]:
+        if (
+            finding.origin_kind is not FindingOriginKind.DETERMINISTIC_EXECUTION
+            or finding.status is FindingStatus.REJECTED
+            or finding.severity not in {Severity.HIGH, Severity.CRITICAL}
+        ):
+            continue
+        contributing_execution_ids = (
+            set(finding.contributing_candidate_ids) & execution_candidate_ids
+        )
+        high_critical_execution_ids.update(contributing_execution_ids)
+        elevated_ids = contributing_execution_ids - high_critical_candidate_ids
+        if not elevated_ids:
+            continue
+        post_judgment_execution_ids.update(elevated_ids)
+        if finding.status in accepted_statuses:
+            raise ValueError(
+                "post-judgment execution severity elevation cannot retain an accepted status"
+            )
+
+    required_resolution_ids = high_critical_candidate_ids | high_critical_execution_ids
+    if not required_resolution_ids <= resolution_ids:
+        raise ValueError(
+            "high/critical candidate obligations require terminal candidate resolutions"
+        )
+    if post_judgment_execution_ids and (
+        report.completed or report.run_status is AuditRunStatus.COMPLETE
+    ):
+        raise ValueError(
+            "post-judgment execution severity elevation requires a non-complete report"
+        )
+
+    qualifying_reproduction_refs: dict[str, set[str]] = {}
+    for result in reproduction_artifact.results:
+        if (
+            result.state
+            in {
+                ReproductionState.REPRODUCED,
+                ReproductionState.REPRODUCED_AND_MINIMIZED,
+            }
+            and result.attempts > 0
+            and result.successful_attempts == result.attempts
+            and result.integrity is not None
+            and result.integrity.status is ReproductionIntegrityStatus.VERIFIED
+        ):
+            qualifying_reproduction_refs.setdefault(result.candidate_id, set()).add(
+                f"reproduction:{result.integrity.integrity_sha256}"
+            )
+    for resolution in reproduction_artifact.candidate_resolutions:
+        expected_refs = qualifying_reproduction_refs.get(resolution.candidate_id, set())
+        if resolution.kind is ReproductionResolutionKind.REPRODUCED:
+            if set(resolution.evidence_refs) != expected_refs:
+                raise ValueError("reproduced resolution is not exactly bound to qualifying results")
+        elif resolution.evidence_refs:
+            raise ValueError("inconclusive resolution contains unsupported evidence references")
+        elif expected_refs:
+            raise ValueError("inconclusive resolution contradicts a qualifying reproduction result")
+
+
 def _validate_report_artifact_consistency(root: Path, report: AuditReport) -> None:
     """Require emitted report summaries to agree before sealing their byte hashes."""
 
@@ -520,6 +677,12 @@ def _validate_report_artifact_consistency(root: Path, report: AuditReport) -> No
         raise ValueError("scanner-results.json differs from the final report")
     candidate_artifact = CandidateFindingArtifact.model_validate(
         _read_json_artifact(root, "candidate-findings.json")
+    )
+    raw_reproduction_artifact = _read_json_artifact(root, "reproduction-results.json")
+    reproduction_artifact = (
+        _ManifestReproductionArtifact.model_validate(raw_reproduction_artifact)
+        if report.schema_version == "1.2"
+        else None
     )
     disposition_path = root / "execution-origin-dispositions.json"
     disposition_artifact_present = (
@@ -690,6 +853,13 @@ def _validate_report_artifact_consistency(root: Path, report: AuditReport) -> No
     if reported_execution_ids != execution_candidate_ids:
         raise ValueError("an execution-origin candidate was omitted from final report evidence")
     report._validate_execution_origin_bindings()
+    if reproduction_artifact is not None:
+        _validate_reproduction_candidate_obligations(
+            report=report,
+            candidate_artifact=candidate_artifact,
+            execution_candidate_ids=execution_candidate_ids,
+            reproduction_artifact=reproduction_artifact,
+        )
     differential_path = root / "repository-suite-differential.json"
     fork_privacy_path = root / "privacy-fork-rpc-egress.json"
     for path in (differential_path, fork_privacy_path):

@@ -2781,7 +2781,7 @@ class AuditPipeline:
             key=lambda candidate: candidate.candidate_id,
         )
         reproduction_resolutions = _build_candidate_reproduction_resolutions(
-            candidates=assurance_high_critical_candidates,
+            candidates=candidates,
             results=reproductions,
             forced_candidate_ids=set(post_judge_execution_severity_candidates),
         )

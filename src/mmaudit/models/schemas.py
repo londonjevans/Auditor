@@ -10231,6 +10231,7 @@ class AuditReport(StrictModel):
 
     @model_validator(mode="after")
     def run_status_matches_minimum_analysis_floor(self) -> AuditReport:
+        self._validate_current_finding_inventories()
         self._validate_execution_origin_bindings()
         if self.schema_version != "1.2":
             if self.run_status is not None or self.minimum_analysis_floor is not None:
@@ -10284,6 +10285,32 @@ class AuditReport(StrictModel):
                 )
         self._validate_minimum_floor_runtime_bindings(self.minimum_analysis_floor)
         return self
+
+    def _validate_current_finding_inventories(self) -> None:
+        """Keep current active and rejected inventories semantically disjoint."""
+
+        if self.schema_version != "1.2":
+            return
+        if any(finding.status is FindingStatus.REJECTED for finding in self.findings):
+            raise ValueError("current report findings inventory cannot contain rejected findings")
+        if any(finding.status is not FindingStatus.REJECTED for finding in self.rejected_findings):
+            raise ValueError(
+                "current report rejected-findings inventory may contain only rejected findings"
+            )
+
+        rejected_execution_findings = [
+            finding
+            for finding in self.rejected_findings
+            if finding.origin_kind is FindingOriginKind.DETERMINISTIC_EXECUTION
+        ]
+        if any(finding.location_validation.valid for finding in rejected_execution_findings):
+            raise ValueError(
+                "a rejected execution-origin finding requires invalid source-location evidence"
+            )
+        if rejected_execution_findings and (
+            self.completed or self.run_status is AuditRunStatus.COMPLETE
+        ):
+            raise ValueError("a rejected execution-origin finding requires a non-complete report")
 
     def _validate_execution_origin_bindings(self) -> None:
         """Bind execution-origin findings to exact serialized runtime evidence."""

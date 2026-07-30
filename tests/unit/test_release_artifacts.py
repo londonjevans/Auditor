@@ -20,7 +20,12 @@ from mmaudit.config import (
     AuditRunOptions,
     canonical_audit_config_json,
 )
-from mmaudit.models.schemas import AuditProfile, AuditReport, RepositoryMap
+from mmaudit.models.schemas import (
+    AuditProfile,
+    AuditReport,
+    CandidateFindingArtifact,
+    RepositoryMap,
+)
 from mmaudit.orchestration.manifest import (
     ManifestBindingSet,
     ManifestHashBinding,
@@ -192,6 +197,28 @@ def _write_report_artifacts(run_dir: Path, report: AuditReport) -> None:
                 "schema_version": report.schema_version,
                 "run_id": report.run_id,
                 "runs": [run.model_dump(mode="json") for run in report.scanner_runs],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "candidate-findings.json").write_text(
+        CandidateFindingArtifact(
+            schema_version="1.1",
+            findings=[],
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    (run_dir / "reproduction-results.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "test_specifications": [],
+                "results": [],
+                "candidate_resolutions": [],
+                "falsification_decisions": [],
             },
             indent=2,
             sort_keys=True,

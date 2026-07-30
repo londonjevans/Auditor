@@ -92,9 +92,11 @@ from mmaudit.orchestration.manifest import (
     canonical_sha256,
     validate_manifest_artifacts,
     validate_report_privacy_consistency,
+    write_run_evidence_manifest,
 )
 from mmaudit.orchestration.pipeline import AuditPipeline
 from mmaudit.orchestration.prior_audit import build_prior_audit_comparison
+from mmaudit.orchestration.replay import OfflineReplayOrchestrator
 from mmaudit.orchestration.verification import (
     RunVerificationStatus,
     verify_run_evidence,
@@ -109,6 +111,7 @@ from mmaudit.privacy import (
     PrivacySourceClassification,
     load_privacy_retention_consent,
 )
+from mmaudit.reporting.json_report import write_json
 from mmaudit.scanners.base import scanner_fingerprint, scanner_workspace_sha256
 from mmaudit.scanners.fork_matrix import repository_fork_matrix_timeout_budget_seconds
 from mmaudit.solidity.compile import CompilationRun
@@ -2523,6 +2526,49 @@ async def test_mocked_runtime_post_judge_severity_fails_closed_across_pipeline_a
     )
     assert verification.status is RunVerificationStatus.CURRENT
 
+    reproduction_path = result.run_dir / "reproduction-results.json"
+    reproduction_payload["candidate_resolutions"] = []
+    write_json(reproduction_path, reproduction_payload)
+
+    resealed_payload = manifest.model_dump(mode="json")
+    reproduction_binding = next(
+        binding
+        for binding in resealed_payload["artifacts"]
+        if binding["path"] == reproduction_path.name
+    )
+    reproduction_bytes = reproduction_path.read_bytes()
+    reproduction_binding["sha256"] = hashlib.sha256(reproduction_bytes).hexdigest()
+    reproduction_binding["size"] = len(reproduction_bytes)
+    resealed_payload["manifest_sha256"] = canonical_sha256(
+        {key: value for key, value in resealed_payload.items() if key != "manifest_sha256"}
+    )
+    write_run_evidence_manifest(
+        manifest_path,
+        RunEvidenceManifest.model_validate(resealed_payload),
+    )
+
+    verification = verify_run_evidence(
+        manifest_path=manifest_path,
+        run_dir=result.run_dir,
+        repository_root=repository,
+        config=config,
+    )
+    assert verification.status is RunVerificationStatus.STALE
+    assert any(
+        mismatch.identifier == "bindings/recalculation" for mismatch in verification.mismatches
+    ), [
+        (mismatch.category.value, mismatch.identifier, mismatch.kind.value)
+        for mismatch in verification.mismatches
+    ]
+
+    with pytest.raises(ValueError, match="offline replay refused stale run evidence"):
+        await OfflineReplayOrchestrator(config).replay(
+            manifest_path=manifest_path,
+            run_dir=result.run_dir,
+            repository_root=repository,
+            work_dir=tmp_path / "tampered-replay",
+        )
+
 
 @pytest.mark.asyncio
 async def test_temporary_liquidity_harness_replays_settled_unsafe_and_safe_variants(
@@ -3678,6 +3724,20 @@ async def test_invalid_file_location_is_rejected(
     )
     assert result.report.rejected_findings
     assert any(not finding.location_validation.valid for finding in result.report.rejected_findings)
+    candidates = CandidateFindingArtifact.model_validate_json(
+        (result.run_dir / "candidate-findings.json").read_text(encoding="utf-8")
+    )
+    required_resolution_ids = {
+        candidate.candidate_id
+        for candidate in candidates.findings
+        if candidate.severity in {Severity.HIGH, Severity.CRITICAL}
+    }
+    reproduction_payload = json.loads(
+        (result.run_dir / "reproduction-results.json").read_text(encoding="utf-8")
+    )
+    assert required_resolution_ids <= {
+        resolution["candidate_id"] for resolution in reproduction_payload["candidate_resolutions"]
+    }
 
 
 @pytest.mark.asyncio
