@@ -5,12 +5,12 @@ The objective source has SHA-256
 Do not record credentials, raw private prompts, or raw provider completions here.
 
 AUTORUN_STATUS: ACTIVE
-CURRENT_MILESTONE: Bounded omission accounting and graceful context degradation
-CURRENT_TICKET: V3-OMISSION-001
+CURRENT_MILESTONE: Execution-originated candidate consensus
+CURRENT_TICKET: V3-EXECORIGIN-001
 LAST_COMPLETED_TICKET: V3-OMISSION-001
-NEXT_ACTION: Create and SSH-push the isolated V3-OMISSION-001 checkpoint, then immediately begin V3-EXECORIGIN-001.
-LAST_COMMAND: .venv/bin/pytest -q
-LAST_RESULT: PASS — exact final source state passed 3095 tests with 11 explicit external-engine, rootless-isolation, compiler, replay, fork, and paid-provider prerequisite skips in 426.94s; two inherited immutable-toolchain cleanup warnings were non-failing.
+NEXT_ACTION: Reproduce the execution-candidate origin gap, inspect consensus/pipeline/report evidence boundaries, then add one typed location-validated execution-originated candidate path and defensive regressions.
+LAST_COMMAND: git commit -m "Bound context omission evidence"
+LAST_RESULT: PASS — isolated V3-OMISSION-001 checkpoint 14391ba7234aba3adfb1e3eb4159e5950754d833 created from the validated clean index.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 0994a6c6e274fa96d4f57fbb248c07e1c8f4f1ba
+LAST_CHECKPOINT_COMMIT: 14391ba7234aba3adfb1e3eb4159e5950754d833
 
 ## 2026-07-30 — V3-OMISSION-001
 
@@ -254,6 +254,25 @@ LAST_CHECKPOINT_COMMIT: 0994a6c6e274fa96d4f57fbb248c07e1c8f4f1ba
   occurred. `V3-OMISSION-001` is `COMPLETE`; the unavailable real integrations
   remain accurately represented by their explicit suite skips and existing
   external blockers.
+
+## 2026-07-30 — V3-EXECORIGIN-001
+
+- **Status:** `IN_PROGRESS`.
+- **Defensive objective:** Permit a location-validated deterministic execution
+  witness to originate a candidate group without model attribution, while
+  preserving deterministic evidence caps and preventing model roles from
+  deleting, relocating, or independently confirming that candidate.
+- **Starting evidence:** The dependency `V3-FORKDIFF-001` is complete, and
+  `V3-OMISSION-001` is checkpointed at
+  `14391ba7234aba3adfb1e3eb4159e5950754d833`. The queue records that execution
+  currently confirms or falsifies only model-proposed candidates; no
+  execution-originated group enters consensus.
+- **Exact next safe action:** Inspect existing candidate, reproduction,
+  consensus, grouping, and report provenance types; reproduce the missing
+  path with a synthetic local execution record; then implement one cohesive
+  typed origin flow with exact source-location and no-model-attribution
+  regressions. No provider, secret, public RPC, wallet, signing, broadcast, or
+  paid operation is in scope.
 
 ## 2026-07-30 — V3-FIXTURE-001
 

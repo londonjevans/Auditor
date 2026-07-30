@@ -586,7 +586,10 @@ are invisible to source review by construction.
   `src/mmaudit/orchestration/pipeline.py`, candidate and finding schemas, reporting,
   regressions.
 - **Dependencies:** `V3-FORKDIFF-001`.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
+- **Current action:** Reproduce the absent execution-origin path, then define a
+  typed source-location-validated execution candidate that can enter grouping
+  without model attribution or model authority over its identity and location.
 
 ## V3-TESTQUALITY-001 — Audited-suite coverage and assertion strength
 
