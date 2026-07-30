@@ -900,6 +900,27 @@ def test_target_selection_deduplicates_aliases_by_immutable_lineage(
     )
 
 
+def test_model_benchmark_egress_rejects_unapproved_registered_target(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    entry = model_registry_entry("synthetic/canonical")
+    config = config_factory(
+        models={"registry": [entry]},
+        privacy={
+            "allow_code_egress": False,
+            "approved_model_lineages": [],
+        },
+    )
+    targets = select_model_benchmark_targets(config, ["synthetic/canonical"])
+
+    with pytest.raises(ValueError, match="root lineage is not approved"):
+        validate_model_benchmark_egress(
+            config,
+            targets,
+            explicitly_allowed=True,
+        )
+
+
 def test_corpus_rejects_tampering_and_links(tmp_path: Path) -> None:
     corpus = load_model_benchmark_corpus(CORPUS_PATH)
     tampered = corpus.corpus.model_dump(mode="json")

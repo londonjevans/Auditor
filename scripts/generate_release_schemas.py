@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from mmaudit.benchmark.engine import BenchmarkReport
 from mmaudit.models.calibration import ModelCalibrationArtifact
+from mmaudit.models.lineage_review import ModelLineageReviewArtifact
 from mmaudit.models.qualification import ModelQualificationArtifact
 from mmaudit.models.refresh import (
     ModelRefreshAttempt,
@@ -37,6 +38,7 @@ MODELS: dict[str, type[BaseModel]] = {
     "benchmark_report.schema.json": BenchmarkReport,
     "context_manifest.schema.json": ContextManifest,
     "model_calibration.schema.json": ModelCalibrationArtifact,
+    "model_lineage_review.schema.json": ModelLineageReviewArtifact,
     "model_qualification.schema.json": ModelQualificationArtifact,
     "model_refresh_attempt.schema.json": ModelRefreshAttempt,
     "model_refresh_diff.schema.json": ModelRefreshDiff,
@@ -57,6 +59,7 @@ MODELS: dict[str, type[BaseModel]] = {
 TITLE_OVERRIDES = {
     "benchmark_report.schema.json": "mmaudit benchmark report",
     "model_calibration.schema.json": "mmaudit model calibration artifact",
+    "model_lineage_review.schema.json": "mmaudit model lineage review artifact",
     "model_qualification.schema.json": "mmaudit model qualification artifact",
     "model_refresh_attempt.schema.json": "mmaudit model refresh attempt",
     "model_refresh_diff.schema.json": "mmaudit model refresh diff",

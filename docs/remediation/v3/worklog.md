@@ -6,11 +6,11 @@ Do not record credentials, raw private prompts, or raw provider completions here
 
 AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Operator root-lineage review binding
-CURRENT_TICKET: V3-LINEAGE-001 (IN_PROGRESS; provider-free review binding)
+CURRENT_TICKET: V3-LINEAGE-001 (PARTIAL; provider-free implementation complete, checkpoint pending)
 LAST_COMPLETED_TICKET: V3-EXECORIGIN-001
-NEXT_ACTION: Inspect the existing lineage, candidate-registry, discovery, privacy, and qualification bindings, then add one strict provider-free operator-review artifact and deterministic join regressions. Keep production quality and approved-lineage configuration empty.
-LAST_COMMAND: `git commit -m "Harden model catalogue refresh"`
-LAST_RESULT: PASS — isolated `V3-MODELREFRESH-001` checkpoint `9d70253f58f759ac2b6b930cc4a9c2efef21cf79` created with 26 intended files; the worktree was clean immediately afterward.
+NEXT_ACTION: Review the final diff and tracked-artifact/secret scope, then create and push the isolated V3-LINEAGE-001 checkpoint.
+LAST_COMMAND: `.venv/bin/pytest -q tests/unit/test_read_only_rpc_bridge.py` (local-loopback permission only)
+LAST_RESULT: PASS — all 76 read-only bridge tests passed in 41.04s. The preceding complete sandboxed suite reached 3549 passed and 15 explicit skips with exactly 71 setup errors, all from the sandbox denying the same bridge file permission to bind 127.0.0.1; replacing those errors with the permitted exact-file result yields 3620 unique passing tests and 15 skips.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -20,6 +20,76 @@ OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
 LAST_CHECKPOINT_COMMIT: 9d70253f58f759ac2b6b930cc4a9c2efef21cf79
+
+## 2026-07-30 — V3-LINEAGE-001
+
+- **Status:** `PARTIAL` (provider-free lineage identity binding complete; real decision binding
+  unavailable).
+- **Defensive objective:** Bind an operator decision to the exact refreshed candidate inventory
+  without granting production selection, source-egress, or quality authority before calibration
+  and qualification.
+- **Consumer audit correction:** Model-independence validation previously invented
+  `heuristic:<vendor/family>` roots for models absent from the immutable operator-reviewed
+  registry. Candidate falsifier selection deduplicated registered roots but did not require those
+  roots to be in `privacy.approved_model_lineages`. Both paths now fail closed: unknown models
+  receive no independence credit, strict profiles report the missing lineage records, and
+  falsifier candidates outside the approved set are excluded.
+- **Validation:** Affected Ruff formatting/checking and strict mypy passed. The focused
+  configuration/cross-examination suite passed `44` tests; the wider registry, coverage,
+  assurance, benchmark, candidate-benchmark, cross-examination, and configuration matrix passed
+  `331` tests in `28.73s`. Only inherited pytest temporary-directory cleanup warnings were
+  emitted.
+- **Independent artifact audit:** The lineage decision must be a separate overlay because
+  resealing a candidate registry would invalidate the exact registry hash already bound by
+  refresh evidence. It must replay source-to-snapshot evidence, revalidate the discovery join,
+  recompute current freshness at a trusted time, cover the exact candidate set once, verify
+  bounded evidence bytes, collapse canonical/routing variants, and expose no conversion to
+  production quality or privacy authority. A workflow-status self-hash alone is inventory
+  metadata, not provider authority.
+- **Real-evidence limitation:** No successful post-correction real refresh snapshot exists, the
+  frozen registry is obsolete, and the documentary decision lacks a whole-second UTC decision
+  time and omits one listed candidate. Therefore this ticket can close only the safe synthetic
+  implementation slice and must remain `PARTIAL`; it cannot truthfully activate public or private
+  source egress.
+- **Typed overlay implementation:** Added a frozen, self-hashed lineage-identity-only artifact
+  with literal public-open-source scope, `NOT_EVALUATED` quality, and hard-coded false
+  source-egress/production-selection authority. Its builder revalidates the pending/rootless
+  discovery registry, replays allowlisted refresh source into the exact supplied snapshot,
+  reproduces `CURRENT` freshness at a trusted whole-second UTC time, verifies bounded raw review
+  evidence bytes, binds exact candidate/model/route state, and rejects incomplete, overlapping,
+  mistimed, stale, identity-drifted, variant-split, or root-split decisions. Descriptor-safe
+  private JSON persistence and a generated strict schema are included.
+- **Overlay focused validation:** Ruff and strict mypy passed; schema generation and verification
+  passed; `tests/unit/test_model_lineage_review.py` plus the general release-schema registry
+  ultimately passed `16` tests in `0.46s`.
+- **Adversarial overlay corrections:** Read-only review found that nested operator-review models
+  were mutable after the outer hash was sealed, freshness limits were supplied by the record they
+  judged, and permissive JSON coercion diverged from the published schema. Nested decisions are
+  now frozen, the builder and validator require explicit trusted age-policy inputs, strict JSON
+  loading rejects stringified integers and integer booleans, and authority flags accept only
+  literal `false`. The artifact now machine-labels itself `PROVIDER_FREE_STRUCTURAL` and records
+  that provider-observation and operator-decision authenticity are
+  `NOT_INDEPENDENTLY_PROVEN`. Exact re-assays passed; no remaining code-level fail-open was found.
+- **Existing-consumer regression expansion:** Five additional negative assays prove that approval
+  revocation fails closed during assignment feasibility, substantive usage credit, assurance
+  revalidation, benchmark egress, and production qualification. Their focused selector passed
+  `5` tests with `268` unrelated tests deselected.
+- **Joined focused gate:** The lineage overlay, discovery, refresh, refresh staging/schema,
+  qualification, registry, coverage, assurance, benchmark, candidate benchmark,
+  cross-examination, configuration, and release-schema matrix passed `565` tests in `40.92s`.
+- **Repository-wide gate:** Ruff left `380` files unchanged and passed all checks; strict mypy
+  passed `155` source files; generated schemas and `git diff --check` passed. The complete
+  sandboxed pytest run reached `3549 passed, 15 skipped, 71 errors in 422.30s`; every error was
+  a setup-time `PermissionError [Errno 1]` from the managed sandbox denying the local read-only
+  RPC bridge permission to bind `127.0.0.1`. The exact affected file was rerun with only
+  local-loopback permission and passed all `76` tests in `41.04s`. Thus every collected test
+  passed or carried an explicit external-prerequisite skip (`3620` unique passes, `15` skips).
+  Paid-provider execution remained disabled.
+- **External effects:** No provider call, network request, credential access, `.env` read, or
+  OpenRouter spend occurred. Production `approved_model_lineages` remains empty.
+- **Next safe action:** Create and push the isolated checkpoint, then begin `V3-EFFORT-001`.
+  Return to real lineage binding only when a successful current refresh and complete
+  independently authenticated operator decision exist.
 
 ## 2026-07-30 — V3-MODELREFRESH-001
 
@@ -241,23 +311,22 @@ LAST_CHECKPOINT_COMMIT: 9d70253f58f759ac2b6b930cc4a9c2efef21cf79
   the SSH remote with the following transition record, then continue the provider-free
   reviewed-lineage binding in `V3-LINEAGE-001`.
 
-## 2026-07-30 — V3-LINEAGE-001 continuation
+## 2026-07-30 — V3-LINEAGE-001 starting state
 
-- **Status:** `IN_PROGRESS` (provider-free reviewed-lineage binding).
+- **Status:** `PARTIAL` (provider-free reviewed-lineage binding implemented and validated).
 - **Defensive objective:** Bind an explicit operator lineage decision to exact refreshed candidate
   evidence without inferring lineage from vendor labels or inventing qualification-derived quality.
 - **Starting checkpoint:** `9d70253f58f759ac2b6b930cc4a9c2efef21cf79`.
 - **Starting evidence:** An operator decision record exists, but it is documentary and deliberately
   not copied into the obsolete frozen candidate registry. Production quality fields and
   `privacy.approved_model_lineages` remain empty, so private-source egress remains fail-closed.
-- **Current safe slice:** Inspect and reuse the existing lineage review, candidate registry,
-  discovery, privacy, and qualification abstractions. Implement a strict, hash-bound,
+- **Completed safe slice:** Reused the existing lineage review, candidate registry, discovery,
+  refresh, privacy, and qualification abstractions to implement a strict, hash-bound,
   provider-free review artifact and exact candidate-evidence join with synthetic local
-  regressions. Do not perform another provider refresh, access an operator secret, populate
-  qualification-derived quality, or activate production source egress.
-- **Exact next safe action:** Map the current typed lineage and registry validation paths, then add
-  failing tests for incomplete, conflicting, duplicate, stale, and non-current review decisions
-  before implementing the join.
+  regressions. No provider refresh, operator secret, qualification-derived quality, or production
+  source-egress activation occurred.
+- **Exact next safe action:** Create and push the ticket checkpoint, then begin
+  `V3-EFFORT-001`.
 
 ## 2026-07-30 — V3-CALIBRATE-001
 

@@ -737,7 +737,7 @@ are invisible to source review by construction.
 
 - **Objective:** Perform and record the independent root-lineage review that
   `privacy.approved_model_lineages` requires, so source egress is not blocked for every
-  candidate. The list is currently empty and is a hard fail-closed gate in six call sites;
+  candidate. The list is currently empty and is a hard fail-closed gate in eight call sites;
   all twelve candidates carry `lineage_review.status = "pending"`.
 - **Acceptance criteria:** Each candidate carries a dated operator review, rationale, and
   evidence hash. Approved root lineages are committed. Distinct vendor aliases of one root
@@ -748,7 +748,7 @@ are invisible to source review by construction.
 - **Dependencies:** None beyond current `HEAD` for the decision itself. A refreshed candidate
   registry can bind the operator review before calibration; the production
   `ModelLineageConfig` binding additionally requires qualification output.
-- **Status:** `IN_PROGRESS`
+- **Status:** `PARTIAL`
 - **Operator decision recorded:** `docs/remediation/v3/model_lineage_review.md` authorises
   eight root lineages — anthropic, openai, google, x-ai, moonshotai, deepseek, z-ai, minimax —
   with per-model derivation evidence from catalogue `hugging_face_id` and HuggingFace
@@ -761,14 +761,34 @@ are invisible to source review by construction.
   Therefore `approved_model_lineages` stays empty and production source egress stays fail-closed
   until qualification completes. The reviewed lineage decision must first be joined to the
   refreshed candidates for calibration; do not hand-author production quality entries early.
-- **Current scope:** Build the provider-free, typed, hash-bound join between an operator-reviewed
-  lineage decision and exact refreshed candidate evidence. The join must reject missing,
-  conflicting, duplicate, stale, or non-current model decisions and preserve all existing
-  fail-closed source-egress gates.
-- **Next action:** Inspect existing lineage, candidate-registry, discovery, privacy, and
-  qualification bindings; add a strict review artifact and deterministic synthetic regressions.
-  Do not populate production quality fields or `approved_model_lineages`, and do not perform
-  another provider refresh in this slice.
+- **Provider-free implementation evidence:** A separate frozen, self-hashed review overlay now
+  revalidates the pending/rootless discovery registry, replays exact refresh source into its
+  snapshot, binds a caller-independent trusted freshness policy, verifies bounded raw decision
+  evidence, and rejects missing, overlapping, mistimed, stale, identity-drifted, ineligible,
+  canonical/variant-split, and root-split decisions. Its schema fixes the scope to public
+  open-source identity review, its quality to `NOT_EVALUATED`, its evidence class to
+  `PROVIDER_FREE_STRUCTURAL`, both provider and operator authenticity to
+  `NOT_INDEPENDENTLY_PROVEN`, and both source-egress and production-selection authority to
+  literal `false`. All eight approval-dependent consumer paths now have negative coverage;
+  unregistered vendor labels receive no independence credit and unapproved falsifier lineages
+  are excluded.
+- **Validation:** The overlay/schema focused gate passed `16` tests; the joined
+  lineage/discovery/refresh/qualification/consumer matrix passed `565`. Repository Ruff, strict
+  mypy over `155` source files, generated-schema synchronization, and diff integrity passed. The
+  complete suite reached `3549 passed, 15 skipped` with exactly `71` setup errors caused by the
+  managed sandbox denying `127.0.0.1` listener creation; the exact affected bridge file then
+  passed all `76` tests with local-loopback permission, yielding effective full coverage of
+  `3620` passing tests and `15` explicit external-prerequisite skips. No provider call, secret
+  access, or spend occurred.
+- **Remaining gap:** No successful post-correction real refresh bundle exists; the documentary
+  decision lacks a whole-second UTC time, omits one documentary candidate, and is not
+  independently authenticated. The frozen candidate registry is obsolete. Therefore no real
+  review artifact, production quality entry, or runtime approval can be emitted honestly, and
+  `approved_model_lineages` remains empty.
+- **Next action:** Continue with `V3-EFFORT-001`, then calibration and qualification. Return here
+  only after a successful exact refreshed candidate bundle and a complete authenticated operator
+  decision exist; do not infer authenticity from a self-hash or activate private-source egress
+  from this public-only record.
 
 ## V3-INTAKE-001 — Untrusted client repository intake
 

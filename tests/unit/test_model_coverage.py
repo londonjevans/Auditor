@@ -1931,6 +1931,56 @@ def test_surface_assignment_feasibility_passes_with_distinct_approved_primaries(
     assert "required_distinct_primary_root_lineages=critical:3,noncritical:1" in gate.detail
 
 
+def test_surface_assignment_feasibility_rejects_revoked_lineage_approval(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    base = config_factory()
+    index, graphs, invariants, audited_suite, requests = _requests_with_audited_coverage()
+    assignments = plan_model_surface_review_assignments(
+        base,
+        requests,
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+        audited_suite_coverage=audited_suite,
+    )
+    revoked = next(
+        entry.root_lineage
+        for entry in base.models.registry
+        if entry.canonical_model_id == base.models.configuration.primary
+    )
+    config = base.model_copy(
+        update={
+            "privacy": base.privacy.model_copy(
+                update={
+                    "approved_model_lineages": tuple(
+                        lineage
+                        for lineage in base.privacy.approved_model_lineages
+                        if lineage != revoked
+                    )
+                }
+            )
+        }
+    )
+
+    gate = model_surface_assignment_feasibility_gate(
+        config,
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+        audited_suite_coverage=audited_suite,
+        requests=requests,
+        assignments=assignments,
+        required=True,
+    )
+
+    assert not gate.passed
+    assert gate.state is AnalysisState.ATTEMPTED_FAILED
+    assert "invalid_assignments=0" not in gate.detail
+
+
 def test_surface_assignment_feasibility_rejects_an_underassigned_surface(
     config_factory: Callable[..., AuditConfig],
 ) -> None:
@@ -2562,6 +2612,54 @@ def test_mock_and_unregistered_models_are_retained_as_no_credit(
     )
     assert any("mock model usage was excluded" in item for item in coverage.limitations)
     assert any("unregistered model" in item for item in coverage.limitations)
+
+
+def test_registered_unapproved_model_is_retained_as_no_credit(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    base = config_factory()
+    revoked = next(
+        entry.root_lineage
+        for entry in base.models.registry
+        if entry.canonical_model_id == base.models.source_audit.primary
+    )
+    config = base.model_copy(
+        update={
+            "privacy": base.privacy.model_copy(
+                update={
+                    "approved_model_lineages": tuple(
+                        lineage
+                        for lineage in base.privacy.approved_model_lineages
+                        if lineage != revoked
+                    )
+                }
+            )
+        }
+    )
+    index, graphs, invariants, requests = _requests()
+    request = next(
+        request for request in requests if request.kind is ModelReviewSurfaceKind.ENTRY_POINT
+    )
+    usage = _usage("source_audit", config.models.source_audit.primary, "request-unapproved")
+
+    coverage = build_model_review_coverage(
+        config,
+        usage_records=[usage],
+        review_artifacts=[_artifact([request], usage, index, graphs)],
+        review_contexts_by_request=_review_contexts([request], [usage], index, graphs),
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+    )
+
+    surface = next(
+        surface for surface in coverage.surfaces if surface.surface_id == request.surface_id
+    )
+    assert not surface.reviewed
+    assert not surface.evidence_references[0].credited
+    assert "lineage lacked operator approval" in surface.evidence_references[0].reason
+    assert any("used an unapproved lineage" in item for item in coverage.limitations)
 
 
 def test_same_lineage_aliases_do_not_inflate_independence(

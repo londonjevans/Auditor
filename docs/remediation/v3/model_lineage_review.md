@@ -7,6 +7,23 @@ This is the operator decision record required by `V3-LINEAGE-001`. It authorises
 lineages for source egress. It is **not** hash-bound discovery evidence and must not be
 copied into `config/models.candidates.toml`.
 
+## Machine-verifiable status
+
+The provider-free implementation in `mmaudit.models.lineage_review` can bind a dated
+decision to exact discovery, refreshed route state, trusted freshness limits, and bounded
+decision-evidence bytes. Its artifact is deliberately labelled
+`PROVIDER_FREE_STRUCTURAL`, `NOT_EVALUATED`, and `NOT_INDEPENDENTLY_PROVEN` for both
+provider observation and operator-decision authenticity. It hard-codes source-egress and
+production-selection authority to `false`.
+
+This Markdown record is not currently eligible to produce that artifact: there is no
+successful post-correction real refresh bundle, the recorded decision has no whole-second
+UTC time, and the assignment table does not exactly cover the current documentary
+candidate list. No root from this page is therefore populated into runtime
+`approved_model_lineages`. A future binding must use the exact current candidate set and
+retain the raw bounded review evidence; it must not infer provider or operator authorship
+from a self-hash.
+
 ## Scope of the authorisation
 
 The operator authorises all eight root lineages below, including the four non-US

@@ -90,3 +90,28 @@ def test_candidate_falsifiers_use_two_distinct_registered_lineages(
 
     assert len(selected) == 2
     assert len({root_lineage for _model_id, root_lineage in selected}) == 2
+
+
+def test_candidate_falsifiers_exclude_unapproved_lineages(
+    config_factory,
+) -> None:
+    base = config_factory()
+    falsifier_entry = model_registry_entry("reviewer/falsifier")
+    registry = [
+        *(entry.model_dump(mode="json") for entry in base.models.registry),
+        falsifier_entry,
+    ]
+    config = config_factory(
+        privacy={"approved_model_lineages": []},
+        models={
+            "specialists": {
+                "falsifier": {
+                    "primary": "reviewer/falsifier",
+                    "fallbacks": [],
+                }
+            },
+            "registry": registry,
+        },
+    )
+
+    assert select_candidate_falsifier_models(config) == []

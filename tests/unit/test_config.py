@@ -350,6 +350,22 @@ def test_independent_models_pass(config_factory) -> None:
     assert validate_model_independence(config_factory()) == []
 
 
+def test_unreviewed_vendor_families_never_receive_independence_credit(
+    config_factory,
+) -> None:
+    config = config_factory(
+        models={
+            "registry": [],
+            "minimum_distinct_families": 4,
+        }
+    )
+
+    errors = validate_model_independence(config)
+
+    assert any("immutable operator-reviewed root lineage" in error for error in errors)
+    assert any("only 0 independent analysis model families" in error for error in errors)
+
+
 def test_duplicate_models_fail(config_factory) -> None:
     config = config_factory()
     duplicate = config.models.model_copy(

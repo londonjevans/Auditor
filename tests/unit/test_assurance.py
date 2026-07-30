@@ -1834,6 +1834,38 @@ def test_shape_only_model_quality_cannot_satisfy_runtime_qualification(config_fa
     assert assessment.status is not MaximumAssuranceStatus.COMPLETE
 
 
+def test_assurance_revalidates_root_approval_for_credited_surface_reviews(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    lineage = model_lineage_index(config)[config.models.source_audit.primary.lower()].root_lineage
+    config = config.model_copy(
+        update={
+            "privacy": config.privacy.model_copy(
+                update={
+                    "approved_model_lineages": tuple(
+                        approved
+                        for approved in config.privacy.approved_model_lineages
+                        if approved != lineage
+                    )
+                }
+            )
+        }
+    )
+
+    assessment = MaximumAssuranceContract(config).evaluate(runtime)
+
+    critical_review = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "critical_model_surface_review"
+    )
+    assert not critical_review.passed
+    assert "not backed by matching certification-grade" in critical_review.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
 @pytest.mark.parametrize(
     "missing_hash",
     [

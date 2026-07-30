@@ -1,0 +1,436 @@
+{
+  "$defs": {
+    "LineageReviewStatus": {
+      "description": "Explicit operator review state; discovery is allowed to remain pending.",
+      "enum": [
+        "pending",
+        "rejected",
+        "approved"
+      ],
+      "title": "LineageReviewStatus",
+      "type": "string"
+    },
+    "ModelLineageCandidateBinding": {
+      "additionalProperties": false,
+      "description": "One exact candidate joined to discovery, refresh, and operator review evidence.",
+      "properties": {
+        "approved_provider_endpoint": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Approved Provider Endpoint",
+          "type": "string"
+        },
+        "approved_provider_name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Approved Provider Name",
+          "type": "string"
+        },
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "canonical_model_slug": {
+          "title": "Canonical Model Slug",
+          "type": "string"
+        },
+        "decision": {
+          "$ref": "#/$defs/LineageReviewStatus"
+        },
+        "discovery_evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Discovery Evidence Sha256",
+          "type": "string"
+        },
+        "endpoint_slug": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Slug"
+        },
+        "endpoint_tag": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Tag"
+        },
+        "exact_model_id": {
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "refresh_model_state_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Refresh Model State Sha256",
+          "type": "string"
+        },
+        "refresh_route_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Refresh Route Sha256",
+          "type": "string"
+        },
+        "review_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Review Sha256",
+          "type": "string"
+        },
+        "root_lineage": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Root Lineage"
+        },
+        "variant_family_key": {
+          "title": "Variant Family Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "canonical_model_slug",
+        "variant_family_key",
+        "approved_provider_endpoint",
+        "approved_provider_name",
+        "discovery_evidence_sha256",
+        "refresh_model_state_sha256",
+        "refresh_route_sha256",
+        "review_sha256",
+        "decision",
+        "binding_sha256"
+      ],
+      "title": "ModelLineageCandidateBinding",
+      "type": "object"
+    },
+    "ModelLineageDecision": {
+      "additionalProperties": false,
+      "description": "Deep-immutable operator decision retained inside the self-hashed artifact.",
+      "properties": {
+        "evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Evidence Sha256"
+        },
+        "rationale": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "review_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Review Sha256",
+          "type": "string"
+        },
+        "reviewed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reviewed At"
+        },
+        "reviewed_by": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reviewed By"
+        },
+        "reviewed_model_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "title": "Reviewed Model Ids",
+          "type": "array"
+        },
+        "root_lineage": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Root Lineage"
+        },
+        "status": {
+          "$ref": "#/$defs/LineageReviewStatus"
+        }
+      },
+      "required": [
+        "status",
+        "reviewed_model_ids",
+        "rationale",
+        "review_sha256"
+      ],
+      "title": "ModelLineageDecision",
+      "type": "object"
+    },
+    "ModelLineageReviewEvidenceBinding": {
+      "additionalProperties": false,
+      "description": "Exact bounded evidence bytes used by one operator decision.",
+      "properties": {
+        "binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Binding Sha256",
+          "type": "string"
+        },
+        "byte_count": {
+          "maximum": 2000000,
+          "minimum": 1,
+          "title": "Byte Count",
+          "type": "integer"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "review_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Review Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "review_sha256",
+        "evidence_sha256",
+        "byte_count",
+        "binding_sha256"
+      ],
+      "title": "ModelLineageReviewEvidenceBinding",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/model_lineage_review.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Exact review overlay that deliberately carries no runtime authority.",
+  "properties": {
+    "approved_root_lineages": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 128,
+      "title": "Approved Root Lineages",
+      "type": "array"
+    },
+    "artifact_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Artifact Sha256",
+      "type": "string"
+    },
+    "candidate_bindings": {
+      "items": {
+        "$ref": "#/$defs/ModelLineageCandidateBinding"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "title": "Candidate Bindings",
+      "type": "array"
+    },
+    "candidate_registry_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Candidate Registry Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "discovery_candidate_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Discovery Candidate Set Sha256",
+      "type": "string"
+    },
+    "discovery_manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Discovery Manifest Sha256",
+      "type": "string"
+    },
+    "evidence_bindings": {
+      "items": {
+        "$ref": "#/$defs/ModelLineageReviewEvidenceBinding"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "title": "Evidence Bindings",
+      "type": "array"
+    },
+    "evidence_class": {
+      "const": "PROVIDER_FREE_STRUCTURAL",
+      "default": "PROVIDER_FREE_STRUCTURAL",
+      "title": "Evidence Class",
+      "type": "string"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+    },
+    "hard_max_age_hours": {
+      "maximum": 2160,
+      "minimum": 2,
+      "title": "Hard Max Age Hours",
+      "type": "integer"
+    },
+    "operator_decision_authenticity": {
+      "const": "NOT_INDEPENDENTLY_PROVEN",
+      "default": "NOT_INDEPENDENTLY_PROVEN",
+      "title": "Operator Decision Authenticity",
+      "type": "string"
+    },
+    "production_selection_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Production Selection Authorized",
+      "type": "boolean"
+    },
+    "provider_observation_authenticity": {
+      "const": "NOT_INDEPENDENTLY_PROVEN",
+      "default": "NOT_INDEPENDENTLY_PROVEN",
+      "title": "Provider Observation Authenticity",
+      "type": "string"
+    },
+    "purpose": {
+      "const": "LINEAGE_IDENTITY_ONLY",
+      "default": "LINEAGE_IDENTITY_ONLY",
+      "title": "Purpose",
+      "type": "string"
+    },
+    "quality_status": {
+      "const": "NOT_EVALUATED",
+      "default": "NOT_EVALUATED",
+      "title": "Quality Status",
+      "type": "string"
+    },
+    "refresh_freshness_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Refresh Freshness Sha256",
+      "type": "string"
+    },
+    "refresh_retrieved_at": {
+      "format": "date-time",
+      "title": "Refresh Retrieved At",
+      "type": "string"
+    },
+    "refresh_semantic_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Refresh Semantic Sha256",
+      "type": "string"
+    },
+    "refresh_snapshot_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Refresh Snapshot Sha256",
+      "type": "string"
+    },
+    "refresh_source_evidence_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Refresh Source Evidence Sha256",
+      "type": "string"
+    },
+    "reviews": {
+      "items": {
+        "$ref": "#/$defs/ModelLineageDecision"
+      },
+      "maxItems": 128,
+      "minItems": 1,
+      "title": "Reviews",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "soft_max_age_hours": {
+      "maximum": 720,
+      "minimum": 1,
+      "title": "Soft Max Age Hours",
+      "type": "integer"
+    },
+    "source_egress_authorized": {
+      "const": false,
+      "default": false,
+      "title": "Source Egress Authorized",
+      "type": "boolean"
+    },
+    "source_scope": {
+      "const": "PUBLIC_OPEN_SOURCE_ONLY",
+      "default": "PUBLIC_OPEN_SOURCE_ONLY",
+      "title": "Source Scope",
+      "type": "string"
+    }
+  },
+  "required": [
+    "created_at",
+    "expires_at",
+    "candidate_registry_sha256",
+    "discovery_manifest_sha256",
+    "discovery_candidate_set_sha256",
+    "refresh_source_evidence_sha256",
+    "refresh_snapshot_sha256",
+    "refresh_semantic_sha256",
+    "refresh_retrieved_at",
+    "refresh_freshness_sha256",
+    "soft_max_age_hours",
+    "hard_max_age_hours",
+    "reviews",
+    "evidence_bindings",
+    "candidate_bindings",
+    "approved_root_lineages",
+    "artifact_sha256"
+  ],
+  "title": "mmaudit model lineage review artifact",
+  "type": "object"
+}

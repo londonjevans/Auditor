@@ -1982,19 +1982,44 @@ def validate_model_independence(config: AuditConfig) -> list[str]:
 
     lineage_by_id = model_lineage_index(config)
 
-    def root_lineage(model_id: str) -> str:
+    def root_lineage(model_id: str) -> str | None:
         entry = lineage_by_id.get(model_id.lower())
-        if entry is not None:
-            return entry.root_lineage
-        return f"heuristic:{model_family(model_id)}"
+        return None if entry is None else entry.root_lineage
+
+    configured_ids = {
+        model_id
+        for role in ALL_MODEL_ROLES
+        for model_id in (
+            config.models.role(role).primary,
+            *config.models.role(role).fallbacks,
+        )
+    } | {
+        model_id
+        for role_config in config.models.specialists.values()
+        for model_id in (role_config.primary, *role_config.fallbacks)
+    }
+    missing_lineage_ids = tuple(
+        sorted(model_id for model_id in configured_ids if root_lineage(model_id) is None)
+    )
+    strict_lineage_required = not config.models.allow_non_independent_models or (
+        config.profile is AuditProfile.MAXIMUM_ASSURANCE
+        and not config.maximum_assurance.allow_downgrade
+    )
+    if missing_lineage_ids and strict_lineage_required:
+        errors.append(
+            "configured models lack immutable operator-reviewed root lineage records: "
+            + ", ".join(missing_lineage_ids)
+        )
 
     analysis_families = {
-        root_lineage(role_ids[role])
+        lineage
         for role in ("threat_model", "source_audit", "business_logic", "configuration")
+        if (lineage := root_lineage(role_ids[role])) is not None
     } | {
-        root_lineage(config.models.specialists[role].primary)
+        lineage
         for role in config.models.specialists
         if role in ALL_SPECIALIST_ROLES
+        if (lineage := root_lineage(config.models.specialists[role].primary)) is not None
     }
     required_families = config.models.minimum_distinct_families
     if (
@@ -2024,12 +2049,13 @@ def validate_model_independence(config: AuditConfig) -> list[str]:
                 + ", ".join(sorted(missing_specialists))
             )
         high_quality_lineages = {
-            root_lineage(role_config.primary)
+            lineage
             for role_config in [
                 *(config.models.role(role) for role in ALL_MODEL_ROLES),
                 *config.models.specialists.values(),
             ]
             if role_config.quality_tier in {"high", "highest"}
+            if (lineage := root_lineage(role_config.primary)) is not None
         }
         required_slots = max(
             config.models.minimum_high_quality_slots,

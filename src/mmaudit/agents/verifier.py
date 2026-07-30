@@ -195,11 +195,16 @@ def select_candidate_falsifier_models(config: AuditConfig) -> list[tuple[str, st
         *config.models.judge.fallbacks,
     ]
     lineage_by_id = model_lineage_index(config)
+    approved_lineages = set(config.privacy.approved_model_lineages)
     selected: list[tuple[str, str]] = []
     seen_lineages: set[str] = set()
     for model_id in ordered_ids:
         lineage = lineage_by_id.get(model_id.lower())
-        if lineage is None or lineage.root_lineage in seen_lineages:
+        if (
+            lineage is None
+            or lineage.root_lineage not in approved_lineages
+            or lineage.root_lineage in seen_lineages
+        ):
             continue
         selected.append((model_id, lineage.root_lineage))
         seen_lineages.add(lineage.root_lineage)

@@ -372,6 +372,36 @@ def test_verified_production_selection_resolves_every_exact_model_and_role() -> 
     assert ProductionQualificationValidation.from_dict(evidence.as_dict()) == evidence
 
 
+def test_production_qualification_rejects_unapproved_root_lineage() -> None:
+    config, qualification, observed_at = _verified_production_config_and_capability()
+    revoked_model = qualification.models[0]
+    config = config.model_copy(
+        update={
+            "privacy": config.privacy.model_copy(
+                update={
+                    "approved_model_lineages": tuple(
+                        lineage
+                        for lineage in config.privacy.approved_model_lineages
+                        if lineage != revoked_model.root_lineage
+                    )
+                }
+            )
+        }
+    )
+
+    evidence = ModelRegistry.validate_production_qualification(
+        config,
+        qualification,
+        now=observed_at,
+    )
+
+    assert not evidence.valid
+    assert (
+        f"verified production root lineage is not approved: {revoked_model.exact_model_id}"
+        in evidence.errors
+    )
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
