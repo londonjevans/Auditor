@@ -659,9 +659,23 @@ are invisible to source review by construction.
   fail-closed at every existing call site.
 - **Files expected to change:** `config/models.candidates.toml`, operator configuration,
   lineage evidence artifacts, regressions.
-- **Dependencies:** None beyond current `HEAD`; this is an operator judgment task and can be
-  recorded at any clean boundary.
-- **Status:** `QUEUED`
+- **Dependencies:** None beyond current `HEAD` for the decision itself; the registry binding
+  additionally requires qualification output.
+- **Status:** `PARTIAL`
+- **Operator decision recorded:** `docs/remediation/v3/model_lineage_review.md` authorises
+  eight root lineages — anthropic, openai, google, x-ai, moonshotai, deepseek, z-ai, minimax —
+  with per-model derivation evidence from catalogue `hugging_face_id` and HuggingFace
+  `cardData.base_model`, a reproducible identifier derivation, and the declared collisions.
+  The basis is that audited targets are public open-source code; the record states that this
+  authorisation does not extend to private pre-deployment client source and must be re-taken
+  before the first such audit.
+- **Remaining gap:** `ModelLineageConfig` also requires `measured_quality_score`,
+  `measured_quality_tier`, and a `quality_measurement` hash, which are qualification outputs.
+  The registry cannot be populated from the decision record alone, so
+  `approved_model_lineages` stays empty and egress stays fail-closed until qualification
+  completes. Do not hand-author registry entries to close this early.
+- **Next action:** Re-run discovery (`V3-MODELREFRESH-001` / `V3-QUALIFY-001`), calibrate
+  thresholds (`V3-CALIBRATE-001`), then bind the registry using the authorised identifiers.
 
 ## V3-INTAKE-001 — Untrusted client repository intake
 
@@ -1054,6 +1068,60 @@ are invisible to source review by construction.
 - **Dependencies:** `V3-OMISSION-001`.
 - **Status:** `QUEUED`
 
+## V3-MODELREFRESH-001 — Daily catalogue refresh and candidate drift detection
+
+- **Priority:** High. The frozen candidate set is already obsolete and will silently decay
+  again without this. Pair it with `V3-QUALIFY-001`.
+- **Objective:** Detect new, changed, withdrawn, and re-priced models daily, and keep the
+  production candidate set current without ever letting an unqualified or lineage-unreviewed
+  model reach an audit.
+- **Rationale:** `config/models.candidates.toml` was frozen from run `run-20260727T2045Z`
+  under the removed `?zdr=true&supported_parameters=response_format` filter and has not been
+  regenerated. A catalogue observation on 2026-07-30 recorded 367 models, 246 ZDR-eligible and
+  219 of those with structured output, including frontier models across at least eight
+  independent root lineages — none of which are in the frozen set. Observed evidence and
+  cautions are recorded in `docs/remediation/v3/model_selection_candidates.md`, which is an
+  input to discovery and carries no hash-bound evidence.
+- **The distinction that governs this ticket.** Daily **discovery** is required. Daily
+  **promotion into production** is forbidden. A newly discovered model must not become
+  selectable by any audit until it has passed qualification against the frozen corpus and its
+  root lineage has been reviewed. Automating staleness away must not automate the fail-closed
+  guarantee away with it.
+- **Acceptance criteria:**
+  - A scheduled daily job refreshes the catalogue and ZDR listing, writes a hash-bound
+    discovery snapshot, and diffs it against the current frozen candidate set.
+  - The diff classifies every change: new eligible model, withdrawn model, changed pricing,
+    changed context or output limits, changed structured-output or reasoning support, changed
+    ZDR eligibility, and changed endpoint availability. Each change carries the exact
+    before-and-after values.
+  - Loss of eligibility for a model already in production selection is surfaced immediately
+    and, where it invalidates a binding precondition such as ZDR eligibility, blocks further
+    use of that model rather than degrading silently.
+  - A pricing increase beyond a configured tolerance is surfaced and does not silently raise
+    audit cost; budget preflight uses the refreshed pricing.
+  - New candidates enter a `discovered` state, are eligible for automatic benchmarking against
+    the frozen corpus within a configured cost ceiling, and then rest in
+    `qualified_pending_lineage`. They become selectable only after lineage review. No path
+    exists from discovery to production selection that skips either step.
+  - Automatic benchmarking spend is bounded per day and per model, reserved atomically against
+    the cumulative ledger, and a refresh that cannot reserve its budget skips benchmarking and
+    records why rather than proceeding unfunded.
+  - The daily run is idempotent, resumable, and produces no spend when the catalogue is
+    unchanged.
+  - Refresh failure — network, authentication, malformed catalogue — is explicit and never
+    presented as "no changes". A stale snapshot beyond a configured age is reported as stale
+    and, past a hard limit, blocks production model selection.
+  - Lineage independence is re-evaluated on refresh, since a new model may share a root
+    lineage with an existing selection and silently collapse ensemble independence. Vendor
+    prefix is never accepted as evidence of independence, and `-fast`, `:batch`, and
+    equivalent variants are recognised as the same model and lineage.
+- **Files expected to change:** `src/mmaudit/models/discovery.py`,
+  `src/mmaudit/models/registry.py`, `src/mmaudit/models/qualification_workflow.py`,
+  `src/mmaudit/cli.py`, drift-report schema, `.github/workflows/`, documentation, regressions.
+- **Dependencies:** `V3-CALIBRATE-001` and `V3-LINEAGE-001` for the promotion path; the
+  discovery, diffing, and alerting portion can land before either and is useful immediately.
+- **Status:** `QUEUED`
+
 ## V3-AUTONOMY-001 — Zero-operator-input managed run profile
 
 - **Objective:** Remove per-run human gating from the audit path so a client purchase can
@@ -1161,7 +1229,11 @@ still applies within a track.
 
 **Track 2 — model selection and quality**
 
-1. `V3-LINEAGE-001` — operator judgment, cheap, unblocks egress; can be recorded immediately.
+1. `V3-MODELREFRESH-001` (discovery/diff portion) then `V3-LINEAGE-001`. Re-run discovery
+   first: the frozen candidate set predates the removal of the frontier-excluding catalogue
+   filter, so reviewing the lineages of twelve obsolete mid-tier models would waste the
+   review. Discover the current set, then review those lineages once.
+   See `docs/remediation/v3/model_selection_candidates.md`.
 2. `V3-EFFORT-001` — small, and likely the largest quality gain per line of code available.
 3. `V3-CALIBRATE-001`, then `V3-QUALIFY-001`.
 4. `V3-SINGLE-AUDIT-001`, `V3-MULTI-AUDIT-001`.
