@@ -580,7 +580,10 @@ def _bundle(
             model_metadata_snapshot_sha256=_sha(f"metadata-{model_id}"),
             pricing_snapshot_sha256=_sha(f"pricing-{model_id}"),
             context_size=100_000,
+            max_prompt_tokens=91_808,
+            max_prompt_tokens_source="metadata",
             output_limit=8_192,
+            output_limit_source="metadata",
             structured_output_supported=structured_output_supported,
             structured_output_mode=structured_output_mode,
             reasoning_supported=True,
@@ -861,6 +864,28 @@ def test_tier_a_eligibility_uses_measured_output_reliability_not_native_flag() -
         and candidate.structured_output_mode is StructuredOutputMode.VALIDATED_TEXT_JSON
         for candidate in bundle.registry.candidates
     )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ({"max_prompt_tokens": None}, "present together"),
+        ({"max_prompt_tokens_source": "context_limit"}, "derived prompt limit"),
+        ({"output_limit": 100_001}, "output limit exceeds"),
+        ({"output_limit_source": "context_limit"}, "derived output limit"),
+        ({"structured_output_supported": False}, "boolean differs"),
+    ),
+)
+def test_candidate_output_capability_facts_are_complete_and_consistent(
+    mutation: dict[str, object],
+    message: str,
+) -> None:
+    candidate = _bundle().registry.candidates[0]
+    payload = candidate.model_dump(mode="json")
+    payload.update(mutation)
+
+    with pytest.raises(ValidationError, match=message):
+        CandidateModel.model_validate(payload)
 
 
 def test_verified_production_capability_is_opaque_current_and_exact() -> None:
@@ -1783,7 +1808,16 @@ def test_candidate_registry_rejects_mixed_discovery_run_provenance() -> None:
         model_metadata_snapshot_sha256=evidence.model_metadata_snapshot_sha256,
         pricing_snapshot_sha256=evidence.pricing_snapshot_sha256,
         context_size=evidence.context_size,
+        max_prompt_tokens=evidence.endpoint_snapshot.endpoint(
+            evidence.approved_provider_endpoint
+        ).max_prompt_tokens,
+        max_prompt_tokens_source=evidence.endpoint_snapshot.endpoint(
+            evidence.approved_provider_endpoint
+        ).max_prompt_tokens_source,
         output_limit=evidence.output_limit,
+        output_limit_source=evidence.endpoint_snapshot.endpoint(
+            evidence.approved_provider_endpoint
+        ).max_completion_tokens_source,
         structured_output_supported=evidence.structured_output_supported,
         structured_output_mode=evidence.structured_output_mode,
         reasoning_supported=evidence.reasoning_supported,

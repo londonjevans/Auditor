@@ -152,7 +152,9 @@ def test_provider_free_job_exercises_local_artifact_and_diff_regressions() -> No
     assert 'MMAUDIT_RUN_REAL_PROVIDER_TESTS: "0"' in local_job
     assert "tests/unit/test_model_refresh.py" in local_job
     assert "tests/unit/test_model_refresh_cli.py" in local_job
+    assert "tests/unit/test_model_refresh_schemas.py" in local_job
     assert "tests/unit/test_model_refresh_staging.py" in local_job
     assert "tests/unit/test_model_refresh_workflow.py" in local_job
+    assert "python scripts/generate_release_schemas.py" in local_job
     assert "mmaudit models refresh" not in local_job
     assert "--secrets-env-file" not in local_job

@@ -150,7 +150,7 @@
     {
       "id": "L",
       "title": "Qualified model selection and responsibilities",
-      "tickets": ["V3-CALIBRATE-001", "V3-QUALIFY-001", "V3-SINGLE-AUDIT-001", "V3-MULTI-AUDIT-001"],
+      "tickets": ["V3-CALIBRATE-001", "V3-MODELREFRESH-001", "V3-LINEAGE-001", "V3-QUALIFY-001", "V3-SINGLE-AUDIT-001", "V3-MULTI-AUDIT-001"],
       "status": "PARTIAL",
       "current_evidence_class": "LOCAL_IMPLEMENTATION",
       "evidence": [
@@ -160,9 +160,12 @@
         "Implementation: src/mmaudit/models/calibration.py, src/mmaudit/models/qualification.py, src/mmaudit/models/qualification_workflow.py, src/mmaudit/benchmark/model_portfolio.py, and src/mmaudit/cli.py; published schemas: schemas/model_calibration.schema.json and schemas/model_qualification.schema.json.",
         "Synthetic/local tests: tests/unit/test_model_calibration.py, tests/unit/test_model_calibration_cli.py, tests/unit/test_qualification_policy_calibration.py, tests/unit/test_role_qualification.py, and tests/unit/test_candidate_benchmark_campaign.py. The exact joined acceptance command passed 130 tests in 317.29 seconds; the full local suite passed 3464 tests with 11 explicit prerequisite skips.",
         "Source implementation checkpoint: 937d97e1d337305ac56cd792fe0d6c2b8bd50674.",
+        "Provider-free catalogue refresh now retains and replays strict v2 source, snapshot, semantic diff, terminal attempt, freshness, and staging evidence with exact route identity, live capability provenance, paired prior evidence, trusted staging time, exact per-artifact self-hash binding, and fail-closed selected-route bootstrap behavior.",
+        "Two materially different authenticated metadata-only attempts failed closed before a usable snapshot and created no model usage record; no successful current provider snapshot or provider-authored signature is claimed.",
+        "The final model-refresh touched matrix passed 354 tests; the complete corrected tree passed 3602 tests with 11 explicit external-prerequisite skips.",
         "No exact production model is currently qualified."
       ],
-      "remaining_proof": "Refresh candidates, approve independent lineages, expand judgment denominators, bind per-role reasoning effort, execute real calibration, freeze its measured policy, and complete staged real role/whole-protocol qualification."
+      "remaining_proof": "Complete a successful current refresh; retain and consume durable prior evidence across reviewed registry evolution; bind operator-reviewed lineages without inventing quality; expand judgment denominators; bind per-role reasoning effort; execute real calibration; freeze its measured policy; and complete staged real role/whole-protocol qualification and promotion."
     },
     {
       "id": "M",
@@ -256,7 +259,8 @@
         "Baseline ticket followed reproduce, validate, trace, and checkpoint sequencing; normal tests did not enable paid calls.",
         "V3-FORKDIFF-001 reproduced two distinct replay defects, added fail-closed regressions, passed a real local clean/pinned Foundry matrix and manifest-bound default replay, then passed 574 focused tests, Ruff, strict mypy, schema synchronization, diff review, and the full 2992-test suite with 10 explicit prerequisite skips.",
         "At its checkpoint, V3-FIXTURE-001 generated and verified 196 deterministic realistic-scale fixture files, passed its real local compiler integration, and passed the complete suite with 3005 tests, 11 explicit prerequisite skips, and the two then-open omission expected reds. That historical fixture ticket remains PARTIAL because semantic sharding is not implemented; the current V3-OMISSION-001 scale suite has since converted both expected reds to passing regressions.",
-        "V3-EXECORIGIN-001 closed two independent serialized-evidence false-complete gaps, passed its 154-test final focused matrix, schema synchronization, Ruff, strict mypy over 149 source files, diff and artifact review, and the complete local suite with 3203 tests and 11 explicit prerequisite skips. Paid-provider execution remained disabled."
+        "V3-EXECORIGIN-001 closed two independent serialized-evidence false-complete gaps, passed its 154-test final focused matrix, schema synchronization, Ruff, strict mypy over 149 source files, diff and artifact review, and the complete local suite with 3203 tests and 11 explicit prerequisite skips. Paid-provider execution remained disabled.",
+        "V3-MODELREFRESH-001 completed its provider-free discovery/diff/workflow slice with independent adversarial replay, 354 touched tests, Ruff, strict mypy over 154 source files, generated-schema and workflow-shell verification, diff and artifact review, and a final complete result of 3602 passed with 11 explicit prerequisite skips. The paid-provider test remained disabled and the ticket stayed PARTIAL."
       ],
       "remaining_proof": "Repeat focused/full validation and exact worklog evidence for every ticket."
     },

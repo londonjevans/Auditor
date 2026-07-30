@@ -28,6 +28,8 @@ jobs:
           cache: pip
       - name: Install provider-free validation dependencies
         run: python -m pip install -e ".[dev]"
+      - name: Verify committed release evidence schemas
+        run: python scripts/generate_release_schemas.py
       - name: Validate refresh artifacts and deterministic diff without provider access
         env:
           MMAUDIT_RUN_REAL_PROVIDER_TESTS: "0"
@@ -37,6 +39,7 @@ jobs:
           python -m pytest -q
           tests/unit/test_model_refresh.py
           tests/unit/test_model_refresh_cli.py
+          tests/unit/test_model_refresh_schemas.py
           tests/unit/test_model_refresh_staging.py
           tests/unit/test_model_refresh_workflow.py
 

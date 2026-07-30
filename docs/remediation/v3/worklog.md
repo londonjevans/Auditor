@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_BY_OPERATOR
+AUTORUN_STATUS: ACTIVE
 CURRENT_MILESTONE: Current model catalogue discovery and drift detection
-CURRENT_TICKET: V3-MODELREFRESH-001 (IN_PROGRESS; paused at safe boundary)
+CURRENT_TICKET: V3-MODELREFRESH-001 (PARTIAL; checkpoint pending)
 LAST_COMPLETED_TICKET: V3-EXECORIGIN-001
-NEXT_ACTION: On operator resume, implement the local fail-closed endpoint-identity normalization for shared provider tags with distinct endpoint slugs, add synthetic regressions, and validate locally. Do not make a third authenticated refresh attempt in this ticket.
-LAST_COMMAND: `.venv/bin/mmaudit models refresh --candidate-registry config/models.candidates.toml --secrets-env-file .env --output-dir /private/tmp/mmaudit-model-refresh-validation.flYYiq/output --soft-max-age-hours 30 --hard-max-age-hours 72 --pricing-tolerance-fraction 0.05 --no-color`
-LAST_RESULT: FAIL-CLOSED (exit 4, no completion and zero usage records) — the second authenticated metadata-only assay reached normalization and rejected current provider metadata because the ZDR catalogue contains shared route labels. A non-raw diagnostic identified `ModelRefreshValidationError: ZDR catalogue contains duplicate exact routes`. Per the no-progress rule, no third provider refresh will be attempted in this ticket.
+NEXT_ACTION: Create and push the isolated `V3-MODELREFRESH-001` checkpoint, record its hash, then transition immediately to provider-free `V3-LINEAGE-001`. Do not make a third authenticated refresh attempt in this ticket.
+LAST_COMMAND: `.venv/bin/pytest -q`
+LAST_RESULT: PASS — the final corrected tree passed 3602 tests with 11 explicit external-prerequisite skips in 505.06s. The paid-provider test remained disabled. Two inherited temporary-tree cleanup warnings were non-failing. No provider call, secret access, network request, or spend occurred.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,11 +19,11 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: ddf2d2d2df947b77da53fc55968cc67eba9917e1
+LAST_CHECKPOINT_COMMIT: b95dcd610209b102a65b57b027e2d6ac12083d41
 
 ## 2026-07-30 — V3-MODELREFRESH-001
 
-- **Status:** `IN_PROGRESS` (discovery/diff portion only).
+- **Status:** `PARTIAL` (provider-free discovery/diff/workflow slice complete).
 - **Defensive objective:** Refresh and compare time-bound provider catalogue evidence without
   allowing discovery to qualify, promote, or silently substitute a model.
 - **Starting boundary:** No paid benchmark, provider completion, lineage inference, or production
@@ -43,8 +43,9 @@ LAST_CHECKPOINT_COMMIT: ddf2d2d2df947b77da53fc55968cc67eba9917e1
 - **Qualification freshness correction:** A fresh benchmark campaign can no longer qualify a
   candidate whose bound discovery predates the policy's maximum evidence age. The synthetic
   negative regression and affected Ruff check pass.
-- **Normalized discovery evidence:** Added strict self-hashed snapshot, diff, terminal-attempt,
-  freshness, and workflow-status models plus five published JSON Schemas. Snapshot normalization
+- **Normalized discovery evidence:** Added strict self-hashed source projection, snapshot, diff,
+  terminal-attempt, freshness, and workflow-status models plus six published JSON Schemas.
+  Snapshot normalization
   covers the full exact-ID catalogue, ZDR routes, and authoritative exact candidate endpoint
   responses. Every required drift class retains exact before/after state; aliases and
   `-fast`/`:batch` variants can trigger lineage review but never acquire lineage authority.
@@ -60,7 +61,7 @@ LAST_CHECKPOINT_COMMIT: ddf2d2d2df947b77da53fc55968cc67eba9917e1
   GETs and no completion or usage record. Duplicate-key, non-finite, exponent-overflow, malformed
   nested metadata, authentication, timeout, rate-limit, provider-unavailable, and secret
   prerequisite failures remain typed. Operator-credential reflection anywhere in metadata is
-  rejected before raw payload hashing or persistence. A canary regression confirms no reflected
+  rejected before allowlisted projection or persistence. A canary regression confirms no reflected
   value reaches output or diagnostics.
 - **Strict scheduled staging:** The daily protected-default-branch workflow now runs provider-free
   regressions before the protected job, removes its explicit mode-`0600` secret before staging,
@@ -79,7 +80,8 @@ LAST_CHECKPOINT_COMMIT: ddf2d2d2df947b77da53fc55968cc67eba9917e1
   the entire refresh; secondary endpoint identity drift was neither classified nor blocking; and
   a mismatched ZDR row could confer eligibility by sharing only one endpoint label. Refresh now
   reuses the production pricing and tag/slug/provider-name normalizers, ignores only syntactically
-  valid routed ZDR aliases while retaining the raw inventory hash, validates optional item model
+  valid routed ZDR aliases while retaining their bounded occurrence projection, validates optional
+  item model
   bindings, compares exact prior tag/slug identities, and grants ZDR only after the authoritative
   exact endpoint and ZDR counterpart agree across normalized identity, provider, status,
   capabilities, limits, and billable pricing.
@@ -135,14 +137,108 @@ LAST_CHECKPOINT_COMMIT: ddf2d2d2df947b77da53fc55968cc67eba9917e1
   with local deterministic normalization that preserves the complete route identity, rejects
   genuinely ambiguous candidate bindings, and grants ZDR only to an exact reconciled
   counterpart. Add synthetic regressions and run local gates before checkpointing.
+- **Resume boundary:** Autorun resumed from the clean synchronized pause checkpoint. The next
+  slice is local and provider-free: represent exact endpoint rows by their complete tag/slug
+  identity, derive only injective public route identifiers across each model's endpoint
+  inventory, and retain the production endpoint validator's fail-closed ambiguity semantics.
+  No third authenticated refresh attempt is authorized for this ticket.
+- **Exact capability parity:** Live routes now reuse the production endpoint parameter and
+  token-limit normalizers, preserve prompt/completion values and fallback sources, and bind the
+  model/endpoint intersection of all supported output modes. Padded operational statuses and
+  duplicate parameter inventories fail closed. Prompt-limit loss, source-only drift, and
+  native-schema-to-JSON-object downgrade are explicit changes; an unchanged exact selected route
+  is no longer false-blocked merely because catalog-level capacity metadata drifted.
+- **Candidate baseline honesty:** Candidate records can retain discovery-bound prompt capacity and
+  prompt/completion sources alongside the existing output-capability hash and exact mode. Those
+  facts are all-or-none and revalidated against the exact endpoint snapshot. Hash-only legacy
+  candidates retain null unknown facts rather than derived provider claims; they remain usable
+  for unselected discovery but cannot satisfy a selected production route.
+- **Semantic staging correction:** Strict staging now deterministically reconstructs the complete
+  diff from the current snapshot, exact previous or registry baseline, frozen candidate registry,
+  selected routes, tolerance, and comparison time. A fully resealed, self-consistent diff that
+  omits real capability drift is rejected, closing reliance on declared nested before/after
+  values.
+- **Producer chronology correction:** The producer now requires the semantic diff comparison time
+  to equal the current snapshot retrieval time and rejects a paired exact prior snapshot whose
+  retrieval time is later than the current observation. Direct diff and fake-provider CLI
+  regressions prove that the previously accepted inverted baseline now fails closed and that the
+  CLI persists only a typed failure attempt rather than a success bundle. An independent
+  provider-free replay confirmed both cases.
+- **Selected bootstrap identity correction:** A final adversarial review proved that the
+  registry-only baseline lacks the complete endpoint tag/slug pair and therefore could not detect
+  secondary endpoint-identity drift for a production-selected route. Selected routes now carry an
+  explicit `ENDPOINT_IDENTITY_UNVERIFIED` classification and block until an exact replayable prior
+  snapshot exists; unselected discovery remains available. The former dual-identity `UNCHANGED`
+  result is a deterministic negative regression. The focused refresh/schema/staging/CLI matrix
+  passed `110` tests after schema regeneration.
+- **Allowlisted source replay correction:** Success evidence now includes a fifth runtime artifact,
+  `model-refresh-source-evidence.json`, containing only bounded canonical catalogue, routed-alias,
+  ZDR, and exact-candidate endpoint fields used by the semantic projection. Unknown provider fields
+  are dropped. The snapshot binds the source self-hash and canonical catalogue/ZDR projection
+  hashes; staging rebuilds the snapshot from the retained source and frozen registry before
+  replaying the diff. A negative regression fully reseals a false snapshot, diff, attempt, and
+  freshness record while leaving the source unchanged; staging rejects it. Cross-run source swaps,
+  nullable token provenance, order invariance, private five-file inventory, and schema bounds are
+  also covered. This proves deterministic projection from the staged authenticated-observation
+  artifact, not cryptographic provider authorship; OpenRouter does not sign these metadata bodies.
+  Live snapshot schema types now require exact route pricing, prompt/output provenance, and an exact
+  output mode, while diff baselines may still represent honest hash-only candidate evidence.
+- **Independent time and baseline validation:** Strict staging now evaluates future skew and
+  freshness against a trusted local validation clock recorded in workflow-status schema v2, rather
+  than trusting an artifact-relative timestamp. An exact previous baseline is accepted only as a
+  paired source/snapshot input whose projection is replayed against the frozen registry. Exact
+  filename-to-self-hash mapping prevents one artifact's hash-shaped field from satisfying another
+  artifact's inventory entry, and diff `after` values require live exact state rather than the
+  hash-only baseline type. Fully resealed future, stale, source-mismatched, prior-mismatched,
+  wrong-artifact-hash, hash-only-after, and workflow-v1 regressions all fail closed.
+- **Provider-free regression evidence:** The initial schema verifier reproduced the expected
+  stale v2 snapshot/diff schemas and exited `1`; regeneration followed by verification passed.
+  The refresh suite passed `52` tests; qualification/refresh/staging coverage passed `201`;
+  schema/staging/workflow coverage passed `30`; and the expanded endpoint/discovery/refresh/
+  qualification/workflow matrix passed `310` tests in `51.98s`. The later source-replay and exact
+  capability matrix passed `343` tests in `53.36s`; its narrower red/green matrix passed `107`
+  tests. Affected Ruff and strict mypy passed, and generated schemas were synchronized. Two
+  inherited temporary-tree cleanup warnings were non-failing.
+  Three independent post-implementation reviews replayed the source/snapshot, staging-time,
+  prior-baseline, self-hash, capability, and chronology negative assays. Their only concrete
+  remaining producer-boundary chronology finding was corrected and independently re-tested.
+  Repository-wide Ruff format/check left all `378` files unchanged and passed, strict mypy passed
+  all `154` source files, generated-schema verification and `git diff --check` passed, and the
+  complete suite passed `3601` tests with `11` explicit external-prerequisite skips in `496.79s`.
+  The workflow YAML parsed and all `11` embedded shell scripts passed `bash -n`; the first Ruby
+  command used an unsupported Ruby 2.6 keyword and exited `1`, then the compatible safe-load
+  command passed. Two inherited temporary-tree cleanup warnings were non-failing.
 - **Remaining partial work:** The scheduled workflow does not yet retrieve a durable prior
   snapshot or bind a real production selection; the audit pipeline does not consume the refresh
   freshness artifact. Automatic benchmark reservation/execution, refreshed-price runtime
   authority, lineage re-evaluation, and production promotion remain gated by calibration,
-  qualification, lineage review, and the cumulative ledger.
-- **Exact next safe action:** Review and checkpoint this fully validated source slice, then perform
-  one explicit authenticated metadata-only refresh into a disposable private directory without
-  issuing a completion.
+  qualification, lineage review, and the cumulative ledger. Snapshot/diff v1 is intentionally
+  rejected by v2; until durable prior retrieval includes a reviewed migration, the first v2 daily
+  run must use the explicit registry baseline rather than silently treating v1 as exact history.
+  Exact source/snapshot history also binds the complete candidate-registry hash, so a later
+  qualification or registry-status update invalidates prior replay and forces another fail-closed
+  bootstrap; durable retrieval needs an explicit cross-registry continuity design rather than
+  merely downloading the old pair.
+- **Ticket boundary:** No further provider action is permitted within this ticket. Preserve the
+  validated provider-free slice as `PARTIAL`, checkpoint it, and continue with the next independent
+  queue ticket.
+- **Final corrected gate:** After the selected-route bootstrap correction, the expanded touched
+  matrix passed `354` tests in `54.98s`; repository-wide Ruff format/check left all `378` files
+  unchanged and passed; strict mypy passed all `154` source files; release-schema verification and
+  `git diff --check` passed; and the complete suite passed `3602` tests with `11` explicit
+  external-prerequisite skips in `505.06s`. The paid-provider test remained disabled. Workflow
+  YAML and all `11` embedded shell scripts passed their provider-free syntax checks. Final status
+  and filename-only artifact inspection found only the intended source, generated schema,
+  workflow, documentation, and regression changes; no tracked operator secret file, private
+  runtime artifact, or credential-value pattern was added.
+- **Disposition:** `PARTIAL`. The deterministic provider-free slice is complete and independently
+  reviewed. There is no successful post-correction real metadata snapshot, durable prior retrieval,
+  cross-registry continuity, pipeline freshness consumption, refreshed-price budget authority,
+  automatic benchmark execution, lineage re-evaluation, or promotion path. No completion,
+  provider call, secret access, public RPC, target access, wallet, signing, broadcast, or spend
+  occurred in the final provider-free implementation slice.
+- **Checkpoint action:** Create the cohesive local checkpoint, record and push it through the SSH
+  remote, then begin the provider-free reviewed-lineage binding in `V3-LINEAGE-001`.
 
 ## 2026-07-30 — V3-CALIBRATE-001
 

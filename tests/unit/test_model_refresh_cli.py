@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -16,9 +17,11 @@ from mmaudit.models.refresh import (
     DIFF_FILENAME,
     FRESHNESS_FILENAME,
     SNAPSHOT_FILENAME,
+    SOURCE_EVIDENCE_FILENAME,
     ModelRefreshAttemptStatus,
     ModelRefreshFailureCode,
     load_model_refresh_attempt,
+    load_model_refresh_source_evidence,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -81,6 +84,7 @@ def _install_fake_client(
     malformed_catalog: bool = False,
     malformed_endpoint_limits: bool = False,
     reflect_secret: bool = False,
+    reflect_secret_in_ignored_field: bool = False,
     empty_zdr: bool = False,
 ) -> tuple[type[Any], list[str], list[Any]]:
     calls: list[str] = []
@@ -102,6 +106,8 @@ def _install_fake_client(
             models = [_model(candidate) for candidate in registry.candidates]
             if malformed_catalog:
                 models.append(dict(models[0]))
+            if reflect_secret_in_ignored_field:
+                models[0]["description"] = "synthetic-refresh-canary"
             return {"data": models}
 
         async def get_zdr_endpoint_metadata(self) -> dict[str, Any]:
@@ -174,6 +180,7 @@ def test_models_refresh_help_exposes_only_metadata_and_evidence_controls() -> No
     for option in (
         "--candidate-registry",
         "--previous-snapshot",
+        "--previous-source-evidence",
         "--selected-route",
         "--secrets-env-file",
         "--output-dir",
@@ -252,6 +259,38 @@ def test_models_refresh_rejects_untrusted_client_before_secret_access(
     assert not secret_accessed
 
 
+def test_models_refresh_requires_paired_previous_source_before_secret_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret_accessed = False
+
+    def forbidden_secret_access(*_args: object, **_kwargs: object) -> None:
+        nonlocal secret_accessed
+        secret_accessed = True
+        raise AssertionError("operator secrets must not be accessed")
+
+    monkeypatch.setattr(cli_module, "load_operator_secrets", forbidden_secret_access)
+    result = runner.invoke(
+        app,
+        [
+            "models",
+            "refresh",
+            "--candidate-registry",
+            str(REGISTRY_PATH),
+            "--previous-snapshot",
+            str(tmp_path / "previous.json"),
+            "--output-dir",
+            str(tmp_path / "output"),
+            "--no-color",
+        ],
+    )
+
+    assert result.exit_code == ExitCode.CONFIGURATION
+    assert "must" in result.stdout and "be supplied together" in result.stdout
+    assert not secret_accessed
+
+
 def test_models_refresh_executes_get_only_path_and_emits_private_artifacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -272,6 +311,7 @@ def test_models_refresh_executes_get_only_path_and_emits_private_artifacts(
     }
     assert all(usage.records == [] for usage in usages)
     assert {path.name for path in output.iterdir()} == {
+        SOURCE_EVIDENCE_FILENAME,
         SNAPSHOT_FILENAME,
         DIFF_FILENAME,
         ATTEMPT_FILENAME,
@@ -282,10 +322,97 @@ def test_models_refresh_executes_get_only_path_and_emits_private_artifacts(
         ModelRefreshAttemptStatus.CHANGED,
         ModelRefreshAttemptStatus.UNCHANGED,
     }
+    assert (
+        load_model_refresh_source_evidence(
+            output / SOURCE_EVIDENCE_FILENAME
+        ).candidate_registry_sha256
+        == registry.registry_sha256
+    )
     serialized = "".join(path.read_text(encoding="utf-8") for path in output.iterdir())
     assert canary not in result.stdout
     assert canary not in serialized
     assert str(secret) not in serialized
+
+
+def test_models_refresh_replays_a_paired_previous_source_before_provider_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = _secret_file(tmp_path, "synthetic-refresh-canary")
+    registry = load_candidate_registry(REGISTRY_PATH)
+    _install_fake_client(monkeypatch, registry)
+    first_output = tmp_path / "refresh-output"
+    first = runner.invoke(app, _arguments(tmp_path, secret), env={"COLUMNS": "500"})
+    assert first.exit_code == ExitCode.SUCCESS, first.stdout
+
+    second_output = tmp_path / "second-output"
+    arguments = _arguments(tmp_path, secret)
+    arguments[arguments.index("--output-dir") + 1] = str(second_output)
+    arguments.extend(
+        [
+            "--previous-snapshot",
+            str(first_output / SNAPSHOT_FILENAME),
+            "--previous-source-evidence",
+            str(first_output / SOURCE_EVIDENCE_FILENAME),
+        ]
+    )
+    second = runner.invoke(app, arguments, env={"COLUMNS": "500"})
+
+    assert second.exit_code == ExitCode.SUCCESS, second.stdout
+    assert {path.name for path in second_output.iterdir()} == {
+        SOURCE_EVIDENCE_FILENAME,
+        SNAPSHOT_FILENAME,
+        DIFF_FILENAME,
+        ATTEMPT_FILENAME,
+        FRESHNESS_FILENAME,
+    }
+
+
+def test_models_refresh_rejects_a_previous_snapshot_newer_than_current_observation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = _secret_file(tmp_path, "synthetic-refresh-canary")
+    registry = load_candidate_registry(REGISTRY_PATH)
+    _install_fake_client(monkeypatch, registry)
+    base_time = datetime(2026, 7, 30, 12, 0, tzinfo=UTC)
+
+    class FutureDatetime(datetime):
+        @classmethod
+        def now(cls, tz: object | None = None) -> datetime:
+            del tz
+            return base_time + timedelta(hours=1)
+
+    monkeypatch.setattr(cli_module, "datetime", FutureDatetime)
+    first_output = tmp_path / "future-output"
+    first_arguments = _arguments(tmp_path, secret)
+    first_arguments[first_arguments.index("--output-dir") + 1] = str(first_output)
+    first = runner.invoke(app, first_arguments, env={"COLUMNS": "500"})
+    assert first.exit_code == ExitCode.SUCCESS, first.stdout
+
+    class CurrentDatetime(datetime):
+        @classmethod
+        def now(cls, tz: object | None = None) -> datetime:
+            del tz
+            return base_time
+
+    monkeypatch.setattr(cli_module, "datetime", CurrentDatetime)
+    second_output = tmp_path / "current-output"
+    second_arguments = _arguments(tmp_path, secret)
+    second_arguments[second_arguments.index("--output-dir") + 1] = str(second_output)
+    second_arguments.extend(
+        [
+            "--previous-snapshot",
+            str(first_output / SNAPSHOT_FILENAME),
+            "--previous-source-evidence",
+            str(first_output / SOURCE_EVIDENCE_FILENAME),
+        ]
+    )
+    second = runner.invoke(app, second_arguments, env={"COLUMNS": "500"})
+
+    assert second.exit_code == ExitCode.MODEL_FAILURE
+    assert "MALFORMED_METADATA" in second.stdout
+    assert [path.name for path in second_output.iterdir()] == [ATTEMPT_FILENAME]
 
 
 def test_models_refresh_authentication_failure_emits_only_typed_attempt(
@@ -383,6 +510,30 @@ def test_models_refresh_rejects_reflected_secret_before_hash_or_persistence(
     assert canary not in (output / ATTEMPT_FILENAME).read_text(encoding="utf-8")
 
 
+def test_models_refresh_rejects_secret_reflected_only_in_an_ignored_field(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canary = "synthetic-refresh-canary"
+    secret = _secret_file(tmp_path, canary)
+    registry = load_candidate_registry(REGISTRY_PATH)
+    _client, _calls, _usages = _install_fake_client(
+        monkeypatch,
+        registry,
+        reflect_secret_in_ignored_field=True,
+    )
+    output = tmp_path / "refresh-output"
+
+    result = runner.invoke(app, _arguments(tmp_path, secret), env={"COLUMNS": "500"})
+
+    assert result.exit_code == ExitCode.MODEL_FAILURE
+    assert [path.name for path in output.iterdir()] == [ATTEMPT_FILENAME]
+    attempt = load_model_refresh_attempt(output / ATTEMPT_FILENAME)
+    assert attempt.failure_code is ModelRefreshFailureCode.MALFORMED_METADATA
+    assert canary not in result.stdout
+    assert canary not in (output / ATTEMPT_FILENAME).read_text(encoding="utf-8")
+
+
 def test_models_refresh_selected_route_loss_emits_evidence_and_incomplete_exit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -409,6 +560,7 @@ def test_models_refresh_selected_route_loss_emits_evidence_and_incomplete_exit(
 
     assert result.exit_code == ExitCode.INCOMPLETE
     assert {path.name for path in output.iterdir()} == {
+        SOURCE_EVIDENCE_FILENAME,
         SNAPSHOT_FILENAME,
         DIFF_FILENAME,
         ATTEMPT_FILENAME,

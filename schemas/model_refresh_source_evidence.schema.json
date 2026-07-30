@@ -1,0 +1,353 @@
+{
+  "$defs": {
+    "ExcludedZdrRoutedModelSource": {
+      "additionalProperties": false,
+      "description": "Count an ignored routed ZDR identifier without retaining endpoint details.",
+      "properties": {
+        "model_id": {
+          "pattern": "^~?[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+          "title": "Model Id",
+          "type": "string"
+        },
+        "occurrence_count": {
+          "maximum": 40000,
+          "minimum": 1,
+          "title": "Occurrence Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "model_id",
+        "occurrence_count"
+      ],
+      "title": "ExcludedZdrRoutedModelSource",
+      "type": "object"
+    },
+    "ModelRefreshCandidateEndpointSource": {
+      "additionalProperties": false,
+      "description": "One exact candidate endpoint envelope retained for deterministic replay.",
+      "properties": {
+        "endpoints": {
+          "items": {
+            "$ref": "#/$defs/ModelRefreshEndpointSource"
+          },
+          "maxItems": 256,
+          "title": "Endpoints",
+          "type": "array"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "endpoints"
+      ],
+      "title": "ModelRefreshCandidateEndpointSource",
+      "type": "object"
+    },
+    "ModelRefreshCatalogSource": {
+      "additionalProperties": false,
+      "description": "Canonical allowlisted catalogue fields retained for deterministic replay.",
+      "properties": {
+        "canonical_model_slug": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Canonical Model Slug",
+          "type": "string"
+        },
+        "catalog_context_length": {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "title": "Catalog Context Length",
+          "type": "integer"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "provider_context_length": {
+          "anyOf": [
+            {
+              "maximum": 2147483647,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Context Length"
+        },
+        "provider_max_completion_tokens": {
+          "anyOf": [
+            {
+              "maximum": 2147483647,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Max Completion Tokens"
+        },
+        "supported_parameters": {
+          "items": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Supported Parameters",
+          "type": "array"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "canonical_model_slug",
+        "catalog_context_length",
+        "supported_parameters"
+      ],
+      "title": "ModelRefreshCatalogSource",
+      "type": "object"
+    },
+    "ModelRefreshEndpointSource": {
+      "additionalProperties": false,
+      "description": "Canonical allowlisted endpoint fields retained for deterministic replay.",
+      "properties": {
+        "context_length": {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "title": "Context Length",
+          "type": "integer"
+        },
+        "endpoint_slug": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Slug"
+        },
+        "endpoint_tag": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Tag"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "max_completion_tokens": {
+          "anyOf": [
+            {
+              "maximum": 2147483647,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Completion Tokens"
+        },
+        "max_prompt_tokens": {
+          "anyOf": [
+            {
+              "maximum": 2147483647,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Prompt Tokens"
+        },
+        "pricing": {
+          "additionalProperties": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxProperties": 64,
+          "title": "Pricing",
+          "type": "object"
+        },
+        "provider_name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider Name",
+          "type": "string"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "maximum": 2147483647,
+              "minimum": -2147483647,
+              "type": "integer"
+            },
+            {
+              "maxLength": 32,
+              "minLength": 1,
+              "type": "string"
+            }
+          ],
+          "title": "Status"
+        },
+        "supported_parameters": {
+          "items": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Supported Parameters",
+          "type": "array"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "provider_name",
+        "status",
+        "context_length",
+        "supported_parameters",
+        "pricing"
+      ],
+      "title": "ModelRefreshEndpointSource",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/model_refresh_source_evidence.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Bounded canonical metadata projection used to reproduce a refresh snapshot.",
+  "properties": {
+    "authenticated_metadata": {
+      "const": true,
+      "title": "Authenticated Metadata",
+      "type": "boolean"
+    },
+    "candidate_endpoint_projection_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Candidate Endpoint Projection Sha256",
+      "type": "string"
+    },
+    "candidate_endpoint_sets": {
+      "items": {
+        "$ref": "#/$defs/ModelRefreshCandidateEndpointSource"
+      },
+      "maxItems": 10000,
+      "title": "Candidate Endpoint Sets",
+      "type": "array"
+    },
+    "candidate_registry_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Candidate Registry Sha256",
+      "type": "string"
+    },
+    "catalog_models": {
+      "items": {
+        "$ref": "#/$defs/ModelRefreshCatalogSource"
+      },
+      "maxItems": 10000,
+      "minItems": 1,
+      "title": "Catalog Models",
+      "type": "array"
+    },
+    "catalog_projection_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Catalog Projection Sha256",
+      "type": "string"
+    },
+    "excluded_routed_model_ids": {
+      "items": {
+        "pattern": "^~?[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$",
+        "type": "string"
+      },
+      "maxItems": 10000,
+      "title": "Excluded Routed Model Ids",
+      "type": "array"
+    },
+    "excluded_zdr_routed_models": {
+      "items": {
+        "$ref": "#/$defs/ExcludedZdrRoutedModelSource"
+      },
+      "maxItems": 40000,
+      "title": "Excluded Zdr Routed Models",
+      "type": "array"
+    },
+    "retrieved_at": {
+      "format": "date-time",
+      "title": "Retrieved At",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_api_identity": {
+      "const": "https://openrouter.ai/api/v1",
+      "default": "https://openrouter.ai/api/v1",
+      "title": "Source Api Identity",
+      "type": "string"
+    },
+    "source_evidence_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Evidence Sha256",
+      "type": "string"
+    },
+    "zdr_endpoints": {
+      "items": {
+        "$ref": "#/$defs/ModelRefreshEndpointSource"
+      },
+      "maxItems": 40000,
+      "title": "Zdr Endpoints",
+      "type": "array"
+    },
+    "zdr_projection_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Zdr Projection Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "retrieved_at",
+    "authenticated_metadata",
+    "candidate_registry_sha256",
+    "catalog_models",
+    "excluded_routed_model_ids",
+    "zdr_endpoints",
+    "excluded_zdr_routed_models",
+    "candidate_endpoint_sets",
+    "catalog_projection_sha256",
+    "zdr_projection_sha256",
+    "candidate_endpoint_projection_sha256",
+    "source_evidence_sha256"
+  ],
+  "title": "mmaudit model refresh source evidence",
+  "type": "object"
+}

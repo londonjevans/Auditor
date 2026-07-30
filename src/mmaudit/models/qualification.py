@@ -290,7 +290,20 @@ class CandidateModel(StrictModel):
     model_metadata_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
     pricing_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
     context_size: int = Field(ge=1)
+    max_prompt_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        exclude_if=lambda value: value is None,
+    )
+    max_prompt_tokens_source: Literal["metadata", "context_limit"] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     output_limit: int = Field(ge=1)
+    output_limit_source: Literal["metadata", "context_limit"] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     structured_output_supported: bool
     structured_output_mode: StructuredOutputMode | None = Field(
         default=None,
@@ -412,12 +425,42 @@ class CandidateModel(StrictModel):
                 raise ValueError("pending benchmark cannot claim artifact or qualification expiry")
         elif self.benchmark_artifact_sha256 is None:
             raise ValueError("completed benchmark status requires an artifact hash")
-        if (self.structured_output_mode is None) is not (self.output_capability_sha256 is None):
+        output_capability_values = (
+            self.output_capability_sha256,
+            self.structured_output_mode,
+            self.max_prompt_tokens,
+            self.max_prompt_tokens_source,
+            self.output_limit_source,
+        )
+        if any(value is None for value in output_capability_values) and any(
+            value is not None for value in output_capability_values
+        ):
             raise ValueError(
-                "candidate output mode and capability evidence must be present together"
+                "candidate output mode, prompt limit, and capability evidence must be present "
+                "together"
             )
+        if self.max_prompt_tokens is not None:
+            if self.max_prompt_tokens > self.context_size:
+                raise ValueError("candidate prompt limit exceeds its context")
+            if (
+                self.max_prompt_tokens_source == "context_limit"
+                and self.max_prompt_tokens != self.context_size
+            ):
+                raise ValueError("candidate derived prompt limit differs from its context")
+        if self.output_limit > self.context_size:
+            raise ValueError("candidate output limit exceeds its context")
+        if self.output_limit_source == "context_limit" and self.output_limit != self.context_size:
+            raise ValueError("candidate derived output limit differs from its context")
+        if self.structured_output_mode is not None and self.structured_output_supported is not (
+            self.structured_output_mode is not StructuredOutputMode.VALIDATED_TEXT_JSON
+        ):
+            raise ValueError("candidate structured-output boolean differs from its exact mode")
         if self.benchmark_status is not CandidateBenchmarkStatus.PENDING and (
-            self.output_capability_sha256 is None or self.structured_output_mode is None
+            self.output_capability_sha256 is None
+            or self.structured_output_mode is None
+            or self.max_prompt_tokens is None
+            or self.max_prompt_tokens_source is None
+            or self.output_limit_source is None
         ):
             raise ValueError("completed benchmark status requires exact output capability evidence")
         if (
@@ -565,6 +608,7 @@ def validate_candidate_registry_discovery(
         raise ValueError("candidate registry differs from the discovery model inventory")
     for candidate in registry.candidates:
         item = by_model[candidate.exact_model_id]
+        endpoint = item.endpoint_snapshot.endpoint(item.approved_provider_endpoint)
         expected = (
             item.canonical_slug,
             item.discovery_evidence_sha256,
@@ -575,7 +619,10 @@ def validate_candidate_registry_discovery(
             item.model_metadata_snapshot_sha256,
             item.pricing_snapshot_sha256,
             item.context_size,
+            endpoint.max_prompt_tokens,
+            endpoint.max_prompt_tokens_source,
             item.output_limit,
+            endpoint.max_completion_tokens_source,
             item.structured_output_supported,
             item.structured_output_mode,
             item.reasoning_supported,
@@ -596,7 +643,10 @@ def validate_candidate_registry_discovery(
             candidate.model_metadata_snapshot_sha256,
             candidate.pricing_snapshot_sha256,
             candidate.context_size,
+            candidate.max_prompt_tokens,
+            candidate.max_prompt_tokens_source,
             candidate.output_limit,
+            candidate.output_limit_source,
             candidate.structured_output_supported,
             candidate.structured_output_mode,
             candidate.reasoning_supported,

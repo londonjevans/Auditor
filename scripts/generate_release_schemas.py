@@ -16,6 +16,7 @@ from mmaudit.models.refresh import (
     ModelRefreshDiff,
     ModelRefreshFreshness,
     ModelRefreshSnapshot,
+    ModelRefreshSourceEvidence,
 )
 from mmaudit.models.refresh_staging import ModelRefreshWorkflowStatus
 from mmaudit.orchestration.context_manifest import ContextManifest
@@ -41,6 +42,7 @@ MODELS: dict[str, type[BaseModel]] = {
     "model_refresh_diff.schema.json": ModelRefreshDiff,
     "model_refresh_freshness.schema.json": ModelRefreshFreshness,
     "model_refresh_snapshot.schema.json": ModelRefreshSnapshot,
+    "model_refresh_source_evidence.schema.json": ModelRefreshSourceEvidence,
     "model_refresh_workflow_status.schema.json": ModelRefreshWorkflowStatus,
     "privacy_retention_consent.schema.json": PrivacyRetentionConsent,
     "release_candidate_observation.schema.json": ReleaseCandidateObservation,
@@ -60,6 +62,7 @@ TITLE_OVERRIDES = {
     "model_refresh_diff.schema.json": "mmaudit model refresh diff",
     "model_refresh_freshness.schema.json": "mmaudit model refresh freshness",
     "model_refresh_snapshot.schema.json": "mmaudit model refresh snapshot",
+    "model_refresh_source_evidence.schema.json": "mmaudit model refresh source evidence",
     "model_refresh_workflow_status.schema.json": "mmaudit model refresh workflow status",
 }
 

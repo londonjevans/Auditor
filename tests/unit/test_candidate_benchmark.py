@@ -417,7 +417,16 @@ def _discovery_and_registry(
                 model_metadata_snapshot_sha256=item.model_metadata_snapshot_sha256,
                 pricing_snapshot_sha256=item.pricing_snapshot_sha256,
                 context_size=item.context_size,
+                max_prompt_tokens=item.endpoint_snapshot.endpoint(
+                    item.approved_provider_endpoint
+                ).max_prompt_tokens,
+                max_prompt_tokens_source=item.endpoint_snapshot.endpoint(
+                    item.approved_provider_endpoint
+                ).max_prompt_tokens_source,
                 output_limit=item.output_limit,
+                output_limit_source=item.endpoint_snapshot.endpoint(
+                    item.approved_provider_endpoint
+                ).max_completion_tokens_source,
                 structured_output_supported=item.structured_output_supported,
                 structured_output_mode=item.structured_output_mode,
                 reasoning_supported=item.reasoning_supported,

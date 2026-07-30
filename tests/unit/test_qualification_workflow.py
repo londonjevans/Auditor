@@ -114,7 +114,16 @@ def _candidate_inputs(
         model_metadata_snapshot_sha256=evidence.model_metadata_snapshot_sha256,
         pricing_snapshot_sha256=evidence.pricing_snapshot_sha256,
         context_size=evidence.context_size,
+        max_prompt_tokens=evidence.endpoint_snapshot.endpoint(
+            evidence.approved_provider_endpoint
+        ).max_prompt_tokens,
+        max_prompt_tokens_source=evidence.endpoint_snapshot.endpoint(
+            evidence.approved_provider_endpoint
+        ).max_prompt_tokens_source,
         output_limit=evidence.output_limit,
+        output_limit_source=evidence.endpoint_snapshot.endpoint(
+            evidence.approved_provider_endpoint
+        ).max_completion_tokens_source,
         structured_output_supported=evidence.structured_output_supported,
         structured_output_mode=evidence.structured_output_mode,
         reasoning_supported=evidence.reasoning_supported,

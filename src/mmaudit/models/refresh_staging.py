@@ -10,6 +10,7 @@ import stat
 import uuid
 from collections.abc import Sequence
 from contextlib import suppress
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
@@ -23,15 +24,21 @@ from mmaudit.models.refresh import (
     DIFF_FILENAME,
     FRESHNESS_FILENAME,
     SNAPSHOT_FILENAME,
+    SOURCE_EVIDENCE_FILENAME,
     ModelRefreshAttemptStatus,
     ModelRefreshFreshnessState,
     ModelRefreshSnapshot,
+    ModelRefreshSourceEvidence,
     RefreshBaselineKind,
     SelectedModelRoute,
+    build_model_refresh_snapshot_from_source,
+    diff_model_refresh,
+    evaluate_model_refresh_freshness,
     load_model_refresh_attempt,
     load_model_refresh_diff,
     load_model_refresh_freshness,
     load_model_refresh_snapshot,
+    load_model_refresh_source_evidence,
 )
 from mmaudit.release_io import read_json_evidence, write_json_evidence
 from mmaudit.reporting.json_report import stable_json
@@ -39,6 +46,7 @@ from mmaudit.reporting.json_report import stable_json
 WORKFLOW_STATUS_FILENAME = "workflow-status.json"
 _SUCCESS_FILENAMES = frozenset(
     {
+        SOURCE_EVIDENCE_FILENAME,
         SNAPSHOT_FILENAME,
         DIFF_FILENAME,
         ATTEMPT_FILENAME,
@@ -52,6 +60,7 @@ _WORKFLOW_NUMBER_PATTERN = r"^[1-9][0-9]{0,19}$"
 _PRIVATE_DIRECTORY_MODE = 0o700
 _PRIVATE_FILE_MODE = 0o600
 _MAX_ARTIFACT_BYTES = 20_000_000
+_MAX_CLOCK_SKEW = timedelta(minutes=5)
 
 
 class ModelRefreshStagingError(ValueError):
@@ -73,6 +82,7 @@ class StagedModelRefreshArtifact(_FrozenModel):
     """Content and internal identity for one validated staged artifact."""
 
     filename: Literal[
+        "model-refresh-source-evidence.json",
         "model-refresh-snapshot.json",
         "model-refresh-diff.json",
         "model-refresh-attempt.json",
@@ -86,7 +96,8 @@ class StagedModelRefreshArtifact(_FrozenModel):
 class ModelRefreshWorkflowStatus(_FrozenModel):
     """Commit-bound inventory for one scheduled refresh attempt."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["2.0"] = "2.0"
+    validated_at: datetime
     disposition: ModelRefreshWorkflowDisposition
     refresh_exit_status: int = Field(ge=0, le=255)
     source_commit: str = Field(pattern=_GIT_COMMIT_PATTERN)
@@ -106,6 +117,11 @@ class ModelRefreshWorkflowStatus(_FrozenModel):
         if parsed > 1:
             raise ValueError("refresh workflow pricing tolerance cannot exceed one")
         return value
+
+    @field_validator("validated_at")
+    @classmethod
+    def validation_time_is_utc(cls, value: datetime) -> datetime:
+        return _whole_second_utc(value, label="refresh workflow validation time")
 
     @model_validator(mode="after")
     def status_is_canonical_and_self_bound(self) -> Self:
@@ -150,13 +166,27 @@ def stage_model_refresh_evidence(
     soft_max_age_hours: int,
     hard_max_age_hours: int,
     previous_snapshot: ModelRefreshSnapshot | None = None,
+    previous_source_evidence: ModelRefreshSourceEvidence | None = None,
     expected_selected_routes: Sequence[SelectedModelRoute] = (),
+    _validation_observed_at: datetime | None = None,
 ) -> ModelRefreshWorkflowStatus:
     """Validate one exact emitted bundle and reconstruct canonical upload evidence."""
 
     if isinstance(refresh_exit_status, bool) or not 0 <= refresh_exit_status <= 255:
         raise ModelRefreshStagingError("refresh exit status must be an integer from zero to 255")
     registry = CandidateRegistry.model_validate(candidate_registry.model_dump(mode="json"))
+    validated_at = (
+        datetime.now(UTC).replace(microsecond=0)
+        if _validation_observed_at is None
+        else _whole_second_utc(
+            _validation_observed_at,
+            label="refresh workflow validation time",
+        )
+    )
+    if (previous_snapshot is None) is not (previous_source_evidence is None):
+        raise ModelRefreshStagingError(
+            "refresh previous snapshot and source evidence must be supplied together"
+        )
     tolerance = _canonical_fraction(pricing_tolerance_fraction)
     if tolerance > 1:
         raise ModelRefreshStagingError("refresh staging pricing tolerance cannot exceed one")
@@ -185,10 +215,12 @@ def stage_model_refresh_evidence(
             disposition=disposition,
             registry=registry,
             previous_snapshot=previous_snapshot,
+            previous_source_evidence=previous_source_evidence,
             expected_selected_routes=expected_selected_routes,
             pricing_tolerance_fraction=pricing_tolerance_fraction,
             soft_max_age_hours=soft_max_age_hours,
             hard_max_age_hours=hard_max_age_hours,
+            validated_at=validated_at,
         )
         after = _observe_exact_private_directory(output_dir, expected_names=expected_names)
         if before != after:
@@ -211,13 +243,14 @@ def stage_model_refresh_evidence(
                 StagedModelRefreshArtifact(
                     filename=filename,
                     content_sha256=hashlib.sha256(raw).hexdigest(),
-                    artifact_sha256=_artifact_self_hash(artifact),
+                    artifact_sha256=_artifact_self_hash(filename, artifact),
                     byte_count=len(raw),
                 )
             )
 
         status_values = {
-            "schema_version": "1.0",
+            "schema_version": "2.0",
+            "validated_at": validated_at.isoformat().replace("+00:00", "Z"),
             "disposition": disposition.value,
             "refresh_exit_status": refresh_exit_status,
             "source_commit": source_commit,
@@ -276,10 +309,12 @@ def _load_and_validate_bundle(
     disposition: ModelRefreshWorkflowDisposition,
     registry: CandidateRegistry,
     previous_snapshot: ModelRefreshSnapshot | None,
+    previous_source_evidence: ModelRefreshSourceEvidence | None,
     expected_selected_routes: Sequence[SelectedModelRoute],
     pricing_tolerance_fraction: str,
     soft_max_age_hours: int,
     hard_max_age_hours: int,
+    validated_at: datetime,
 ) -> dict[str, BaseModel]:
     attempt = load_model_refresh_attempt(output_dir / ATTEMPT_FILENAME)
     if attempt.candidate_registry_sha256 != registry.registry_sha256:
@@ -289,9 +324,23 @@ def _load_and_validate_bundle(
             raise ModelRefreshStagingError("failed refresh exit lacks a failed attempt artifact")
         return {ATTEMPT_FILENAME: attempt}
 
+    source_evidence = load_model_refresh_source_evidence(output_dir / SOURCE_EVIDENCE_FILENAME)
     snapshot = load_model_refresh_snapshot(output_dir / SNAPSHOT_FILENAME)
     diff = load_model_refresh_diff(output_dir / DIFF_FILENAME)
     freshness = load_model_refresh_freshness(output_dir / FRESHNESS_FILENAME)
+    try:
+        reproduced_snapshot = build_model_refresh_snapshot_from_source(
+            source_evidence=source_evidence,
+            candidate_registry=registry,
+        )
+    except ValueError as exc:
+        raise ModelRefreshStagingError(
+            "refresh success bundle cannot reproduce its semantic snapshot"
+        ) from exc
+    if snapshot != reproduced_snapshot:
+        raise ModelRefreshStagingError(
+            "refresh success bundle differs from its reproduced semantic snapshot"
+        )
     expected_routes = tuple(
         sorted(
             (
@@ -330,21 +379,74 @@ def _load_and_validate_bundle(
         attempt.attempted_at <= snapshot.retrieved_at == diff.compared_at == freshness.observed_at
     ):
         raise ModelRefreshStagingError("refresh success bundle time ordering is inconsistent")
+    if snapshot.retrieved_at - validated_at > _MAX_CLOCK_SKEW:
+        raise ModelRefreshStagingError(
+            "refresh success bundle is future-dated beyond the clock-skew allowance"
+        )
+    trusted_observed_at = max(validated_at, snapshot.retrieved_at)
+    try:
+        trusted_freshness = evaluate_model_refresh_freshness(
+            observed_at=trusted_observed_at,
+            snapshot=snapshot,
+            soft_max_age_hours=soft_max_age_hours,
+            hard_max_age_hours=hard_max_age_hours,
+            production_selection_present=bool(expected_routes),
+        )
+    except ValueError as exc:
+        raise ModelRefreshStagingError(
+            "refresh success bundle freshness cannot be reproduced"
+        ) from exc
+    if trusted_freshness.state is not ModelRefreshFreshnessState.CURRENT:
+        raise ModelRefreshStagingError("refresh success bundle is not current at staging time")
     if diff.baseline_kind is RefreshBaselineKind.CANDIDATE_REGISTRY_HASH_ONLY:
-        if diff.baseline_sha256 != registry.registry_sha256 or previous_snapshot is not None:
+        if (
+            diff.baseline_sha256 != registry.registry_sha256
+            or previous_snapshot is not None
+            or previous_source_evidence is not None
+        ):
             raise ModelRefreshStagingError("refresh bootstrap baseline binding is inconsistent")
     else:
-        if previous_snapshot is None:
+        if previous_snapshot is None or previous_source_evidence is None:
             raise ModelRefreshStagingError(
-                "refresh previous-snapshot baseline is unavailable for validation"
+                "refresh previous-snapshot baseline or source is unavailable for validation"
             )
         previous = ModelRefreshSnapshot.model_validate(previous_snapshot.model_dump(mode="json"))
+        previous_source = ModelRefreshSourceEvidence.model_validate(
+            previous_source_evidence.model_dump(mode="json")
+        )
+        try:
+            reproduced_previous = build_model_refresh_snapshot_from_source(
+                source_evidence=previous_source,
+                candidate_registry=registry,
+            )
+        except ValueError as exc:
+            raise ModelRefreshStagingError(
+                "refresh previous snapshot cannot be reproduced from its source"
+            ) from exc
         if (
-            previous.snapshot_sha256 != diff.baseline_sha256
+            previous != reproduced_previous
+            or previous.snapshot_sha256 != diff.baseline_sha256
             or previous.candidate_registry_sha256 != registry.registry_sha256
             or previous.retrieved_at > snapshot.retrieved_at
         ):
             raise ModelRefreshStagingError("refresh previous-snapshot baseline binding is invalid")
+    try:
+        expected_diff = diff_model_refresh(
+            current=snapshot,
+            previous=previous_snapshot,
+            candidate_registry=registry,
+            pricing_tolerance_fraction=pricing_tolerance_fraction,
+            compared_at=diff.compared_at,
+            selected_routes=expected_routes,
+        )
+    except ValueError as exc:
+        raise ModelRefreshStagingError(
+            "refresh success bundle cannot reproduce its semantic diff"
+        ) from exc
+    if diff != expected_diff:
+        raise ModelRefreshStagingError(
+            "refresh success bundle differs from its reproduced semantic diff"
+        )
     if disposition is ModelRefreshWorkflowDisposition.COMPLETED:
         if attempt.status not in {
             ModelRefreshAttemptStatus.UNCHANGED,
@@ -356,6 +458,7 @@ def _load_and_validate_bundle(
             "incomplete refresh exit lacks a production-blocked attempt status"
         )
     return {
+        SOURCE_EVIDENCE_FILENAME: source_evidence,
         SNAPSHOT_FILENAME: snapshot,
         DIFF_FILENAME: diff,
         ATTEMPT_FILENAME: attempt,
@@ -388,17 +491,24 @@ def _disposition_for_exit(exit_status: int) -> ModelRefreshWorkflowDisposition:
     raise ModelRefreshStagingError("refresh exit status is not an accepted workflow result")
 
 
-def _artifact_self_hash(artifact: BaseModel) -> str:
-    for field in (
-        "snapshot_sha256",
-        "diff_sha256",
-        "attempt_sha256",
-        "freshness_sha256",
-    ):
-        value = getattr(artifact, field, None)
-        if isinstance(value, str) and re.fullmatch(_SHA256_PATTERN, value):
-            return value
+def _artifact_self_hash(filename: str, artifact: BaseModel) -> str:
+    field = {
+        SOURCE_EVIDENCE_FILENAME: "source_evidence_sha256",
+        SNAPSHOT_FILENAME: "snapshot_sha256",
+        DIFF_FILENAME: "diff_sha256",
+        ATTEMPT_FILENAME: "attempt_sha256",
+        FRESHNESS_FILENAME: "freshness_sha256",
+    }.get(filename)
+    value = getattr(artifact, field, None) if field is not None else None
+    if isinstance(value, str) and re.fullmatch(_SHA256_PATTERN, value):
+        return value
     raise ModelRefreshStagingError("refresh artifact lacks a recognized self-hash")
+
+
+def _whole_second_utc(value: datetime, *, label: str) -> datetime:
+    if value.tzinfo is None or value.utcoffset() != timedelta(0) or value.microsecond != 0:
+        raise ModelRefreshStagingError(f"{label} must use whole-second UTC")
+    return value
 
 
 def _canonical_fraction(value: str) -> Decimal:

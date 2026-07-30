@@ -1208,15 +1208,36 @@ are invisible to source review by construction.
   `src/mmaudit/cli.py`, drift-report schema, `.github/workflows/`, documentation, regressions.
 - **Dependencies:** `V3-CALIBRATE-001` and `V3-LINEAGE-001` for the promotion path; the
   discovery, diffing, and alerting portion can land before either and is useful immediately.
-- **Status:** `IN_PROGRESS`
+- **Status:** `PARTIAL`
 - **Starting scope:** Implement and validate only discovery, immutable snapshotting, deterministic
   drift classification, staleness/production blocking, and the scheduled provider-free test path
   first. Automatic paid benchmarking and production promotion remain gated by calibration,
   qualification, lineage review, and the cumulative cost ledger.
-- **Next action:** Run the complete repository validation and an explicitly opted-in
-  authenticated metadata-only refresh. If both are valid, checkpoint the discovery/diff/workflow
-  slice as `PARTIAL`; durable prior-artifact retrieval, production-selection/freshness wiring,
-  automatic benchmark spend, lineage re-evaluation, and promotion remain separate gated work.
+- **Provider-free evidence:** Strict v2 source, snapshot, diff, attempt, freshness, and workflow
+  artifacts preserve exact full route identity and live capability provenance. Source-to-snapshot
+  and semantic-diff replay, paired exact prior evidence, a trusted staging clock, exact
+  filename-to-self-hash inventory binding, and selected-route bootstrap blocking are covered by
+  deterministic negative regressions. The source artifact proves deterministic projection from
+  the retained process observation; it is not a provider signature or independent proof of
+  OpenRouter authorship.
+- **Validation:** Independent read-only reviews replayed the chronology, future/stale clock,
+  resealed source/snapshot/diff, previous-baseline, per-artifact hash, live-after-state, and
+  selected endpoint-identity assays. The final touched matrix passed `354` tests. Repository-wide
+  Ruff format/check, strict mypy over `154` source files, generated-schema verification, workflow
+  YAML plus all `11` embedded shell scripts, diff integrity, and the complete suite passed; the
+  final suite result was `3602 passed, 11 skipped in 505.06s`.
+- **Runtime honesty:** Two materially different authenticated metadata-only attempts failed closed
+  before a usable snapshot and issued no completion or usage record. A third attempt is prohibited
+  for this ticket under the no-progress rule. No post-correction real provider snapshot exists.
+- **Remaining work:** The workflow does not retrieve a durable prior source/snapshot pair; exact
+  history cannot yet bridge a candidate-registry change; the audit pipeline does not consume
+  refresh freshness or production selection; refreshed pricing is not runtime budget authority;
+  and automatic benchmark reservation/execution, lineage re-evaluation, qualification, and
+  promotion are not implemented.
+- **Next action:** Continue with the provider-free reviewed-lineage binding in
+  `V3-LINEAGE-001`. Keep production lineages and quality fields fail-closed until real calibration
+  and qualification evidence exists; do not make a third authenticated refresh attempt as part of
+  this ticket.
 
 ## V3-AUTONOMY-001 — Zero-operator-input managed run profile
 

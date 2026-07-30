@@ -1412,6 +1412,12 @@ def _supported_parameters(value: Any) -> tuple[str, ...]:
     return normalized
 
 
+def canonicalize_openrouter_catalog_supported_parameters(value: Any) -> tuple[str, ...]:
+    """Return the exact production model-catalog parameter inventory."""
+
+    return _supported_parameters(value)
+
+
 def _validate_artifact_leaf(path: Path) -> None:
     if is_sensitive_workspace_name(path.name):
         raise ValueError("refusing a sensitive model discovery artifact filename")

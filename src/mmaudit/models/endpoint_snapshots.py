@@ -624,26 +624,13 @@ def _normalize_endpoint(
             "configured endpoint lacks emitted request parameter support: " + ", ".join(missing)
         )
     pricing = canonicalize_openrouter_pricing(raw_endpoint.get("pricing"))
-    context_length = _positive_integer(
-        raw_endpoint.get("context_length"),
-        "endpoint context length",
-    )
-    max_prompt_tokens, max_prompt_tokens_source = _effective_token_limit(
-        raw_endpoint.get("max_prompt_tokens"),
-        context_length=context_length,
-        label="endpoint prompt limit",
-    )
-    max_completion_tokens, max_completion_tokens_source = _effective_token_limit(
-        raw_endpoint.get("max_completion_tokens"),
-        context_length=context_length,
-        label="endpoint completion limit",
-    )
-    if max_prompt_tokens > context_length:
-        raise EndpointSnapshotValidationError("endpoint prompt limit exceeds its context length")
-    if max_completion_tokens > context_length:
-        raise EndpointSnapshotValidationError(
-            "endpoint completion limit exceeds its context length"
-        )
+    (
+        context_length,
+        max_prompt_tokens,
+        max_prompt_tokens_source,
+        max_completion_tokens,
+        max_completion_tokens_source,
+    ) = canonicalize_openrouter_endpoint_token_limits(raw_endpoint)
     normalized = {
         "exact_model_id": exact_model_id,
         "provider_endpoint": configured_endpoint,
@@ -699,6 +686,52 @@ def _supported_parameters(value: Any) -> tuple[str, ...]:
     if len(value) != len(set(value)):
         raise EndpointSnapshotValidationError("endpoint supported parameters are duplicated")
     return tuple(sorted(value))
+
+
+def canonicalize_openrouter_supported_parameters(value: Any) -> tuple[str, ...]:
+    """Return the exact production endpoint parameter inventory."""
+
+    return _supported_parameters(value)
+
+
+def canonicalize_openrouter_endpoint_token_limits(
+    raw_endpoint: Mapping[str, Any],
+) -> tuple[
+    int,
+    int,
+    Literal["metadata", "context_limit"],
+    int,
+    Literal["metadata", "context_limit"],
+]:
+    """Return the exact production context, prompt, and completion ceilings."""
+
+    context_length = _positive_integer(
+        raw_endpoint.get("context_length"),
+        "endpoint context length",
+    )
+    max_prompt_tokens, max_prompt_tokens_source = _effective_token_limit(
+        raw_endpoint.get("max_prompt_tokens"),
+        context_length=context_length,
+        label="endpoint prompt limit",
+    )
+    max_completion_tokens, max_completion_tokens_source = _effective_token_limit(
+        raw_endpoint.get("max_completion_tokens"),
+        context_length=context_length,
+        label="endpoint completion limit",
+    )
+    if max_prompt_tokens > context_length:
+        raise EndpointSnapshotValidationError("endpoint prompt limit exceeds its context length")
+    if max_completion_tokens > context_length:
+        raise EndpointSnapshotValidationError(
+            "endpoint completion limit exceeds its context length"
+        )
+    return (
+        context_length,
+        max_prompt_tokens,
+        max_prompt_tokens_source,
+        max_completion_tokens,
+        max_completion_tokens_source,
+    )
 
 
 def _positive_integer(value: Any, label: str) -> int:

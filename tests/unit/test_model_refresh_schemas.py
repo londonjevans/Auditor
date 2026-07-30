@@ -12,6 +12,7 @@ from mmaudit.models.refresh import (
     ModelRefreshDiff,
     ModelRefreshFreshness,
     ModelRefreshSnapshot,
+    ModelRefreshSourceEvidence,
 )
 from mmaudit.models.refresh_staging import ModelRefreshWorkflowStatus
 from scripts.generate_release_schemas import rendered_schema
@@ -24,6 +25,7 @@ REFRESH_SCHEMAS: tuple[tuple[str, type[BaseModel]], ...] = (
     ("model_refresh_diff.schema.json", ModelRefreshDiff),
     ("model_refresh_freshness.schema.json", ModelRefreshFreshness),
     ("model_refresh_snapshot.schema.json", ModelRefreshSnapshot),
+    ("model_refresh_source_evidence.schema.json", ModelRefreshSourceEvidence),
     ("model_refresh_workflow_status.schema.json", ModelRefreshWorkflowStatus),
 )
 
@@ -60,15 +62,72 @@ def test_refresh_snapshot_and_diff_schema_preserve_evidence_bounds() -> None:
     snapshot = _published("model_refresh_snapshot.schema.json")
     diff = _published("model_refresh_diff.schema.json")
 
+    assert snapshot["properties"]["schema_version"]["const"] == "2.0"
+    assert (
+        snapshot["$defs"]["LiveCatalogModelState"]["properties"]["schema_version"]["const"] == "2.0"
+    )
+    assert (
+        snapshot["$defs"]["LiveProviderRouteState"]["properties"]["schema_version"]["const"]
+        == "2.0"
+    )
+    assert diff["properties"]["schema_version"]["const"] == "2.0"
+    assert diff["$defs"]["CatalogModelState"]["properties"]["schema_version"]["const"] == "2.0"
+    assert diff["$defs"]["ProviderRouteState"]["properties"]["schema_version"]["const"] == "2.0"
     assert snapshot["properties"]["models"]["minItems"] == 1
     assert snapshot["properties"]["models"]["maxItems"] == 10_000
     assert snapshot["properties"]["excluded_routed_model_ids"]["maxItems"] == 10_000
-    assert snapshot["$defs"]["CatalogModelState"]["properties"]["routes"]["maxItems"] == 256
+    assert snapshot["$defs"]["LiveCatalogModelState"]["properties"]["routes"]["maxItems"] == 256
     assert (
-        snapshot["$defs"]["ProviderRouteState"]["properties"]["supported_parameters"]["maxItems"]
+        snapshot["$defs"]["LiveProviderRouteState"]["properties"]["supported_parameters"][
+            "maxItems"
+        ]
         == 256
     )
+    route = snapshot["$defs"]["LiveProviderRouteState"]["properties"]
+    model = snapshot["$defs"]["LiveCatalogModelState"]["properties"]
+    assert route["max_prompt_tokens"] == {
+        "maximum": 2**31 - 1,
+        "minimum": 1,
+        "title": "Max Prompt Tokens",
+        "type": "integer",
+    }
+    assert route["max_prompt_tokens_source"]["enum"] == [
+        "metadata",
+        "context_limit",
+    ]
+    assert route["output_limit_source"]["enum"] == [
+        "metadata",
+        "context_limit",
+    ]
+    assert route["pricing_observation"]["const"] == "EXACT"
+    assert "max_prompt_tokens" in snapshot["$defs"]["LiveProviderRouteState"]["required"]
+    assert "max_prompt_tokens_source" in snapshot["$defs"]["LiveProviderRouteState"]["required"]
+    assert "output_limit_source" in snapshot["$defs"]["LiveProviderRouteState"]["required"]
+    assert "structured_output_mode" in snapshot["$defs"]["LiveProviderRouteState"]["required"]
+    assert "pricing" in snapshot["$defs"]["LiveProviderRouteState"]["required"]
+    assert route["supported_output_modes"]["minItems"] == 1
+    assert route["supported_output_modes"]["maxItems"] == 3
+    assert model["catalog_context_limit"]["minimum"] == 1
+    assert model["context_limit_source"]["enum"] == [
+        "metadata",
+        "catalog_context",
+    ]
+    assert model["output_limit_source"]["enum"] == [
+        "metadata",
+        "provider_context",
+    ]
+    assert snapshot["$defs"]["StructuredOutputMode"]["enum"] == [
+        "NATIVE_JSON_SCHEMA",
+        "JSON_OBJECT",
+        "VALIDATED_TEXT_JSON",
+    ]
     assert diff["$defs"]["ModelDriftRecord"]["properties"]["change_kinds"]["minItems"] == 1
+    assert diff["$defs"]["ModelDriftRecord"]["properties"]["before"]["anyOf"][0] == {
+        "$ref": "#/$defs/CatalogModelState"
+    }
+    assert diff["$defs"]["ModelDriftRecord"]["properties"]["after"]["anyOf"][0] == {
+        "$ref": "#/$defs/LiveCatalogModelState"
+    }
     assert diff["$defs"]["ModelDriftKind"]["enum"] == [
         "NEW_ELIGIBLE_MODEL",
         "WITHDRAWN_MODEL",
@@ -81,6 +140,7 @@ def test_refresh_snapshot_and_diff_schema_preserve_evidence_bounds() -> None:
         "ZDR_ELIGIBILITY_CHANGED",
         "ENDPOINT_AVAILABILITY_CHANGED",
         "ENDPOINT_IDENTITY_CHANGED",
+        "ENDPOINT_IDENTITY_UNVERIFIED",
         "LINEAGE_REVIEW_REQUIRED",
     ]
 
@@ -124,10 +184,35 @@ def test_refresh_terminal_and_freshness_states_are_explicit() -> None:
     }
 
 
+def test_refresh_source_schema_is_bounded_and_allowlisted() -> None:
+    source = _published("model_refresh_source_evidence.schema.json")
+    endpoint = source["$defs"]["ModelRefreshEndpointSource"]["properties"]
+
+    assert source["properties"]["schema_version"]["const"] == "1.0"
+    assert source["properties"]["source_api_identity"]["const"] == ("https://openrouter.ai/api/v1")
+    assert source["properties"]["authenticated_metadata"]["const"] is True
+    assert source["properties"]["catalog_models"]["minItems"] == 1
+    assert source["properties"]["catalog_models"]["maxItems"] == 10_000
+    assert source["properties"]["zdr_endpoints"]["maxItems"] == 40_000
+    assert source["properties"]["candidate_endpoint_sets"]["maxItems"] == 10_000
+    assert endpoint["provider_name"]["maxLength"] == 128
+    assert endpoint["supported_parameters"]["maxItems"] == 256
+    assert endpoint["supported_parameters"]["items"]["maxLength"] == 100
+    assert endpoint["pricing"]["maxProperties"] == 64
+    assert endpoint["pricing"]["additionalProperties"]["maxLength"] == 128
+    assert source["properties"]["excluded_routed_model_ids"]["items"]["pattern"]
+    assert (
+        source["$defs"]["ExcludedZdrRoutedModelSource"]["properties"]["model_id"]["pattern"]
+        == source["properties"]["excluded_routed_model_ids"]["items"]["pattern"]
+    )
+
+
 def test_refresh_workflow_status_schema_binds_disposition_inventory_and_identity() -> None:
     status = _published("model_refresh_workflow_status.schema.json")
     artifact = status["$defs"]["StagedModelRefreshArtifact"]
 
+    assert status["properties"]["schema_version"]["const"] == "2.0"
+    assert status["properties"]["validated_at"]["format"] == "date-time"
     assert status["$defs"]["ModelRefreshWorkflowDisposition"]["enum"] == [
         "COMPLETED",
         "PRODUCTION_BLOCKED",
@@ -136,6 +221,7 @@ def test_refresh_workflow_status_schema_binds_disposition_inventory_and_identity
     ]
     assert artifact["additionalProperties"] is False
     assert artifact["properties"]["filename"]["enum"] == [
+        "model-refresh-source-evidence.json",
         "model-refresh-snapshot.json",
         "model-refresh-diff.json",
         "model-refresh-attempt.json",

@@ -11,31 +11,54 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import stat
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
 
+from mmaudit.models.discovery import (
+    ModelDiscoveryValidationError,
+    canonicalize_openrouter_catalog_supported_parameters,
+)
 from mmaudit.models.endpoint_snapshots import (
     EndpointSnapshotValidationError,
     canonicalize_openrouter_endpoint_identity,
+    canonicalize_openrouter_endpoint_token_limits,
     canonicalize_openrouter_pricing,
+    canonicalize_openrouter_supported_parameters,
 )
 from mmaudit.models.identifiers import (
     EXACT_MODEL_ID_PATTERN,
+    OPENROUTER_CATALOG_MODEL_ID_PATTERN,
     is_exact_openrouter_model_id,
     is_openrouter_catalog_model_id,
     require_exact_openrouter_model_id,
 )
-from mmaudit.models.output_modes import reasoning_capability_parameters, supports_reasoning_request
+from mmaudit.models.output_modes import (
+    StructuredOutputMode,
+    mutually_supported_output_modes,
+    reasoning_capability_parameters,
+    supported_output_modes,
+    supports_provider_structured_output,
+    supports_reasoning_request,
+)
 from mmaudit.models.qualification import (
+    CandidateModel,
     CandidateOperationalStatus,
     CandidateRegistry,
 )
@@ -52,13 +75,33 @@ _MAX_ARTIFACT_BYTES = 20_000_000
 _PRIVATE_FILE_MODE = 0o600
 _PRIVATE_DIRECTORY_MODE = 0o700
 _REQUIRED_PARAMETERS = frozenset({"max_tokens", "temperature"})
-_STRUCTURED_PARAMETERS = frozenset({"json_schema", "response_format", "structured_outputs"})
 _OPERATIONAL_TEXT = frozenset({"active", "available", "healthy", "online", "operational"})
 
 SNAPSHOT_FILENAME = "model-refresh-snapshot.json"
+SOURCE_EVIDENCE_FILENAME = "model-refresh-source-evidence.json"
 DIFF_FILENAME = "model-refresh-diff.json"
 ATTEMPT_FILENAME = "model-refresh-attempt.json"
 FRESHNESS_FILENAME = "model-refresh-freshness.json"
+
+_EndpointIdentityKey = tuple[str | None, str | None]
+_CatalogModelId = Annotated[
+    str,
+    Field(pattern=OPENROUTER_CATALOG_MODEL_ID_PATTERN),
+]
+_BoundedParameter = Annotated[str, Field(min_length=1, max_length=100)]
+_CanonicalPrice = Annotated[str, Field(min_length=1, max_length=128)]
+_EndpointStatus = (
+    Annotated[StrictInt, Field(ge=-(2**31 - 1), le=2**31 - 1)]
+    | Annotated[StrictStr, Field(min_length=1, max_length=32)]
+)
+
+
+@dataclass(frozen=True)
+class _EndpointRouteInput:
+    raw: Mapping[str, Any]
+    identity_key: _EndpointIdentityKey
+    provider_endpoint: str
+    routing_identity_unambiguous: bool
 
 
 class ModelRefreshValidationError(ValueError):
@@ -88,6 +131,7 @@ class ModelDriftKind(StrEnum):
     ZDR_ELIGIBILITY_CHANGED = "ZDR_ELIGIBILITY_CHANGED"
     ENDPOINT_AVAILABILITY_CHANGED = "ENDPOINT_AVAILABILITY_CHANGED"
     ENDPOINT_IDENTITY_CHANGED = "ENDPOINT_IDENTITY_CHANGED"
+    ENDPOINT_IDENTITY_UNVERIFIED = "ENDPOINT_IDENTITY_UNVERIFIED"
     LINEAGE_REVIEW_REQUIRED = "LINEAGE_REVIEW_REQUIRED"
 
 
@@ -124,22 +168,240 @@ class _FrozenModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class ModelRefreshCatalogSource(_FrozenModel):
+    """Canonical allowlisted catalogue fields retained for deterministic replay."""
+
+    exact_model_id: str = Field(pattern=EXACT_MODEL_ID_PATTERN)
+    canonical_model_slug: str = Field(pattern=EXACT_MODEL_ID_PATTERN)
+    catalog_context_length: int = Field(ge=1, le=2**31 - 1)
+    provider_context_length: int | None = Field(default=None, ge=1, le=2**31 - 1)
+    provider_max_completion_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        le=2**31 - 1,
+    )
+    supported_parameters: tuple[_BoundedParameter, ...] = Field(max_length=_MAX_PARAMETERS)
+
+    @field_validator("exact_model_id", "canonical_model_slug")
+    @classmethod
+    def model_ids_are_exact(cls, value: str) -> str:
+        return require_exact_openrouter_model_id(value)
+
+    @model_validator(mode="after")
+    def source_is_canonical(self) -> Self:
+        if self.exact_model_id.split("/", 1)[0] != self.canonical_model_slug.split("/", 1)[0]:
+            raise ValueError("refresh source canonical slug changes model author")
+        effective_context = self.provider_context_length or self.catalog_context_length
+        effective_output = self.provider_max_completion_tokens or effective_context
+        if effective_output > effective_context:
+            raise ValueError("refresh source catalogue output limit exceeds its context")
+        if self.supported_parameters != tuple(sorted(set(self.supported_parameters))):
+            raise ValueError("refresh source catalogue parameters must be unique and sorted")
+        return self
+
+
+class ModelRefreshEndpointSource(_FrozenModel):
+    """Canonical allowlisted endpoint fields retained for deterministic replay."""
+
+    exact_model_id: str = Field(pattern=EXACT_MODEL_ID_PATTERN)
+    endpoint_tag: str | None = Field(default=None, pattern=_ENDPOINT_PATTERN)
+    endpoint_slug: str | None = Field(default=None, pattern=_ENDPOINT_PATTERN)
+    provider_name: str = Field(min_length=1, max_length=128)
+    status: _EndpointStatus
+    context_length: int = Field(ge=1, le=2**31 - 1)
+    max_prompt_tokens: int | None = Field(default=None, ge=1, le=2**31 - 1)
+    max_completion_tokens: int | None = Field(default=None, ge=1, le=2**31 - 1)
+    supported_parameters: tuple[_BoundedParameter, ...] = Field(max_length=_MAX_PARAMETERS)
+    pricing: dict[str, _CanonicalPrice] = Field(max_length=_MAX_PRICING_FIELDS)
+
+    @field_validator("exact_model_id")
+    @classmethod
+    def model_is_exact(cls, value: str) -> str:
+        return require_exact_openrouter_model_id(value)
+
+    @field_validator("provider_name")
+    @classmethod
+    def provider_name_is_safe_display_text(cls, value: str) -> str:
+        if value != value.strip() or any(not character.isprintable() for character in value):
+            raise ValueError("refresh source provider name is invalid")
+        return value
+
+    @model_validator(mode="after")
+    def source_is_canonical(self) -> Self:
+        if self.endpoint_tag is None and self.endpoint_slug is None:
+            raise ValueError("refresh source endpoint requires a tag or slug")
+        _operational, normalized_status = _operational_status(self.status)
+        if isinstance(self.status, str) and normalized_status != self.status:
+            raise ValueError("refresh source endpoint status is not canonical")
+        canonical_limits = _endpoint_token_limits(_endpoint_source_payload(self))
+        expected_limits = (
+            self.context_length,
+            self.context_length if self.max_prompt_tokens is None else self.max_prompt_tokens,
+            "context_limit" if self.max_prompt_tokens is None else "metadata",
+            (
+                self.context_length
+                if self.max_completion_tokens is None
+                else self.max_completion_tokens
+            ),
+            "context_limit" if self.max_completion_tokens is None else "metadata",
+        )
+        if canonical_limits != expected_limits:
+            raise ValueError("refresh source endpoint token limits are not canonical")
+        if self.supported_parameters != tuple(sorted(set(self.supported_parameters))):
+            raise ValueError("refresh source endpoint parameters must be unique and sorted")
+        if _endpoint_supported_parameters(list(self.supported_parameters)) != (
+            self.supported_parameters
+        ):
+            raise ValueError("refresh source endpoint parameters are not canonical")
+        if tuple(self.pricing) != tuple(sorted(self.pricing)):
+            raise ValueError("refresh source endpoint pricing fields must be sorted")
+        if _canonical_pricing(self.pricing) != self.pricing:
+            raise ValueError("refresh source endpoint pricing is not canonical")
+        return self
+
+
+class ModelRefreshCandidateEndpointSource(_FrozenModel):
+    """One exact candidate endpoint envelope retained for deterministic replay."""
+
+    exact_model_id: str = Field(pattern=EXACT_MODEL_ID_PATTERN)
+    endpoints: tuple[ModelRefreshEndpointSource, ...] = Field(max_length=_MAX_ROUTES_PER_MODEL)
+
+    @field_validator("exact_model_id")
+    @classmethod
+    def model_is_exact(cls, value: str) -> str:
+        return require_exact_openrouter_model_id(value)
+
+    @model_validator(mode="after")
+    def endpoint_set_is_canonical(self) -> Self:
+        if any(endpoint.exact_model_id != self.exact_model_id for endpoint in self.endpoints):
+            raise ValueError("refresh candidate endpoint source changes model identity")
+        keys = tuple(_endpoint_source_sort_key(endpoint) for endpoint in self.endpoints)
+        if keys != tuple(sorted(set(keys))):
+            raise ValueError("refresh candidate endpoint source must be unique and sorted")
+        return self
+
+
+class ExcludedZdrRoutedModelSource(_FrozenModel):
+    """Count an ignored routed ZDR identifier without retaining endpoint details."""
+
+    model_id: _CatalogModelId
+    occurrence_count: int = Field(ge=1, le=_MAX_MODELS * 4)
+
+    @field_validator("model_id")
+    @classmethod
+    def model_is_routed_catalog_id(cls, value: str) -> str:
+        if not is_openrouter_catalog_model_id(value) or is_exact_openrouter_model_id(value):
+            raise ValueError("excluded ZDR routed model ID is invalid")
+        return value
+
+
+class ModelRefreshSourceEvidence(_FrozenModel):
+    """Bounded canonical metadata projection used to reproduce a refresh snapshot."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    retrieved_at: datetime
+    source_api_identity: Literal["https://openrouter.ai/api/v1"] = "https://openrouter.ai/api/v1"
+    authenticated_metadata: Literal[True]
+    candidate_registry_sha256: str = Field(pattern=_SHA256_PATTERN)
+    catalog_models: tuple[ModelRefreshCatalogSource, ...] = Field(
+        min_length=1,
+        max_length=_MAX_MODELS,
+    )
+    excluded_routed_model_ids: tuple[_CatalogModelId, ...] = Field(max_length=_MAX_MODELS)
+    zdr_endpoints: tuple[ModelRefreshEndpointSource, ...] = Field(max_length=_MAX_MODELS * 4)
+    excluded_zdr_routed_models: tuple[ExcludedZdrRoutedModelSource, ...] = Field(
+        max_length=_MAX_MODELS * 4
+    )
+    candidate_endpoint_sets: tuple[ModelRefreshCandidateEndpointSource, ...] = Field(
+        max_length=_MAX_MODELS
+    )
+    catalog_projection_sha256: str = Field(pattern=_SHA256_PATTERN)
+    zdr_projection_sha256: str = Field(pattern=_SHA256_PATTERN)
+    candidate_endpoint_projection_sha256: str = Field(pattern=_SHA256_PATTERN)
+    source_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @field_validator("retrieved_at")
+    @classmethod
+    def retrieval_time_is_utc(cls, value: datetime) -> datetime:
+        return _whole_second_utc(value, label="refresh source retrieval time")
+
+    @field_validator("excluded_routed_model_ids")
+    @classmethod
+    def excluded_catalog_ids_are_canonical(
+        cls,
+        value: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if value != tuple(sorted(set(value))) or any(
+            not is_openrouter_catalog_model_id(model_id) or is_exact_openrouter_model_id(model_id)
+            for model_id in value
+        ):
+            raise ValueError("excluded refresh source catalogue IDs are invalid")
+        return value
+
+    @model_validator(mode="after")
+    def evidence_is_canonical_and_self_bound(self) -> Self:
+        catalog_ids = tuple(model.exact_model_id for model in self.catalog_models)
+        if catalog_ids != tuple(sorted(set(catalog_ids))):
+            raise ValueError("refresh source catalogue models must be unique and sorted")
+        if len(catalog_ids) + len(self.excluded_routed_model_ids) > _MAX_MODELS:
+            raise ValueError("refresh source catalogue exceeds the model limit")
+        zdr_keys = tuple(_endpoint_source_sort_key(endpoint) for endpoint in self.zdr_endpoints)
+        if zdr_keys != tuple(sorted(set(zdr_keys))):
+            raise ValueError("refresh source ZDR endpoints must be unique and sorted")
+        excluded_zdr_ids = tuple(item.model_id for item in self.excluded_zdr_routed_models)
+        if excluded_zdr_ids != tuple(sorted(set(excluded_zdr_ids))):
+            raise ValueError("excluded refresh source ZDR IDs must be unique and sorted")
+        if (
+            len(self.zdr_endpoints)
+            + sum(item.occurrence_count for item in self.excluded_zdr_routed_models)
+            > _MAX_MODELS * 4
+        ):
+            raise ValueError("refresh source ZDR catalogue exceeds the endpoint limit")
+        candidate_ids = tuple(item.exact_model_id for item in self.candidate_endpoint_sets)
+        if candidate_ids != tuple(sorted(set(candidate_ids))):
+            raise ValueError("refresh source candidate endpoint sets must be unique and sorted")
+        expected_catalog_hash = _canonical_sha256(_catalog_payload_from_source(self))
+        expected_zdr_hash = _canonical_sha256(_zdr_payload_from_source(self))
+        expected_candidate_hash = _canonical_sha256(_candidate_payloads_from_source(self))
+        if self.catalog_projection_sha256 != expected_catalog_hash:
+            raise ValueError("refresh source catalogue projection hash is inconsistent")
+        if self.zdr_projection_sha256 != expected_zdr_hash:
+            raise ValueError("refresh source ZDR projection hash is inconsistent")
+        if self.candidate_endpoint_projection_sha256 != expected_candidate_hash:
+            raise ValueError("refresh source candidate projection hash is inconsistent")
+        expected = _canonical_sha256(
+            self.model_dump(mode="json", exclude={"source_evidence_sha256"})
+        )
+        if self.source_evidence_sha256 != expected:
+            raise ValueError("refresh source evidence self-hash is inconsistent")
+        return self
+
+
 class ProviderRouteState(_FrozenModel):
     """Allowlisted exact route facts needed for safety and cost drift checks."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["2.0"] = "2.0"
     exact_model_id: str = Field(pattern=EXACT_MODEL_ID_PATTERN)
     provider_endpoint: str = Field(pattern=_ENDPOINT_PATTERN)
     endpoint_tag: str | None = Field(default=None, pattern=_ENDPOINT_PATTERN)
     endpoint_slug: str | None = Field(default=None, pattern=_ENDPOINT_PATTERN)
     provider_name: str = Field(min_length=1, max_length=128)
+    routing_identity_unambiguous: bool
     operational: bool
     operational_status: str = Field(min_length=1, max_length=32)
     zdr_eligible: bool
     context_limit: int = Field(ge=1, le=2**31 - 1)
+    max_prompt_tokens: int | None = Field(default=None, ge=1, le=2**31 - 1)
+    max_prompt_tokens_source: Literal["metadata", "context_limit"] | None = None
     output_limit: int = Field(ge=1, le=2**31 - 1)
+    output_limit_source: Literal["metadata", "context_limit"] | None = None
     supported_parameters: tuple[str, ...] = Field(max_length=_MAX_PARAMETERS)
+    supported_output_modes: tuple[StructuredOutputMode, ...] = Field(
+        min_length=1,
+        max_length=3,
+    )
     structured_output_supported: bool
+    structured_output_mode: StructuredOutputMode | None = None
     reasoning_supported: bool
     pricing_observation: PricingObservationKind
     pricing: dict[str, str] | None = Field(default=None, max_length=_MAX_PRICING_FIELDS)
@@ -164,15 +426,34 @@ class ProviderRouteState(_FrozenModel):
             raise ValueError("refresh route requires an endpoint tag or slug")
         if self.provider_endpoint not in {self.endpoint_tag, self.endpoint_slug}:
             raise ValueError("refresh route endpoint differs from its tag and slug")
+        if (self.max_prompt_tokens is None) is not (self.max_prompt_tokens_source is None):
+            raise ValueError("refresh route prompt limit evidence is incomplete")
+        if self.max_prompt_tokens is not None and self.max_prompt_tokens > self.context_limit:
+            raise ValueError("refresh route prompt limit exceeds its context")
+        if (
+            self.max_prompt_tokens_source == "context_limit"
+            and self.max_prompt_tokens != self.context_limit
+        ):
+            raise ValueError("refresh route derived prompt limit differs from its context")
         if self.output_limit > self.context_limit:
             raise ValueError("refresh route output limit exceeds its context")
+        if self.output_limit_source == "context_limit" and self.output_limit != self.context_limit:
+            raise ValueError("refresh route derived output limit differs from its context")
         if self.supported_parameters != tuple(sorted(set(self.supported_parameters))):
             raise ValueError("refresh route parameters must be unique and sorted")
-        expected_structured = bool(
-            set(self.supported_parameters).intersection(_STRUCTURED_PARAMETERS)
+        route_modes = supported_output_modes(self.supported_parameters)
+        projected_modes = tuple(
+            mode for mode in route_modes if mode in frozenset(self.supported_output_modes)
         )
+        if self.supported_output_modes != projected_modes:
+            raise ValueError("refresh route output-mode projection is inconsistent")
+        expected_structured = supports_provider_structured_output(self.supported_parameters)
         if self.structured_output_supported is not expected_structured:
             raise ValueError("refresh route structured-output status is inconsistent")
+        if self.structured_output_mode is not None and (
+            self.structured_output_mode is not self.supported_output_modes[0]
+        ):
+            raise ValueError("refresh route selected output mode is inconsistent")
         expected_reasoning = supports_reasoning_request(
             reasoning_capability_parameters(self.supported_parameters)
         )
@@ -181,14 +462,22 @@ class ProviderRouteState(_FrozenModel):
         if self.pricing_observation is PricingObservationKind.EXACT:
             if self.pricing is None or not {"prompt", "completion"}.issubset(self.pricing):
                 raise ValueError("exact refresh pricing requires prompt and completion values")
+            if (
+                self.max_prompt_tokens is None
+                or self.max_prompt_tokens_source is None
+                or self.output_limit_source is None
+                or self.structured_output_mode is None
+            ):
+                raise ValueError("exact refresh route lacks exact capability evidence")
             if tuple(self.pricing) != tuple(sorted(self.pricing)):
                 raise ValueError("refresh route pricing fields must be sorted")
             if _canonical_pricing(self.pricing) != self.pricing:
                 raise ValueError("refresh route pricing is not canonical")
             if self.pricing_sha256 != _canonical_sha256(self.pricing):
                 raise ValueError("refresh route pricing hash is inconsistent")
-        elif self.pricing is not None:
-            raise ValueError("hash-only refresh pricing cannot retain exact values")
+        else:
+            if self.pricing is not None:
+                raise ValueError("hash-only refresh pricing cannot retain exact values")
         expected = _canonical_sha256(self.model_dump(mode="json", exclude={"route_sha256"}))
         if self.route_sha256 != expected:
             raise ValueError("refresh route self-hash is inconsistent")
@@ -199,9 +488,9 @@ class ProviderRouteState(_FrozenModel):
         """Return only metadata eligibility; this is never model qualification."""
 
         return (
-            self.operational
+            self.routing_identity_unambiguous
+            and self.operational
             and self.zdr_eligible
-            and self.structured_output_supported
             and _REQUIRED_PARAMETERS.issubset(self.supported_parameters)
             and self.pricing_observation is PricingObservationKind.EXACT
         )
@@ -210,14 +499,22 @@ class ProviderRouteState(_FrozenModel):
 class CatalogModelState(_FrozenModel):
     """One exact catalogue model and every normalized observed route."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["2.0"] = "2.0"
     exact_model_id: str = Field(pattern=EXACT_MODEL_ID_PATTERN)
     canonical_model_slug: str = Field(pattern=EXACT_MODEL_ID_PATTERN)
     variant_family_key: str = Field(pattern=EXACT_MODEL_ID_PATTERN)
+    catalog_context_limit: int = Field(ge=1, le=2**31 - 1)
     context_limit: int = Field(ge=1, le=2**31 - 1)
+    context_limit_source: Literal["metadata", "catalog_context", "candidate_registry"]
     output_limit: int = Field(ge=1, le=2**31 - 1)
+    output_limit_source: Literal["metadata", "provider_context", "candidate_registry"]
     supported_parameters: tuple[str, ...] = Field(max_length=_MAX_PARAMETERS)
+    supported_output_modes: tuple[StructuredOutputMode, ...] = Field(
+        min_length=1,
+        max_length=3,
+    )
     structured_output_supported: bool
+    structured_output_mode: StructuredOutputMode | None = None
     reasoning_supported: bool
     routes: tuple[ProviderRouteState, ...] = Field(max_length=_MAX_ROUTES_PER_MODEL)
     eligible_provider_endpoints: tuple[str, ...] = Field(max_length=_MAX_ROUTES_PER_MODEL)
@@ -234,15 +531,46 @@ class CatalogModelState(_FrozenModel):
             raise ValueError("refresh canonical slug changes model author")
         if self.output_limit > self.context_limit:
             raise ValueError("refresh model output limit exceeds its context")
+        if (
+            self.context_limit_source == "catalog_context"
+            and self.context_limit != self.catalog_context_limit
+        ):
+            raise ValueError("refresh model derived provider context is inconsistent")
+        if (
+            self.output_limit_source == "provider_context"
+            and self.output_limit != self.context_limit
+        ):
+            raise ValueError("refresh model derived output limit is inconsistent")
         if self.variant_family_key != model_variant_family_key(self.exact_model_id):
             raise ValueError("refresh model variant-family key is inconsistent")
         if self.supported_parameters != tuple(sorted(set(self.supported_parameters))):
             raise ValueError("refresh model parameters must be unique and sorted")
-        expected_structured = bool(
-            set(self.supported_parameters).intersection(_STRUCTURED_PARAMETERS)
-        )
+        expected_modes = supported_output_modes(self.supported_parameters)
+        if self.supported_output_modes != expected_modes:
+            raise ValueError("refresh model output modes are inconsistent")
+        expected_structured = supports_provider_structured_output(self.supported_parameters)
         if self.structured_output_supported is not expected_structured:
             raise ValueError("refresh model structured-output status is inconsistent")
+        observation_kinds = {route.pricing_observation for route in self.routes}
+        if len(observation_kinds) > 1:
+            raise ValueError("refresh model mixes exact and hash-only route observations")
+        hash_only_baseline = observation_kinds == {PricingObservationKind.HASH_ONLY}
+        if hash_only_baseline:
+            if (
+                self.context_limit_source != "candidate_registry"
+                or self.output_limit_source != "candidate_registry"
+            ):
+                raise ValueError("hash-only refresh model lacks registry provenance")
+            if self.structured_output_mode is not None and (
+                self.structured_output_mode is not expected_modes[0]
+            ):
+                raise ValueError("hash-only refresh model output mode is inconsistent")
+        elif (
+            self.context_limit_source == "candidate_registry"
+            or self.output_limit_source == "candidate_registry"
+            or self.structured_output_mode is not expected_modes[0]
+        ):
+            raise ValueError("exact refresh model lacks exact capability evidence")
         expected_reasoning = supports_reasoning_request(
             reasoning_capability_parameters(self.supported_parameters)
         )
@@ -253,12 +581,42 @@ class CatalogModelState(_FrozenModel):
             raise ValueError("refresh model routes must be unique and sorted")
         if any(route.exact_model_id != self.exact_model_id for route in self.routes):
             raise ValueError("refresh model contains a route for another model")
+        for route in self.routes:
+            expected_route_modes = mutually_supported_output_modes(
+                (self.supported_parameters, route.supported_parameters)
+            )
+            if route.supported_output_modes != expected_route_modes:
+                raise ValueError("refresh route output modes differ from the model intersection")
+            expected_route_mode = (
+                None
+                if route.pricing_observation is PricingObservationKind.HASH_ONLY
+                and route.structured_output_mode is None
+                else expected_route_modes[0]
+            )
+            if route.structured_output_mode is not expected_route_mode:
+                raise ValueError("refresh route output mode differs from the model intersection")
+        identity_keys = tuple((route.endpoint_tag, route.endpoint_slug) for route in self.routes)
+        if len(identity_keys) != len(set(identity_keys)):
+            raise ValueError("refresh model contains duplicate full route identities")
+        alias_counts: dict[str, int] = {}
+        provider_name_counts: dict[str, int] = {}
+        for route in self.routes:
+            for alias in {
+                value for value in (route.endpoint_tag, route.endpoint_slug) if value is not None
+            }:
+                alias_counts[alias] = alias_counts.get(alias, 0) + 1
+            normalized_name = route.provider_name.casefold()
+            provider_name_counts[normalized_name] = provider_name_counts.get(normalized_name, 0) + 1
+        for route in self.routes:
+            if alias_counts[route.provider_endpoint] != 1:
+                raise ValueError("refresh model route selector is ambiguous")
+            expected_unambiguous = provider_name_counts[route.provider_name.casefold()] == 1
+            if route.routing_identity_unambiguous is not expected_unambiguous:
+                raise ValueError("refresh route identity-ambiguity state is inconsistent")
         expected_eligible = tuple(
             route.provider_endpoint
             for route in self.routes
-            if route.discovery_eligible
-            and self.structured_output_supported
-            and _REQUIRED_PARAMETERS.issubset(self.supported_parameters)
+            if route.discovery_eligible and _REQUIRED_PARAMETERS.issubset(self.supported_parameters)
         )
         if self.eligible_provider_endpoints != expected_eligible:
             raise ValueError("refresh model eligible route projection is inconsistent")
@@ -268,19 +626,43 @@ class CatalogModelState(_FrozenModel):
         return self
 
 
+class LiveProviderRouteState(ProviderRouteState):
+    """Schema-visible exact route evidence required in a live refresh snapshot."""
+
+    max_prompt_tokens: int = Field(ge=1, le=2**31 - 1)
+    max_prompt_tokens_source: Literal["metadata", "context_limit"]
+    output_limit_source: Literal["metadata", "context_limit"]
+    structured_output_mode: StructuredOutputMode
+    pricing_observation: Literal[PricingObservationKind.EXACT]
+    pricing: dict[str, str] = Field(max_length=_MAX_PRICING_FIELDS)
+
+
+class LiveCatalogModelState(CatalogModelState):
+    """Schema-visible exact catalogue evidence required in a live snapshot."""
+
+    context_limit_source: Literal["metadata", "catalog_context"]
+    output_limit_source: Literal["metadata", "provider_context"]
+    structured_output_mode: StructuredOutputMode
+    routes: tuple[LiveProviderRouteState, ...] = Field(max_length=_MAX_ROUTES_PER_MODEL)
+
+
 class ModelRefreshSnapshot(_FrozenModel):
     """Complete allowlisted semantic snapshot from one provider observation."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["2.0"] = "2.0"
     retrieved_at: datetime
     source_api_identity: Literal["https://openrouter.ai/api/v1"] = "https://openrouter.ai/api/v1"
     authenticated_metadata: Literal[True]
     candidate_registry_sha256: str = Field(pattern=_SHA256_PATTERN)
+    source_evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
     catalog_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
     zdr_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
     catalog_model_count: int = Field(ge=1, le=_MAX_MODELS)
     excluded_routed_model_ids: tuple[str, ...] = Field(max_length=_MAX_MODELS)
-    models: tuple[CatalogModelState, ...] = Field(min_length=1, max_length=_MAX_MODELS)
+    models: tuple[LiveCatalogModelState, ...] = Field(
+        min_length=1,
+        max_length=_MAX_MODELS,
+    )
     semantic_sha256: str = Field(pattern=_SHA256_PATTERN)
     snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
 
@@ -336,7 +718,7 @@ class ModelDriftRecord(_FrozenModel):
     exact_model_id: str = Field(pattern=EXACT_MODEL_ID_PATTERN)
     change_kinds: tuple[ModelDriftKind, ...] = Field(min_length=1)
     before: CatalogModelState | None
-    after: CatalogModelState | None
+    after: LiveCatalogModelState | None
     pricing_comparison: PricingComparisonState
     pricing_increase_fields: tuple[str, ...] = Field(max_length=_MAX_PRICING_FIELDS)
     production_selected: bool
@@ -381,7 +763,7 @@ class ModelDriftRecord(_FrozenModel):
 class ModelRefreshDiff(_FrozenModel):
     """Deterministic exact-state comparison against a frozen baseline."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["2.0"] = "2.0"
     compared_at: datetime
     baseline_kind: RefreshBaselineKind
     baseline_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -594,6 +976,193 @@ def reject_model_refresh_secret_reflection(
             pending.extend(current)
 
 
+def build_model_refresh_source_evidence(
+    *,
+    retrieved_at: datetime,
+    catalog_payload: Mapping[str, Any],
+    zdr_payload: Mapping[str, Any],
+    candidate_registry: CandidateRegistry,
+    candidate_endpoint_payloads: Mapping[str, Mapping[str, Any]],
+    authenticated_metadata: bool,
+) -> ModelRefreshSourceEvidence:
+    """Retain only canonical provider fields needed to reproduce a refresh snapshot."""
+
+    if authenticated_metadata is not True:
+        raise ModelRefreshValidationError(
+            "refresh source evidence requires an authenticated metadata session"
+        )
+    retrieved_at = _whole_second_utc(retrieved_at, label="refresh retrieval time")
+    registry = CandidateRegistry.model_validate(candidate_registry.model_dump(mode="json"))
+    raw_models = _required_bounded_list(catalog_payload.get("data"), label="model catalogue")
+    raw_zdr = _required_bounded_list(
+        zdr_payload.get("data"),
+        label="ZDR endpoint catalogue",
+        allow_empty=True,
+        maximum=_MAX_MODELS * 4,
+    )
+    catalog_models: list[ModelRefreshCatalogSource] = []
+    excluded: list[str] = []
+    seen_catalog_ids: set[str] = set()
+    for raw in raw_models:
+        model_id = raw.get("id")
+        if not isinstance(model_id, str) or not is_openrouter_catalog_model_id(model_id):
+            raise ModelRefreshValidationError("model catalogue contains an invalid model ID")
+        if model_id in seen_catalog_ids:
+            raise ModelRefreshValidationError("model catalogue contains duplicate model IDs")
+        seen_catalog_ids.add(model_id)
+        if not is_exact_openrouter_model_id(model_id):
+            excluded.append(model_id)
+            continue
+        catalog_models.append(_catalog_source_from_raw(model_id=model_id, raw=raw))
+    if not catalog_models:
+        raise ModelRefreshValidationError("model catalogue contains no exact models")
+
+    candidate_ids = tuple(candidate.exact_model_id for candidate in registry.candidates)
+    if set(candidate_endpoint_payloads) != set(candidate_ids):
+        raise ModelRefreshValidationError(
+            "candidate endpoint payloads do not exactly cover the candidate registry"
+        )
+
+    zdr_endpoints: list[ModelRefreshEndpointSource] = []
+    excluded_zdr_counts: dict[str, int] = {}
+    for raw in raw_zdr:
+        model_id = raw.get("model_id")
+        if not isinstance(model_id, str) or not is_openrouter_catalog_model_id(model_id):
+            raise ModelRefreshValidationError("ZDR catalogue contains an invalid model ID")
+        if not is_exact_openrouter_model_id(model_id):
+            excluded_zdr_counts[model_id] = excluded_zdr_counts.get(model_id, 0) + 1
+            continue
+        zdr_endpoints.append(
+            _endpoint_source_from_raw(
+                exact_model_id=model_id,
+                raw=raw,
+            )
+        )
+
+    candidate_sets: list[ModelRefreshCandidateEndpointSource] = []
+    for model_id, envelope in sorted(candidate_endpoint_payloads.items()):
+        data = envelope.get("data")
+        if not isinstance(data, Mapping) or data.get("id") != model_id:
+            raise ModelRefreshValidationError(
+                "candidate endpoint metadata changes exact model identity"
+            )
+        endpoints = _required_bounded_list(
+            data.get("endpoints"),
+            label="candidate endpoint catalogue",
+            allow_empty=True,
+            maximum=_MAX_ROUTES_PER_MODEL,
+        )
+        source_endpoints = tuple(
+            sorted(
+                (
+                    _endpoint_source_from_raw(
+                        exact_model_id=model_id,
+                        raw=endpoint,
+                    )
+                    for endpoint in endpoints
+                ),
+                key=_endpoint_source_sort_key,
+            )
+        )
+        if len(source_endpoints) != len(
+            {_endpoint_source_sort_key(endpoint) for endpoint in source_endpoints}
+        ):
+            raise ModelRefreshValidationError(
+                "candidate endpoint catalogue contains duplicate exact routes"
+            )
+        try:
+            candidate_sets.append(
+                ModelRefreshCandidateEndpointSource(
+                    exact_model_id=model_id,
+                    endpoints=source_endpoints,
+                )
+            )
+        except ValueError as exc:
+            raise ModelRefreshValidationError(
+                "candidate endpoint source projection is invalid"
+            ) from exc
+
+    ordered_catalog = tuple(sorted(catalog_models, key=lambda item: item.exact_model_id))
+    ordered_excluded = tuple(sorted(excluded))
+    ordered_zdr = tuple(sorted(zdr_endpoints, key=_endpoint_source_sort_key))
+    if len(ordered_zdr) != len({_endpoint_source_sort_key(endpoint) for endpoint in ordered_zdr}):
+        raise ModelRefreshValidationError("ZDR catalogue contains duplicate exact routes")
+    ordered_excluded_zdr = tuple(
+        ExcludedZdrRoutedModelSource(
+            model_id=model_id,
+            occurrence_count=count,
+        )
+        for model_id, count in sorted(excluded_zdr_counts.items())
+    )
+    ordered_candidates = tuple(sorted(candidate_sets, key=lambda item: item.exact_model_id))
+    values: dict[str, Any] = {
+        "schema_version": "1.0",
+        "retrieved_at": retrieved_at,
+        "source_api_identity": "https://openrouter.ai/api/v1",
+        "authenticated_metadata": True,
+        "candidate_registry_sha256": registry.registry_sha256,
+        "catalog_models": [item.model_dump(mode="json") for item in ordered_catalog],
+        "excluded_routed_model_ids": list(ordered_excluded),
+        "zdr_endpoints": [item.model_dump(mode="json") for item in ordered_zdr],
+        "excluded_zdr_routed_models": [
+            item.model_dump(mode="json") for item in ordered_excluded_zdr
+        ],
+        "candidate_endpoint_sets": [item.model_dump(mode="json") for item in ordered_candidates],
+        "catalog_projection_sha256": _canonical_sha256(
+            _catalog_payload_from_parts(
+                catalog_models=ordered_catalog,
+                excluded_routed_model_ids=ordered_excluded,
+            )
+        ),
+        "zdr_projection_sha256": _canonical_sha256(
+            _zdr_payload_from_parts(
+                zdr_endpoints=ordered_zdr,
+                excluded_zdr_routed_models=ordered_excluded_zdr,
+            )
+        ),
+        "candidate_endpoint_projection_sha256": _canonical_sha256(
+            _candidate_payloads_from_parts(candidate_endpoint_sets=ordered_candidates)
+        ),
+    }
+    values["source_evidence_sha256"] = _canonical_sha256(values)
+    try:
+        return ModelRefreshSourceEvidence.model_validate(values)
+    except ValueError as exc:
+        raise ModelRefreshValidationError("refresh source evidence is invalid") from exc
+
+
+def build_model_refresh_snapshot_from_source(
+    *,
+    source_evidence: ModelRefreshSourceEvidence,
+    candidate_registry: CandidateRegistry,
+) -> ModelRefreshSnapshot:
+    """Reproduce the semantic snapshot from persisted canonical source evidence."""
+
+    source = ModelRefreshSourceEvidence.model_validate(source_evidence.model_dump(mode="json"))
+    registry = CandidateRegistry.model_validate(candidate_registry.model_dump(mode="json"))
+    if source.candidate_registry_sha256 != registry.registry_sha256:
+        raise ModelRefreshValidationError(
+            "refresh source evidence binds a different candidate registry"
+        )
+    candidate_ids = tuple(candidate.exact_model_id for candidate in registry.candidates)
+    source_candidate_ids = tuple(
+        candidate.exact_model_id for candidate in source.candidate_endpoint_sets
+    )
+    if source_candidate_ids != tuple(sorted(candidate_ids)):
+        raise ModelRefreshValidationError(
+            "refresh source candidate endpoints do not exactly cover the registry"
+        )
+    return _build_model_refresh_snapshot_from_payloads(
+        retrieved_at=source.retrieved_at,
+        catalog_payload=_catalog_payload_from_source(source),
+        zdr_payload=_zdr_payload_from_source(source),
+        candidate_registry=registry,
+        candidate_endpoint_payloads=_candidate_payloads_from_source(source),
+        authenticated_metadata=source.authenticated_metadata,
+        source_evidence_sha256=source.source_evidence_sha256,
+    )
+
+
 def build_model_refresh_snapshot(
     *,
     retrieved_at: datetime,
@@ -603,7 +1172,33 @@ def build_model_refresh_snapshot(
     candidate_endpoint_payloads: Mapping[str, Mapping[str, Any]],
     authenticated_metadata: bool,
 ) -> ModelRefreshSnapshot:
-    """Normalize one complete catalogue, ZDR list, and exact candidate endpoints."""
+    """Normalize raw metadata through persisted-source semantics for compatibility."""
+
+    source = build_model_refresh_source_evidence(
+        retrieved_at=retrieved_at,
+        catalog_payload=catalog_payload,
+        zdr_payload=zdr_payload,
+        candidate_registry=candidate_registry,
+        candidate_endpoint_payloads=candidate_endpoint_payloads,
+        authenticated_metadata=authenticated_metadata,
+    )
+    return build_model_refresh_snapshot_from_source(
+        source_evidence=source,
+        candidate_registry=candidate_registry,
+    )
+
+
+def _build_model_refresh_snapshot_from_payloads(
+    *,
+    retrieved_at: datetime,
+    catalog_payload: Mapping[str, Any],
+    zdr_payload: Mapping[str, Any],
+    candidate_registry: CandidateRegistry,
+    candidate_endpoint_payloads: Mapping[str, Mapping[str, Any]],
+    authenticated_metadata: bool,
+    source_evidence_sha256: str,
+) -> ModelRefreshSnapshot:
+    """Build a snapshot only from a canonical allowlisted source projection."""
 
     if authenticated_metadata is not True:
         raise ModelRefreshValidationError(
@@ -641,26 +1236,34 @@ def build_model_refresh_snapshot(
             "candidate endpoint payloads do not exactly cover the candidate registry"
         )
 
-    zdr_by_route: dict[tuple[str, str], Mapping[str, Any]] = {}
+    raw_zdr_by_model: dict[str, list[Mapping[str, Any]]] = {}
     for raw in raw_zdr:
         model_id = raw.get("model_id")
         if not isinstance(model_id, str) or not is_openrouter_catalog_model_id(model_id):
             raise ModelRefreshValidationError("ZDR catalogue contains an invalid model ID")
         if not is_exact_openrouter_model_id(model_id):
-            # The full provider inventory legitimately includes router aliases
-            # such as openrouter/auto. They remain bound by the raw ZDR hash but
-            # cannot enter the exact-model semantic projection.
             continue
-        endpoint = _endpoint_identity(raw)
-        key = (model_id, endpoint)
-        if key in zdr_by_route:
-            raise ModelRefreshValidationError("ZDR catalogue contains duplicate exact routes")
-        zdr_by_route[key] = raw
+        raw_zdr_by_model.setdefault(model_id, []).append(raw)
 
-    routes_by_model: dict[str, dict[str, Mapping[str, Any]]] = {}
-    for (model_id, endpoint), raw in zdr_by_route.items():
-        if model_id in catalog_by_id:
-            routes_by_model.setdefault(model_id, {})[endpoint] = raw
+    zdr_routes_by_model: dict[str, tuple[_EndpointRouteInput, ...]] = {}
+    zdr_alias_counts_by_model: dict[str, dict[str, int]] = {}
+    zdr_by_identity: dict[tuple[str, _EndpointIdentityKey], _EndpointRouteInput] = {}
+    for model_id, raw_routes in sorted(raw_zdr_by_model.items()):
+        normalized, alias_counts = _normalize_endpoint_inventory(
+            raw_routes,
+            label="ZDR catalogue",
+        )
+        zdr_routes_by_model[model_id] = normalized
+        zdr_alias_counts_by_model[model_id] = alias_counts
+        for route in normalized:
+            zdr_by_identity[(model_id, route.identity_key)] = route
+
+    routes_by_model: dict[str, tuple[_EndpointRouteInput, ...]] = {
+        model_id: routes
+        for model_id, routes in zdr_routes_by_model.items()
+        if model_id in catalog_by_id
+    }
+    candidates_by_id = {candidate.exact_model_id: candidate for candidate in registry.candidates}
     for model_id, envelope in candidate_endpoint_payloads.items():
         data = envelope.get("data")
         if not isinstance(data, Mapping) or data.get("id") != model_id:
@@ -673,29 +1276,33 @@ def build_model_refresh_snapshot(
             allow_empty=True,
             maximum=_MAX_ROUTES_PER_MODEL,
         )
-        # The exact-model endpoint response is authoritative for endpoint
-        # availability. ZDR inventory only contributes the privacy flag for
-        # routes that the exact response still reports.
-        selected: dict[str, Mapping[str, Any]] = {}
-        routes_by_model[model_id] = selected
-        for raw in endpoints:
-            endpoint = _endpoint_identity(raw)
-            if endpoint in selected:
-                raise ModelRefreshValidationError(
-                    "candidate endpoint catalogue contains duplicate exact routes"
-                )
-            selected[endpoint] = raw
+        routes_by_model[model_id], _ = _normalize_endpoint_inventory(
+            endpoints,
+            label="candidate endpoint catalogue",
+            preferred_endpoint=candidates_by_id[model_id].approved_provider_endpoint,
+        )
 
     models: list[CatalogModelState] = []
     for model_id, raw_model in sorted(catalog_by_id.items()):
-        model_parameters = _supported_parameters(raw_model.get("supported_parameters"))
-        context_limit = _positive_integer(
+        model_parameters = _catalog_supported_parameters(raw_model.get("supported_parameters"))
+        catalog_context_limit = _positive_integer(
             raw_model.get("context_length"),
             label="catalogue context limit",
         )
         top_provider = raw_model.get("top_provider")
         if top_provider is not None and not isinstance(top_provider, Mapping):
             raise ModelRefreshValidationError("catalogue top provider must be an object")
+        context_value = (
+            top_provider.get("context_length") if isinstance(top_provider, Mapping) else None
+        )
+        context_limit = (
+            catalog_context_limit
+            if context_value is None
+            else _positive_integer(context_value, label="catalogue provider context limit")
+        )
+        context_limit_source: Literal["metadata", "catalog_context"] = (
+            "catalog_context" if context_value is None else "metadata"
+        )
         output_value = (
             top_provider.get("max_completion_tokens") if isinstance(top_provider, Mapping) else None
         )
@@ -703,6 +1310,9 @@ def build_model_refresh_snapshot(
             context_limit
             if output_value is None
             else _positive_integer(output_value, label="catalogue output limit")
+        )
+        output_limit_source: Literal["metadata", "provider_context"] = (
+            "provider_context" if output_value is None else "metadata"
         )
         canonical_slug = raw_model.get("canonical_slug", model_id)
         if (
@@ -712,18 +1322,29 @@ def build_model_refresh_snapshot(
         ):
             raise ModelRefreshValidationError("catalogue canonical model slug is invalid")
         route_states: list[ProviderRouteState] = []
-        for endpoint, raw_route in sorted(routes_by_model.get(model_id, {}).items()):
-            zdr_counterpart = zdr_by_route.get((model_id, endpoint))
+        for route_input in routes_by_model.get(model_id, ()):
+            zdr_counterpart = zdr_by_identity.get((model_id, route_input.identity_key))
+            zdr_alias_count = zdr_alias_counts_by_model.get(model_id, {}).get(
+                route_input.provider_endpoint,
+                0,
+            )
             route_states.append(
                 _route_state_from_raw(
                     exact_model_id=model_id,
-                    raw=raw_route,
+                    raw=route_input.raw,
+                    model_supported_parameters=model_parameters,
+                    provider_endpoint=route_input.provider_endpoint,
+                    routing_identity_unambiguous=route_input.routing_identity_unambiguous,
                     zdr_eligible=(
                         zdr_counterpart is not None
+                        and zdr_alias_count == 1
                         and _zdr_counterpart_matches(
                             exact_model_id=model_id,
-                            endpoint_raw=raw_route,
-                            zdr_raw=zdr_counterpart,
+                            provider_endpoint=route_input.provider_endpoint,
+                            model_supported_parameters=model_parameters,
+                            endpoint_raw=route_input.raw,
+                            zdr_raw=zdr_counterpart.raw,
+                            routing_identity_unambiguous=(route_input.routing_identity_unambiguous),
                         )
                     ),
                 )
@@ -732,19 +1353,23 @@ def build_model_refresh_snapshot(
             _seal_catalog_model_state(
                 exact_model_id=model_id,
                 canonical_model_slug=canonical_slug,
+                catalog_context_limit=catalog_context_limit,
                 context_limit=context_limit,
+                context_limit_source=context_limit_source,
                 output_limit=output_limit,
+                output_limit_source=output_limit_source,
                 supported_parameters=model_parameters,
                 routes=tuple(route_states),
             )
         )
 
     values: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "retrieved_at": retrieved_at,
         "source_api_identity": "https://openrouter.ai/api/v1",
         "authenticated_metadata": authenticated_metadata,
         "candidate_registry_sha256": registry.registry_sha256,
+        "source_evidence_sha256": source_evidence_sha256,
         "catalog_snapshot_sha256": _canonical_sha256(catalog_payload),
         "zdr_snapshot_sha256": _canonical_sha256(zdr_payload),
         "catalog_model_count": len(raw_models),
@@ -754,6 +1379,212 @@ def build_model_refresh_snapshot(
     }
     values["snapshot_sha256"] = _canonical_sha256(values)
     return ModelRefreshSnapshot.model_validate(values)
+
+
+def _catalog_source_from_raw(
+    *,
+    model_id: str,
+    raw: Mapping[str, Any],
+) -> ModelRefreshCatalogSource:
+    parameters = _catalog_supported_parameters(raw.get("supported_parameters"))
+    catalog_context = _positive_integer(
+        raw.get("context_length"),
+        label="catalogue context limit",
+    )
+    top_provider = raw.get("top_provider")
+    if top_provider is not None and not isinstance(top_provider, Mapping):
+        raise ModelRefreshValidationError("catalogue top provider must be an object")
+    provider_context_value = (
+        top_provider.get("context_length") if isinstance(top_provider, Mapping) else None
+    )
+    provider_output_value = (
+        top_provider.get("max_completion_tokens") if isinstance(top_provider, Mapping) else None
+    )
+    provider_context = (
+        None
+        if provider_context_value is None
+        else _positive_integer(
+            provider_context_value,
+            label="catalogue provider context limit",
+        )
+    )
+    provider_output = (
+        None
+        if provider_output_value is None
+        else _positive_integer(
+            provider_output_value,
+            label="catalogue output limit",
+        )
+    )
+    canonical_slug = raw.get("canonical_slug", model_id)
+    if (
+        not isinstance(canonical_slug, str)
+        or not is_exact_openrouter_model_id(canonical_slug)
+        or canonical_slug.split("/", 1)[0] != model_id.split("/", 1)[0]
+    ):
+        raise ModelRefreshValidationError("catalogue canonical model slug is invalid")
+    try:
+        return ModelRefreshCatalogSource(
+            exact_model_id=model_id,
+            canonical_model_slug=canonical_slug,
+            catalog_context_length=catalog_context,
+            provider_context_length=provider_context,
+            provider_max_completion_tokens=provider_output,
+            supported_parameters=parameters,
+        )
+    except ValueError as exc:
+        raise ModelRefreshValidationError("catalogue source projection is invalid") from exc
+
+
+def _endpoint_source_from_raw(
+    *,
+    exact_model_id: str,
+    raw: Mapping[str, Any],
+) -> ModelRefreshEndpointSource:
+    item_model_id = raw.get("model_id")
+    if item_model_id is not None and item_model_id != exact_model_id:
+        raise ModelRefreshValidationError(
+            "endpoint record is not bound to the exact requested model"
+        )
+    identity = _endpoint_identity_projection(raw)
+    _operational, normalized_status = _operational_status(raw.get("status"))
+    raw_status = raw.get("status")
+    status: int | str = raw_status if isinstance(raw_status, int) else normalized_status
+    context, prompt, prompt_source, output, output_source = _endpoint_token_limits(raw)
+    parameters = _endpoint_supported_parameters(raw.get("supported_parameters"))
+    pricing = _canonical_pricing(raw.get("pricing"))
+    try:
+        return ModelRefreshEndpointSource(
+            exact_model_id=exact_model_id,
+            endpoint_tag=identity["tag"],
+            endpoint_slug=identity["slug"],
+            provider_name=identity["provider_name"],
+            status=status,
+            context_length=context,
+            max_prompt_tokens=None if prompt_source == "context_limit" else prompt,
+            max_completion_tokens=None if output_source == "context_limit" else output,
+            supported_parameters=parameters,
+            pricing=pricing,
+        )
+    except ValueError as exc:
+        raise ModelRefreshValidationError("endpoint source projection is invalid") from exc
+
+
+def _endpoint_source_sort_key(
+    endpoint: ModelRefreshEndpointSource,
+) -> tuple[str, str, str]:
+    return (
+        endpoint.exact_model_id,
+        endpoint.endpoint_tag or "",
+        endpoint.endpoint_slug or "",
+    )
+
+
+def _catalog_source_payload(source: ModelRefreshCatalogSource) -> dict[str, Any]:
+    return {
+        "id": source.exact_model_id,
+        "canonical_slug": source.canonical_model_slug,
+        "context_length": source.catalog_context_length,
+        "top_provider": {
+            "context_length": source.provider_context_length,
+            "max_completion_tokens": source.provider_max_completion_tokens,
+        },
+        "supported_parameters": list(source.supported_parameters),
+    }
+
+
+def _endpoint_source_payload(source: ModelRefreshEndpointSource) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model_id": source.exact_model_id,
+        "provider_name": source.provider_name,
+        "status": source.status,
+        "context_length": source.context_length,
+        "max_prompt_tokens": source.max_prompt_tokens,
+        "max_completion_tokens": source.max_completion_tokens,
+        "supported_parameters": list(source.supported_parameters),
+        "pricing": dict(source.pricing),
+    }
+    if source.endpoint_tag is not None:
+        payload["tag"] = source.endpoint_tag
+    if source.endpoint_slug is not None:
+        payload["slug"] = source.endpoint_slug
+    return payload
+
+
+def _catalog_payload_from_parts(
+    *,
+    catalog_models: Sequence[ModelRefreshCatalogSource],
+    excluded_routed_model_ids: Sequence[str],
+) -> dict[str, Any]:
+    data = [
+        *(_catalog_source_payload(model) for model in catalog_models),
+        *({"id": model_id} for model_id in excluded_routed_model_ids),
+    ]
+    return {"data": sorted(data, key=lambda item: str(item["id"]))}
+
+
+def _zdr_payload_from_parts(
+    *,
+    zdr_endpoints: Sequence[ModelRefreshEndpointSource],
+    excluded_zdr_routed_models: Sequence[ExcludedZdrRoutedModelSource],
+) -> dict[str, Any]:
+    data = [_endpoint_source_payload(endpoint) for endpoint in zdr_endpoints]
+    for excluded in excluded_zdr_routed_models:
+        data.extend({"model_id": excluded.model_id} for _index in range(excluded.occurrence_count))
+    return {
+        "data": sorted(
+            data,
+            key=lambda item: (
+                str(item["model_id"]),
+                str(item.get("tag") or ""),
+                str(item.get("slug") or ""),
+            ),
+        )
+    }
+
+
+def _candidate_payloads_from_parts(
+    *,
+    candidate_endpoint_sets: Sequence[ModelRefreshCandidateEndpointSource],
+) -> dict[str, Mapping[str, Any]]:
+    result: dict[str, Mapping[str, Any]] = {}
+    for endpoint_set in candidate_endpoint_sets:
+        endpoints: list[dict[str, Any]] = []
+        for endpoint in endpoint_set.endpoints:
+            payload = _endpoint_source_payload(endpoint)
+            payload.pop("model_id")
+            endpoints.append(payload)
+        result[endpoint_set.exact_model_id] = {
+            "data": {
+                "id": endpoint_set.exact_model_id,
+                "endpoints": endpoints,
+            }
+        }
+    return result
+
+
+def _catalog_payload_from_source(
+    source: ModelRefreshSourceEvidence,
+) -> dict[str, Any]:
+    return _catalog_payload_from_parts(
+        catalog_models=source.catalog_models,
+        excluded_routed_model_ids=source.excluded_routed_model_ids,
+    )
+
+
+def _zdr_payload_from_source(
+    source: ModelRefreshSourceEvidence,
+) -> dict[str, Any]:
+    return _zdr_payload_from_parts(
+        zdr_endpoints=source.zdr_endpoints,
+        excluded_zdr_routed_models=source.excluded_zdr_routed_models,
+    )
+
+
+def _candidate_payloads_from_source(
+    source: ModelRefreshSourceEvidence,
+) -> dict[str, Mapping[str, Any]]:
+    return _candidate_payloads_from_parts(candidate_endpoint_sets=source.candidate_endpoint_sets)
 
 
 def diff_model_refresh(
@@ -775,6 +1606,10 @@ def diff_model_refresh(
     if tolerance > 1:
         raise ModelRefreshValidationError("refresh pricing tolerance cannot exceed one")
     compared_at = _whole_second_utc(compared_at, label="refresh comparison time")
+    if compared_at != current.retrieved_at:
+        raise ModelRefreshValidationError(
+            "refresh comparison time must equal the current snapshot retrieval time"
+        )
     selected = tuple(
         sorted(
             (
@@ -814,6 +1649,10 @@ def diff_model_refresh(
             raise ModelRefreshValidationError(
                 "previous refresh snapshot binds a different candidate registry"
             )
+        if previous.retrieved_at > current.retrieved_at:
+            raise ModelRefreshValidationError(
+                "previous refresh snapshot is newer than the current snapshot"
+            )
         baseline_kind = RefreshBaselineKind.PREVIOUS_SNAPSHOT
         baseline_sha256 = previous.snapshot_sha256
         before_models = {model.exact_model_id: model for model in previous.models}
@@ -841,14 +1680,28 @@ def diff_model_refresh(
         else:
             if before.canonical_model_slug != after.canonical_model_slug:
                 kinds.add(ModelDriftKind.MODEL_IDENTITY_CHANGED)
-            if before.context_limit != after.context_limit:
-                kinds.add(ModelDriftKind.CONTEXT_LIMIT_CHANGED)
-            if before.output_limit != after.output_limit:
-                kinds.add(ModelDriftKind.OUTPUT_LIMIT_CHANGED)
-            if before.structured_output_supported != after.structured_output_supported:
-                kinds.add(ModelDriftKind.STRUCTURED_OUTPUT_SUPPORT_CHANGED)
-            if before.reasoning_supported != after.reasoning_supported:
-                kinds.add(ModelDriftKind.REASONING_SUPPORT_CHANGED)
+            if exact_previous_snapshot:
+                if (
+                    before.catalog_context_limit != after.catalog_context_limit
+                    or before.context_limit != after.context_limit
+                    or before.context_limit_source != after.context_limit_source
+                ):
+                    kinds.add(ModelDriftKind.CONTEXT_LIMIT_CHANGED)
+                if (
+                    before.output_limit != after.output_limit
+                    or before.output_limit_source != after.output_limit_source
+                ):
+                    kinds.add(ModelDriftKind.OUTPUT_LIMIT_CHANGED)
+                if (
+                    before.structured_output_supported != after.structured_output_supported
+                    or before.supported_output_modes != after.supported_output_modes
+                    or before.structured_output_mode is not after.structured_output_mode
+                ):
+                    kinds.add(ModelDriftKind.STRUCTURED_OUTPUT_SUPPORT_CHANGED)
+                if before.reasoning_supported != after.reasoning_supported:
+                    kinds.add(ModelDriftKind.REASONING_SUPPORT_CHANGED)
+                if before.supported_parameters != after.supported_parameters:
+                    kinds.add(ModelDriftKind.ENDPOINT_AVAILABILITY_CHANGED)
             before_routes = {route.provider_endpoint: route for route in before.routes}
             after_routes = {route.provider_endpoint: route for route in after.routes}
             if set(before_routes) != set(after_routes):
@@ -857,14 +1710,27 @@ def diff_model_refresh(
             if any(
                 (
                     before_routes[endpoint].provider_name,
+                    before_routes[endpoint].routing_identity_unambiguous,
                     before_routes[endpoint].operational,
-                    _REQUIRED_PARAMETERS.issubset(before_routes[endpoint].supported_parameters),
                 )
                 != (
                     after_routes[endpoint].provider_name,
+                    after_routes[endpoint].routing_identity_unambiguous,
                     after_routes[endpoint].operational,
-                    _REQUIRED_PARAMETERS.issubset(after_routes[endpoint].supported_parameters),
                 )
+                for endpoint in common_endpoints
+            ) or (
+                exact_previous_snapshot
+                and any(
+                    before_routes[endpoint].supported_parameters
+                    != after_routes[endpoint].supported_parameters
+                    for endpoint in common_endpoints
+                )
+            ):
+                kinds.add(ModelDriftKind.ENDPOINT_AVAILABILITY_CHANGED)
+            if exact_previous_snapshot and any(
+                before_routes[endpoint].operational_status
+                != after_routes[endpoint].operational_status
                 for endpoint in common_endpoints
             ):
                 kinds.add(ModelDriftKind.ENDPOINT_AVAILABILITY_CHANGED)
@@ -881,24 +1747,67 @@ def diff_model_refresh(
             ):
                 kinds.add(ModelDriftKind.ENDPOINT_IDENTITY_CHANGED)
             if any(
-                before_routes[endpoint].context_limit != after_routes[endpoint].context_limit
+                (
+                    before_routes[endpoint].context_limit != after_routes[endpoint].context_limit
+                    or (
+                        before_routes[endpoint].max_prompt_tokens is not None
+                        and before_routes[endpoint].max_prompt_tokens
+                        != after_routes[endpoint].max_prompt_tokens
+                    )
+                    or (
+                        before_routes[endpoint].max_prompt_tokens_source is not None
+                        and before_routes[endpoint].max_prompt_tokens_source
+                        != after_routes[endpoint].max_prompt_tokens_source
+                    )
+                )
                 for endpoint in common_endpoints
             ):
                 kinds.add(ModelDriftKind.CONTEXT_LIMIT_CHANGED)
             if any(
-                before_routes[endpoint].output_limit != after_routes[endpoint].output_limit
+                (
+                    before_routes[endpoint].output_limit != after_routes[endpoint].output_limit
+                    or (
+                        before_routes[endpoint].output_limit_source is not None
+                        and before_routes[endpoint].output_limit_source
+                        != after_routes[endpoint].output_limit_source
+                    )
+                )
                 for endpoint in common_endpoints
             ):
                 kinds.add(ModelDriftKind.OUTPUT_LIMIT_CHANGED)
-            if any(
-                before_routes[endpoint].structured_output_supported
-                != after_routes[endpoint].structured_output_supported
-                for endpoint in common_endpoints
+            if (
+                exact_previous_snapshot
+                and any(
+                    (
+                        before_routes[endpoint].structured_output_supported
+                        != after_routes[endpoint].structured_output_supported
+                        or before_routes[endpoint].supported_output_modes
+                        != after_routes[endpoint].supported_output_modes
+                        or before_routes[endpoint].structured_output_mode
+                        is not after_routes[endpoint].structured_output_mode
+                    )
+                    for endpoint in common_endpoints
+                )
+            ) or (
+                not exact_previous_snapshot
+                and any(
+                    before_routes[endpoint].structured_output_mode is not None
+                    and before_routes[endpoint].structured_output_mode
+                    not in after_routes[endpoint].supported_output_modes
+                    for endpoint in common_endpoints
+                )
             ):
                 kinds.add(ModelDriftKind.STRUCTURED_OUTPUT_SUPPORT_CHANGED)
             if any(
-                before_routes[endpoint].reasoning_supported
-                != after_routes[endpoint].reasoning_supported
+                (
+                    before_routes[endpoint].reasoning_supported
+                    != after_routes[endpoint].reasoning_supported
+                    if exact_previous_snapshot
+                    else (
+                        before_routes[endpoint].reasoning_supported
+                        and not after_routes[endpoint].reasoning_supported
+                    )
+                )
                 for endpoint in common_endpoints
             ):
                 kinds.add(ModelDriftKind.REASONING_SUPPORT_CHANGED)
@@ -941,6 +1850,50 @@ def diff_model_refresh(
                         and prior_route.pricing is not None
                         and prior_route.pricing_sha256 == candidate.pricing_snapshot_sha256
                     )
+                    capability_evidence_missing = (
+                        candidate.structured_output_mode is None
+                        or candidate.output_capability_sha256 is None
+                    )
+                    output_source_missing = candidate.output_limit_source is None
+                    prompt_evidence_missing = (
+                        candidate.max_prompt_tokens is None
+                        or candidate.max_prompt_tokens_source is None
+                    )
+                    mode_blocked = (
+                        observed_route is not None
+                        and candidate.structured_output_mode is not None
+                        and candidate.structured_output_mode
+                        not in mutually_supported_output_modes(
+                            (after.supported_parameters, observed_route.supported_parameters)
+                        )
+                    )
+                    prompt_blocked = observed_route is not None and (
+                        observed_route.max_prompt_tokens is None
+                        or (
+                            candidate.max_prompt_tokens is not None
+                            and observed_route.max_prompt_tokens < candidate.max_prompt_tokens
+                        )
+                    )
+                    prompt_source_changed = (
+                        observed_route is not None
+                        and candidate.max_prompt_tokens_source is not None
+                        and observed_route.max_prompt_tokens_source
+                        != candidate.max_prompt_tokens_source
+                    )
+                    output_source_changed = (
+                        observed_route is not None
+                        and candidate.output_limit_source is not None
+                        and observed_route.output_limit_source != candidate.output_limit_source
+                    )
+                    endpoint_identity_unverified = not exact_previous_snapshot
+                    if capability_evidence_missing or mode_blocked:
+                        kinds.add(ModelDriftKind.STRUCTURED_OUTPUT_SUPPORT_CHANGED)
+                    if prompt_evidence_missing or prompt_blocked or prompt_source_changed:
+                        kinds.add(ModelDriftKind.CONTEXT_LIMIT_CHANGED)
+                    if output_source_missing or output_source_changed:
+                        kinds.add(ModelDriftKind.OUTPUT_LIMIT_CHANGED)
+                    if endpoint_identity_unverified:
+                        kinds.add(ModelDriftKind.ENDPOINT_IDENTITY_UNVERIFIED)
                     route_blocked = (
                         observed_route is None
                         or not observed_route.operational
@@ -948,6 +1901,23 @@ def diff_model_refresh(
                         or not observed_route.discovery_eligible
                         or observed_route.provider_name != candidate.approved_provider_name
                         or after.canonical_model_slug != candidate.canonical_model_slug
+                        or capability_evidence_missing
+                        or output_source_missing
+                        or prompt_evidence_missing
+                        or mode_blocked
+                        or prompt_source_changed
+                        or output_source_changed
+                        or endpoint_identity_unverified
+                        or (
+                            candidate.reasoning_supported
+                            and (
+                                not after.reasoning_supported
+                                or not observed_route.reasoning_supported
+                            )
+                        )
+                        or observed_route.context_limit < candidate.context_size
+                        or prompt_blocked
+                        or observed_route.output_limit < candidate.output_limit
                         or (
                             exact_previous_snapshot
                             and prior_route is not None
@@ -1011,7 +1981,7 @@ def diff_model_refresh(
         )
     )
     values: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "compared_at": compared_at,
         "baseline_kind": baseline_kind.value,
         "baseline_sha256": baseline_sha256,
@@ -1127,6 +2097,7 @@ def evaluate_model_refresh_freshness(
 def write_model_refresh_success(
     output_dir: Path,
     *,
+    source_evidence: ModelRefreshSourceEvidence,
     snapshot: ModelRefreshSnapshot,
     diff: ModelRefreshDiff,
     attempt: ModelRefreshAttempt,
@@ -1137,7 +2108,14 @@ def write_model_refresh_success(
     if attempt.status is ModelRefreshAttemptStatus.FAILED:
         raise ModelRefreshValidationError("failed attempt cannot enter a success bundle")
     if (
-        attempt.snapshot_sha256 != snapshot.snapshot_sha256
+        source_evidence.source_evidence_sha256 != snapshot.source_evidence_sha256
+        or source_evidence.retrieved_at != snapshot.retrieved_at
+        or source_evidence.source_api_identity != snapshot.source_api_identity
+        or source_evidence.authenticated_metadata is not snapshot.authenticated_metadata
+        or source_evidence.candidate_registry_sha256 != snapshot.candidate_registry_sha256
+        or source_evidence.catalog_projection_sha256 != snapshot.catalog_snapshot_sha256
+        or source_evidence.zdr_projection_sha256 != snapshot.zdr_snapshot_sha256
+        or attempt.snapshot_sha256 != snapshot.snapshot_sha256
         or attempt.diff_sha256 != diff.diff_sha256
         or diff.current_snapshot_sha256 != snapshot.snapshot_sha256
         or freshness.snapshot_sha256 != snapshot.snapshot_sha256
@@ -1145,6 +2123,7 @@ def write_model_refresh_success(
         raise ModelRefreshValidationError("refresh success artifacts are not hash-bound")
     root = _create_private_output_directory(output_dir)
     try:
+        _write_private_artifact(root / SOURCE_EVIDENCE_FILENAME, source_evidence)
         _write_private_artifact(root / SNAPSHOT_FILENAME, snapshot)
         _write_private_artifact(root / DIFF_FILENAME, diff)
         _write_private_artifact(root / ATTEMPT_FILENAME, attempt)
@@ -1175,6 +2154,10 @@ def load_model_refresh_snapshot(path: Path) -> ModelRefreshSnapshot:
     return _load_private_artifact(path, ModelRefreshSnapshot)
 
 
+def load_model_refresh_source_evidence(path: Path) -> ModelRefreshSourceEvidence:
+    return _load_private_artifact(path, ModelRefreshSourceEvidence)
+
+
 def load_model_refresh_diff(path: Path) -> ModelRefreshDiff:
     return _load_private_artifact(path, ModelRefreshDiff)
 
@@ -1193,28 +2176,25 @@ def _candidate_baseline_models(
     result: dict[str, CatalogModelState] = {}
     for candidate in registry.candidates:
         operational = candidate.operational_status is CandidateOperationalStatus.AVAILABLE
-        parameters = tuple(
-            sorted(
-                {
-                    "max_tokens",
-                    "temperature",
-                    *(("response_format",) if candidate.structured_output_supported else ()),
-                    *(("reasoning",) if candidate.reasoning_supported else ()),
-                }
-            )
-        )
+        parameters = _candidate_baseline_parameters(candidate)
         route = _seal_route_state(
             exact_model_id=candidate.exact_model_id,
             provider_endpoint=candidate.approved_provider_endpoint,
             endpoint_tag=candidate.approved_provider_endpoint,
             endpoint_slug=None,
             provider_name=candidate.approved_provider_name,
+            routing_identity_unambiguous=True,
             operational=operational,
             operational_status=("operational" if operational else "unavailable"),
             zdr_eligible=candidate.zdr_eligible,
             context_limit=candidate.context_size,
+            max_prompt_tokens=candidate.max_prompt_tokens,
+            max_prompt_tokens_source=candidate.max_prompt_tokens_source,
             output_limit=candidate.output_limit,
+            output_limit_source=candidate.output_limit_source,
             supported_parameters=parameters,
+            model_supported_parameters=parameters,
+            structured_output_mode=candidate.structured_output_mode,
             pricing_observation=PricingObservationKind.HASH_ONLY,
             pricing=None,
             pricing_sha256=candidate.pricing_snapshot_sha256,
@@ -1222,18 +2202,47 @@ def _candidate_baseline_models(
         result[candidate.exact_model_id] = _seal_catalog_model_state(
             exact_model_id=candidate.exact_model_id,
             canonical_model_slug=candidate.canonical_model_slug,
+            catalog_context_limit=candidate.context_size,
             context_limit=candidate.context_size,
+            context_limit_source="candidate_registry",
             output_limit=candidate.output_limit,
+            output_limit_source="candidate_registry",
             supported_parameters=parameters,
             routes=(route,),
+            structured_output_mode=candidate.structured_output_mode,
         )
     return result
+
+
+def _candidate_baseline_parameters(candidate: CandidateModel) -> tuple[str, ...]:
+    parameters = {"max_tokens", "temperature"}
+    if candidate.reasoning_supported:
+        parameters.add("reasoning")
+    mode = candidate.structured_output_mode
+    if mode is StructuredOutputMode.NATIVE_JSON_SCHEMA:
+        parameters.update({"json_schema", "response_format"})
+    elif mode is StructuredOutputMode.JSON_OBJECT:
+        parameters.add("response_format")
+    elif mode is None and candidate.structured_output_supported:
+        # Legacy hash-only candidates prove provider-structured output only as a
+        # boolean. The selected-route gate still rejects the missing exact mode.
+        parameters.add("response_format")
+    if mode is not None and candidate.structured_output_supported is not (
+        mode is not StructuredOutputMode.VALIDATED_TEXT_JSON
+    ):
+        raise ModelRefreshValidationError(
+            "candidate structured-output boolean differs from its exact mode"
+        )
+    return tuple(sorted(parameters))
 
 
 def _route_state_from_raw(
     *,
     exact_model_id: str,
     raw: Mapping[str, Any],
+    model_supported_parameters: tuple[str, ...],
+    provider_endpoint: str,
+    routing_identity_unambiguous: bool,
     zdr_eligible: bool,
 ) -> ProviderRouteState:
     item_model_id = raw.get("model_id")
@@ -1242,33 +2251,45 @@ def _route_state_from_raw(
             "endpoint record is not bound to the exact requested model"
         )
     identity = _endpoint_identity_projection(raw)
-    provider_endpoint = _endpoint_identity(raw)
     endpoint_tag = identity["tag"]
     endpoint_slug = identity["slug"]
     provider_name = identity["provider_name"]
     assert isinstance(provider_name, str)
+    if provider_endpoint not in {endpoint_tag, endpoint_slug}:
+        raise ModelRefreshValidationError(
+            "normalized route selector differs from the endpoint tag and slug"
+        )
     operational, operational_status = _operational_status(raw.get("status"))
-    context = _positive_integer(raw.get("context_length"), label="endpoint context limit")
-    output_value = raw.get("max_completion_tokens")
-    output = (
-        context
-        if output_value is None
-        else _positive_integer(output_value, label="endpoint output limit")
-    )
-    route_parameters = _supported_parameters(raw.get("supported_parameters"))
+    (
+        context,
+        max_prompt_tokens,
+        max_prompt_tokens_source,
+        output,
+        output_limit_source,
+    ) = _endpoint_token_limits(raw)
+    route_parameters = _endpoint_supported_parameters(raw.get("supported_parameters"))
     pricing = _canonical_pricing(raw.get("pricing"))
+    effective_modes = mutually_supported_output_modes(
+        (model_supported_parameters, route_parameters)
+    )
     return _seal_route_state(
         exact_model_id=exact_model_id,
         provider_endpoint=provider_endpoint,
         endpoint_tag=endpoint_tag,
         endpoint_slug=endpoint_slug,
         provider_name=provider_name,
+        routing_identity_unambiguous=routing_identity_unambiguous,
         operational=operational,
         operational_status=operational_status,
         zdr_eligible=zdr_eligible,
         context_limit=context,
+        max_prompt_tokens=max_prompt_tokens,
+        max_prompt_tokens_source=max_prompt_tokens_source,
         output_limit=output,
+        output_limit_source=output_limit_source,
         supported_parameters=route_parameters,
+        model_supported_parameters=model_supported_parameters,
+        structured_output_mode=effective_modes[0],
         pricing_observation=PricingObservationKind.EXACT,
         pricing=pricing,
         pricing_sha256=_canonical_sha256(pricing),
@@ -1278,47 +2299,31 @@ def _route_state_from_raw(
 def _zdr_counterpart_matches(
     *,
     exact_model_id: str,
+    provider_endpoint: str,
+    model_supported_parameters: tuple[str, ...],
     endpoint_raw: Mapping[str, Any],
     zdr_raw: Mapping[str, Any],
+    routing_identity_unambiguous: bool,
 ) -> bool:
     """Grant ZDR only when both authenticated endpoint records agree exactly."""
 
     endpoint = _route_state_from_raw(
         exact_model_id=exact_model_id,
         raw=endpoint_raw,
+        model_supported_parameters=model_supported_parameters,
+        provider_endpoint=provider_endpoint,
+        routing_identity_unambiguous=routing_identity_unambiguous,
         zdr_eligible=False,
     )
     counterpart = _route_state_from_raw(
         exact_model_id=exact_model_id,
         raw=zdr_raw,
+        model_supported_parameters=model_supported_parameters,
+        provider_endpoint=provider_endpoint,
+        routing_identity_unambiguous=routing_identity_unambiguous,
         zdr_eligible=False,
     )
-    return endpoint.route_sha256 == counterpart.route_sha256 and _endpoint_token_limit_projection(
-        endpoint_raw
-    ) == _endpoint_token_limit_projection(zdr_raw)
-
-
-def _endpoint_token_limit_projection(raw: Mapping[str, Any]) -> tuple[int, str, str]:
-    context = _positive_integer(raw.get("context_length"), label="endpoint context limit")
-    prompt_value = raw.get("max_prompt_tokens")
-    completion_value = raw.get("max_completion_tokens")
-    prompt = (
-        context
-        if prompt_value is None
-        else _positive_integer(prompt_value, label="endpoint prompt limit")
-    )
-    completion = (
-        context
-        if completion_value is None
-        else _positive_integer(completion_value, label="endpoint output limit")
-    )
-    if prompt > context or completion > context:
-        raise ModelRefreshValidationError("endpoint token limit exceeds its context")
-    return (
-        prompt,
-        "context_limit" if prompt_value is None else "metadata",
-        "context_limit" if completion_value is None else "metadata",
-    )
+    return endpoint.route_sha256 == counterpart.route_sha256
 
 
 def _seal_route_state(
@@ -1328,31 +2333,48 @@ def _seal_route_state(
     endpoint_tag: str | None,
     endpoint_slug: str | None,
     provider_name: str,
+    routing_identity_unambiguous: bool,
     operational: bool,
     operational_status: str,
     zdr_eligible: bool,
     context_limit: int,
+    max_prompt_tokens: int | None,
+    max_prompt_tokens_source: Literal["metadata", "context_limit"] | None,
     output_limit: int,
+    output_limit_source: Literal["metadata", "context_limit"] | None,
     supported_parameters: tuple[str, ...],
+    model_supported_parameters: tuple[str, ...],
+    structured_output_mode: StructuredOutputMode | None,
     pricing_observation: PricingObservationKind,
     pricing: dict[str, str] | None,
     pricing_sha256: str,
 ) -> ProviderRouteState:
     values: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "exact_model_id": exact_model_id,
         "provider_endpoint": provider_endpoint,
         "endpoint_tag": endpoint_tag,
         "endpoint_slug": endpoint_slug,
         "provider_name": provider_name,
+        "routing_identity_unambiguous": routing_identity_unambiguous,
         "operational": operational,
         "operational_status": operational_status,
         "zdr_eligible": zdr_eligible,
         "context_limit": context_limit,
+        "max_prompt_tokens": max_prompt_tokens,
+        "max_prompt_tokens_source": max_prompt_tokens_source,
         "output_limit": output_limit,
+        "output_limit_source": output_limit_source,
         "supported_parameters": list(supported_parameters),
-        "structured_output_supported": bool(
-            set(supported_parameters).intersection(_STRUCTURED_PARAMETERS)
+        "supported_output_modes": [
+            mode.value
+            for mode in mutually_supported_output_modes(
+                (model_supported_parameters, supported_parameters)
+            )
+        ],
+        "structured_output_supported": supports_provider_structured_output(supported_parameters),
+        "structured_output_mode": (
+            None if structured_output_mode is None else structured_output_mode.value
         ),
         "reasoning_supported": supports_reasoning_request(
             reasoning_capability_parameters(supported_parameters)
@@ -1369,29 +2391,46 @@ def _seal_catalog_model_state(
     *,
     exact_model_id: str,
     canonical_model_slug: str,
+    catalog_context_limit: int,
     context_limit: int,
+    context_limit_source: Literal["metadata", "catalog_context", "candidate_registry"],
     output_limit: int,
+    output_limit_source: Literal["metadata", "provider_context", "candidate_registry"],
     supported_parameters: tuple[str, ...],
     routes: tuple[ProviderRouteState, ...],
+    structured_output_mode: StructuredOutputMode | None = None,
 ) -> CatalogModelState:
     ordered = tuple(sorted(routes, key=lambda route: route.provider_endpoint))
-    structured = bool(set(supported_parameters).intersection(_STRUCTURED_PARAMETERS))
+    structured = supports_provider_structured_output(supported_parameters)
+    exact_observation = not ordered or any(
+        route.pricing_observation is PricingObservationKind.EXACT for route in ordered
+    )
+    selected_mode = (
+        supported_output_modes(supported_parameters)[0]
+        if exact_observation
+        else structured_output_mode
+    )
     eligible = tuple(
         route.provider_endpoint
         for route in ordered
-        if route.discovery_eligible
-        and structured
-        and _REQUIRED_PARAMETERS.issubset(supported_parameters)
+        if route.discovery_eligible and _REQUIRED_PARAMETERS.issubset(supported_parameters)
     )
     values: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "exact_model_id": exact_model_id,
         "canonical_model_slug": canonical_model_slug,
         "variant_family_key": model_variant_family_key(exact_model_id),
+        "catalog_context_limit": catalog_context_limit,
         "context_limit": context_limit,
+        "context_limit_source": context_limit_source,
         "output_limit": output_limit,
+        "output_limit_source": output_limit_source,
         "supported_parameters": list(supported_parameters),
+        "supported_output_modes": [
+            mode.value for mode in supported_output_modes(supported_parameters)
+        ],
         "structured_output_supported": structured,
+        "structured_output_mode": None if selected_mode is None else selected_mode.value,
         "reasoning_supported": supports_reasoning_request(
             reasoning_capability_parameters(supported_parameters)
         ),
@@ -1457,12 +2496,78 @@ def _endpoints_with_pricing_increase(
     return result
 
 
-def _endpoint_identity(raw: Mapping[str, Any]) -> str:
-    projection = _endpoint_identity_projection(raw)
-    identities = [value for value in (projection["tag"], projection["slug"]) if value is not None]
-    if not identities:
-        raise ModelRefreshValidationError("endpoint metadata lacks a safe exact tag or slug")
-    return identities[0]
+def _normalize_endpoint_inventory(
+    raw_routes: Sequence[Mapping[str, Any]],
+    *,
+    label: str,
+    preferred_endpoint: str | None = None,
+) -> tuple[tuple[_EndpointRouteInput, ...], dict[str, int]]:
+    """Retain full identity while choosing only injective provider route selectors."""
+
+    if len(raw_routes) > _MAX_ROUTES_PER_MODEL:
+        raise ModelRefreshValidationError(f"{label} exceeds the per-model route limit")
+
+    projected: list[
+        tuple[
+            Mapping[str, Any],
+            _EndpointIdentityKey,
+            tuple[str, ...],
+            str,
+        ]
+    ] = []
+    seen_identity_keys: set[_EndpointIdentityKey] = set()
+    alias_counts: dict[str, int] = {}
+    provider_name_counts: dict[str, int] = {}
+    for raw in raw_routes:
+        identity = _endpoint_identity_projection(raw)
+        key = (identity["tag"], identity["slug"])
+        if key in seen_identity_keys:
+            raise ModelRefreshValidationError(f"{label} contains duplicate exact routes")
+        seen_identity_keys.add(key)
+        aliases = tuple(
+            dict.fromkeys(
+                value for value in (identity["tag"], identity["slug"]) if isinstance(value, str)
+            )
+        )
+        if not aliases:
+            raise ModelRefreshValidationError(
+                f"{label} contains a route without an exact tag or slug"
+            )
+        provider_name = identity["provider_name"]
+        assert isinstance(provider_name, str)
+        for alias in aliases:
+            alias_counts[alias] = alias_counts.get(alias, 0) + 1
+        normalized_name = provider_name.casefold()
+        provider_name_counts[normalized_name] = provider_name_counts.get(normalized_name, 0) + 1
+        projected.append((raw, key, aliases, provider_name))
+
+    normalized: list[_EndpointRouteInput] = []
+    for raw, key, aliases, provider_name in sorted(
+        projected,
+        key=lambda item: (item[1][0] or "", item[1][1] or ""),
+    ):
+        unique_aliases = tuple(alias for alias in aliases if alias_counts[alias] == 1)
+        if not unique_aliases:
+            raise ModelRefreshValidationError(
+                f"{label} contains a route without a uniquely addressable tag or slug"
+            )
+        provider_endpoint = (
+            preferred_endpoint
+            if preferred_endpoint is not None and preferred_endpoint in unique_aliases
+            else unique_aliases[0]
+        )
+        normalized.append(
+            _EndpointRouteInput(
+                raw=raw,
+                identity_key=key,
+                provider_endpoint=provider_endpoint,
+                routing_identity_unambiguous=(provider_name_counts[provider_name.casefold()] == 1),
+            )
+        )
+    return (
+        tuple(sorted(normalized, key=lambda route: route.provider_endpoint)),
+        alias_counts,
+    )
 
 
 def _endpoint_identity_projection(raw: Mapping[str, Any]) -> dict[str, str | None]:
@@ -1477,26 +2582,49 @@ def _operational_status(value: Any) -> tuple[bool, str]:
         raise ModelRefreshValidationError("endpoint operational status is invalid")
     if isinstance(value, int):
         status = str(value)
+        if len(status) > 32:
+            raise ModelRefreshValidationError("endpoint operational status is invalid")
         return value == 0, status
     if isinstance(value, str):
-        normalized = value.strip().casefold()
-        if not normalized or len(normalized) > 32:
+        if (
+            value != value.strip()
+            or any(not character.isprintable() for character in value)
+            or not value
+            or len(value) > 32
+        ):
             raise ModelRefreshValidationError("endpoint operational status is invalid")
+        normalized = value.casefold()
         return normalized in _OPERATIONAL_TEXT, normalized
     raise ModelRefreshValidationError("endpoint operational status is invalid")
 
 
-def _supported_parameters(value: Any) -> tuple[str, ...]:
-    if (
-        not isinstance(value, list)
-        or len(value) > _MAX_PARAMETERS
-        or any(
-            not isinstance(item, str) or re.fullmatch(r"[a-z][a-z0-9_]{0,63}", item) is None
-            for item in value
-        )
-    ):
-        raise ModelRefreshValidationError("supported parameters are malformed")
-    return tuple(sorted(set(value)))
+def _catalog_supported_parameters(value: Any) -> tuple[str, ...]:
+    try:
+        return canonicalize_openrouter_catalog_supported_parameters(value)
+    except ModelDiscoveryValidationError as exc:
+        raise ModelRefreshValidationError("catalog supported parameters are malformed") from exc
+
+
+def _endpoint_supported_parameters(value: Any) -> tuple[str, ...]:
+    try:
+        return canonicalize_openrouter_supported_parameters(value)
+    except EndpointSnapshotValidationError as exc:
+        raise ModelRefreshValidationError("endpoint supported parameters are malformed") from exc
+
+
+def _endpoint_token_limits(
+    raw: Mapping[str, Any],
+) -> tuple[
+    int,
+    int,
+    Literal["metadata", "context_limit"],
+    int,
+    Literal["metadata", "context_limit"],
+]:
+    try:
+        return canonicalize_openrouter_endpoint_token_limits(raw)
+    except EndpointSnapshotValidationError as exc:
+        raise ModelRefreshValidationError("endpoint token-limit metadata is invalid") from exc
 
 
 def _canonical_pricing(value: Any) -> dict[str, str]:
@@ -1710,6 +2838,7 @@ def _remove_fresh_output(path: Path) -> None:
     if not path.exists() or path.is_symlink():
         return
     for name in (
+        SOURCE_EVIDENCE_FILENAME,
         SNAPSHOT_FILENAME,
         DIFF_FILENAME,
         ATTEMPT_FILENAME,

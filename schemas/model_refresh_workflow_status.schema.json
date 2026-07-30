@@ -32,6 +32,7 @@
         },
         "filename": {
           "enum": [
+            "model-refresh-source-evidence.json",
             "model-refresh-snapshot.json",
             "model-refresh-diff.json",
             "model-refresh-attempt.json",
@@ -88,8 +89,8 @@
       "type": "integer"
     },
     "schema_version": {
-      "const": "1.0",
-      "default": "1.0",
+      "const": "2.0",
+      "default": "2.0",
       "title": "Schema Version",
       "type": "string"
     },
@@ -102,6 +103,11 @@
     "source_commit": {
       "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
       "title": "Source Commit",
+      "type": "string"
+    },
+    "validated_at": {
+      "format": "date-time",
+      "title": "Validated At",
       "type": "string"
     },
     "workflow_run_attempt": {
@@ -121,6 +127,7 @@
     }
   },
   "required": [
+    "validated_at",
     "disposition",
     "refresh_exit_status",
     "source_commit",

@@ -6,7 +6,10 @@ import argparse
 from pathlib import Path
 
 from mmaudit.models.qualification import load_candidate_registry
-from mmaudit.models.refresh import load_model_refresh_snapshot
+from mmaudit.models.refresh import (
+    load_model_refresh_snapshot,
+    load_model_refresh_source_evidence,
+)
 from mmaudit.models.refresh_staging import (
     ModelRefreshStagingError,
     stage_model_refresh_evidence,
@@ -41,6 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--staging-dir", type=_bounded_path, required=True)
     parser.add_argument("--candidate-registry", type=_bounded_path, required=True)
     parser.add_argument("--previous-snapshot", type=_bounded_path)
+    parser.add_argument("--previous-source-evidence", type=_bounded_path)
     parser.add_argument("--refresh-exit-status", type=int, required=True)
     parser.add_argument("--source-commit", type=_bounded_identity, required=True)
     parser.add_argument("--workflow-run-id", type=_bounded_identity, required=True)
@@ -51,9 +55,20 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     try:
         registry = load_candidate_registry(arguments.candidate_registry)
+        if (arguments.previous_snapshot is None) is not (
+            arguments.previous_source_evidence is None
+        ):
+            raise ModelRefreshStagingError(
+                "previous snapshot and source evidence must be supplied together"
+            )
         previous_snapshot = (
             load_model_refresh_snapshot(arguments.previous_snapshot)
             if arguments.previous_snapshot is not None
+            else None
+        )
+        previous_source_evidence = (
+            load_model_refresh_source_evidence(arguments.previous_source_evidence)
+            if arguments.previous_source_evidence is not None
             else None
         )
         status = stage_model_refresh_evidence(
@@ -68,6 +83,7 @@ def main(argv: list[str] | None = None) -> int:
             soft_max_age_hours=arguments.soft_max_age_hours,
             hard_max_age_hours=arguments.hard_max_age_hours,
             previous_snapshot=previous_snapshot,
+            previous_source_evidence=previous_source_evidence,
         )
     except (ModelRefreshStagingError, ValueError):
         print("model-refresh artifact staging failed")

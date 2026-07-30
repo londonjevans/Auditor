@@ -1,19 +1,33 @@
 {
   "$defs": {
-    "CatalogModelState": {
+    "LiveCatalogModelState": {
       "additionalProperties": false,
-      "description": "One exact catalogue model and every normalized observed route.",
+      "description": "Schema-visible exact catalogue evidence required in a live snapshot.",
       "properties": {
         "canonical_model_slug": {
           "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
           "title": "Canonical Model Slug",
           "type": "string"
         },
+        "catalog_context_limit": {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "title": "Catalog Context Limit",
+          "type": "integer"
+        },
         "context_limit": {
           "maximum": 2147483647,
           "minimum": 1,
           "title": "Context Limit",
           "type": "integer"
+        },
+        "context_limit_source": {
+          "enum": [
+            "metadata",
+            "catalog_context"
+          ],
+          "title": "Context Limit Source",
+          "type": "string"
         },
         "eligible_provider_endpoints": {
           "items": {
@@ -34,21 +48,29 @@
           "title": "Output Limit",
           "type": "integer"
         },
+        "output_limit_source": {
+          "enum": [
+            "metadata",
+            "provider_context"
+          ],
+          "title": "Output Limit Source",
+          "type": "string"
+        },
         "reasoning_supported": {
           "title": "Reasoning Supported",
           "type": "boolean"
         },
         "routes": {
           "items": {
-            "$ref": "#/$defs/ProviderRouteState"
+            "$ref": "#/$defs/LiveProviderRouteState"
           },
           "maxItems": 256,
           "title": "Routes",
           "type": "array"
         },
         "schema_version": {
-          "const": "1.0",
-          "default": "1.0",
+          "const": "2.0",
+          "default": "2.0",
           "title": "Schema Version",
           "type": "string"
         },
@@ -57,9 +79,21 @@
           "title": "State Sha256",
           "type": "string"
         },
+        "structured_output_mode": {
+          "$ref": "#/$defs/StructuredOutputMode"
+        },
         "structured_output_supported": {
           "title": "Structured Output Supported",
           "type": "boolean"
+        },
+        "supported_output_modes": {
+          "items": {
+            "$ref": "#/$defs/StructuredOutputMode"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "title": "Supported Output Modes",
+          "type": "array"
         },
         "supported_parameters": {
           "items": {
@@ -79,29 +113,26 @@
         "exact_model_id",
         "canonical_model_slug",
         "variant_family_key",
+        "catalog_context_limit",
         "context_limit",
+        "context_limit_source",
         "output_limit",
+        "output_limit_source",
         "supported_parameters",
+        "supported_output_modes",
         "structured_output_supported",
+        "structured_output_mode",
         "reasoning_supported",
         "routes",
         "eligible_provider_endpoints",
         "state_sha256"
       ],
-      "title": "CatalogModelState",
+      "title": "LiveCatalogModelState",
       "type": "object"
     },
-    "PricingObservationKind": {
-      "enum": [
-        "EXACT",
-        "HASH_ONLY"
-      ],
-      "title": "PricingObservationKind",
-      "type": "string"
-    },
-    "ProviderRouteState": {
+    "LiveProviderRouteState": {
       "additionalProperties": false,
-      "description": "Allowlisted exact route facts needed for safety and cost drift checks.",
+      "description": "Schema-visible exact route evidence required in a live refresh snapshot.",
       "properties": {
         "context_limit": {
           "maximum": 2147483647,
@@ -140,6 +171,20 @@
           "title": "Exact Model Id",
           "type": "string"
         },
+        "max_prompt_tokens": {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "title": "Max Prompt Tokens",
+          "type": "integer"
+        },
+        "max_prompt_tokens_source": {
+          "enum": [
+            "metadata",
+            "context_limit"
+          ],
+          "title": "Max Prompt Tokens Source",
+          "type": "string"
+        },
         "operational": {
           "title": "Operational",
           "type": "boolean"
@@ -156,24 +201,26 @@
           "title": "Output Limit",
           "type": "integer"
         },
-        "pricing": {
-          "anyOf": [
-            {
-              "additionalProperties": {
-                "type": "string"
-              },
-              "maxProperties": 64,
-              "type": "object"
-            },
-            {
-              "type": "null"
-            }
+        "output_limit_source": {
+          "enum": [
+            "metadata",
+            "context_limit"
           ],
-          "default": null,
-          "title": "Pricing"
+          "title": "Output Limit Source",
+          "type": "string"
+        },
+        "pricing": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "maxProperties": 64,
+          "title": "Pricing",
+          "type": "object"
         },
         "pricing_observation": {
-          "$ref": "#/$defs/PricingObservationKind"
+          "const": "EXACT",
+          "title": "Pricing Observation",
+          "type": "string"
         },
         "pricing_sha256": {
           "pattern": "^[0-9a-f]{64}$",
@@ -200,15 +247,31 @@
           "title": "Route Sha256",
           "type": "string"
         },
+        "routing_identity_unambiguous": {
+          "title": "Routing Identity Unambiguous",
+          "type": "boolean"
+        },
         "schema_version": {
-          "const": "1.0",
-          "default": "1.0",
+          "const": "2.0",
+          "default": "2.0",
           "title": "Schema Version",
           "type": "string"
+        },
+        "structured_output_mode": {
+          "$ref": "#/$defs/StructuredOutputMode"
         },
         "structured_output_supported": {
           "title": "Structured Output Supported",
           "type": "boolean"
+        },
+        "supported_output_modes": {
+          "items": {
+            "$ref": "#/$defs/StructuredOutputMode"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "title": "Supported Output Modes",
+          "type": "array"
         },
         "supported_parameters": {
           "items": {
@@ -227,20 +290,37 @@
         "exact_model_id",
         "provider_endpoint",
         "provider_name",
+        "routing_identity_unambiguous",
         "operational",
         "operational_status",
         "zdr_eligible",
         "context_limit",
+        "max_prompt_tokens",
+        "max_prompt_tokens_source",
         "output_limit",
+        "output_limit_source",
         "supported_parameters",
+        "supported_output_modes",
         "structured_output_supported",
+        "structured_output_mode",
         "reasoning_supported",
         "pricing_observation",
+        "pricing",
         "pricing_sha256",
         "route_sha256"
       ],
-      "title": "ProviderRouteState",
+      "title": "LiveProviderRouteState",
       "type": "object"
+    },
+    "StructuredOutputMode": {
+      "description": "One exact request/validation protocol for model output.",
+      "enum": [
+        "NATIVE_JSON_SCHEMA",
+        "JSON_OBJECT",
+        "VALIDATED_TEXT_JSON"
+      ],
+      "title": "StructuredOutputMode",
+      "type": "string"
     }
   },
   "$id": "https://mmaudit.local/schemas/model_refresh_snapshot.schema.json",
@@ -279,7 +359,7 @@
     },
     "models": {
       "items": {
-        "$ref": "#/$defs/CatalogModelState"
+        "$ref": "#/$defs/LiveCatalogModelState"
       },
       "maxItems": 10000,
       "minItems": 1,
@@ -292,8 +372,8 @@
       "type": "string"
     },
     "schema_version": {
-      "const": "1.0",
-      "default": "1.0",
+      "const": "2.0",
+      "default": "2.0",
       "title": "Schema Version",
       "type": "string"
     },
@@ -313,6 +393,11 @@
       "title": "Source Api Identity",
       "type": "string"
     },
+    "source_evidence_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Evidence Sha256",
+      "type": "string"
+    },
     "zdr_snapshot_sha256": {
       "pattern": "^[0-9a-f]{64}$",
       "title": "Zdr Snapshot Sha256",
@@ -323,6 +408,7 @@
     "retrieved_at",
     "authenticated_metadata",
     "candidate_registry_sha256",
+    "source_evidence_sha256",
     "catalog_snapshot_sha256",
     "zdr_snapshot_sha256",
     "catalog_model_count",

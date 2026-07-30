@@ -129,10 +129,12 @@ from mmaudit.models.refresh import (
     ModelRefreshFailureCode,
     ModelRefreshValidationError,
     SelectedModelRoute,
-    build_model_refresh_snapshot,
+    build_model_refresh_snapshot_from_source,
+    build_model_refresh_source_evidence,
     diff_model_refresh,
     evaluate_model_refresh_freshness,
     load_model_refresh_snapshot,
+    load_model_refresh_source_evidence,
     reject_model_refresh_secret_reflection,
     seal_model_refresh_attempt,
     write_model_refresh_failure,
@@ -818,6 +820,13 @@ def models_refresh(
             help="Optional prior canonical refresh snapshot with exact historical pricing.",
         ),
     ] = None,
+    previous_source_evidence: Annotated[
+        Path | None,
+        typer.Option(
+            "--previous-source-evidence",
+            help="Canonical source evidence paired with --previous-snapshot.",
+        ),
+    ] = None,
     selected_route: Annotated[
         list[str] | None,
         typer.Option(
@@ -856,11 +865,29 @@ def models_refresh(
 
     async def execute() -> None:
         registry = load_candidate_registry(candidate_registry)
+        if (previous_snapshot is None) is not (previous_source_evidence is None):
+            raise ConfigError(
+                "--previous-snapshot and --previous-source-evidence must be supplied together"
+            )
         previous = (
             load_model_refresh_snapshot(previous_snapshot)
             if previous_snapshot is not None
             else None
         )
+        previous_source = (
+            load_model_refresh_source_evidence(previous_source_evidence)
+            if previous_source_evidence is not None
+            else None
+        )
+        if previous is not None and previous_source is not None:
+            reproduced_previous = build_model_refresh_snapshot_from_source(
+                source_evidence=previous_source,
+                candidate_registry=registry,
+            )
+            if previous != reproduced_previous:
+                raise ConfigError(
+                    "previous refresh snapshot differs from its paired source evidence"
+                )
         selected = _parse_model_refresh_selected_routes(selected_route or [])
         approved_routes = {
             (candidate.exact_model_id, candidate.approved_provider_endpoint)
@@ -949,13 +976,17 @@ def models_refresh(
             raise ConfigError("metadata refresh unexpectedly created model usage records")
         retrieved_at = datetime.now(UTC).replace(microsecond=0)
         try:
-            snapshot = build_model_refresh_snapshot(
+            source_evidence = build_model_refresh_source_evidence(
                 retrieved_at=retrieved_at,
                 catalog_payload=catalog_payload,
                 zdr_payload=zdr_payload,
                 candidate_registry=registry,
                 candidate_endpoint_payloads=endpoint_payloads,
                 authenticated_metadata=True,
+            )
+            snapshot = build_model_refresh_snapshot_from_source(
+                source_evidence=source_evidence,
+                candidate_registry=registry,
             )
             diff = diff_model_refresh(
                 current=snapshot,
@@ -999,6 +1030,7 @@ def models_refresh(
         try:
             write_model_refresh_success(
                 output_dir,
+                source_evidence=source_evidence,
                 snapshot=snapshot,
                 diff=diff,
                 attempt=attempt,

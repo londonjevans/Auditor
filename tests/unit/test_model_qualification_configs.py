@@ -30,6 +30,9 @@ def test_committed_candidate_registry_is_exact_frozen_and_unqualified() -> None:
         and candidate.structured_output_supported
         and candidate.structured_output_mode is None
         and candidate.output_capability_sha256 is None
+        and candidate.max_prompt_tokens is None
+        and candidate.max_prompt_tokens_source is None
+        and candidate.output_limit_source is None
         and candidate.zdr_eligible
         and candidate.data_collection_deny_eligible
         and len(candidate.approved_roles) >= 24
