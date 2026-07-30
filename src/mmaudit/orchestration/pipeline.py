@@ -2679,8 +2679,7 @@ class AuditPipeline:
                     rejected_findings.append(finding)
                 elif (
                     finding.origin_kind is FindingOriginKind.DETERMINISTIC_EXECUTION
-                    or
-                    SEVERITY_ORDER[finding.severity.value]
+                    or SEVERITY_ORDER[finding.severity.value]
                     >= SEVERITY_ORDER[severity_threshold.value]
                 ):
                     final_findings.append(finding)
@@ -3283,6 +3282,7 @@ class AuditPipeline:
             property_corpus=property_corpus,
             invariant_review=invariant_review,
             invariant_executions=invariant_executions,
+            execution_candidate_build=execution_candidate_build,
             economic_simulations=economic_simulations,
             formal_runs=formal_runs,
             solidity_coverage=solidity_coverage,
@@ -3739,6 +3739,7 @@ class AuditPipeline:
         property_corpus: PropertyCorpus,
         invariant_review: InvariantReviewResult | None,
         invariant_executions: list[InvariantExecutionResult],
+        execution_candidate_build: ExecutionCandidateBuildResult,
         economic_simulations: list[EconomicSimulationPlan],
         formal_runs: list[FormalToolRun],
         solidity_coverage: SolidityCoverage | None,
@@ -3946,6 +3947,13 @@ class AuditPipeline:
                         "properties": len(property_corpus.properties),
                         "limitations": len(property_corpus.limitations),
                         "corpus_hash": property_corpus.corpus_hash,
+                    },
+                    "execution_origin_summary": {
+                        "originated_candidates": len(execution_candidate_build.candidates),
+                        "rejected_counterexamples": (
+                            execution_candidate_build.rejected_counterexample_count
+                        ),
+                        "limitations": list(execution_candidate_build.limitations),
                     },
                     "economic_simulation_summary": {
                         "planned": len(economic_simulations),
@@ -4509,6 +4517,8 @@ def _scanner_findings_for_report(
                     scanner,
                     valid_locations or scanner.locations,
                 ),
+                group_id=f"scanner-{scanner.fingerprint[:16]}",
+                origin_kind=FindingOriginKind.STATIC_ANALYZER,
                 title=scanner.title,
                 status=status,
                 severity=scanner.severity,

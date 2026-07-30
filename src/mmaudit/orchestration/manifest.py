@@ -24,10 +24,13 @@ from mmaudit.constants import ALL_MODEL_ROLES, VERSION
 from mmaudit.models.schemas import (
     AuditProfile,
     AuditReport,
-    CandidateFinding,
+    CandidateFindingArtifact,
     CandidateOriginKind,
     FindingOriginKind,
+    FoundryInvariantHarnessSpec,
+    InvariantExecutionResult,
     MaximumAssuranceStatus,
+    PropertyCorpus,
     StrictModel,
 )
 from mmaudit.models.token_planning import PromptAllocationCategory, RequestTokenPlan
@@ -39,6 +42,9 @@ from mmaudit.orchestration.context_manifest import (
     context_manifest_report_binding,
     load_context_manifest,
     validate_context_manifest_against_usage,
+)
+from mmaudit.orchestration.execution_candidates import (
+    validate_invariant_execution_candidate_provenance,
 )
 from mmaudit.reporting.json_report import write_json
 from mmaudit.repository.ignore import normalize_relative_path
@@ -510,29 +516,83 @@ def _validate_report_artifact_consistency(root: Path, report: AuditReport) -> No
     scanner_results = _read_json_artifact(root, "scanner-results.json")
     if scanner_results.get("runs") != [run.model_dump(mode="json") for run in report.scanner_runs]:
         raise ValueError("scanner-results.json differs from the final report")
-    candidate_artifact = _read_json_artifact(root, "candidate-findings.json")
-    raw_candidates = candidate_artifact.get("findings")
-    if not isinstance(raw_candidates, list):
-        raise ValueError("candidate-findings.json lacks a typed candidate inventory")
-    candidates = [CandidateFinding.model_validate(item) for item in raw_candidates]
-    candidate_ids = [candidate.candidate_id for candidate in candidates]
-    if len(candidate_ids) != len(set(candidate_ids)):
-        raise ValueError("candidate-findings.json contains duplicate candidate IDs")
+    candidate_artifact = CandidateFindingArtifact.model_validate(
+        _read_json_artifact(root, "candidate-findings.json")
+    )
+    candidates = candidate_artifact.findings
     candidates_by_id = {candidate.candidate_id: candidate for candidate in candidates}
     execution_candidate_ids = {
         candidate.candidate_id
         for candidate in candidates
         if candidate.origin_kind is CandidateOriginKind.DETERMINISTIC_EXECUTION
     }
-    if execution_candidate_ids and candidate_artifact.get("schema_version") != "1.1":
+    if execution_candidate_ids and candidate_artifact.schema_version != "1.1":
         raise ValueError("execution-origin candidates require candidate artifact schema 1.1")
+    if execution_candidate_ids:
+        harness_plan = _read_json_artifact(root, "invariant-harness-plan.json")
+        invariant_results = _read_json_artifact(root, "invariant-execution-results.json")
+        property_artifact = _read_json_artifact(root, "property-corpus.json")
+        raw_planned_harnesses = harness_plan.get("harnesses")
+        raw_execution_harnesses = invariant_results.get("harnesses")
+        raw_results = invariant_results.get("results")
+        raw_corpus = property_artifact.get("corpus")
+        if (
+            not isinstance(raw_planned_harnesses, list)
+            or not isinstance(raw_execution_harnesses, list)
+            or not isinstance(raw_results, list)
+            or not isinstance(raw_corpus, dict)
+        ):
+            raise ValueError("execution-origin candidate runtime artifacts are incomplete")
+        planned_harnesses = [
+            FoundryInvariantHarnessSpec.model_validate(item) for item in raw_planned_harnesses
+        ]
+        execution_harnesses = [
+            FoundryInvariantHarnessSpec.model_validate(item) for item in raw_execution_harnesses
+        ]
+        planned_by_key = {
+            (harness.invariant_id, harness.name): canonical_sha256(harness.model_dump(mode="json"))
+            for harness in planned_harnesses
+        }
+        execution_by_key = {
+            (harness.invariant_id, harness.name): canonical_sha256(harness.model_dump(mode="json"))
+            for harness in execution_harnesses
+        }
+        if planned_by_key != execution_by_key or len(planned_by_key) != len(planned_harnesses):
+            raise ValueError("execution-origin harness artifacts disagree")
+        typed_results = [InvariantExecutionResult.model_validate(item) for item in raw_results]
+        typed_corpus = PropertyCorpus.model_validate(raw_corpus)
+        for candidate in candidates:
+            if candidate.origin_kind is not CandidateOriginKind.DETERMINISTIC_EXECUTION:
+                continue
+            if candidate.execution_provenance is None:
+                raise ValueError("execution-origin candidate lacks typed provenance")
+            try:
+                validate_invariant_execution_candidate_provenance(
+                    candidate.execution_provenance,
+                    invariant_suite=report.invariants,
+                    harnesses=planned_harnesses,
+                    property_corpus=typed_corpus,
+                    executions=typed_results,
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "execution-origin candidate differs from its emitted runtime artifacts"
+                ) from exc
+    scanner_fingerprints = {
+        finding.fingerprint for run in report.scanner_runs for finding in run.findings
+    }
     reported_execution_ids: set[str] = set()
     for finding in [*report.findings, *report.rejected_findings]:
-        contributing = {
-            candidate_id
-            for candidate_id in finding.contributing_candidate_ids
-            if candidate_id in candidates_by_id
-        }
+        contributing = set(finding.contributing_candidate_ids)
+        if len(contributing) != len(finding.contributing_candidate_ids):
+            raise ValueError("final finding contains duplicate contributing evidence IDs")
+        if finding.origin_kind is FindingOriginKind.STATIC_ANALYZER:
+            if not contributing or not contributing <= scanner_fingerprints:
+                raise ValueError("static-analyzer finding lacks exact scanner provenance")
+            continue
+        unknown_contributors = contributing - set(candidates_by_id)
+        if unknown_contributors:
+            raise ValueError("final finding references a candidate absent from its inventory")
         contributing_execution = contributing & execution_candidate_ids
         if finding.origin_kind is FindingOriginKind.DETERMINISTIC_EXECUTION:
             if not contributing_execution:
@@ -540,14 +600,10 @@ def _validate_report_artifact_consistency(root: Path, report: AuditReport) -> No
             candidate_provenance = {
                 provenance.provenance_sha256
                 for candidate_id in contributing_execution
-                if (
-                    provenance := candidates_by_id[candidate_id].execution_provenance
-                )
-                is not None
+                if (provenance := candidates_by_id[candidate_id].execution_provenance) is not None
             }
             finding_provenance = {
-                provenance.provenance_sha256
-                for provenance in finding.execution_provenance
+                provenance.provenance_sha256 for provenance in finding.execution_provenance
             }
             if candidate_provenance != finding_provenance:
                 raise ValueError(

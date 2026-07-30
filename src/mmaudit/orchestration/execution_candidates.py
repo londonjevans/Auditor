@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,7 +27,6 @@ from mmaudit.models.schemas import (
     SolidityProvenance,
     VerificationTest,
 )
-from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.repository.locations import validate_location
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -172,7 +173,7 @@ def build_invariant_execution_candidates(
             property_hashes=tuple(
                 sorted(property_spec.property_hash for property_spec in properties)
             ),
-            execution_result_sha256=canonical_sha256(result.model_dump(mode="json")),
+            execution_result_sha256=_canonical_sha256(result.model_dump(mode="json")),
             execution_observation_sha256=result.execution_observation_sha256,
             executable_sha256=result.executable_sha256,
             source_sha256=result.source_sha256,
@@ -187,6 +188,13 @@ def build_invariant_execution_candidates(
                 and result.minimization_evidence.proven_minimal
             ),
             source_locations=source_locations,
+        )
+        validate_invariant_execution_candidate_provenance(
+            provenance,
+            invariant_suite=invariant_suite,
+            harnesses=harnesses,
+            property_corpus=property_corpus,
+            executions=executions,
         )
         candidate = _candidate_from_execution(
             invariant=invariant,
@@ -205,6 +213,110 @@ def build_invariant_execution_candidates(
         rejected_counterexample_count=rejected_count,
         limitations=_bounded_limitations(limitations),
     )
+
+
+def validate_invariant_execution_candidate_provenance(
+    provenance: InvariantExecutionCandidateProvenance,
+    *,
+    invariant_suite: InvariantSuite | None,
+    harnesses: list[FoundryInvariantHarnessSpec],
+    property_corpus: PropertyCorpus,
+    executions: list[InvariantExecutionResult],
+) -> None:
+    """Cross-bind one execution origin to every exact serialized runtime input."""
+
+    provenance = InvariantExecutionCandidateProvenance.model_validate(
+        provenance.model_dump(mode="python")
+    )
+    validated_invariants = _validated_invariants(invariant_suite)
+    validated_harnesses = _validated_harnesses(harnesses)
+    validated_corpus = _validated_property_corpus(property_corpus)
+    validated_executions = [
+        result
+        for raw_result in executions
+        if (result := _validated_execution(raw_result)) is not None
+    ]
+    invariants = [
+        invariant for invariant in validated_invariants if invariant.id == provenance.invariant_id
+    ]
+    joined_harnesses = [
+        harness
+        for harness in validated_harnesses
+        if harness.invariant_id == provenance.invariant_id
+        and harness.name == provenance.harness_name
+    ]
+    joined_results = [
+        result
+        for result in validated_executions
+        if result.invariant_id == provenance.invariant_id
+        and result.harness_name == provenance.harness_name
+    ]
+    if (
+        len(invariants) != 1
+        or len(joined_harnesses) != 1
+        or len(joined_results) != 1
+        or validated_corpus is None
+    ):
+        raise ValueError(
+            "execution provenance lacks one exact invariant, harness, result, or corpus"
+        )
+
+    invariant = invariants[0]
+    harness = joined_harnesses[0]
+    result = joined_results[0]
+    if (
+        _invariant_qualification_error(invariant) is not None
+        or _execution_qualification_error(result) is not None
+        or result.harness_spec_sha256 != harness.specification_sha256()
+        or result.runs != harness.runs
+        or result.depth != harness.depth
+        or result.seed != harness.seed
+        or _harness_coverage_error(result, harness) is not None
+    ):
+        raise ValueError("execution provenance runtime evidence is not qualifying")
+
+    properties = [
+        property_spec
+        for property_spec in validated_corpus.properties
+        if property_spec.invariant_id == invariant.id and property_spec.harness_name == harness.name
+    ]
+    if (
+        _property_join_error(
+            invariant=invariant,
+            harness=harness,
+            properties=properties,
+        )
+        is not None
+    ):
+        raise ValueError("execution provenance property bindings differ from the runtime corpus")
+    source_locations = _canonical_source_locations(properties)
+    result_minimized = bool(
+        result.minimization_evidence is not None and result.minimization_evidence.proven_minimal
+    )
+    expected = {
+        "invariant_evidence_sha256": invariant.evidence_hash,
+        "harness_spec_sha256": harness.specification_sha256(),
+        "property_corpus_sha256": validated_corpus.corpus_hash,
+        "property_ids": tuple(sorted(property_spec.id for property_spec in properties)),
+        "property_hashes": tuple(
+            sorted(property_spec.property_hash for property_spec in properties)
+        ),
+        "execution_result_sha256": _canonical_sha256(result.model_dump(mode="json")),
+        "execution_observation_sha256": result.execution_observation_sha256,
+        "executable_sha256": result.executable_sha256,
+        "source_sha256": result.source_sha256,
+        "compiler_version": result.compiler_version,
+        "compiler_sha256": result.compiler_sha256,
+        "isolation_backend": result.isolation_backend,
+        "isolation_attestation_sha256": result.isolation_attestation_sha256,
+        "attempts": result.attempts,
+        "successful_attempts": result.successful_attempts,
+        "minimized": result_minimized,
+        "source_locations": source_locations,
+    }
+    observed = {field: getattr(provenance, field) for field in expected}
+    if observed != expected:
+        raise ValueError("execution provenance differs from its exact serialized runtime evidence")
 
 
 def _validated_invariants(suite: InvariantSuite | None) -> list[InvariantSpec]:
@@ -513,6 +625,18 @@ def _location_key(location: Location) -> tuple[str, int, int, str, str]:
 
 def _is_sha256(value: object) -> bool:
     return isinstance(value, str) and _SHA256_RE.fullmatch(value) is not None
+
+
+def _canonical_sha256(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode()
+    ).hexdigest()
 
 
 def _nonempty(value: object) -> bool:

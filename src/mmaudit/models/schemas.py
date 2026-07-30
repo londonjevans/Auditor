@@ -1065,6 +1065,15 @@ class InvariantExecutionCandidateProvenance(StrictModel):
             raise ValueError("execution provenance property hashes must be unique and sorted")
         if len(self.property_ids) != len(self.property_hashes):
             raise ValueError("execution provenance property IDs and hashes must have equal length")
+        if any(
+            property_id != f"prop-{property_hash[:24]}"
+            for property_id, property_hash in zip(
+                self.property_ids,
+                self.property_hashes,
+                strict=True,
+            )
+        ):
+            raise ValueError("execution provenance property IDs must derive from their hashes")
         if self.attempts != self.successful_attempts:
             raise ValueError("execution provenance requires every replay attempt to succeed")
         location_keys = [
@@ -2324,6 +2333,41 @@ class CandidateFinding(StrictModel):
             raise ValueError("execution evidence must bind the exact provenance record")
         if any(item.type == "model" for item in self.evidence):
             raise ValueError("execution-origin candidates cannot contain model evidence")
+        return self
+
+
+class CandidateFindingArtifact(StrictModel):
+    """Versioned candidate inventory emitted before final consensus reporting."""
+
+    schema_version: Literal["1.0", "1.1"]
+    findings: list[CandidateFinding] = Field(default_factory=list, max_length=100_000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def version_declares_origin_semantics(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        version = value.get("schema_version")
+        raw_findings = value.get("findings")
+        if not isinstance(raw_findings, list):
+            return value
+        if version == "1.1" and any(
+            not isinstance(item, dict) or "origin_kind" not in item for item in raw_findings
+        ):
+            raise ValueError("candidate artifact 1.1 requires explicit origin on every candidate")
+        if version == "1.0" and any(
+            isinstance(item, dict)
+            and item.get("origin_kind") == CandidateOriginKind.DETERMINISTIC_EXECUTION.value
+            for item in raw_findings
+        ):
+            raise ValueError("candidate artifact 1.0 cannot claim deterministic execution origin")
+        return value
+
+    @model_validator(mode="after")
+    def candidates_are_unique(self) -> CandidateFindingArtifact:
+        identifiers = [item.candidate_id for item in self.findings]
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("saved candidates must be unique")
         return self
 
 
@@ -10002,6 +10046,11 @@ class AuditReport(StrictModel):
     def _validate_execution_origin_bindings(self) -> None:
         """Bind execution-origin findings to exact serialized runtime evidence."""
 
+        execution_keys = [
+            (result.invariant_id, result.harness_name) for result in self.invariant_executions
+        ]
+        if len(execution_keys) != len(set(execution_keys)):
+            raise ValueError("report invariant execution identities must be unique")
         execution_results = {
             (result.invariant_id, result.harness_name): result
             for result in self.invariant_executions
@@ -10022,6 +10071,35 @@ class AuditReport(StrictModel):
                 observed_provenance.add(provenance.provenance_sha256)
                 result = execution_results.get((provenance.invariant_id, provenance.harness_name))
                 invariant = invariant_by_id.get(provenance.invariant_id)
+                result_minimized = bool(
+                    result is not None
+                    and result.minimization_evidence is not None
+                    and result.minimization_evidence.proven_minimal
+                )
+                invariant_location_keys = (
+                    sorted(
+                        (
+                            location.path,
+                            location.start_line,
+                            location.end_line,
+                            location.symbol or "",
+                            location.content_hash or "",
+                        )
+                        for location in invariant.locations
+                    )
+                    if invariant is not None
+                    else []
+                )
+                provenance_location_keys = [
+                    (
+                        location.path,
+                        location.start_line,
+                        location.end_line,
+                        location.symbol or "",
+                        location.content_hash or "",
+                    )
+                    for location in provenance.source_locations
+                ]
                 if (
                     result is None
                     or invariant is None
@@ -10033,6 +10111,18 @@ class AuditReport(StrictModel):
                     or _canonical_model_sha256(result.model_dump(mode="json"))
                     != provenance.execution_result_sha256
                     or invariant.evidence_hash != provenance.invariant_evidence_sha256
+                    or provenance.executable_sha256 != result.executable_sha256
+                    or provenance.source_sha256 != result.source_sha256
+                    or provenance.compiler_version != result.compiler_version
+                    or provenance.compiler_sha256 != result.compiler_sha256
+                    or provenance.isolation_backend != result.isolation_backend
+                    or provenance.isolation_attestation_sha256
+                    != result.isolation_attestation_sha256
+                    or provenance.attempts != result.attempts
+                    or provenance.successful_attempts != result.successful_attempts
+                    or provenance.replay_confirmed != result.replay_confirmed
+                    or provenance.minimized != result_minimized
+                    or provenance_location_keys != invariant_location_keys
                 ):
                     raise ValueError(
                         "execution-origin finding differs from its serialized invariant evidence"

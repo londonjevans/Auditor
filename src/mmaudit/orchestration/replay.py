@@ -24,6 +24,7 @@ from mmaudit.models.schemas import (
     REPOSITORY_SUITE_WORKSPACE_REMOVAL_ENTRY_LIMIT,
     REPOSITORY_SUITE_WORKSPACE_REMOVAL_TIMEOUT_SECONDS,
     CandidateFinding,
+    CandidateFindingArtifact,
     CandidateOriginKind,
     ExecutionEvidenceKind,
     FalsificationDecision,
@@ -33,6 +34,7 @@ from mmaudit.models.schemas import (
     InvariantExecutionResult,
     InvariantExecutionStatus,
     InvariantSuite,
+    PropertyCorpus,
     RepositoryCleanStateAttestationEvidence,
     RepositoryDifferentialRunStatus,
     RepositoryForkEgressStatus,
@@ -51,6 +53,9 @@ from mmaudit.models.schemas import (
     ScannerStatus,
     SolidityProjectMetadata,
     StrictModel,
+)
+from mmaudit.orchestration.execution_candidates import (
+    validate_invariant_execution_candidate_provenance,
 )
 from mmaudit.orchestration.manifest import (
     RunEvidenceManifest,
@@ -418,38 +423,12 @@ class _InvariantExecutionArtifact(StrictModel):
         return self
 
 
-class _CandidateArtifact(StrictModel):
-    schema_version: Literal["1.0", "1.1"]
-    findings: list[CandidateFinding] = Field(max_length=100_000)
+_CandidateArtifact = CandidateFindingArtifact
 
-    @model_validator(mode="before")
-    @classmethod
-    def current_artifacts_declare_origin(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        version = value.get("schema_version")
-        raw_findings = value.get("findings")
-        if not isinstance(raw_findings, list):
-            return value
-        if version == "1.1" and any(
-            not isinstance(item, dict) or "origin_kind" not in item for item in raw_findings
-        ):
-            raise ValueError("candidate artifact 1.1 requires explicit origin on every candidate")
-        if version == "1.0" and any(
-            isinstance(item, dict)
-            and item.get("origin_kind")
-            == CandidateOriginKind.DETERMINISTIC_EXECUTION.value
-            for item in raw_findings
-        ):
-            raise ValueError("candidate artifact 1.0 cannot claim deterministic execution origin")
-        return value
 
-    @model_validator(mode="after")
-    def candidates_are_unique(self) -> _CandidateArtifact:
-        identifiers = [item.candidate_id for item in self.findings]
-        if len(identifiers) != len(set(identifiers)):
-            raise ValueError("saved candidates must be unique")
-        return self
+class _PropertyCorpusArtifact(StrictModel):
+    schema_version: Literal["1.0"]
+    corpus: dict[str, Any]
 
 
 class _ReproductionArtifact(StrictModel):
@@ -1231,6 +1210,7 @@ class _ReplayArtifacts(StrictModel):
     projects: _SolidityProjectsArtifact
     invariants: _InvariantArtifact
     harnesses: _InvariantHarnessArtifact
+    property_corpus: _PropertyCorpusArtifact
     invariant_results: _InvariantExecutionArtifact
     candidates: _CandidateArtifact
     reproductions: _ReproductionArtifact
@@ -1266,37 +1246,32 @@ class _ReplayArtifacts(StrictModel):
         candidate_ids = {item.candidate_id for item in self.candidates.findings}
         if not {candidate_id for candidate_id, _name in specification_keys} <= candidate_ids:
             raise ValueError("saved test specifications reference missing candidates")
-        invariant_results = {
-            (item.invariant_id, item.harness_name): item
-            for item in self.invariant_results.results
-        }
-        harnesses = {
-            (item.invariant_id, item.name): item for item in self.invariant_results.harnesses
-        }
-        for candidate in self.candidates.findings:
-            if candidate.origin_kind is not CandidateOriginKind.DETERMINISTIC_EXECUTION:
-                continue
+        execution_candidates = [
+            candidate
+            for candidate in self.candidates.findings
+            if candidate.origin_kind is CandidateOriginKind.DETERMINISTIC_EXECUTION
+        ]
+        runtime_corpus = (
+            PropertyCorpus.model_validate(self.property_corpus.corpus)
+            if execution_candidates
+            else None
+        )
+        for candidate in execution_candidates:
             provenance = candidate.execution_provenance
-            if provenance is None:
+            if provenance is None or runtime_corpus is None:
                 raise ValueError("execution-origin candidate lacks typed provenance")
-            key = (provenance.invariant_id, provenance.harness_name)
-            result = invariant_results.get(key)
-            harness = harnesses.get(key)
-            if (
-                result is None
-                or harness is None
-                or result.status is not InvariantExecutionStatus.COUNTEREXAMPLE
-                or result.execution_evidence is not ExecutionEvidenceKind.REAL
-                or result.harness_spec_sha256 != provenance.harness_spec_sha256
-                or harness.specification_sha256() != provenance.harness_spec_sha256
-                or result.execution_observation_sha256
-                != provenance.execution_observation_sha256
-                or canonical_sha256(result.model_dump(mode="json"))
-                != provenance.execution_result_sha256
-            ):
+            try:
+                validate_invariant_execution_candidate_provenance(
+                    provenance,
+                    invariant_suite=self.invariants.invariants,
+                    harnesses=self.invariant_results.harnesses,
+                    property_corpus=runtime_corpus,
+                    executions=self.invariant_results.results,
+                )
+            except ValueError as exc:
                 raise ValueError(
                     "execution-origin candidate differs from its saved invariant execution"
-                )
+                ) from exc
         if self.differential is not None and not self.differential_required:
             raise ValueError("loaded differential evidence must create a replay obligation")
         if self.differential is None and self.differential_required:
@@ -1375,6 +1350,11 @@ def _load_replay_artifacts(
             run_dir,
             "invariant-harness-plan.json",
             _InvariantHarnessArtifact,
+        ),
+        property_corpus=_load_artifact(
+            run_dir,
+            "property-corpus.json",
+            _PropertyCorpusArtifact,
         ),
         invariant_results=_load_artifact(
             run_dir,

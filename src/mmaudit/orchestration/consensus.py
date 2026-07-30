@@ -163,9 +163,8 @@ def group_candidates(candidates: list[CandidateFinding]) -> list[CandidateGroup]
 
     for left_index, left in enumerate(candidates):
         for right_index in range(left_index + 1, len(candidates)):
-            if (
-                candidate_similarity(left, candidates[right_index]) >= 0.55
-                and can_union(left_index, right_index)
+            if candidate_similarity(left, candidates[right_index]) >= 0.55 and can_union(
+                left_index, right_index
             ):
                 union(left_index, right_index)
     grouped: dict[int, list[CandidateFinding]] = {}
@@ -174,11 +173,14 @@ def group_candidates(candidates: list[CandidateFinding]) -> list[CandidateGroup]
     result: list[CandidateGroup] = []
     for members in grouped.values():
         ordered = tuple(sorted(members, key=lambda item: item.candidate_id))
-        identity_members = tuple(
-            candidate
-            for candidate in ordered
-            if candidate.origin_kind is CandidateOriginKind.DETERMINISTIC_EXECUTION
-        ) or ordered
+        identity_members = (
+            tuple(
+                candidate
+                for candidate in ordered
+                if candidate.origin_kind is CandidateOriginKind.DETERMINISTIC_EXECUTION
+            )
+            or ordered
+        )
         digest = hashlib.sha256(
             "\0".join(item.candidate_id for item in identity_members).encode()
         ).hexdigest()[:16]
@@ -239,10 +241,11 @@ def preliminary_status(
     valid_execution = [
         candidate
         for candidate in group.execution_candidates
-        if validations.get(candidate.candidate_id)
-        and validations[candidate.candidate_id].valid
+        if validations.get(candidate.candidate_id) and validations[candidate.candidate_id].valid
     ]
-    if valid_execution:
+    if group.execution_candidates:
+        if len(valid_execution) != len(group.execution_candidates):
+            return FindingStatus.REJECTED
         # A qualifying execution candidate is already a repeated, replay-confirmed
         # invariant counterexample. Model roles may analyze its impact, but they do
         # not control whether the deterministic observation exists.
@@ -378,10 +381,11 @@ def merge_group(
         and decision.verdict in {VerificationVerdict.VERIFIED, VerificationVerdict.PLAUSIBLE}
     ]
     valid_execution_candidates = [
-        candidate
-        for candidate in group.execution_candidates
-        if candidate in valid_candidates
+        candidate for candidate in group.execution_candidates if candidate in valid_candidates
     ]
+    execution_origin_valid = bool(group.execution_candidates) and len(
+        valid_execution_candidates
+    ) == len(group.execution_candidates)
     primary_pool = (
         valid_execution_candidates
         or list(group.execution_candidates)
@@ -415,9 +419,7 @@ def merge_group(
         )
     )
     validation_scope = (
-        list(group.execution_candidates)
-        if group.execution_candidates
-        else list(group.candidates)
+        list(group.execution_candidates) if group.execution_candidates else list(group.candidates)
     )
     validation_errors = [
         error
@@ -437,7 +439,9 @@ def merge_group(
     aggregate_hash = (
         hashlib.sha256("".join(sorted(valid_hashes)).encode()).hexdigest() if valid_hashes else None
     )
-    if validation_errors and not valid_candidates:
+    if group.execution_candidates and not execution_origin_valid:
+        confidence = 0.0
+    elif validation_errors and not valid_candidates:
         confidence = min(confidence, 0.59)
     disagreement = (
         judge.rationale
@@ -504,14 +508,12 @@ def merge_group(
             candidate.source is not None and candidate.sink is not None
             for candidate in valid_candidates
         ),
-        has_execution_counterexample=bool(valid_execution_candidates),
+        has_execution_counterexample=execution_origin_valid,
     )
     execution_provenance = tuple(
         sorted(
             {
-                candidate.execution_provenance.provenance_sha256: (
-                    candidate.execution_provenance
-                )
+                candidate.execution_provenance.provenance_sha256: (candidate.execution_provenance)
                 for candidate in group.execution_candidates
                 if candidate.execution_provenance is not None
             }.values(),
@@ -555,7 +557,9 @@ def merge_group(
         verification_test=primary.verification_test,
         model_votes=[vote for candidate in group.candidates for vote in candidate.model_votes],
         location_validation=LocationValidation(
-            valid=bool(valid_candidates),
+            valid=(
+                execution_origin_valid if group.execution_candidates else bool(valid_candidates)
+            ),
             content_hash=aggregate_hash,
             errors=validation_errors,
             validated_at=datetime.now(UTC),

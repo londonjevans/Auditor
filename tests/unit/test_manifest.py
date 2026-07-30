@@ -152,6 +152,10 @@ def _write_required_artifacts(run_dir: Path, report: AuditReport) -> None:
             "schema_version": "1.0",
             "runs": [run.model_dump(mode="json") for run in report.scanner_runs],
         },
+        "candidate-findings.json": {
+            "schema_version": "1.1",
+            "findings": [],
+        },
     }
     run_dir.mkdir()
     for name, payload in payloads.items():

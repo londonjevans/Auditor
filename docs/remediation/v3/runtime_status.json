@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-07-30T04:48:57Z",
+  "updated_at": "2026-07-30T05:08:02Z",
   "candidate_commit": "0a9660a84f454da1d1f589a8c0523c34692c1aa8",
-  "autorun_status": "PAUSED_BY_OPERATOR",
+  "autorun_status": "PAUSED",
   "current_milestone": "execution_originated_candidate_consensus",
   "current_ticket": "V3-EXECORIGIN-001",
   "last_checkpoint_commit": "0a9660a84f454da1d1f589a8c0523c34692c1aa8",

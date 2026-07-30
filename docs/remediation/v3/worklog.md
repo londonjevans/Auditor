@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_BY_OPERATOR
+AUTORUN_STATUS: PAUSED
 CURRENT_MILESTONE: Execution-originated candidate consensus
 CURRENT_TICKET: V3-EXECORIGIN-001
 LAST_COMPLETED_TICKET: V3-OMISSION-001
-NEXT_ACTION: Resume V3-EXECORIGIN-001 by reviewing the preserved typed provenance, execution-candidate builder, consensus, pipeline, replay, manifest, and reporting slices together; add the pending consensus/pipeline/report/replay/manifest regressions; then run focused integration and full validation before checkpointing.
-LAST_COMMAND: git commit -m "Checkpoint execution-origin implementation"
-LAST_RESULT: PASS — created incomplete pause checkpoint 0a9660a84f454da1d1f589a8c0523c34692c1aa8 with the 14 explicitly scoped V3-EXECORIGIN files; this is preservation evidence, not ticket acceptance.
+NEXT_ACTION: Resume V3-EXECORIGIN-001 from the preserved working tree; add the pending real local pipeline regression, rerun the consensus and reporting regressions after their production corrections, then run the complete ticket gate.
+LAST_COMMAND: Interrupted the remaining pipeline-integration worker and ran `git diff --check` plus `git status --short` at the operator-requested pause boundary.
+LAST_RESULT: PAUSED — the working tree passes `git diff --check`; completed artifact-adjacent runs report 44 execution tests and 58 manifest/replay tests passing, while integrated post-correction validation and the real local pipeline regression remain outstanding.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -300,6 +300,25 @@ LAST_CHECKPOINT_COMMIT: 0a9660a84f454da1d1f589a8c0523c34692c1aa8
   pause checkpoint `0a9660a84f454da1d1f589a8c0523c34692c1aa8`
   preserves this incomplete ticket at the operator's request; it does not
   constitute acceptance or completion.
+- **Resume:** Autorun resumed at `2026-07-30T04:52:29Z` from synchronized
+  checkpoint `0d28c54a7cf957ab604bf2e9fd8ed8b0b022bf61`. The complete objective and
+  active acceptance criteria were re-read. Three disjoint independent reviews
+  are covering consensus authority, artifact cross-binding, and reporting while
+  root performs integrated pipeline review. An unrelated concurrent queue edit
+  is preserved and will not be silently folded into this ticket. No provider,
+  secret, public RPC, wallet, signing, broadcast, or paid operation is in scope.
+- **Operator pause:** At `2026-07-30T05:08:02Z`, the remaining
+  pipeline-integration worker was interrupted before it created a test file.
+  The artifact-boundary review added 26 regressions and reported its focused
+  suite passing, plus adjacent execution and manifest/replay slices passing
+  `44` and `58` tests respectively. Consensus and reporting reviews reproduced
+  authority/provenance defects; corresponding production corrections are
+  preserved but still require an exact post-correction integrated run because
+  the last combined command output was truncated and is not credited. Three
+  new unit-test files and the root implementation edits remain uncommitted;
+  `git diff --check` passes. The unrelated concurrent work-queue additions
+  remain preserved. No provider call, secret access, public RPC, wallet,
+  signing, broadcast, external execution, or paid operation occurred.
 
 ## 2026-07-30 — V3-FIXTURE-001
 
