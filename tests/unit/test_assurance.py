@@ -36,6 +36,7 @@ from mmaudit.models.schemas import (
     AuditScopeAssessment,
     CandidateReproductionResolution,
     CompilationStatus,
+    ContextRequestEvidence,
     CoverageMetric,
     CoverageProvenance,
     EconomicSimulationKind,
@@ -145,6 +146,7 @@ from mmaudit.traceability import (
 )
 from tests.identity_fixtures import (
     bind_synthetic_usage_identity,
+    reattest_synthetic_real_usage,
     rebind_synthetic_token_plan,
 )
 from tests.output_evidence_fixtures import synthetic_structured_output_routing
@@ -549,6 +551,12 @@ def _real_formal_run(
 
 
 def _real_model_usage(now: datetime) -> list[UsageRecord]:
+    def specialist_request_role(role: str) -> str:
+        suffix = (
+            ":exploit_test" if role in {"test_generation", "exploit_reproduction_planner"} else ""
+        )
+        return f"specialist:{role}{suffix}"
+
     roles = sorted(
         {
             "threat_model",
@@ -559,7 +567,7 @@ def _real_model_usage(now: datetime) -> list[UsageRecord]:
             "judge",
             "falsifier",
             *(f"whole_protocol_review:{index}" for index in range(4)),
-            *(f"specialist:{role}" for role in ALL_SPECIALIST_ROLES),
+            *(specialist_request_role(role) for role in ALL_SPECIALIST_ROLES),
         }
     )
     base_models = {
@@ -575,7 +583,7 @@ def _real_model_usage(now: datetime) -> list[UsageRecord]:
         "whole_protocol_review:3": "specialist-3/model-3",
     }
     specialist_models = {
-        f"specialist:{role}": f"specialist-{index % 8}/model-{index % 8}"
+        specialist_request_role(role): f"specialist-{index % 8}/model-{index % 8}"
         for index, role in enumerate(ALL_SPECIALIST_ROLES)
     }
     specialist_models.update(
@@ -660,6 +668,38 @@ def _real_model_usage(now: datetime) -> list[UsageRecord]:
         )
         for index, role in enumerate(roles)
     ]
+    source_bound_records: list[UsageRecord] = []
+    for record in records:
+        try:
+            context_evidence = ContextRequestEvidence.build(
+                request_id=record.request_id,
+                request_role=record.role,
+                context_role="whole_protocol_review",
+                byte_budget=1_000,
+                declared_bytes_used=128,
+                rendered_bytes=128,
+                source_bytes=64,
+                configured_maximum_source_tokens_per_request=1_000,
+                effective_source_byte_ceiling=64,
+                rendered_sha256=hashlib.sha256(
+                    f"{record.request_id}:whole-protocol-context".encode()
+                ).hexdigest(),
+            )
+        except ValueError:
+            source_bound_records.append(record)
+            continue
+        source_bound_records.append(
+            record.model_copy(
+                update={
+                    "user_prompt_sha256": context_evidence.rendered_sha256,
+                    "routing": {
+                        **record.routing,
+                        "context_request_evidence": context_evidence.model_dump(mode="json"),
+                        "context_request_evidence_sha256": (context_evidence.evidence_sha256),
+                    },
+                }
+            )
+        )
     return [
         _with_output_evidence(
             record,
@@ -669,7 +709,7 @@ def _real_model_usage(now: datetime) -> list[UsageRecord]:
             ).hexdigest(),
             mode=StructuredOutputMode.JSON_OBJECT,
         )
-        for record in records
+        for record in source_bound_records
     ]
 
 
@@ -1593,6 +1633,43 @@ def test_certified_ensemble_requires_four_whole_protocol_lineages(config_factory
 
     assessment = MaximumAssuranceContract(config).evaluate(
         replace(runtime, model_usage=reduced_usage)
+    )
+    ensemble = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "certified_model_ensemble"
+    )
+
+    assert not ensemble.passed
+    assert "whole-protocol lineages=3/4" in ensemble.detail
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+@pytest.mark.parametrize(
+    "invalid_binding",
+    ["missing_user_prompt_sha256", "mismatched_user_prompt_sha256"],
+)
+def test_certified_ensemble_requires_exact_whole_protocol_prompt_binding(
+    config_factory,
+    invalid_binding: str,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    original = next(
+        record for record in runtime.model_usage if record.role == "whole_protocol_review:3"
+    )
+    assert original.user_prompt_sha256 is not None
+    user_prompt_sha256 = None if invalid_binding == "missing_user_prompt_sha256" else "f" * 64
+    invalid = reattest_synthetic_real_usage(
+        original.model_copy(update={"user_prompt_sha256": user_prompt_sha256})
+    )
+    invalid_usage = [
+        invalid if record.request_id == original.request_id else record
+        for record in runtime.model_usage
+    ]
+
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(runtime, model_usage=invalid_usage)
     )
     ensemble = next(
         requirement
@@ -3735,9 +3812,7 @@ def test_maximum_assurance_requires_every_narrow_specialist(config_factory) -> N
         {definition.effective_schema_name() for definition in SPECIALIST_ROLE_REGISTRY.values()}
     ) == len(SPECIALIST_ROLE_REGISTRY)
     assert all(
-        definition.required_checks
-        and definition.context_priorities
-        and definition.max_context_bytes > 0
+        definition.required_checks and definition.context_priorities
         for definition in SPECIALIST_ROLE_REGISTRY.values()
     )
 

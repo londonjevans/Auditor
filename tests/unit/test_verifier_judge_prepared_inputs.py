@@ -32,6 +32,8 @@ def _context(role: str) -> ContextPackage:
         role=role,
         byte_budget=1,
         bytes_used=0,
+        configured_maximum_source_tokens_per_request=200_000,
+        effective_source_byte_ceiling=0,
         scanner_findings=[],
         excerpts=[],
         repository_map=RepositoryMap(

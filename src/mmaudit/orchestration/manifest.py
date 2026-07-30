@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import stat
+from decimal import Decimal
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, Literal
@@ -26,6 +27,7 @@ from mmaudit.models.schemas import (
     MaximumAssuranceStatus,
     StrictModel,
 )
+from mmaudit.models.token_planning import PromptAllocationCategory, RequestTokenPlan
 from mmaudit.orchestration.context_manifest import (
     ContextManifest,
     ContextManifestReportBinding,
@@ -638,25 +640,48 @@ def _validate_context_manifest_configuration(
         return
     expected_input = config.token_budgets.global_input_token_budget
     expected_output = config.token_budgets.global_output_token_budget
+    expected_source = config.token_budgets.maximum_source_tokens_per_request
+    expected_utilization = Decimal(str(config.token_budgets.usable_input_fraction))
+    expected_reserved_output = config.effective_reserved_output_tokens
+    configured_reserves = {
+        PromptAllocationCategory.SYSTEM: config.token_budgets.reserved_system_tokens,
+        PromptAllocationCategory.SCHEMA: config.token_budgets.reserved_schema_tokens,
+        PromptAllocationCategory.PROTOCOL: config.token_budgets.reserved_protocol_tokens,
+        PromptAllocationCategory.WORKFLOW: config.token_budgets.reserved_workflow_tokens,
+    }
+
+    def validate_plan(plan: RequestTokenPlan) -> None:
+        allocation_bytes = {
+            allocation.category: allocation.estimate.byte_upper_bound_tokens
+            for allocation in plan.allocations
+        }
+        expected_reserves = {
+            category: max(configured, allocation_bytes[category])
+            for category, configured in configured_reserves.items()
+        }
+        if (
+            plan.global_budget.global_input_token_budget != expected_input
+            or plan.global_budget.global_output_token_budget != expected_output
+            or (plan.source_budget.configured_maximum_source_tokens_per_request != expected_source)
+            or plan.context_utilization != expected_utilization
+            or plan.reserved_output_tokens != expected_reserved_output
+            or plan.reserved_system_tokens != expected_reserves[PromptAllocationCategory.SYSTEM]
+            or plan.reserved_schema_tokens != expected_reserves[PromptAllocationCategory.SCHEMA]
+            or plan.reserved_protocol_tokens != expected_reserves[PromptAllocationCategory.PROTOCOL]
+            or plan.reserved_workflow_tokens != expected_reserves[PromptAllocationCategory.WORKFLOW]
+        ):
+            raise ValueError("context request plan differs from effective token configuration")
+
     for request in manifest.requests:
         if isinstance(request, ContextPreflightRequestEvidence):
             plan = request.request_plan
-            if plan is not None and (
-                plan.global_budget.global_input_token_budget != expected_input
-                or plan.global_budget.global_output_token_budget != expected_output
-            ):
-                raise ValueError(
-                    "context preflight plan differs from effective token configuration"
-                )
+            if plan is not None:
+                validate_plan(plan)
             continue
         if not isinstance(request, ContextRequestEvidence):
             continue
         plan = request.request_plan
-        if (
-            plan.global_budget.global_input_token_budget != expected_input
-            or plan.global_budget.global_output_token_budget != expected_output
-        ):
-            raise ValueError("context request plan differs from effective token configuration")
+        validate_plan(plan)
         for reservation in request.atomic_token_reservations:
             if (
                 reservation.global_input_token_limit != expected_input

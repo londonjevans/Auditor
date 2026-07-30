@@ -489,6 +489,21 @@ def _review_evidence_references(
             reasons.append("no source review context matched the artifact request")
         elif len(contexts) != 1:
             reasons.append("artifact request did not join exactly one source review context")
+        elif context is not None:
+            # Imported lazily because context construction imports this module.
+            from mmaudit.orchestration.context import (
+                ContextBudgetError,
+                revalidate_context_package,
+            )
+
+            try:
+                context = revalidate_context_package(context)
+            except ContextBudgetError:
+                context = None
+                reasons.append("source review context failed exact boundary validation")
+                limitations.add(
+                    f"model-review request {artifact.request_id} used an invalid context package"
+                )
 
         artifact_requests: list[ModelSurfaceReviewRequest] = []
         unknown_surface_ids = [

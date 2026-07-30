@@ -6,12 +6,19 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from mmaudit.models.openrouter import StructuredCompletion, strict_json_schema
+import mmaudit.orchestration.pipeline as pipeline_module
+from mmaudit.agents.base import FindingReviewResult
+from mmaudit.models.openrouter import (
+    OpenRouterSchemaError,
+    StructuredCompletion,
+    strict_json_schema,
+)
 from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.schemas import (
     CandidateReviewBatch,
     ContextExcerpt,
     ContextPackage,
+    ContextRequestEvidence,
     ExecutionEvidenceKind,
     Location,
     ModelRequestValidationStatus,
@@ -46,6 +53,7 @@ from mmaudit.orchestration.model_review_evidence import (
 from mmaudit.orchestration.model_review_evidence import (
     seal_model_surface_review_artifact as _seal_model_surface_review_artifact,
 )
+from mmaudit.orchestration.pipeline import _validated_finding_result
 from tests.identity_fixtures import (
     synthetic_strict_zdr_privacy_routing,
     synthetic_token_plan_routing,
@@ -365,10 +373,12 @@ def _context(
         ],
         ast_sources=[_PATH],
     )
-    return ContextPackage(
+    package = ContextPackage(
         role=role,
         byte_budget=100_000,
-        bytes_used=len(_SOURCE.encode()),
+        bytes_used=0,
+        configured_maximum_source_tokens_per_request=200_000,
+        effective_source_byte_ceiling=100_000,
         repository_map=_repository_map(),
         scanner_findings=[],
         excerpts=[
@@ -384,6 +394,11 @@ def _context(
         solidity_index=resolved_index,
         solidity_graphs=graphs or SolidityGraphSet(edges=[]),
     )
+    return _with_exact_context_bytes(package)
+
+
+def _with_exact_context_bytes(context: ContextPackage) -> ContextPackage:
+    return context.model_copy(update={"bytes_used": len(render_context(context).encode("utf-8"))})
 
 
 def _usage(batch: CandidateReviewBatch, *, role: str = _ROLE) -> UsageRecord:
@@ -541,6 +556,74 @@ def test_seal_surface_review_artifact_binds_exact_request_response_and_source() 
     assert first.require_exact_requested_surface_manifest((request,)) == first
 
 
+def test_pipeline_rejects_equal_count_different_surface_artifact_splice(
+    monkeypatch,
+) -> None:
+    first_request = _request()
+    second_request = _request("second")
+    batch = CandidateReviewBatch(
+        findings=[],
+        surface_reviews=(_record(first_request),),
+    )
+    completion = _completion(batch)
+    first_context = _context((first_request,))
+    second_context = _context((second_request,))
+    artifact = seal_model_surface_review_artifact(first_context, completion)
+    assert artifact is not None
+    second_rendered = render_context(second_context).encode("utf-8")
+    second_rendered_sha256 = hashlib.sha256(second_rendered).hexdigest()
+    artifact_payload = artifact.model_dump(mode="json")
+    artifact_payload["rendered_context_sha256"] = second_rendered_sha256
+    artifact_payload["artifact_sha256"] = ModelSurfaceReviewArtifact.calculate_artifact_sha256(
+        artifact_payload
+    )
+    spliced = ModelSurfaceReviewArtifact.model_validate(artifact_payload)
+    context_evidence = ContextRequestEvidence.build(
+        request_id=completion.usage_record.request_id,
+        request_role=_ROLE,
+        context_role=_ROLE,
+        byte_budget=second_context.byte_budget,
+        declared_bytes_used=second_context.bytes_used,
+        rendered_bytes=len(second_rendered),
+        source_bytes=sum(
+            len(excerpt.content.encode("utf-8")) for excerpt in second_context.excerpts
+        ),
+        configured_maximum_source_tokens_per_request=(
+            second_context.configured_maximum_source_tokens_per_request
+        ),
+        effective_source_byte_ceiling=second_context.effective_source_byte_ceiling,
+        rendered_sha256=second_rendered_sha256,
+    )
+    usage = completion.usage_record.model_copy(
+        update={
+            "user_prompt_sha256": second_rendered_sha256,
+            "routing": {
+                **completion.usage_record.routing,
+                "context_request_evidence": context_evidence.model_dump(mode="json"),
+                "context_request_evidence_sha256": context_evidence.evidence_sha256,
+            },
+        }
+    )
+    result = FindingReviewResult(
+        findings=(),
+        surface_review_artifact=spliced,
+        surface_review_context=second_context,
+        completion_usage=usage,
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "is_creditable_usage_record",
+        lambda _record: True,
+    )
+
+    with pytest.raises(OpenRouterSchemaError, match="requested surface manifest"):
+        _validated_finding_result(
+            result,
+            expected_role=_ROLE,
+            usage_records=[usage],
+        )
+
+
 def test_seal_rejects_a_post_hoc_context_substitution() -> None:
     request = _request()
     record = _record(request)
@@ -553,16 +636,18 @@ def test_seal_rejects_a_post_hoc_context_substitution() -> None:
             update={"user_prompt_sha256": hashlib.sha256(frozen_rendering.encode()).hexdigest()}
         ),
     )
-    substituted_context = original_context.model_copy(
-        update={
-            "omissions": [
-                _typed_omission(
-                    "post-hoc context substitution",
-                    category=ContextOmissionCategory.CONTEXT_PACKAGE,
-                    reason=ContextOmissionReason.CONTEXT_BUDGET_EXCLUDED,
-                )
-            ]
-        }
+    substituted_context = _with_exact_context_bytes(
+        original_context.model_copy(
+            update={
+                "omissions": [
+                    _typed_omission(
+                        "post-hoc context substitution",
+                        category=ContextOmissionCategory.CONTEXT_PACKAGE,
+                        reason=ContextOmissionReason.CONTEXT_BUDGET_EXCLUDED,
+                    )
+                ]
+            }
+        )
     )
 
     with pytest.raises(ModelReviewEvidenceError, match="differs from the rendered"):
@@ -570,6 +655,25 @@ def test_seal_rejects_a_post_hoc_context_substitution() -> None:
             substituted_context,
             bound_completion,
             rendered_user_context=frozen_rendering,
+        )
+
+
+def test_seal_rejects_stale_declared_context_bytes() -> None:
+    request = _request()
+    context = _context((request,))
+    payload = dict(context.__dict__)
+    payload["bytes_used"] = context.bytes_used - 1
+    stale = ContextPackage.model_construct(**payload)
+
+    with pytest.raises(ModelReviewEvidenceError, match="exact boundary validation"):
+        seal_model_surface_review_artifact(
+            stale,
+            _completion(
+                CandidateReviewBatch(
+                    findings=[],
+                    surface_reviews=(_record(request),),
+                )
+            ),
         )
 
 
@@ -727,7 +831,7 @@ def test_seal_rejects_a_symbol_only_review_without_source_bytes() -> None:
         _record(request),
         ModelSurfaceReviewCitation(location=None, symbol="deposit(uint256)"),
     )
-    context = _context((request,)).model_copy(update={"excerpts": []})
+    context = _with_exact_context_bytes(_context((request,)).model_copy(update={"excerpts": []}))
 
     with pytest.raises(ModelReviewEvidenceError, match="source evidence was omitted"):
         seal_model_surface_review_artifact(
@@ -738,7 +842,7 @@ def test_seal_rejects_a_symbol_only_review_without_source_bytes() -> None:
 
 def test_seal_rejects_a_known_location_without_source_bytes() -> None:
     request = _request()
-    context = _context((request,)).model_copy(update={"excerpts": []})
+    context = _with_exact_context_bytes(_context((request,)).model_copy(update={"excerpts": []}))
 
     with pytest.raises(ModelReviewEvidenceError, match="source evidence was omitted"):
         seal_model_surface_review_artifact(
@@ -749,11 +853,15 @@ def test_seal_rejects_a_known_location_without_source_bytes() -> None:
 
 def test_seal_rejects_credit_when_preferred_source_was_omitted_by_budget() -> None:
     request = _request()
-    context = _context((request,)).model_copy(
-        update={
-            "excerpts": [],
-            "omissions": [_typed_omission(f"{_PATH}: preferred source omitted by context budget")],
-        }
+    context = _with_exact_context_bytes(
+        _context((request,)).model_copy(
+            update={
+                "excerpts": [],
+                "omissions": [
+                    _typed_omission(f"{_PATH}: preferred source omitted by context budget")
+                ],
+            }
+        )
     )
 
     with pytest.raises(ModelReviewEvidenceError, match="source evidence was omitted"):
@@ -772,11 +880,15 @@ def test_seal_allows_inconclusive_when_source_was_omitted_by_budget() -> None:
             "reachability": None,
         }
     )
-    context = _context((request,)).model_copy(
-        update={
-            "excerpts": [],
-            "omissions": [_typed_omission(f"{_PATH}: preferred source omitted by context budget")],
-        }
+    context = _with_exact_context_bytes(
+        _context((request,)).model_copy(
+            update={
+                "excerpts": [],
+                "omissions": [
+                    _typed_omission(f"{_PATH}: preferred source omitted by context budget")
+                ],
+            }
+        )
     )
 
     artifact = seal_model_surface_review_artifact(
@@ -885,9 +997,11 @@ def test_seal_rejects_location_not_proven_by_the_supplied_source_context() -> No
     poisoned_excerpt = context.excerpts[0].model_copy(
         update={"content": _SOURCE.replace("deposit", "withdraw")}
     )
-    context = context.model_copy(update={"excerpts": [poisoned_excerpt]})
+    context_payload = dict(context.__dict__)
+    context_payload["excerpts"] = (poisoned_excerpt,)
+    context = ContextPackage.model_construct(**context_payload)
 
-    with pytest.raises(ModelReviewEvidenceError, match="not proven by supplied context bytes"):
+    with pytest.raises(ModelReviewEvidenceError, match="exact boundary validation"):
         seal_model_surface_review_artifact(context, _completion(batch))
 
 
@@ -927,11 +1041,12 @@ def test_seal_rejects_an_unsorted_requested_surface_manifest() -> None:
     requests = tuple(sorted((_request(), _request("second")), key=lambda item: item.surface_id))
     records = tuple(_record(request) for request in requests)
     batch = CandidateReviewBatch(findings=[], surface_reviews=records)
-    context = _context(requests).model_copy(
-        update={"requested_model_surfaces": list(reversed(requests))}
-    )
+    context = _context(requests)
+    context_payload = dict(context.__dict__)
+    context_payload["requested_model_surfaces"] = tuple(reversed(requests))
+    context = ContextPackage.model_construct(**context_payload)
 
-    with pytest.raises(ModelReviewEvidenceError, match="unique and sorted"):
+    with pytest.raises(ModelReviewEvidenceError, match="exact boundary validation"):
         seal_model_surface_review_artifact(context, _completion(batch))
 
 

@@ -85,6 +85,7 @@ from mmaudit.models.output_modes import (
 )
 from mmaudit.models.schemas import (
     ContextPackage,
+    ContextRequestEvidence,
     ExecutionEvidenceKind,
     ModelIdentityStrength,
     ModelRequestValidationStatus,
@@ -1109,6 +1110,35 @@ def _prompt_token_allocations(
             )
         )
     return tuple(allocations)
+
+
+def _context_request_evidence(
+    *,
+    request_id: str,
+    request_role: str,
+    context_package: ContextPackage,
+) -> ContextRequestEvidence:
+    """Bind one request to the exact context bytes checked before transport."""
+
+    # Local import avoids the context -> review-evidence -> OpenRouter import cycle.
+    from mmaudit.orchestration.context import render_context, revalidate_context_package
+
+    sealed = revalidate_context_package(context_package)
+    rendered = render_context(sealed).encode("utf-8")
+    return ContextRequestEvidence.build(
+        request_id=request_id,
+        request_role=request_role,
+        context_role=sealed.role,
+        byte_budget=sealed.byte_budget,
+        declared_bytes_used=sealed.bytes_used,
+        rendered_bytes=len(rendered),
+        source_bytes=sum(len(excerpt.content.encode("utf-8")) for excerpt in sealed.excerpts),
+        configured_maximum_source_tokens_per_request=(
+            sealed.configured_maximum_source_tokens_per_request
+        ),
+        effective_source_byte_ceiling=sealed.effective_source_byte_ceiling,
+        rendered_sha256=hashlib.sha256(rendered).hexdigest(),
+    )
 
 
 def _prompt_envelope_byte_upper_bound_tokens(
@@ -2962,7 +2992,19 @@ class OpenRouterClient:
         response_model: type[BaseModel],
         schema_name: str,
         context_package: ContextPackage | None = None,
-    ) -> RequestTokenPlan:
+    ) -> tuple[RequestTokenPlan, ContextRequestEvidence | None]:
+        if context_package is not None:
+            from mmaudit.orchestration.context import (
+                ContextBoundaryError,
+                revalidate_context_package,
+            )
+
+            try:
+                context_package = revalidate_context_package(context_package)
+            except ContextBoundaryError:
+                raise _OpenRouterContextPlanError(
+                    "provider request cannot satisfy the bounded context plan"
+                ) from None
         required_output_tokens = self._required_output_tokens()
         reserved_reasoning_tokens = self._reserved_reasoning_tokens(required_output_tokens)
         requested_completion_tokens = required_output_tokens + reserved_reasoning_tokens
@@ -3007,7 +3049,29 @@ class OpenRouterClient:
                 "provider-visible prompt differs from its bounded context plan"
             ) from None
         try:
-            return build_request_token_plan(
+            context_request_evidence = (
+                _context_request_evidence(
+                    request_id=request_id,
+                    request_role=role,
+                    context_package=context_package,
+                )
+                if context_package is not None
+                else None
+            )
+            configured_maximum_source_tokens = (
+                self.token_budgets.maximum_source_tokens_per_request
+                if self.token_budgets is not None
+                else 200_000
+            )
+            if (
+                context_package is not None
+                and context_package.configured_maximum_source_tokens_per_request
+                != configured_maximum_source_tokens
+            ):
+                raise ContextTokenPlanError(
+                    "context package source ceiling differs from provider planning configuration"
+                )
+            request_token_plan = build_request_token_plan(
                 request_id=request_id,
                 role=role,
                 route_intersection=route_intersection,
@@ -3049,10 +3113,11 @@ class OpenRouterClient:
                     if self.token_budgets is not None
                     else 0
                 ),
-                maximum_source_tokens_per_request=(
-                    self.token_budgets.maximum_source_tokens_per_request
-                    if self.token_budgets is not None
-                    else 200_000
+                maximum_source_tokens_per_request=configured_maximum_source_tokens,
+                context_package_source_byte_ceiling=(
+                    context_package.effective_source_byte_ceiling
+                    if context_package is not None
+                    else None
                 ),
                 requested_surface_count=(
                     len(context_package.requested_model_surfaces)
@@ -3064,6 +3129,7 @@ class OpenRouterClient:
                     _prompt_envelope_byte_upper_bound_tokens(structured_output_plan)
                 ),
             )
+            return request_token_plan, context_request_evidence
         except GlobalTokenBudgetPlanningError:
             raise _OpenRouterGlobalTokenBudgetError(
                 "provider request cannot satisfy the configured global token budget"
@@ -3759,7 +3825,7 @@ class OpenRouterClient:
             )
             raise
         try:
-            request_token_plan = self._request_token_plan(
+            request_token_plan, context_request_evidence = self._request_token_plan(
                 request_id=request_id,
                 role=role,
                 model=model,
@@ -3821,6 +3887,10 @@ class OpenRouterClient:
             ),
             "mmaudit_token_plan_sha256": request_token_plan.plan_sha256,
         }
+        if context_request_evidence is not None:
+            request_metadata["mmaudit_context_request_evidence_sha256"] = (
+                context_request_evidence.evidence_sha256
+            )
         if structured_output_plan.strict_protocol_sha256 is not None:
             request_metadata["mmaudit_output_protocol_sha256"] = (
                 structured_output_plan.strict_protocol_sha256
@@ -4149,6 +4219,7 @@ class OpenRouterClient:
                 host_model_fallback_used=fallback_used,
                 request_token_plan=request_token_plan,
                 token_reservations=attempt_reservations,
+                context_request_evidence=context_request_evidence,
             )
             usage_record = UsageRecord(
                 request_id=request_id,
@@ -4299,6 +4370,7 @@ class OpenRouterClient:
                         model_identity=self._model_identities.get(model),
                         request_token_plan=request_token_plan,
                         token_reservations=attempt_reservations,
+                        context_request_evidence=context_request_evidence,
                     ),
                     prompt_sha256=prompt_hash,
                     user_prompt_sha256=user_prompt_hash,
@@ -4528,6 +4600,7 @@ class OpenRouterClient:
         *,
         request_token_plan: RequestTokenPlan,
         reservations: Sequence[Reservation],
+        context_request_evidence: ContextRequestEvidence | None,
     ) -> dict[str, Any]:
         if not reservations or len(reservations) > 32:
             raise OpenRouterCostControlError(
@@ -4561,7 +4634,7 @@ class OpenRouterClient:
             )
         atomic_evidence = atomic_inventory[-1]
         atomic_hashes = [item.evidence_sha256 for item in atomic_inventory]
-        return {
+        evidence: dict[str, Any] = {
             "request_token_plan": request_token_plan.model_dump(mode="json"),
             "request_token_plan_sha256": request_token_plan.plan_sha256,
             "atomic_token_reservations": [
@@ -4571,6 +4644,10 @@ class OpenRouterClient:
             "atomic_token_reservation": atomic_evidence.model_dump(mode="json"),
             "atomic_token_reservation_sha256": atomic_evidence.evidence_sha256,
         }
+        if context_request_evidence is not None:
+            evidence["context_request_evidence"] = context_request_evidence.model_dump(mode="json")
+            evidence["context_request_evidence_sha256"] = context_request_evidence.evidence_sha256
+        return evidence
 
     def _privacy_routing_evidence(
         self,
@@ -4644,6 +4721,7 @@ class OpenRouterClient:
         host_model_fallback_used: bool,
         request_token_plan: RequestTokenPlan,
         token_reservations: Sequence[Reservation],
+        context_request_evidence: ContextRequestEvidence | None,
         repair_request: bool = False,
     ) -> dict[str, Any]:
         usage = envelope.usage
@@ -4865,6 +4943,7 @@ class OpenRouterClient:
             self._token_plan_routing_evidence(
                 request_token_plan=request_token_plan,
                 reservations=token_reservations,
+                context_request_evidence=context_request_evidence,
             )
         )
         if qualification_binding is not None:
@@ -4891,6 +4970,7 @@ class OpenRouterClient:
         model_identity: _RegisteredModelIdentity | None,
         request_token_plan: RequestTokenPlan,
         token_reservations: Sequence[Reservation],
+        context_request_evidence: ContextRequestEvidence | None,
     ) -> dict[str, Any]:
         router_metadata = payload.get("openrouter_metadata") if isinstance(payload, dict) else None
         finish_reason = _optional_finish_reason(payload)
@@ -4967,6 +5047,7 @@ class OpenRouterClient:
             self._token_plan_routing_evidence(
                 request_token_plan=request_token_plan,
                 reservations=token_reservations,
+                context_request_evidence=context_request_evidence,
             )
         )
         identity_diagnostic = _identity_failure_diagnostic(

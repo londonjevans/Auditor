@@ -7,7 +7,9 @@ import pytest
 from pydantic import ValidationError
 
 from mmaudit.models.token_planning import (
+    CONTEXT_OMISSION_SAMPLE_CAP,
     PROMPT_ALLOCATION_CATEGORIES,
+    ContextOmissionAccumulator,
     ContextOmissionCategory,
     ContextOmissionItem,
     ContextOmissionReason,
@@ -17,6 +19,7 @@ from mmaudit.models.token_planning import (
     PromptAllocationCategory,
     PromptTokenAllocation,
     RequestTokenPlan,
+    SourceTokenBudgetEvidence,
     TokenPlanningError,
     Utf8TokenEstimate,
     build_request_token_plan,
@@ -80,6 +83,7 @@ def _plan(
     configured_reserved_schema_tokens: int = 0,
     configured_reserved_protocol_tokens: int = 0,
     maximum_source_tokens_per_request: int = 200_000,
+    context_package_source_byte_ceiling: int | None = None,
     context_omissions: tuple[ContextOmissionItem, ...] = (),
 ) -> RequestTokenPlan:
     resolved_allocations = allocations or _allocations(source_tokens=63_000)
@@ -97,6 +101,7 @@ def _plan(
         configured_reserved_schema_tokens=configured_reserved_schema_tokens,
         configured_reserved_protocol_tokens=configured_reserved_protocol_tokens,
         maximum_source_tokens_per_request=maximum_source_tokens_per_request,
+        context_package_source_byte_ceiling=context_package_source_byte_ceiling,
         context_omissions=context_omissions,
         prompt_envelope_byte_upper_bound_tokens=sum(
             allocation.estimate.byte_upper_bound_tokens for allocation in resolved_allocations
@@ -193,6 +198,51 @@ def test_high_capacity_route_accepts_approximately_200k_estimated_input_tokens()
     assert plan.source_budget.planned_source_tokens == 195_000
     assert plan.prompt_byte_upper_bound_tokens == 600_000
     assert plan.prompt_byte_upper_bound_tokens <= plan.usable_prompt_tokens
+
+
+def test_source_budget_rejects_resealed_impossible_derived_maximum() -> None:
+    plan = _plan(
+        allocations=_allocations(source_tokens=1_000),
+        context_package_source_byte_ceiling=30_000,
+    )
+    payload = plan.source_budget.model_dump(mode="python")
+    payload.update(
+        {
+            "maximum_source_tokens_per_request": 200_000,
+            "remaining_source_tokens": 199_000,
+        }
+    )
+    payload["evidence_sha256"] = canonical_sha256(
+        {key: value for key, value in payload.items() if key != "evidence_sha256"}
+    )
+
+    with pytest.raises(ValidationError, match="not derived from its governing limits"):
+        SourceTokenBudgetEvidence.model_validate(payload)
+
+
+def test_context_package_source_ceiling_limits_phantom_request_headroom() -> None:
+    plan = _plan(
+        allocations=_allocations(source_tokens=9_000),
+        maximum_source_tokens_per_request=200_000,
+        context_package_source_byte_ceiling=30_000,
+    )
+
+    assert plan.source_budget.context_package_source_byte_ceiling == 30_000
+    assert plan.source_budget.maximum_source_byte_upper_bound_tokens == 30_000
+    assert plan.source_budget.maximum_source_tokens_per_request == 10_000
+    assert plan.source_budget.planned_source_tokens == 9_000
+    assert plan.source_budget.remaining_source_tokens == 1_000
+
+
+def test_context_package_source_ceiling_rejects_undeliverable_source_plan() -> None:
+    with pytest.raises(
+        TokenPlanningError,
+        match="source allocation exceeds its per-request maximum",
+    ):
+        _plan(
+            allocations=_allocations(source_tokens=10_001),
+            context_package_source_byte_ceiling=30_000,
+        )
 
 
 def test_output_allocation_evidence_conserves_visible_output_and_surface_coverage() -> None:
@@ -408,6 +458,66 @@ def test_context_omissions_are_typed_canonical_and_self_bound() -> None:
     )
     with pytest.raises(TokenPlanningError, match="duplicate"):
         _plan(context_omissions=(duplicate, duplicate))
+
+
+def test_context_omission_aggregate_commits_full_inventory_with_bounded_samples() -> None:
+    inventory = tuple(f"{index:064x}" for index in range(1, 14))
+
+    aggregate = ContextOmissionItem.build_aggregate(
+        category=ContextOmissionCategory.SOURCE,
+        reason=ContextOmissionReason.SOURCE_BUDGET_EXCLUDED,
+        omitted_item_sha256s=inventory,
+    )
+    changed = ContextOmissionItem.build_aggregate(
+        category=ContextOmissionCategory.SOURCE,
+        reason=ContextOmissionReason.SOURCE_BUDGET_EXCLUDED,
+        omitted_item_sha256s=(*inventory[:-1], "f" * 64),
+    )
+
+    assert aggregate.omitted_item_count == len(inventory)
+    assert aggregate.sampled_item_sha256s == inventory[:CONTEXT_OMISSION_SAMPLE_CAP]
+    assert aggregate.samples_truncated is True
+    assert aggregate.omitted_item_sha256 not in aggregate.sampled_item_sha256s
+    assert changed.omitted_item_sha256 != aggregate.omitted_item_sha256
+    assert changed.evidence_sha256 != aggregate.evidence_sha256
+
+
+def test_context_omission_aggregate_rejects_an_empty_inventory() -> None:
+    with pytest.raises(TokenPlanningError, match="requires at least one item"):
+        ContextOmissionItem.build_aggregate(
+            category=ContextOmissionCategory.SOURCE,
+            reason=ContextOmissionReason.SOURCE_BUDGET_EXCLUDED,
+            omitted_item_sha256s=(),
+        )
+
+
+def test_context_omission_aggregate_counts_duplicate_events_without_unbounded_samples() -> None:
+    aggregate = ContextOmissionItem.build_aggregate(
+        category=ContextOmissionCategory.GRAPH,
+        reason=ContextOmissionReason.METADATA_BUDGET_EXCLUDED,
+        omitted_item_sha256s=("a" * 64, "a" * 64, "b" * 64),
+    )
+
+    assert aggregate.omitted_item_count == 3
+    assert aggregate.sampled_item_sha256s == ("a" * 64, "b" * 64)
+    assert aggregate.samples_truncated is True
+
+
+def test_context_omission_accumulator_streams_large_inventory_with_fixed_samples() -> None:
+    accumulator = ContextOmissionAccumulator(
+        category=ContextOmissionCategory.SOURCE,
+        reason=ContextOmissionReason.SOURCE_BUDGET_EXCLUDED,
+    )
+    for index in range(10_000):
+        accumulator.add(f"{index + 1:064x}")
+
+    aggregate = accumulator.build()
+
+    assert accumulator.omitted_item_count == 10_000
+    assert len(accumulator.sampled_item_sha256s) == CONTEXT_OMISSION_SAMPLE_CAP
+    assert aggregate.omitted_item_count == 10_000
+    assert aggregate.sampled_item_sha256s == accumulator.sampled_item_sha256s
+    assert aggregate.samples_truncated is True
 
 
 def test_context_omission_reason_must_match_category() -> None:

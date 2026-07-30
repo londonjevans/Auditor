@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mmaudit.agents.base import load_prompt
+from mmaudit.agents.base import ValidatedAgentResult, load_prompt
 from mmaudit.agents.specialists import SPECIALIST_ROLE_REGISTRY
 from mmaudit.config import AuditConfig
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterSchemaError
@@ -20,10 +20,16 @@ class InvariantReviewAgent:
         self.client = client
 
     async def run(self, context: ContextPackage) -> InvariantReviewBatch:
+        return (await self.run_with_evidence(context)).value
+
+    async def run_with_evidence(
+        self,
+        context: ContextPackage,
+    ) -> ValidatedAgentResult[InvariantReviewBatch]:
         configured = self.config.models.role(self.role)
         definition = SPECIALIST_ROLE_REGISTRY[self.role]
         request_role = f"specialist:{self.role}"
-        response = await self.client.complete(
+        completion = await self.client.complete_with_evidence(
             role=request_role,
             models=[configured.primary, *configured.fallbacks],
             system_prompt="\n\n".join(
@@ -40,6 +46,7 @@ class InvariantReviewAgent:
             response_model=InvariantReviewBatch,
             schema_name=definition.effective_schema_name(),
         )
+        response = completion.value
         existing_ids = {
             invariant.id
             for invariant in (
@@ -56,4 +63,7 @@ class InvariantReviewAgent:
             raise OpenRouterSchemaError(
                 "invariant reviewer referenced unknown source-derived invariant identifiers"
             )
-        return response
+        return ValidatedAgentResult(
+            value=response,
+            completion_usage=completion.usage_record,
+        )

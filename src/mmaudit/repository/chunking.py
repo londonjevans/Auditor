@@ -157,6 +157,6 @@ def chunk_text(
             )
             continue
         excerpts.append(_make_excerpt(path, lines, start, end, categories, len(lines)))
-    if not excerpts:
+    if not excerpts and not omissions:
         omissions.append(f"{path}: no complete logical block fit the chunk limit")
     return ChunkingResult(excerpts=tuple(excerpts), omissions=tuple(omissions))

@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-07-30T00:53:06Z",
-  "candidate_commit": "7c65c26003e294072534513f7d78d61eee3c42d0",
-  "autorun_status": "PAUSED",
-  "current_milestone": "paused_after_realistic_scale_solidity_fixtures",
-  "current_ticket": null,
-  "last_checkpoint_commit": "7c65c26003e294072534513f7d78d61eee3c42d0",
+  "updated_at": "2026-07-30T04:15:44Z",
+  "candidate_commit": "0994a6c6e274fa96d4f57fbb248c07e1c8f4f1ba",
+  "autorun_status": "ACTIVE",
+  "current_milestone": "bounded_omission_accounting_and_context_degradation",
+  "current_ticket": "V3-OMISSION-001",
+  "last_checkpoint_commit": "0994a6c6e274fa96d4f57fbb248c07e1c8f4f1ba",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,

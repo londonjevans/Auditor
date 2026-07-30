@@ -7,22 +7,26 @@ import json
 import math
 import re
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from enum import StrEnum
 from itertools import pairwise
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 from pydantic import (
     AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
+    StrictInt,
     field_validator,
     model_validator,
 )
 
-from mmaudit.constants import ANALYSIS_ROLES
+from mmaudit.constants import (
+    ANALYSIS_ROLES,
+    SPECIALIST_INVESTIGATOR_ROLES,
+)
 from mmaudit.models.identity import OpenRouterIdentityStrength
 from mmaudit.models.output_modes import (
     STRUCTURED_OUTPUT_PROTOCOL_VERSION,
@@ -31,7 +35,12 @@ from mmaudit.models.output_modes import (
     output_mode_request_parameters,
 )
 from mmaudit.models.structured_output import StructuredOutputRepairEvidence
-from mmaudit.models.token_planning import ContextOmissionItem
+from mmaudit.models.token_planning import (
+    CONTEXT_OMISSION_GROUP_CAP,
+    UTF8_BYTES_PER_ESTIMATED_TOKEN,
+    ContextOmissionItem,
+    ContextOmissionNoticeLevel,
+)
 
 
 class StrictModel(BaseModel):
@@ -8861,7 +8870,293 @@ class SpecialistExecutionStatus(StrEnum):
     NOT_CONFIGURED = "not_configured"
     NOT_SCHEDULED = "not_scheduled"
     FAILED = "failed"
+    PARTIAL = "partial"
     COMPLETED = "completed"
+
+
+class ContextRequestRelationship(StrEnum):
+    """Host-controlled relationship between one request role and its context role."""
+
+    EXACT = "exact"
+    EXPLOIT_TEST = "exploit_test"
+    FALSIFIER_FALLBACK = "falsifier_fallback"
+    CANDIDATE_CROSS_EXAMINATION = "candidate_cross_examination"
+    WHOLE_PROTOCOL_INDEXED = "whole_protocol_indexed"
+
+
+_BASE_CONTEXT_ROLE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_SPECIALIST_CONTEXT_ROLE = re.compile(r"^specialist:[a-z][a-z0-9_]{0,63}$")
+_CANDIDATE_FALSIFIER_REQUEST_ROLE = re.compile(r"^candidate_falsifier:[0-9a-f]{64}:reviewer_[12]$")
+_WHOLE_PROTOCOL_INDEXED_REQUEST_ROLE = re.compile(r"^whole_protocol_review:(?:0|[1-9][0-9]{0,3})$")
+
+
+def _context_request_relationship(
+    request_role: str,
+    context_role: str,
+) -> ContextRequestRelationship:
+    """Resolve only the request/context relationships emitted by host orchestration."""
+
+    exact_context_role = bool(
+        _BASE_CONTEXT_ROLE.fullmatch(context_role)
+        or _SPECIALIST_CONTEXT_ROLE.fullmatch(context_role)
+    )
+    if request_role == context_role and exact_context_role:
+        return ContextRequestRelationship.EXACT
+    if exact_context_role and request_role == (
+        f"{context_role}:exploit_test"
+        if context_role.startswith("specialist:")
+        else f"specialist:{context_role}:exploit_test"
+    ):
+        return ContextRequestRelationship.EXPLOIT_TEST
+    if request_role == "falsifier" and context_role == "verifier":
+        return ContextRequestRelationship.FALSIFIER_FALLBACK
+    if (
+        context_role == "candidate_cross_examination"
+        and _CANDIDATE_FALSIFIER_REQUEST_ROLE.fullmatch(request_role)
+    ):
+        return ContextRequestRelationship.CANDIDATE_CROSS_EXAMINATION
+    if context_role == "whole_protocol_review" and _WHOLE_PROTOCOL_INDEXED_REQUEST_ROLE.fullmatch(
+        request_role
+    ):
+        return ContextRequestRelationship.WHOLE_PROTOCOL_INDEXED
+    raise ValueError("request role is not valid for the supplied context-package role")
+
+
+class ContextExecutionEvidence(StrictModel):
+    """Exact bounded byte evidence for one materialized context package."""
+
+    context_role: str = Field(min_length=1, max_length=200)
+    byte_budget: StrictInt = Field(ge=0)
+    declared_bytes_used: StrictInt = Field(ge=0)
+    rendered_bytes: StrictInt = Field(ge=0)
+    source_bytes: StrictInt = Field(ge=0)
+    configured_maximum_source_tokens_per_request: StrictInt = Field(gt=0)
+    effective_source_byte_ceiling: StrictInt = Field(ge=0)
+    rendered_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def bytes_are_exact_and_bounded(self) -> ContextExecutionEvidence:
+        if self.declared_bytes_used != self.rendered_bytes:
+            raise ValueError("declared context bytes differ from its rendered UTF-8 bytes")
+        if self.rendered_bytes > self.byte_budget:
+            raise ValueError("rendered context bytes exceed the package budget")
+        configured_source_bytes = min(
+            2**31 - 1,
+            self.configured_maximum_source_tokens_per_request * UTF8_BYTES_PER_ESTIMATED_TOKEN,
+        )
+        if self.effective_source_byte_ceiling > min(
+            self.byte_budget,
+            configured_source_bytes,
+        ):
+            raise ValueError("effective context source ceiling exceeds its governing limit")
+        if self.source_bytes > self.effective_source_byte_ceiling:
+            raise ValueError("context source bytes exceed the package source ceiling")
+        return self
+
+    def context_binding(self) -> tuple[str, int, int, int, int, int, int, str]:
+        """Return every field that binds provider evidence to retained context bytes."""
+
+        return (
+            self.context_role,
+            self.byte_budget,
+            self.declared_bytes_used,
+            self.rendered_bytes,
+            self.source_bytes,
+            self.configured_maximum_source_tokens_per_request,
+            self.effective_source_byte_ceiling,
+            self.rendered_sha256,
+        )
+
+
+class ContextRequestEvidence(ContextExecutionEvidence):
+    """Self-hashed request-to-context binding retained with provider usage evidence."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    request_id: str = Field(min_length=1, max_length=200)
+    request_role: str = Field(min_length=1, max_length=200)
+    relationship: ContextRequestRelationship
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        request_id: str,
+        request_role: str,
+        context_role: str,
+        byte_budget: int,
+        declared_bytes_used: int,
+        rendered_bytes: int,
+        source_bytes: int,
+        configured_maximum_source_tokens_per_request: int,
+        effective_source_byte_ceiling: int,
+        rendered_sha256: str,
+    ) -> ContextRequestEvidence:
+        relationship = _context_request_relationship(request_role, context_role)
+        payload: dict[str, Any] = {
+            "schema_version": "1.0",
+            "request_id": request_id,
+            "request_role": request_role,
+            "context_role": context_role,
+            "relationship": relationship.value,
+            "byte_budget": byte_budget,
+            "declared_bytes_used": declared_bytes_used,
+            "rendered_bytes": rendered_bytes,
+            "source_bytes": source_bytes,
+            "configured_maximum_source_tokens_per_request": (
+                configured_maximum_source_tokens_per_request
+            ),
+            "effective_source_byte_ceiling": effective_source_byte_ceiling,
+            "rendered_sha256": rendered_sha256,
+        }
+        evidence_sha256 = hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        return cls.model_validate({**payload, "evidence_sha256": evidence_sha256})
+
+    @model_validator(mode="after")
+    def relationship_and_hash_are_exact(self) -> ContextRequestEvidence:
+        expected_relationship = _context_request_relationship(
+            self.request_role,
+            self.context_role,
+        )
+        if self.relationship is not expected_relationship:
+            raise ValueError("request/context relationship label is inconsistent")
+        payload = self.model_dump(mode="json", exclude={"evidence_sha256"})
+        expected_hash = hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        if self.evidence_sha256 != expected_hash:
+            raise ValueError("request/context evidence hash is inconsistent")
+        return self
+
+
+class SpecialistAcceptedOutcomeKind(StrEnum):
+    """Host-validated specialist workflow result eligible for execution credit."""
+
+    CANDIDATE_REVIEW = "candidate_review"
+    INVARIANT_REVIEW = "invariant_review"
+    TEST_GENERATION = "test_generation"
+    FALSIFICATION = "falsification"
+    REPORT_QUALITY = "report_quality"
+
+
+class SpecialistAcceptedOutcome(StrictModel):
+    """Self-hashed proof that host-side role validation accepted one response."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    request_id: str = Field(min_length=1, max_length=200)
+    specialist_role: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    request_role: str = Field(min_length=1, max_length=200)
+    outcome_kind: SpecialistAcceptedOutcomeKind
+    validated_response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    context_request_evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    requested_surface_count: StrictInt = Field(default=0, ge=0, le=10_000)
+    surface_review_artifact_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        request_id: str,
+        specialist_role: str,
+        request_role: str,
+        outcome_kind: SpecialistAcceptedOutcomeKind,
+        validated_response_sha256: str,
+        context_request_evidence_sha256: str,
+        requested_surface_count: int = 0,
+        surface_review_artifact_sha256: str | None = None,
+    ) -> SpecialistAcceptedOutcome:
+        payload: dict[str, Any] = {
+            "schema_version": "1.0",
+            "request_id": request_id,
+            "specialist_role": specialist_role,
+            "request_role": request_role,
+            "outcome_kind": outcome_kind.value,
+            "validated_response_sha256": validated_response_sha256,
+            "context_request_evidence_sha256": context_request_evidence_sha256,
+            "requested_surface_count": requested_surface_count,
+            "surface_review_artifact_sha256": surface_review_artifact_sha256,
+        }
+        evidence_sha256 = hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        return cls.model_validate({**payload, "evidence_sha256": evidence_sha256})
+
+    @model_validator(mode="after")
+    def role_shape_and_hash_are_exact(self) -> SpecialistAcceptedOutcome:
+        expected_request_role: str
+        if self.outcome_kind is SpecialistAcceptedOutcomeKind.CANDIDATE_REVIEW:
+            if self.specialist_role not in SPECIALIST_INVESTIGATOR_ROLES:
+                raise ValueError("candidate-review outcome requires an investigator role")
+            expected_request_role = f"specialist:{self.specialist_role}"
+            if self.requested_surface_count > 0 and self.surface_review_artifact_sha256 is None:
+                raise ValueError("requested candidate surfaces require an accepted review artifact")
+            if (
+                self.requested_surface_count == 0
+                and self.surface_review_artifact_sha256 is not None
+            ):
+                raise ValueError(
+                    "surface-review artifact cannot be declared without requested surfaces"
+                )
+        elif self.outcome_kind is SpecialistAcceptedOutcomeKind.INVARIANT_REVIEW:
+            if self.specialist_role != "invariant_review":
+                raise ValueError("invariant-review outcome has an inconsistent specialist role")
+            expected_request_role = "specialist:invariant_review"
+        elif self.outcome_kind is SpecialistAcceptedOutcomeKind.TEST_GENERATION:
+            if self.specialist_role not in {
+                "test_generation",
+                "exploit_reproduction_planner",
+            }:
+                raise ValueError("test-generation outcome has an inconsistent specialist role")
+            expected_request_role = f"specialist:{self.specialist_role}:exploit_test"
+        elif self.outcome_kind is SpecialistAcceptedOutcomeKind.FALSIFICATION:
+            if self.specialist_role != "falsifier":
+                raise ValueError("falsification outcome has an inconsistent specialist role")
+            expected_request_role = "specialist:falsifier"
+        else:
+            if self.specialist_role != "report_quality":
+                raise ValueError("report-quality outcome has an inconsistent specialist role")
+            expected_request_role = "specialist:report_quality"
+        if self.request_role != expected_request_role:
+            raise ValueError("accepted specialist outcome has an inconsistent request role")
+        if self.outcome_kind is not SpecialistAcceptedOutcomeKind.CANDIDATE_REVIEW and (
+            self.requested_surface_count != 0 or self.surface_review_artifact_sha256 is not None
+        ):
+            raise ValueError("non-investigator outcome cannot claim model-surface review")
+        payload = self.model_dump(mode="json", exclude={"evidence_sha256"})
+        expected_hash = hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        if self.evidence_sha256 != expected_hash:
+            raise ValueError("accepted specialist outcome hash is inconsistent")
+        return self
 
 
 class SpecialistExecutionRecord(StrictModel):
@@ -8876,10 +9171,64 @@ class SpecialistExecutionRecord(StrictModel):
     context_limit_bytes: int = Field(ge=1)
     context_budget_bytes: int | None = Field(default=None, ge=1)
     context_bytes_used: int | None = Field(default=None, ge=0)
-    request_roles: list[str] = Field(default_factory=list, max_length=100)
-    successful_requests: int = Field(default=0, ge=0)
-    failed_requests: int = Field(default=0, ge=0)
+    contexts: tuple[ContextExecutionEvidence, ...] = Field(default=(), max_length=4_096)
+    request_contexts: tuple[ContextRequestEvidence, ...] = Field(
+        default=(),
+        max_length=4_096,
+    )
+    accepted_outcomes: tuple[SpecialistAcceptedOutcome, ...] = Field(
+        default=(),
+        max_length=4_096,
+    )
+    request_roles: list[str] = Field(default_factory=list, max_length=4_096)
+    successful_request_ids: tuple[str, ...] = Field(default=(), max_length=4_096)
+    failed_request_ids: tuple[str, ...] = Field(default=(), max_length=4_096)
+    successful_requests: StrictInt = Field(default=0, ge=0)
+    failed_requests: StrictInt = Field(default=0, ge=0)
+    source_review_creditable_requests: StrictInt = Field(default=0, ge=0)
     status: SpecialistExecutionStatus
+
+    @field_validator("successful_request_ids", "failed_request_ids")
+    @classmethod
+    def request_ids_are_canonical(
+        cls,
+        value: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if any(not request_id or len(request_id) > 200 for request_id in value):
+            raise ValueError("specialist request IDs must be non-empty and bounded")
+        if value != tuple(sorted(set(value))):
+            raise ValueError("specialist request IDs must be unique and canonically sorted")
+        return value
+
+    def derived_source_review_creditable_requests(self) -> int:
+        """Recompute source-backed successes without trusting the serialized counter."""
+
+        successful_ids = set(self.successful_request_ids)
+        retained_bindings = {context.context_binding() for context in self.contexts}
+        expected_context_role = f"specialist:{self.role}"
+        request_contexts_by_id = {context.request_id: context for context in self.request_contexts}
+        accepted_candidate_ids = {
+            outcome.request_id
+            for outcome in self.accepted_outcomes
+            if outcome.outcome_kind is SpecialistAcceptedOutcomeKind.CANDIDATE_REVIEW
+            and outcome.request_role == expected_context_role
+            and outcome.requested_surface_count > 0
+            and outcome.surface_review_artifact_sha256 is not None
+            and ((request_context := request_contexts_by_id.get(outcome.request_id)) is not None)
+            and outcome.context_request_evidence_sha256 == request_context.evidence_sha256
+        }
+        return len(
+            {
+                request_context.request_id
+                for request_context in self.request_contexts
+                if request_context.request_id in successful_ids
+                and request_context.request_id in accepted_candidate_ids
+                and request_context.context_role == expected_context_role
+                and request_context.request_role == expected_context_role
+                and request_context.context_binding() in retained_bindings
+                and request_context.source_bytes > 0
+            }
+        )
 
     @model_validator(mode="after")
     def execution_state_is_consistent(self) -> SpecialistExecutionRecord:
@@ -8891,16 +9240,95 @@ class SpecialistExecutionRecord(StrictModel):
                 raise ValueError("specialist context budget exceeds its role limit")
             if self.context_bytes_used > self.context_budget_bytes:
                 raise ValueError("specialist context usage exceeds its allocated budget")
+        if len(self.contexts) == 1:
+            context = self.contexts[0]
+            if (
+                self.context_budget_bytes != context.byte_budget
+                or self.context_bytes_used != context.rendered_bytes
+            ):
+                raise ValueError("single-context specialist summary differs from its inventory")
+        elif self.context_budget_bytes is not None or self.context_bytes_used is not None:
+            raise ValueError("singular context summary is valid only for one actual context")
+        if any(context.byte_budget > self.context_limit_bytes for context in self.contexts):
+            raise ValueError("specialist context budget exceeds its configured package limit")
+        expected_context_role = f"specialist:{self.role}"
+        if any(context.context_role != expected_context_role for context in self.contexts):
+            raise ValueError("retained specialist context has an inconsistent role")
+        retained_bindings = {context.context_binding() for context in self.contexts}
+        request_context_ids = [context.request_id for context in self.request_contexts]
+        if len(request_context_ids) != len(set(request_context_ids)):
+            raise ValueError("specialist request-context evidence IDs must be unique")
+        allowed_request_roles = (
+            {f"{expected_context_role}:exploit_test"}
+            if self.role in {"test_generation", "exploit_reproduction_planner"}
+            else {expected_context_role}
+        )
+        if self.request_roles != sorted(set(self.request_roles)) or any(
+            request_role not in allowed_request_roles for request_role in self.request_roles
+        ):
+            raise ValueError("specialist request roles must be unique, canonical, and role-bound")
+        request_context_roles = {context.request_role for context in self.request_contexts}
+        if not request_context_roles.issubset(self.request_roles):
+            raise ValueError("specialist request-role summary omits request-context evidence")
+        if any(
+            context.context_role != expected_context_role
+            or context.request_role not in allowed_request_roles
+            or context.context_binding() not in retained_bindings
+            for context in self.request_contexts
+        ):
+            raise ValueError("request context does not match a retained specialist context")
+        successful_ids = set(self.successful_request_ids)
+        failed_ids = set(self.failed_request_ids)
+        outcome_ids = [outcome.request_id for outcome in self.accepted_outcomes]
+        if len(outcome_ids) != len(set(outcome_ids)):
+            raise ValueError("accepted specialist outcome request IDs must be unique")
+        if any(
+            outcome.specialist_role != self.role
+            or outcome.request_role not in allowed_request_roles
+            for outcome in self.accepted_outcomes
+        ):
+            raise ValueError("accepted specialist outcome is not bound to its responsibility")
+        request_contexts_by_id = {context.request_id: context for context in self.request_contexts}
+        if any(
+            (request_context := request_contexts_by_id.get(outcome.request_id)) is None
+            or outcome.context_request_evidence_sha256 != request_context.evidence_sha256
+            for outcome in self.accepted_outcomes
+        ):
+            raise ValueError("accepted specialist outcome context evidence digest is inconsistent")
+        if successful_ids & failed_ids:
+            raise ValueError("specialist successful and failed request IDs must be disjoint")
+        if self.successful_requests != len(successful_ids):
+            raise ValueError("successful specialist request count differs from its ID inventory")
+        if self.failed_requests != len(failed_ids):
+            raise ValueError("failed specialist request count differs from its ID inventory")
+        accounted_ids = successful_ids | failed_ids
+        if accounted_ids and not self.request_roles:
+            raise ValueError("specialist request accounting requires a request-role summary")
+        if any(request_id not in accounted_ids for request_id in request_context_ids):
+            raise ValueError("request-context evidence is absent from specialist accounting")
+        if successful_ids - set(request_context_ids):
+            raise ValueError("successful request lacks bound context evidence")
+        if successful_ids != set(outcome_ids):
+            raise ValueError("successful request inventory differs from accepted role outcomes")
+        derived_credit = self.derived_source_review_creditable_requests()
+        if self.source_review_creditable_requests != derived_credit:
+            raise ValueError("source-review credit differs from source-backed request evidence")
         if not self.configured and self.status is not SpecialistExecutionStatus.NOT_CONFIGURED:
             raise ValueError("unconfigured specialist must remain not_configured")
-        if self.status is SpecialistExecutionStatus.COMPLETED and self.successful_requests == 0:
-            raise ValueError("completed specialist requires a successful request")
-        if self.status is SpecialistExecutionStatus.COMPLETED and self.context_budget_bytes is None:
+        if self.status is SpecialistExecutionStatus.COMPLETED and (
+            self.successful_requests == 0 or self.failed_requests > 0
+        ):
+            raise ValueError("completed specialist requires success without failed requests")
+        if self.status is SpecialistExecutionStatus.COMPLETED and not self.contexts:
             raise ValueError("completed specialist requires bounded context evidence")
         if self.status is SpecialistExecutionStatus.FAILED and (
             self.failed_requests == 0 or self.successful_requests > 0
         ):
             raise ValueError("failed specialist requires failures and no successful request")
+        if self.status is SpecialistExecutionStatus.PARTIAL and (
+            self.failed_requests == 0 or self.successful_requests == 0
+        ):
+            raise ValueError("partial specialist requires successful and failed requests")
         if self.status is SpecialistExecutionStatus.NOT_SCHEDULED and (
             not self.configured or self.successful_requests or self.failed_requests
         ):
@@ -9019,42 +9447,58 @@ class RepositoryMap(StrictModel):
 
 
 class ContextExcerpt(StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     path: str
     start_line: int
     end_line: int
     content_hash: str
     content: str
-    categories: list[str] = Field(default_factory=list)
+    categories: tuple[str, ...] = ()
     omitted_before: bool = False
     omitted_after: bool = False
 
+    @model_validator(mode="after")
+    def content_hash_is_exact(self) -> ContextExcerpt:
+        if self.content_hash != hashlib.sha256(self.content.encode("utf-8")).hexdigest():
+            raise ValueError("context excerpt hash differs from its source bytes")
+        return self
+
 
 class ContextPackage(StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     role: str
-    byte_budget: int
-    bytes_used: int
+    byte_budget: StrictInt = Field(ge=0)
+    bytes_used: StrictInt = Field(ge=0)
+    configured_maximum_source_tokens_per_request: StrictInt = Field(gt=0)
+    effective_source_byte_ceiling: StrictInt = Field(ge=0)
     repository_map: RepositoryMap
-    scanner_findings: list[ScannerFinding]
-    excerpts: list[ContextExcerpt]
-    requested_model_surfaces: list[ModelSurfaceReviewRequest] = Field(default_factory=list)
+    scanner_findings: tuple[ScannerFinding, ...]
+    excerpts: tuple[ContextExcerpt, ...]
+    requested_model_surfaces: tuple[ModelSurfaceReviewRequest, ...] = ()
     threat_model: ThreatModel | None = None
-    solidity_projects: list[SolidityProjectMetadata] = Field(default_factory=list)
-    solidity_compilations: list[SolidityCompilationResult] = Field(default_factory=list)
+    solidity_projects: tuple[SolidityProjectMetadata, ...] = ()
+    solidity_compilations: tuple[SolidityCompilationResult, ...] = ()
     solidity_index: SoliditySymbolIndex | None = None
     solidity_graphs: SolidityGraphSet | None = None
     solidity_invariants: InvariantSuite | None = None
-    invariant_executions: list[InvariantExecutionResult] = Field(default_factory=list)
-    economic_simulations: list[EconomicSimulationPlan] = Field(default_factory=list)
-    formal_runs: list[FormalToolRun] = Field(default_factory=list)
+    invariant_executions: tuple[InvariantExecutionResult, ...] = ()
+    economic_simulations: tuple[EconomicSimulationPlan, ...] = ()
+    formal_runs: tuple[FormalToolRun, ...] = ()
     solidity_coverage: SolidityCoverage | None = None
-    omissions: list[ContextOmissionItem] = Field(default_factory=list, max_length=4_096)
+    omission_notice_level: ContextOmissionNoticeLevel = ContextOmissionNoticeLevel.MANIFEST_ONLY
+    omissions: tuple[ContextOmissionItem, ...] = Field(
+        default=(),
+        max_length=CONTEXT_OMISSION_GROUP_CAP,
+    )
 
     @field_validator("requested_model_surfaces")
     @classmethod
     def requested_model_surfaces_are_canonical(
         cls,
-        value: list[ModelSurfaceReviewRequest],
-    ) -> list[ModelSurfaceReviewRequest]:
+        value: tuple[ModelSurfaceReviewRequest, ...],
+    ) -> tuple[ModelSurfaceReviewRequest, ...]:
         surface_ids = [request.surface_id for request in value]
         if surface_ids != sorted(set(surface_ids)):
             raise ValueError("requested model surfaces must be unique and sorted by surface ID")
@@ -9064,20 +9508,56 @@ class ContextPackage(StrictModel):
     @classmethod
     def omissions_are_typed_unique_and_canonical(
         cls,
-        value: list[ContextOmissionItem],
-    ) -> list[ContextOmissionItem]:
-        canonical = sorted(
-            value,
-            key=lambda item: (
-                item.category.value,
-                item.reason.value,
-                item.omitted_item_sha256,
-            ),
+        value: tuple[ContextOmissionItem, ...],
+    ) -> tuple[ContextOmissionItem, ...]:
+        canonical = tuple(
+            sorted(
+                value,
+                key=lambda item: (
+                    item.category.value,
+                    item.reason.value,
+                    item.omitted_item_sha256,
+                ),
+            )
         )
-        hashes = [item.omitted_item_sha256 for item in canonical]
-        if value != canonical or len(hashes) != len(set(hashes)):
-            raise ValueError("context-package omissions must be unique and canonically sorted")
+        groups = [(item.category, item.reason) for item in canonical]
+        if value != canonical or len(groups) != len(set(groups)):
+            raise ValueError(
+                "context-package omission groups must be unique and canonically sorted"
+            )
         return value
+
+    @model_validator(mode="after")
+    def source_ceiling_is_explicit_and_package_bound(self) -> ContextPackage:
+        if self.bytes_used > self.byte_budget:
+            raise ValueError("declared context-package bytes exceed its byte budget")
+        configured = self.configured_maximum_source_tokens_per_request
+        effective = self.effective_source_byte_ceiling
+        configured_bytes = min(
+            2**31 - 1,
+            configured * UTF8_BYTES_PER_ESTIMATED_TOKEN,
+        )
+        if effective > configured_bytes or effective > self.byte_budget:
+            raise ValueError("effective context-package source ceiling exceeds its governing limit")
+        delivered_source_bytes = sum(
+            len(excerpt.content.encode("utf-8")) for excerpt in self.excerpts
+        )
+        if delivered_source_bytes > effective:
+            raise ValueError("context-package source content exceeds its effective source ceiling")
+        return self
+
+    def model_copy(
+        self,
+        *,
+        update: Mapping[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        """Copy through validation so bounded immutable omission tuples cannot be bypassed."""
+
+        payload = self.model_dump(mode="python")
+        if update is not None:
+            payload.update(update)
+        return type(self).model_validate(payload)
 
 
 class MinimumAnalysisFloor(StrictModel):

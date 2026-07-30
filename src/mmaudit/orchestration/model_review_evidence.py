@@ -146,6 +146,18 @@ def seal_model_surface_review_artifact(
 ) -> ModelSurfaceReviewArtifact | None:
     """Validate and hash-link one completed response to its exact requested surfaces."""
 
+    # Imported lazily because context construction imports the surface inventory.
+    from mmaudit.orchestration.context import (
+        ContextBudgetError,
+        revalidate_context_package,
+    )
+
+    try:
+        context = revalidate_context_package(context)
+    except ContextBudgetError as exc:
+        raise ModelReviewEvidenceError(
+            "model surface evidence context failed exact boundary validation"
+        ) from exc
     if context.role not in _BASE_REVIEW_ROLES | _SPECIALIST_REVIEW_ROLES:
         raise ModelReviewEvidenceError(
             "model surface evidence was produced by a non-investigator role"
@@ -253,9 +265,13 @@ def model_review_context_sha256(context: ContextPackage) -> str:
     """Hash the exact deterministic user-context rendering without retaining its content."""
 
     # Imported lazily because context construction imports the surface inventory.
-    from mmaudit.orchestration.context import render_context
+    from mmaudit.orchestration.context import (
+        render_context,
+        revalidate_context_package,
+    )
 
-    return hashlib.sha256(render_context(context).encode()).hexdigest()
+    sealed = revalidate_context_package(context)
+    return hashlib.sha256(render_context(sealed).encode()).hexdigest()
 
 
 def validate_model_surface_review_record(

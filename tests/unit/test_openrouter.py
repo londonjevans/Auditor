@@ -136,6 +136,36 @@ class LooseAnswer(BaseModel):
     answer: str
 
 
+def _empty_context_package(*, role: str = "source_audit") -> ContextPackage:
+    package = ContextPackage(
+        role=role,
+        byte_budget=10_000,
+        bytes_used=0,
+        configured_maximum_source_tokens_per_request=200_000,
+        effective_source_byte_ceiling=0,
+        repository_map=RepositoryMap(
+            root_name="synthetic-request-context",
+            languages={"Solidity": 1},
+            frameworks=[],
+            manifests=[],
+            entry_points=[],
+            api_surfaces=[],
+            auth_components=[],
+            data_layers=[],
+            network_clients=[],
+            file_handlers=[],
+            configuration_files=[],
+            sensitive_processing=[],
+            security_tests=[],
+            files=[],
+            omitted_files=[],
+        ),
+        scanner_findings=[],
+        excerpts=[],
+    )
+    return package.model_copy(update={"bytes_used": len(render_context(package).encode("utf-8"))})
+
+
 def _qualification_routing(
     *,
     model: str = "alpha/atlas-secure",
@@ -4761,6 +4791,8 @@ async def test_context_package_omitted_from_prompt_is_typed_planless_preflight(
         role="source_audit",
         byte_budget=10_000,
         bytes_used=0,
+        configured_maximum_source_tokens_per_request=200_000,
+        effective_source_byte_ceiling=0,
         repository_map=RepositoryMap(
             root_name="synthetic-context-preflight",
             languages={"Solidity": 1},
@@ -4780,6 +4812,9 @@ async def test_context_package_omitted_from_prompt_is_typed_planless_preflight(
         ),
         scanner_findings=[],
         excerpts=[],
+    )
+    package = package.model_copy(
+        update={"bytes_used": len(render_context(package).encode("utf-8"))}
     )
     client, http_client, usage = _client(config_factory(), handler)
     try:
@@ -4811,6 +4846,183 @@ async def test_context_package_omitted_from_prompt_is_typed_planless_preflight(
     assert preflight.planning_snapshot.allocations is None
     assert preflight.planning_snapshot.output_allocations is not None
     assert preflight.planning_snapshot.prompt_envelope_byte_upper_bound_tokens is not None
+
+
+@pytest.mark.asyncio
+async def test_context_package_source_configuration_mismatch_fails_before_transport(
+    config_factory,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    package = ContextPackage(
+        role="source_audit",
+        byte_budget=10_000,
+        bytes_used=0,
+        configured_maximum_source_tokens_per_request=199_999,
+        effective_source_byte_ceiling=0,
+        repository_map=RepositoryMap(
+            root_name="synthetic-context-mismatch",
+            languages={"Solidity": 1},
+            frameworks=[],
+            manifests=[],
+            entry_points=[],
+            api_surfaces=[],
+            auth_components=[],
+            data_layers=[],
+            network_clients=[],
+            file_handlers=[],
+            configuration_files=[],
+            sensitive_processing=[],
+            security_tests=[],
+            files=[],
+            omitted_files=[],
+        ),
+        scanner_findings=[],
+        excerpts=[],
+    )
+    package = package.model_copy(
+        update={"bytes_used": len(render_context(package).encode("utf-8"))}
+    )
+    rendered = render_context(package)
+    client, http_client, usage = _client(config_factory(), handler)
+    try:
+        with pytest.raises(OpenRouterRequestLimitError):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt=rendered,
+                context_package=package,
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 0
+    assert usage.records == []
+    assert client.context_preflight.records[-1].reason is (
+        ContextPreflightReason.CONTEXT_PLAN_INVALID
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_role", "context_role"),
+    [
+        ("specialist:access_control:arbitrary", "specialist:access_control"),
+        ("specialist:access_control", "specialist:reentrancy"),
+        ("whole_protocol_review:", "whole_protocol_review"),
+        ("whole_protocol_review:00", "whole_protocol_review"),
+        ("whole_protocol_review:10000", "whole_protocol_review"),
+        ("whole_protocol_review:not-an-index", "whole_protocol_review"),
+    ],
+)
+async def test_request_role_must_have_an_exact_typed_context_relationship(
+    config_factory,
+    request_role: str,
+    context_role: str,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    package = _empty_context_package(role=context_role)
+    client, http_client, usage = _client(config_factory(), handler)
+    try:
+        with pytest.raises(OpenRouterRequestLimitError):
+            await client.complete(
+                role=request_role,
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt=render_context(package),
+                context_package=package,
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 0
+    assert usage.records == []
+    assert client.context_preflight.records[-1].reason is (
+        ContextPreflightReason.CONTEXT_PLAN_INVALID
+    )
+
+
+@pytest.mark.asyncio
+async def test_indexed_whole_protocol_request_has_a_typed_context_relationship(
+    config_factory,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"reviewed"}')
+
+    package = _empty_context_package(role="whole_protocol_review")
+    client, http_client, usage = _client(config_factory(), handler)
+    try:
+        response = await client.complete(
+            role="whole_protocol_review:0",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt=render_context(package),
+            context_package=package,
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert response.answer == "reviewed"
+    assert calls == 1
+    context_evidence = usage.records[0].routing["context_request_evidence"]
+    assert context_evidence["request_role"] == "whole_protocol_review:0"
+    assert context_evidence["context_role"] == "whole_protocol_review"
+    assert context_evidence["relationship"] == "whole_protocol_indexed"
+
+
+@pytest.mark.asyncio
+async def test_stale_context_package_bytes_fail_before_transport(config_factory) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not execute"}')
+
+    package = _empty_context_package()
+    stale = package.model_copy(update={"bytes_used": package.bytes_used - 1})
+    client, http_client, usage = _client(config_factory(), handler)
+    try:
+        with pytest.raises(OpenRouterRequestLimitError):
+            await client.complete(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt=render_context(stale),
+                context_package=stale,
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 0
+    assert usage.records == []
+    assert client.context_preflight.records[-1].reason is (
+        ContextPreflightReason.CONTEXT_PLAN_INVALID
+    )
 
 
 @pytest.mark.asyncio
@@ -7001,6 +7213,8 @@ async def test_context_package_token_plan_binds_category_hashes_and_omissions(
         role="source_audit",
         byte_budget=100_000,
         bytes_used=0,
+        configured_maximum_source_tokens_per_request=200_000,
+        effective_source_byte_ceiling=75_000,
         repository_map=RepositoryMap(
             root_name="synthetic-token-context",
             languages={"Solidity": 1},
@@ -7042,6 +7256,9 @@ async def test_context_package_token_plan_binds_category_hashes_and_omissions(
             ),
         ],
     )
+    package = package.model_copy(
+        update={"bytes_used": len(render_context(package).encode("utf-8"))}
+    )
     rendered = render_context(package)
     workflow_prefix = "Review this synthetic context.\n"
     expected_measurements = context_category_measurements(package)
@@ -7079,10 +7296,24 @@ async def test_context_package_token_plan_binds_category_hashes_and_omissions(
     assert plan["context_omission_sha256s"] == sorted(
         item.omitted_item_sha256 for item in package.omissions
     )
+    assert plan["source_budget"]["context_package_source_byte_ceiling"] == 75_000
+    assert plan["source_budget"]["maximum_source_byte_upper_bound_tokens"] == 75_000
+    assert plan["source_budget"]["maximum_source_tokens_per_request"] == 25_000
     assert {(item["category"], item["reason"]) for item in plan["context_omissions"]} == {
         ("context_package", "CONTEXT_BUDGET_EXCLUDED"),
         ("source", "SOURCE_BUDGET_EXCLUDED"),
     }
+    context_evidence = usage.records[0].routing["context_request_evidence"]
+    assert context_evidence["request_role"] == "source_audit"
+    assert context_evidence["context_role"] == "source_audit"
+    assert context_evidence["relationship"] == "exact"
+    assert context_evidence["declared_bytes_used"] == package.bytes_used
+    assert context_evidence["rendered_bytes"] == package.bytes_used
+    assert context_evidence["source_bytes"] == len(source.encode("utf-8"))
+    assert (
+        usage.records[0].routing["context_request_evidence_sha256"]
+        == (context_evidence["evidence_sha256"])
+    )
 
 
 @pytest.mark.asyncio

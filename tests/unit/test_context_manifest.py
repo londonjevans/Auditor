@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable
+import os
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from pydantic import ValidationError
@@ -22,6 +24,7 @@ from mmaudit.models.schemas import (
     UsageRecord,
 )
 from mmaudit.models.token_planning import (
+    CONTEXT_OMISSION_SAMPLE_CAP,
     PROMPT_ALLOCATION_CATEGORIES,
     ContextOmissionCategory,
     ContextOmissionItem,
@@ -33,11 +36,13 @@ from mmaudit.models.token_planning import (
     RequestTokenPlan,
     build_request_token_plan,
 )
+from mmaudit.orchestration import context_manifest as context_manifest_module
 from mmaudit.orchestration.budgets import AtomicTokenReservationEvidence
 from mmaudit.orchestration.context_manifest import (
     ActualTokenUsageSource,
     ContextManifest,
     ContextManifestError,
+    ContextOmissionProvenance,
     ContextPlanningSnapshot,
     ContextPreflightLedger,
     ContextPreflightReason,
@@ -56,6 +61,12 @@ from mmaudit.orchestration.manifest import (
     _validate_context_manifest_configuration,
     _validated_context_manifest,
 )
+from mmaudit.reporting.json_report import stable_json
+
+_PreflightRequestState = Literal[
+    ContextRequestState.PRE_FLIGHT_REJECTED,
+    ContextRequestState.NOT_SENT,
+]
 
 
 @pytest.fixture(autouse=True)
@@ -86,6 +97,7 @@ def _plan(
     *,
     request_id: str = "request-1",
     raw_canary: str = "PRIVATE-SOURCE-CANARY",
+    omitted_item_sha256s: Sequence[str] | None = None,
 ) -> RequestTokenPlan:
     route = EndpointRouteTokenCapacity.build(
         exact_model_id="alpha/frontier-secure",
@@ -117,18 +129,24 @@ def _plan(
         role="source_audit",
         route_intersection=EndpointRouteIntersection.build((route,)),
         allocations=allocations,
-        required_output_tokens=4_096,
+        required_output_tokens=2_048,
         reserved_reasoning_tokens=1_024,
         global_input_token_budget=1_000_000,
         global_output_token_budget=100_000,
         context_utilization=Decimal("0.70"),
+        configured_reserved_system_tokens=8_192,
+        configured_reserved_schema_tokens=8_192,
+        configured_reserved_protocol_tokens=2_048,
+        configured_reserved_workflow_tokens=32_768,
         context_omissions=(
-            ContextOmissionItem.build(
+            ContextOmissionItem.build_aggregate(
                 category=ContextOmissionCategory.SOURCE,
                 reason=ContextOmissionReason.SOURCE_BUDGET_EXCLUDED,
-                omitted_item_sha256=hashlib.sha256(
-                    b"source excerpt omitted by role budget"
-                ).hexdigest(),
+                omitted_item_sha256s=(
+                    tuple(omitted_item_sha256s)
+                    if omitted_item_sha256s is not None
+                    else (hashlib.sha256(b"source excerpt omitted by role budget").hexdigest(),)
+                ),
             ),
         ),
         prompt_envelope_byte_upper_bound_tokens=sum(
@@ -219,6 +237,26 @@ def _usage(
         identity_strength=ModelIdentityStrength.UNBOUND,
         status="success",
         attempts=1,
+    )
+
+
+def _retry_preflight(
+    plan: RequestTokenPlan,
+    *,
+    attempt: int = 2,
+) -> ContextPreflightRequestEvidence:
+    return ContextPreflightRequestEvidence.build(
+        request_id=f"{plan.request_id}:attempt:{attempt}:preflight",
+        logical_request_id=plan.request_id,
+        role=plan.role,
+        requested_model="alpha/frontier-secure",
+        request_state=ContextRequestState.PRE_FLIGHT_REJECTED,
+        decision_source=ContextPreflightSource.BUDGET_MANAGER,
+        reason=ContextPreflightReason.COST_BUDGET,
+        decision_evidence_sha256s=("a" * 64, plan.plan_sha256),
+        estimated_prompt_tokens=plan.estimated_prompt_tokens,
+        requested_completion_tokens=plan.requested_completion_tokens,
+        request_plan=plan,
     )
 
 
@@ -321,16 +359,101 @@ def test_context_manifest_is_deterministic_hash_only_and_conserved() -> None:
     assert '"content"' not in serialized
 
 
+def test_context_manifest_retains_bounded_aggregate_omission_commitment() -> None:
+    omitted_hashes = tuple(
+        hashlib.sha256(f"synthetic-omitted-block-{index:04d}".encode()).hexdigest()
+        for index in range(1_000)
+    )
+    plan = _plan(omitted_item_sha256s=omitted_hashes)
+    manifest = build_context_manifest(
+        run_id="bounded-omissions",
+        usage_records=[_usage(plan=plan)],
+    )
+    request = manifest.requests[0]
+    assert isinstance(request, ContextRequestEvidence)
+    aggregate = next(
+        omission
+        for omission in request.omissions
+        if omission.provenance is ContextOmissionProvenance.HASHED_CONTEXT_PACKAGE
+    )
+    planned_aggregate = plan.context_omissions[0]
+
+    assert aggregate.inventory_sha256 == planned_aggregate.omitted_item_sha256
+    assert aggregate.context_omission_evidence_sha256 == planned_aggregate.evidence_sha256
+    assert aggregate.omitted_item_count == len(omitted_hashes)
+    assert len(aggregate.omitted_item_sha256s) == CONTEXT_OMISSION_SAMPLE_CAP
+    assert aggregate.samples_truncated
+    assert manifest.totals.omitted_item_count == len(omitted_hashes)
+    assert manifest.totals.sampled_omitted_item_count == CONTEXT_OMISSION_SAMPLE_CAP
+    assert manifest.totals.truncated_omission_record_count == 1
+
+    serialized = manifest.model_dump_json()
+    unsampled_hash = next(
+        value for value in omitted_hashes if value not in aggregate.omitted_item_sha256s
+    )
+    assert unsampled_hash not in serialized
+    assert ContextManifest.model_validate_json(serialized) == manifest
+
+
+def test_context_manifest_rejects_valid_aggregate_from_a_different_request_plan() -> None:
+    original_hashes = tuple(
+        hashlib.sha256(f"original-{index:02d}".encode()).hexdigest()
+        for index in range(CONTEXT_OMISSION_SAMPLE_CAP + 2)
+    )
+    replacement_hashes = tuple(
+        hashlib.sha256(f"replacement-{index:02d}".encode()).hexdigest()
+        for index in range(CONTEXT_OMISSION_SAMPLE_CAP + 2)
+    )
+    original = build_context_manifest(
+        run_id="aggregate-join",
+        usage_records=[_usage(plan=_plan(omitted_item_sha256s=original_hashes))],
+    )
+    replacement = build_context_manifest(
+        run_id="aggregate-join",
+        usage_records=[_usage(plan=_plan(omitted_item_sha256s=replacement_hashes))],
+    )
+    original_request = original.requests[0]
+    replacement_request = replacement.requests[0]
+    assert isinstance(original_request, ContextRequestEvidence)
+    assert isinstance(replacement_request, ContextRequestEvidence)
+    replacement_aggregate = next(
+        omission
+        for omission in replacement_request.omissions
+        if omission.provenance is ContextOmissionProvenance.HASHED_CONTEXT_PACKAGE
+    )
+    blind = next(
+        omission
+        for omission in original_request.omissions
+        if omission.provenance is ContextOmissionProvenance.BLIND_DISCOVERY_POLICY
+    )
+    payload = original_request.model_dump(mode="python")
+    payload["omissions"] = tuple(
+        sorted(
+            (blind, replacement_aggregate),
+            key=lambda item: (item.category.value, item.reason.value),
+        )
+    )
+
+    with pytest.raises(ValidationError, match="differs from its request plan"):
+        ContextRequestEvidence.model_validate(payload)
+
+
 def test_context_manifest_report_binding_is_small_and_self_hashed() -> None:
     manifest = build_context_manifest(run_id="run-1", usage_records=[_usage()])
+    assert manifest.schema_version == "1.1"
 
     binding = context_manifest_report_binding(manifest)
+    assert binding.schema_version == "1.1"
 
     assert binding.manifest_sha256 == manifest.manifest_sha256
     assert binding.request_count == 1
     assert binding.planned_source_tokens > 0
     assert binding.provider_reported_request_count == 0
     assert binding.mock_reported_request_count == 1
+    assert binding.omission_record_count == 2
+    assert binding.omitted_item_count == 1
+    assert binding.sampled_omitted_item_count == 1
+    assert binding.truncated_omission_record_count == 0
 
 
 def test_synthetic_real_evidence_is_counted_only_as_provider_reported_usage() -> None:
@@ -440,6 +563,81 @@ def test_context_manifest_rejects_duplicate_request_ids() -> None:
         build_context_manifest(run_id="run-1", usage_records=[_usage(), _usage()])
 
 
+def test_context_manifest_rejects_retry_preflight_with_a_different_logical_plan() -> None:
+    provider_plan = _plan(omitted_item_sha256s=(hashlib.sha256(b"provider omission").hexdigest(),))
+    spliced_plan = _plan(omitted_item_sha256s=(hashlib.sha256(b"spliced omission").hexdigest(),))
+
+    with pytest.raises(ContextManifestError, match="logical request plan"):
+        build_context_manifest(
+            run_id="retry-plan-splice",
+            usage_records=[_usage(plan=provider_plan)],
+            preflight_records=[_retry_preflight(spliced_plan)],
+        )
+
+
+def test_context_manifest_rejects_preflight_only_retries_with_different_plans() -> None:
+    original_plan = _plan(
+        omitted_item_sha256s=(hashlib.sha256(b"original preflight omission").hexdigest(),)
+    )
+    spliced_plan = _plan(
+        omitted_item_sha256s=(hashlib.sha256(b"spliced preflight omission").hexdigest(),)
+    )
+
+    with pytest.raises(ContextManifestError, match="logical request plan"):
+        build_context_manifest(
+            run_id="preflight-only-plan-splice",
+            usage_records=[],
+            preflight_records=[
+                _retry_preflight(original_plan),
+                _retry_preflight(spliced_plan, attempt=3),
+            ],
+        )
+
+
+def test_context_manifest_retains_matching_preflight_only_retries_once_in_totals() -> None:
+    plan = _plan()
+
+    manifest = build_context_manifest(
+        run_id="matching-preflight-only-retries",
+        usage_records=[],
+        preflight_records=[
+            _retry_preflight(plan),
+            _retry_preflight(plan, attempt=3),
+        ],
+    )
+
+    assert manifest.totals.omission_record_count == 1
+    assert manifest.totals.omission_evidence_occurrence_count == 2
+    assert manifest.totals.omitted_item_count == 1
+    assert manifest.totals.sampled_omitted_item_count == 1
+    assert manifest.totals.truncated_omission_record_count == 0
+
+
+def test_context_manifest_deduplicates_logical_retry_omission_totals() -> None:
+    plan = _plan()
+    retry_preflight = _retry_preflight(plan)
+
+    manifest = build_context_manifest(
+        run_id="retry-omission-totals",
+        usage_records=[_usage(plan=plan)],
+        preflight_records=[retry_preflight],
+    )
+    provider = next(
+        request for request in manifest.requests if isinstance(request, ContextRequestEvidence)
+    )
+
+    assert retry_preflight in manifest.requests
+    assert len(provider.omissions) == 2
+    assert manifest.totals.omission_record_count == 2
+    assert manifest.totals.omission_evidence_occurrence_count == 3
+    assert manifest.totals.omitted_item_count == 1
+    assert manifest.totals.sampled_omitted_item_count == 1
+    assert manifest.totals.truncated_omission_record_count == 0
+    binding = context_manifest_report_binding(manifest)
+    assert binding.omission_record_count == 2
+    assert binding.omission_evidence_occurrence_count == 3
+
+
 def test_context_manifest_retains_typed_preflight_rejection_without_fabricated_usage() -> None:
     snapshot = _planning_snapshot(
         request_id="request-preflight-1",
@@ -474,6 +672,10 @@ def test_context_manifest_retains_typed_preflight_rejection_without_fabricated_u
     assert manifest.totals.reserved_output_tokens == 0
     assert manifest.totals.provider_attempt_count == 0
     assert manifest.totals.atomic_reservation_count == 0
+    assert manifest.totals.omission_record_count == 1
+    assert manifest.totals.omitted_item_count == 1
+    assert manifest.totals.sampled_omitted_item_count == 1
+    assert manifest.totals.truncated_omission_record_count == 0
     assert all(category.request_count == 0 for category in manifest.totals.categories)
     validate_context_manifest_against_usage(
         manifest,
@@ -523,6 +725,7 @@ def test_partial_planning_snapshot_rejects_hash_or_component_drift() -> None:
         request_id="request-partial-drift",
         reason=ContextPreflightReason.ENDPOINT_CAPACITY,
     )
+    assert snapshot.estimated_prompt_tokens is not None
     tampered = snapshot.model_copy(
         update={"estimated_prompt_tokens": snapshot.estimated_prompt_tokens + 1}
     )
@@ -631,7 +834,7 @@ def test_context_manifest_retains_not_sent_valid_plan() -> None:
     ],
 )
 def test_context_preflight_state_source_reason_matrix_accepts_only_valid_pairs(
-    state: ContextRequestState,
+    state: _PreflightRequestState,
     source: ContextPreflightSource,
     reason: ContextPreflightReason,
 ) -> None:
@@ -731,7 +934,7 @@ _VALID_PREFLIGHT_MATRIX = {
     ],
 )
 def test_context_preflight_state_source_reason_matrix_rejects_invalid_pairs(
-    state: ContextRequestState,
+    state: _PreflightRequestState,
     source: ContextPreflightSource,
     reason: ContextPreflightReason,
 ) -> None:
@@ -856,6 +1059,82 @@ def test_context_manifest_atomic_limits_bind_effective_configuration(
 
     with pytest.raises(ValueError, match=r"differs from effective (?:token )?configuration"):
         _validate_context_manifest_configuration(manifest, config_factory())
+    source_mismatch = config_factory(
+        token_budgets={
+            "global_input_token_budget": 1_000_000,
+            "global_output_token_budget": 100_000,
+            "maximum_source_tokens_per_request": 199_999,
+        }
+    )
+    with pytest.raises(ValueError, match="differs from effective token configuration"):
+        _validate_context_manifest_configuration(manifest, source_mismatch)
+
+
+@pytest.mark.parametrize(
+    ("token_budget_updates", "execution_updates"),
+    [
+        ({"usable_input_fraction": 0.71}, {}),
+        ({"reserved_output_tokens": 2_049}, {"max_output_tokens_per_request": 2_049}),
+        ({"reserved_system_tokens": 8_193}, {}),
+        ({"reserved_schema_tokens": 8_193}, {}),
+        ({"reserved_protocol_tokens": 2_049}, {}),
+        ({"reserved_workflow_tokens": 32_769}, {}),
+    ],
+    ids=(
+        "context-utilization",
+        "output-reserve",
+        "system-reserve",
+        "schema-reserve",
+        "protocol-reserve",
+        "workflow-reserve",
+    ),
+)
+def test_context_manifest_plan_binds_every_effective_token_control(
+    config_factory: Callable[..., AuditConfig],
+    token_budget_updates: dict[str, int | float],
+    execution_updates: dict[str, int],
+) -> None:
+    manifest = build_context_manifest(run_id="run-1", usage_records=[_usage()])
+    token_budgets: dict[str, int | float] = {
+        "global_input_token_budget": 1_000_000,
+        "global_output_token_budget": 100_000,
+        **token_budget_updates,
+    }
+    config = config_factory(
+        token_budgets=token_budgets,
+        execution=execution_updates,
+    )
+
+    with pytest.raises(ValueError, match="differs from effective token configuration"):
+        _validate_context_manifest_configuration(manifest, config)
+
+
+def test_context_manifest_preflight_plan_binds_effective_source_configuration(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    plan = _plan(request_id="preflight-source-binding")
+    manifest = build_context_manifest(
+        run_id="preflight-source-binding",
+        usage_records=[],
+        preflight_records=[_retry_preflight(plan)],
+    )
+    matching = config_factory(
+        token_budgets={
+            "global_input_token_budget": 1_000_000,
+            "global_output_token_budget": 100_000,
+        }
+    )
+    _validate_context_manifest_configuration(manifest, matching)
+
+    mismatch = config_factory(
+        token_budgets={
+            "global_input_token_budget": 1_000_000,
+            "global_output_token_budget": 100_000,
+            "maximum_source_tokens_per_request": 199_999,
+        }
+    )
+    with pytest.raises(ValueError, match="differs from effective token configuration"):
+        _validate_context_manifest_configuration(manifest, mismatch)
 
 
 def test_context_manifest_schema_rejects_tampered_aggregate_and_self_hash() -> None:
@@ -874,9 +1153,144 @@ def test_context_manifest_load_rejects_duplicate_keys_and_round_trips(tmp_path: 
 
     assert load_context_manifest(path) == manifest
 
-    path.write_text('{"schema_version":"1.0","schema_version":"1.0"}\n', encoding="utf-8")
+    path.write_text('{"schema_version":"1.1","schema_version":"1.1"}\n', encoding="utf-8")
     with pytest.raises(ContextManifestError, match="duplicate JSON keys"):
         load_context_manifest(path)
+
+
+def test_context_manifest_io_rejects_a_symlinked_parent_component(tmp_path: Path) -> None:
+    manifest = build_context_manifest(run_id="run-1", usage_records=[_usage()])
+    actual_parent = tmp_path / "actual"
+    actual_parent.mkdir()
+    linked_parent = tmp_path / "linked"
+    linked_parent.symlink_to(actual_parent, target_is_directory=True)
+    linked_path = linked_parent / "context-manifest.json"
+
+    with pytest.raises(ContextManifestError, match=r"parent path.*link"):
+        write_context_manifest(linked_path, manifest)
+    assert not (actual_parent / "context-manifest.json").exists()
+
+    actual_path = actual_parent / "context-manifest.json"
+    write_context_manifest(actual_path, manifest)
+    with pytest.raises(ContextManifestError, match=r"parent path.*link"):
+        load_context_manifest(linked_path)
+
+
+def test_context_manifest_loader_rejects_a_shared_hardlink(tmp_path: Path) -> None:
+    path = tmp_path / "context-manifest.json"
+    sibling = tmp_path / "context-manifest-copy.json"
+    manifest = build_context_manifest(run_id="run-1", usage_records=[_usage()])
+    write_context_manifest(path, manifest)
+    os.link(path, sibling)
+
+    with pytest.raises(ContextManifestError, match="bounded unique non-link regular file"):
+        load_context_manifest(path)
+
+
+def test_context_manifest_loader_opens_fifo_nonblocking_before_type_rejection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nonblocking = getattr(os, "O_NONBLOCK", 0)
+    if not isinstance(nonblocking, int) or nonblocking <= 0:
+        pytest.skip("platform has no nonblocking descriptor flag")
+    path = tmp_path / "context-manifest.json"
+    os.mkfifo(path)
+    real_open = os.open
+    leaf_open_observed = False
+
+    def guarded_open(
+        path_value: str,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal leaf_open_observed
+        if path_value == path.name and dir_fd is not None:
+            leaf_open_observed = True
+            assert flags & nonblocking
+        return real_open(path_value, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", guarded_open)
+
+    with pytest.raises(ContextManifestError, match="bounded unique non-link regular file"):
+        load_context_manifest(path)
+    assert leaf_open_observed
+
+
+def test_context_manifest_loader_rejects_descriptor_metadata_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "context-manifest.json"
+    sibling = tmp_path / "concurrent-link.json"
+    manifest = build_context_manifest(run_id="run-1", usage_records=[_usage()])
+    write_context_manifest(path, manifest)
+    real_read = os.read
+    linked = False
+
+    def link_after_first_read(descriptor: int, byte_count: int) -> bytes:
+        nonlocal linked
+        chunk = real_read(descriptor, byte_count)
+        if chunk and not linked:
+            linked = True
+            os.link(path, sibling)
+        return chunk
+
+    monkeypatch.setattr(os, "read", link_after_first_read)
+
+    with pytest.raises(ContextManifestError, match="changed while being read"):
+        load_context_manifest(path)
+
+
+def test_context_manifest_loader_enforces_the_descriptor_byte_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "context-manifest.json"
+    manifest = build_context_manifest(run_id="run-1", usage_records=[_usage()])
+    write_context_manifest(path, manifest)
+    monkeypatch.setattr(
+        context_manifest_module,
+        "_MAX_CONTEXT_MANIFEST_BYTES",
+        path.stat().st_size - 1,
+    )
+
+    with pytest.raises(ContextManifestError, match="bounded unique non-link regular file"):
+        load_context_manifest(path)
+
+
+def test_context_manifest_writer_enforces_the_loader_bound_atomically(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "context-manifest.json"
+    manifest = build_context_manifest(run_id="run-1", usage_records=[_usage()])
+    serialized_bytes = len(stable_json(manifest).encode("utf-8"))
+    preserved = "preserved-existing-artifact\n"
+    path.write_text(preserved, encoding="utf-8")
+    monkeypatch.setattr(
+        context_manifest_module,
+        "_MAX_CONTEXT_MANIFEST_BYTES",
+        serialized_bytes - 1,
+    )
+
+    with pytest.raises(ContextManifestError, match="serialized byte limit"):
+        write_context_manifest(path, manifest)
+
+    assert path.read_text(encoding="utf-8") == preserved
+    assert list(tmp_path.iterdir()) == [path]
+
+    monkeypatch.setattr(
+        context_manifest_module,
+        "_MAX_CONTEXT_MANIFEST_BYTES",
+        serialized_bytes,
+    )
+    write_context_manifest(path, manifest)
+
+    assert path.stat().st_size == serialized_bytes
+    assert load_context_manifest(path) == manifest
 
 
 def test_empty_context_manifest_is_explicitly_non_provider_evidence() -> None:

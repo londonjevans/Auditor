@@ -76,6 +76,7 @@ from mmaudit.models.qualification_workflow import (
     run_qualification_workflow,
 )
 from mmaudit.models.schemas import (
+    ContextRequestEvidence,
     ExecutionEvidenceKind,
     ModelRequestValidationStatus,
     UsageRecord,
@@ -111,6 +112,11 @@ def _sha(label: str) -> str:
 
 
 _PRODUCTION_CONFIG_SHA256 = _sha("production-effective-config")
+
+
+def _specialist_request_role(role: str) -> str:
+    suffix = ":exploit_test" if role in {"test_generation", "exploit_reproduction_planner"} else ""
+    return f"specialist:{role}{suffix}"
 
 
 def _model_id(index: int) -> str:
@@ -343,6 +349,24 @@ def _usage_record(
         routing["qualification_artifact_sha256"] = qualification_artifact_sha256
     if production_selection_sha256 is not None:
         routing["production_selection_sha256"] = production_selection_sha256
+    try:
+        context_evidence = ContextRequestEvidence.build(
+            request_id=request_id,
+            request_role=role,
+            context_role="whole_protocol_review",
+            byte_budget=1_000,
+            declared_bytes_used=128,
+            rendered_bytes=128,
+            source_bytes=64,
+            configured_maximum_source_tokens_per_request=1_000,
+            effective_source_byte_ceiling=64,
+            rendered_sha256=_sha(f"whole-protocol-context-{request_id}"),
+        )
+    except ValueError:
+        context_evidence = None
+    if context_evidence is not None:
+        routing["context_request_evidence"] = context_evidence.model_dump(mode="json")
+        routing["context_request_evidence_sha256"] = context_evidence.evidence_sha256
     return bind_synthetic_usage_identity(
         UsageRecord(
             request_id=request_id,
@@ -361,6 +385,9 @@ def _usage_record(
             accounted_cost_usd=0.01,
             routing=routing,
             prompt_sha256=prompt_sha256,
+            user_prompt_sha256=(
+                context_evidence.rendered_sha256 if context_evidence is not None else None
+            ),
             response_sha256=response_sha256,
             validated_response_sha256=validated_response_sha256,
             request_body_sha256=request_body_sha256,
@@ -1803,7 +1830,7 @@ def _production_evidence(bundle: _Bundle):
         records.append(
             _usage_record(
                 candidate=candidate,
-                role=f"specialist:{role}",
+                role=_specialist_request_role(role),
                 request_id=request_id,
                 qualification_artifact_sha256=bundle.artifact.artifact_sha256,
                 production_selection_sha256=bundle.selection.selection_sha256,
@@ -1925,12 +1952,99 @@ def test_certified_ensemble_enforces_all_six_runtime_minima() -> None:
     evaluation = _evaluate(_bundle())
 
     assert evaluation.passed
+    assert _requirement_state(evaluation, "whole_protocol_reviews") == "pass"
+    assert len(evaluation.whole_protocol_root_lineages) == 4
     assert len(evaluation.exact_model_ids) == 8
     assert len(evaluation.root_lineages) == 6
     assert len(evaluation.specialist_responsibilities) == 24
-    assert len(evaluation.whole_protocol_root_lineages) == 4
     assert len(evaluation.critical_surface_lineages["surface-critical"]) == 3
     assert len(evaluation.falsifier_candidate_lineages["candidate-high"]) == 2
+
+
+@pytest.mark.parametrize(
+    "invalid_binding",
+    [
+        "bogus_index_suffix",
+        "missing_context_evidence",
+        "source_free_context",
+        "missing_user_prompt_sha256",
+        "mismatched_rendered_context",
+    ],
+)
+def test_certified_ensemble_rejects_unbound_whole_protocol_review(
+    invalid_binding: str,
+) -> None:
+    bundle = _bundle()
+    records, _critical, _candidates, _falsifier = _production_evidence(bundle)
+    original = next(record for record in records if record.request_id == "whole-3")
+    routing = dict(original.routing)
+    role = original.role
+    user_prompt_sha256 = original.user_prompt_sha256
+    if invalid_binding == "bogus_index_suffix":
+        role = "whole_protocol_review:bogus"
+    elif invalid_binding == "missing_context_evidence":
+        routing.pop("context_request_evidence", None)
+        routing.pop("context_request_evidence_sha256", None)
+    elif invalid_binding == "source_free_context":
+        source_free = ContextRequestEvidence.build(
+            request_id=original.request_id,
+            request_role=original.role,
+            context_role="whole_protocol_review",
+            byte_budget=1_000,
+            declared_bytes_used=128,
+            rendered_bytes=128,
+            source_bytes=0,
+            configured_maximum_source_tokens_per_request=1_000,
+            effective_source_byte_ceiling=0,
+            rendered_sha256=_sha("source-free-whole-protocol-context"),
+        )
+        routing["context_request_evidence"] = source_free.model_dump(mode="json")
+        routing["context_request_evidence_sha256"] = source_free.evidence_sha256
+    elif invalid_binding == "missing_user_prompt_sha256":
+        user_prompt_sha256 = None
+    else:
+        original_evidence = ContextRequestEvidence.model_validate(
+            routing["context_request_evidence"]
+        )
+        mismatched = ContextRequestEvidence.build(
+            request_id=original_evidence.request_id,
+            request_role=original_evidence.request_role,
+            context_role=original_evidence.context_role,
+            byte_budget=original_evidence.byte_budget,
+            declared_bytes_used=original_evidence.declared_bytes_used,
+            rendered_bytes=original_evidence.rendered_bytes,
+            source_bytes=original_evidence.source_bytes,
+            configured_maximum_source_tokens_per_request=(
+                original_evidence.configured_maximum_source_tokens_per_request
+            ),
+            effective_source_byte_ceiling=(original_evidence.effective_source_byte_ceiling),
+            rendered_sha256=_sha("mismatched-whole-protocol-context"),
+        )
+        routing["context_request_evidence"] = mismatched.model_dump(mode="json")
+        routing["context_request_evidence_sha256"] = mismatched.evidence_sha256
+    invalid = reattest_synthetic_real_usage(
+        original.model_copy(
+            update={
+                "role": role,
+                "routing": routing,
+                "user_prompt_sha256": user_prompt_sha256,
+            }
+        )
+    )
+    invalid_records = tuple(
+        invalid if record.request_id == original.request_id else record for record in records
+    )
+
+    evaluation = _evaluate(bundle, usage_records=invalid_records)
+
+    assert not evaluation.passed
+    whole_protocol = next(
+        requirement
+        for requirement in evaluation.requirements
+        if requirement.requirement == "whole_protocol_reviews"
+    )
+    assert whole_protocol.state.value == "fail"
+    assert whole_protocol.observed == 3
 
 
 @pytest.mark.parametrize(

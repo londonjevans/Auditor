@@ -17,6 +17,8 @@ from pydantic import BaseModel, ValidationError
 from mmaudit.models.identity import OpenRouterIdentityBindingResult
 from mmaudit.models.output_modes import supported_output_modes
 from mmaudit.models.schemas import (
+    ContextRequestEvidence,
+    ContextRequestRelationship,
     ExecutionEvidenceKind,
     ModelIdentityStrength,
     ModelRequestValidationStatus,
@@ -29,6 +31,7 @@ from mmaudit.orchestration.budgets import AtomicTokenReservationEvidence
 from mmaudit.privacy import EndpointPolicyClass, PrivacyProfile, PrivacySourceClassification
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_WHOLE_PROTOCOL_INDEXED_ROLE = re.compile(r"^whole_protocol_review:(?:0|[1-9][0-9]{0,3})$")
 
 
 def candidate_falsifier_role_prefix(candidate_id: str) -> str:
@@ -46,6 +49,34 @@ def candidate_falsifier_role(candidate_id: str, reviewer_index: int) -> str:
     if reviewer_index not in {1, 2}:
         raise ValueError("candidate falsifier reviewer index must be one or two")
     return f"{candidate_falsifier_role_prefix(candidate_id)}:reviewer_{reviewer_index}"
+
+
+def source_backed_whole_protocol_context(
+    record: UsageRecord,
+) -> ContextRequestEvidence | None:
+    """Return exact typed source evidence for one canonical whole-protocol review."""
+
+    if _WHOLE_PROTOCOL_INDEXED_ROLE.fullmatch(record.role) is None:
+        return None
+    raw_evidence = record.routing.get("context_request_evidence")
+    if not isinstance(raw_evidence, dict):
+        return None
+    try:
+        evidence = ContextRequestEvidence.model_validate(raw_evidence)
+    except ValueError:
+        return None
+    if (
+        evidence.request_id != record.request_id
+        or evidence.request_role != record.role
+        or evidence.context_role != "whole_protocol_review"
+        or evidence.relationship is not ContextRequestRelationship.WHOLE_PROTOCOL_INDEXED
+        or record.user_prompt_sha256 is None
+        or evidence.rendered_sha256 != record.user_prompt_sha256
+        or evidence.source_bytes <= 0
+        or record.routing.get("context_request_evidence_sha256") != evidence.evidence_sha256
+    ):
+        return None
+    return evidence
 
 
 def is_creditable_usage_record(

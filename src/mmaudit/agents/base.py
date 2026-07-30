@@ -16,6 +16,7 @@ from mmaudit.models.schemas import (
     ModelSurfaceReviewArtifact,
     ModelVote,
     ThreatModel,
+    UsageRecord,
 )
 from mmaudit.orchestration.context import render_context
 from mmaudit.orchestration.model_review_evidence import (
@@ -58,6 +59,15 @@ class FindingReviewResult:
     findings: tuple[CandidateFinding, ...]
     surface_review_artifact: ModelSurfaceReviewArtifact | None
     surface_review_context: ContextPackage
+    completion_usage: UsageRecord
+
+
+@dataclass(frozen=True, slots=True)
+class ValidatedAgentResult[ValueT]:
+    """Host-validated role result paired with its exact provider completion."""
+
+    value: ValueT
+    completion_usage: UsageRecord
 
 
 class ThreatModelAgent(AgentBase):
@@ -156,4 +166,5 @@ class FindingAgent(AgentBase):
             findings=tuple(stamped),
             surface_review_artifact=surface_review_artifact,
             surface_review_context=request_context,
+            completion_usage=usage,
         )

@@ -440,10 +440,12 @@ def _review_context(
         content=_SOURCE,
     )
     selected_excerpts = [source_excerpt] if excerpts is None else excerpts
-    return ContextPackage(
+    package = ContextPackage(
         role=usage.role,
         byte_budget=100_000,
-        bytes_used=sum(len(excerpt.content.encode()) for excerpt in selected_excerpts),
+        bytes_used=0,
+        configured_maximum_source_tokens_per_request=200_000,
+        effective_source_byte_ceiling=100_000,
         repository_map=RepositoryMap(
             root_name="synthetic-model-coverage",
             languages={"Solidity": 1},
@@ -466,6 +468,11 @@ def _review_context(
         solidity_index=index,
         solidity_graphs=graphs,
     )
+    return _with_exact_context_bytes(package)
+
+
+def _with_exact_context_bytes(context: ContextPackage) -> ContextPackage:
+    return context.model_copy(update={"bytes_used": len(render_context(context).encode("utf-8"))})
 
 
 def _review_contexts(
@@ -843,11 +850,13 @@ def test_compact_source_context_inventory_subset_receives_credit(
             "edges": [edge for edge in graphs.edges if edge.graph is SolidityGraphKind.STATE_WRITE]
         }
     )
-    context = context.model_copy(
-        update={
-            "solidity_index": compact_index,
-            "solidity_graphs": compact_graphs,
-        }
+    context = _with_exact_context_bytes(
+        context.model_copy(
+            update={
+                "solidity_index": compact_index,
+                "solidity_graphs": compact_graphs,
+            }
+        )
     )
     _bind_usage_to_context(usage, context)
 
@@ -933,18 +942,20 @@ def test_post_hoc_context_substitution_cannot_authorize_coverage(
         graphs,
         context=original_context,
     )
-    substituted_context = original_context.model_copy(
-        update={
-            "omissions": [
-                ContextOmissionItem.build(
-                    category=ContextOmissionCategory.CONTEXT_PACKAGE,
-                    reason=ContextOmissionReason.CONTEXT_BUDGET_EXCLUDED,
-                    omitted_item_sha256=hashlib.sha256(
-                        b"post-hoc context differs from the provider request"
-                    ).hexdigest(),
-                )
-            ]
-        }
+    substituted_context = _with_exact_context_bytes(
+        original_context.model_copy(
+            update={
+                "omissions": [
+                    ContextOmissionItem.build(
+                        category=ContextOmissionCategory.CONTEXT_PACKAGE,
+                        reason=ContextOmissionReason.CONTEXT_BUDGET_EXCLUDED,
+                        omitted_item_sha256=hashlib.sha256(
+                            b"post-hoc context differs from the provider request"
+                        ).hexdigest(),
+                    )
+                ]
+            }
+        )
     )
 
     coverage = build_model_review_coverage(
@@ -966,6 +977,39 @@ def test_post_hoc_context_substitution_cannot_authorize_coverage(
         "context hash differed from the rendered provider request"
         in surface.evidence_references[0].reason
     )
+
+
+def test_nested_context_mutation_cannot_authorize_coverage(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    config = config_factory()
+    index, graphs, invariants, requests = _requests()
+    request = next(
+        request for request in requests if request.kind is ModelReviewSurfaceKind.ENTRY_POINT
+    )
+    usage = _usage("source_audit", config.models.source_audit.primary, "request-mutated-context")
+    context = _review_context([request], usage, index, graphs)
+    _bind_usage_to_context(usage, context)
+    artifact = _artifact([request], usage, index, graphs, context=context)
+    context.repository_map.frameworks.append("SyntheticNestedMutation")
+
+    coverage = build_model_review_coverage(
+        config,
+        usage_records=[usage],
+        review_artifacts=[artifact],
+        review_contexts_by_request={usage.request_id: [context]},
+        index=index,
+        graphs=graphs,
+        invariants=invariants,
+        economic_simulations=[],
+    )
+
+    surface = next(
+        surface for surface in coverage.surfaces if surface.surface_id == request.surface_id
+    )
+    assert not surface.reviewed
+    assert "failed exact boundary validation" in surface.evidence_references[0].reason
+    assert any("invalid context package" in limitation for limitation in coverage.limitations)
 
 
 def test_serialized_generic_state_self_loop_cannot_self_authorize_coverage(

@@ -69,6 +69,7 @@ from mmaudit.models.schemas import (
 from mmaudit.models.usage import (
     candidate_falsifier_role_prefix,
     is_creditable_usage_record,
+    source_backed_whole_protocol_context,
 )
 from mmaudit.orchestration.replay import (
     OfflineReplay,
@@ -792,8 +793,7 @@ class MaximumAssuranceContract:
             [
                 record
                 for record in real_model_records
-                if record.role == "whole_protocol_review"
-                or record.role.startswith("whole_protocol_review:")
+                if source_backed_whole_protocol_context(record) is not None
             ],
             production_qualification,
         )
@@ -2280,9 +2280,10 @@ def _is_real_model_usage(
 ) -> bool:
     if qualification is None or not _real_provider_session_is_qualifying(provider_session):
         return False
-    whole_protocol_review = record.role == "whole_protocol_review" or record.role.startswith(
-        "whole_protocol_review:"
-    )
+    whole_protocol_context = source_backed_whole_protocol_context(record)
+    if record.role.startswith("whole_protocol_review") and whole_protocol_context is None:
+        return False
+    whole_protocol_review = whole_protocol_context is not None
     role = (
         "whole_protocol_review"
         if whole_protocol_review

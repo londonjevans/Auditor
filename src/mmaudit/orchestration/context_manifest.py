@@ -6,8 +6,10 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import stat
 from collections.abc import Sequence
+from contextlib import suppress
 from enum import StrEnum
 from pathlib import Path
 from threading import Lock
@@ -21,9 +23,12 @@ from mmaudit.models.schemas import (
     UsageRecord,
 )
 from mmaudit.models.token_planning import (
+    CONTEXT_OMISSION_GROUP_CAP,
+    CONTEXT_OMISSION_SAMPLE_CAP,
     OUTPUT_ALLOCATION_CATEGORIES,
     PROMPT_ALLOCATION_CATEGORIES,
     ContextOmissionCategory,
+    ContextOmissionCommitmentMethod,
     ContextOmissionItem,
     ContextOmissionReason,
     EndpointRouteIntersection,
@@ -33,7 +38,7 @@ from mmaudit.models.token_planning import (
     RequestTokenPlan,
 )
 from mmaudit.orchestration.budgets import AtomicTokenReservationEvidence
-from mmaudit.reporting.json_report import write_json
+from mmaudit.reporting.json_report import stable_json
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _SHA256_RE = re.compile(_SHA256_PATTERN)
@@ -43,7 +48,7 @@ _MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:
 _RUN_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
 _MAX_CONTEXT_MANIFEST_BYTES = 100_000_000
 _MAX_CONTEXT_REQUESTS = 100_000
-_MAX_OMISSIONS_PER_REQUEST = 100_000
+_MAX_REQUEST_OMISSION_EVIDENCE = CONTEXT_OMISSION_GROUP_CAP + 1
 
 
 class ContextManifestError(ValueError):
@@ -136,11 +141,11 @@ class ContextPlanningSnapshot(FrozenContextEvidence):
     prompt_envelope_byte_upper_bound_tokens: int | None = Field(default=None, ge=0)
     context_omissions: tuple[ContextOmissionItem, ...] = Field(
         default=(),
-        max_length=_MAX_OMISSIONS_PER_REQUEST,
+        max_length=CONTEXT_OMISSION_GROUP_CAP,
     )
     context_omission_sha256s: tuple[str, ...] = Field(
         default=(),
-        max_length=_MAX_OMISSIONS_PER_REQUEST,
+        max_length=CONTEXT_OMISSION_GROUP_CAP,
     )
     review_credit: Literal[False] = False
     atomic_reservation_created: Literal[False] = False
@@ -309,27 +314,40 @@ class ContextPlanningSnapshot(FrozenContextEvidence):
             )
         )
         omission_hashes = tuple(sorted(item.omitted_item_sha256 for item in self.context_omissions))
+        omission_groups = tuple((item.category, item.reason) for item in self.context_omissions)
         if self.context_omissions != canonical_omissions:
             raise ValueError("planning omissions must be canonically sorted")
         if (
-            len(omission_hashes) != len(set(omission_hashes))
+            len(omission_groups) != len(set(omission_groups))
+            or len(omission_hashes) != len(set(omission_hashes))
             or self.context_omission_sha256s != omission_hashes
             or any(_SHA256_RE.fullmatch(value) is None for value in omission_hashes)
         ):
-            raise ValueError("planning omission hashes must be unique and sorted")
+            raise ValueError("planning omission groups and hashes must be unique and sorted")
         _require_self_hash(self, "snapshot_sha256")
         return self
 
 
 class ContextOmissionEvidence(FrozenContextEvidence):
-    """Hash-only inventory for one typed omission class."""
+    """Bounded aggregate inventory for one typed omission class."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.1"] = "1.1"
     category: ContextOmissionCategory
     reason: ContextOmissionReason
     provenance: ContextOmissionProvenance
-    omitted_item_sha256s: tuple[str, ...] = Field(max_length=_MAX_OMISSIONS_PER_REQUEST)
-    omitted_item_count: int = Field(ge=0, le=_MAX_OMISSIONS_PER_REQUEST)
+    inventory_commitment_method: ContextOmissionCommitmentMethod | None = None
+    inventory_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+    # The compatibility-named field is a bounded representative sample, not the
+    # complete inventory. The exact count and inventory commitment are separate.
+    omitted_item_sha256s: tuple[str, ...] = Field(
+        max_length=CONTEXT_OMISSION_SAMPLE_CAP,
+    )
+    omitted_item_count: int = Field(ge=0)
+    samples_truncated: bool
+    context_omission_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+    )
     token_estimation_state: Literal[OmissionTokenEstimationState.NOT_ESTIMATED] = (
         OmissionTokenEstimationState.NOT_ESTIMATED
     )
@@ -343,26 +361,59 @@ class ContextOmissionEvidence(FrozenContextEvidence):
         category: ContextOmissionCategory,
         reason: ContextOmissionReason,
         provenance: ContextOmissionProvenance,
-        omitted_item_sha256s: Sequence[str] = (),
+        context_omission: ContextOmissionItem | None = None,
     ) -> Self:
-        ordered = tuple(sorted(omitted_item_sha256s))
+        if provenance is ContextOmissionProvenance.HASHED_CONTEXT_PACKAGE:
+            if not isinstance(context_omission, ContextOmissionItem):
+                raise ContextManifestError(
+                    "hashed context omission evidence requires one typed aggregate"
+                )
+            if context_omission.category is not category or context_omission.reason is not reason:
+                raise ContextManifestError(
+                    "hashed context omission aggregate differs from its evidence class"
+                )
+            inventory_sha256 = context_omission.omitted_item_sha256
+            inventory_commitment_method = context_omission.inventory_commitment_method
+            samples = context_omission.sampled_item_sha256s
+            omitted_item_count = context_omission.omitted_item_count
+            samples_truncated = context_omission.samples_truncated
+            context_omission_evidence_sha256 = context_omission.evidence_sha256
+        else:
+            if context_omission is not None:
+                raise ContextManifestError(
+                    "blind-discovery omission evidence cannot retain a context aggregate"
+                )
+            inventory_sha256 = None
+            inventory_commitment_method = None
+            samples = ()
+            omitted_item_count = 0
+            samples_truncated = False
+            context_omission_evidence_sha256 = None
         payload: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": "1.1",
             "category": category,
             "reason": reason,
             "provenance": provenance,
-            "omitted_item_sha256s": ordered,
-            "omitted_item_count": len(ordered),
+            "inventory_commitment_method": inventory_commitment_method,
+            "inventory_sha256": inventory_sha256,
+            "omitted_item_sha256s": samples,
+            "omitted_item_count": omitted_item_count,
+            "samples_truncated": samples_truncated,
+            "context_omission_evidence_sha256": context_omission_evidence_sha256,
             "token_estimation_state": OmissionTokenEstimationState.NOT_ESTIMATED,
             "estimated_tokens": None,
         }
         return cls(
-            schema_version="1.0",
+            schema_version="1.1",
             category=category,
             reason=reason,
             provenance=provenance,
-            omitted_item_sha256s=ordered,
-            omitted_item_count=len(ordered),
+            inventory_commitment_method=inventory_commitment_method,
+            inventory_sha256=inventory_sha256,
+            omitted_item_sha256s=samples,
+            omitted_item_count=omitted_item_count,
+            samples_truncated=samples_truncated,
+            context_omission_evidence_sha256=context_omission_evidence_sha256,
             token_estimation_state=OmissionTokenEstimationState.NOT_ESTIMATED,
             estimated_tokens=None,
             evidence_sha256=_canonical_sha256(payload),
@@ -370,31 +421,47 @@ class ContextOmissionEvidence(FrozenContextEvidence):
 
     @model_validator(mode="after")
     def omission_is_canonical_and_self_hashed(self) -> ContextOmissionEvidence:
-        if self.omitted_item_sha256s != tuple(sorted(set(self.omitted_item_sha256s))):
-            raise ValueError("context omission hashes must be unique and sorted")
         if any(_SHA256_RE.fullmatch(value) is None for value in self.omitted_item_sha256s):
             raise ValueError("context omission inventory contains a non-SHA-256 value")
-        if self.omitted_item_count != len(self.omitted_item_sha256s):
-            raise ValueError("context omission count differs from its hash inventory")
+        if len(self.omitted_item_sha256s) != len(set(self.omitted_item_sha256s)):
+            raise ValueError("context omission samples must be unique")
+        if self.omitted_item_count < len(self.omitted_item_sha256s):
+            raise ValueError("context omission count is below its retained samples")
+        if self.samples_truncated != (self.omitted_item_count > len(self.omitted_item_sha256s)):
+            raise ValueError("context omission truncation state differs from its sample count")
         if self.reason is ContextOmissionReason.BLIND_DISCOVERY_WITHHELD:
             if (
                 self.category is not ContextOmissionCategory.PRIOR_AUDIT
                 or self.provenance is not ContextOmissionProvenance.BLIND_DISCOVERY_POLICY
+                or self.inventory_commitment_method is not None
+                or self.inventory_sha256 is not None
                 or self.omitted_item_sha256s
+                or self.omitted_item_count != 0
+                or self.samples_truncated
+                or self.context_omission_evidence_sha256 is not None
             ):
                 raise ValueError("blind-discovery omission evidence is inconsistent")
         else:
             if (
                 self.provenance is not ContextOmissionProvenance.HASHED_CONTEXT_PACKAGE
+                or self.inventory_commitment_method is None
+                or self.inventory_sha256 is None
                 or not self.omitted_item_sha256s
+                or self.omitted_item_count <= 0
+                or self.context_omission_evidence_sha256 is None
             ):
                 raise ValueError("context-package omission evidence is inconsistent")
-            for item_sha256 in self.omitted_item_sha256s:
-                ContextOmissionItem.build(
-                    category=self.category,
-                    reason=self.reason,
-                    omitted_item_sha256=item_sha256,
-                )
+            ContextOmissionItem(
+                schema_version="1.1",
+                category=self.category,
+                reason=self.reason,
+                inventory_commitment_method=self.inventory_commitment_method,
+                omitted_item_sha256=self.inventory_sha256,
+                omitted_item_count=self.omitted_item_count,
+                sampled_item_sha256s=self.omitted_item_sha256s,
+                samples_truncated=self.samples_truncated,
+                evidence_sha256=self.context_omission_evidence_sha256,
+            )
         _require_self_hash(self, "evidence_sha256")
         return self
 
@@ -496,7 +563,7 @@ class ContextRequestEvidence(FrozenContextEvidence):
     atomic_token_reservation_sha256: str = Field(pattern=_SHA256_PATTERN)
     omissions: tuple[ContextOmissionEvidence, ...] = Field(
         min_length=1,
-        max_length=32,
+        max_length=_MAX_REQUEST_OMISSION_EVIDENCE,
     )
     actual_usage: ActualTokenUsageEvidence
     evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -516,21 +583,13 @@ class ContextRequestEvidence(FrozenContextEvidence):
                 provenance=ContextOmissionProvenance.BLIND_DISCOVERY_POLICY,
             )
         ]
-        grouped_omissions: dict[
-            tuple[ContextOmissionCategory, ContextOmissionReason],
-            list[str],
-        ] = {}
         for item in plan.context_omissions:
-            grouped_omissions.setdefault((item.category, item.reason), []).append(
-                item.omitted_item_sha256
-            )
-        for (category, reason), omission_hashes in grouped_omissions.items():
             omissions.append(
                 ContextOmissionEvidence.build(
-                    category=category,
-                    reason=reason,
+                    category=item.category,
+                    reason=item.reason,
                     provenance=ContextOmissionProvenance.HASHED_CONTEXT_PACKAGE,
-                    omitted_item_sha256s=omission_hashes,
+                    context_omission=item,
                 )
             )
         ordered_omissions = tuple(sorted(omissions, key=_omission_sort_key))
@@ -648,27 +707,11 @@ class ContextRequestEvidence(FrozenContextEvidence):
         ):
             raise ValueError("context request lacks explicit blind prior-audit evidence")
         observed_context_omissions = tuple(
-            sorted(
-                (
-                    omission.category,
-                    omission.reason,
-                    item_sha256,
-                )
-                for omission in self.omissions
-                if omission.provenance is ContextOmissionProvenance.HASHED_CONTEXT_PACKAGE
-                for item_sha256 in omission.omitted_item_sha256s
-            )
+            _context_omission_item_from_evidence(omission)
+            for omission in self.omissions
+            if omission.provenance is ContextOmissionProvenance.HASHED_CONTEXT_PACKAGE
         )
-        expected_context_omissions = tuple(
-            sorted(
-                (
-                    item.category,
-                    item.reason,
-                    item.omitted_item_sha256,
-                )
-                for item in self.request_plan.context_omissions
-            )
-        )
+        expected_context_omissions = self.request_plan.context_omissions
         if observed_context_omissions != expected_context_omissions:
             raise ValueError("context omission evidence differs from its request plan")
         if self.request_state is ContextRequestState.COMPLETED and (
@@ -930,7 +973,10 @@ class ContextManifestTotals(FrozenContextEvidence):
     mock_reported_completion_tokens: int = Field(ge=0)
     unavailable_actual_usage_count: int = Field(ge=0, le=_MAX_CONTEXT_REQUESTS)
     omission_record_count: int = Field(ge=0)
+    omission_evidence_occurrence_count: int = Field(ge=0)
     omitted_item_count: int = Field(ge=0)
+    sampled_omitted_item_count: int = Field(ge=0)
+    truncated_omission_record_count: int = Field(ge=0)
     categories: tuple[ContextCategoryTotals, ...] = Field(
         min_length=len(PROMPT_ALLOCATION_CATEGORIES),
         max_length=len(PROMPT_ALLOCATION_CATEGORIES),
@@ -978,6 +1024,16 @@ class ContextManifestTotals(FrozenContextEvidence):
             raise ValueError("completion totals do not conserve output and reasoning reserves")
         if self.provider_attempt_count != self.atomic_reservation_count:
             raise ValueError("provider attempts differ from the atomic reservation inventory")
+        if (
+            self.omission_evidence_occurrence_count < self.omission_record_count
+            or self.sampled_omitted_item_count > self.omitted_item_count
+            or self.truncated_omission_record_count > self.omission_record_count
+            or (
+                self.truncated_omission_record_count == 0
+                and self.sampled_omitted_item_count != self.omitted_item_count
+            )
+        ):
+            raise ValueError("context omission totals do not conserve samples and exact counts")
         _require_self_hash(self, "totals_sha256")
         return self
 
@@ -985,7 +1041,7 @@ class ContextManifestTotals(FrozenContextEvidence):
 class ContextManifest(FrozenContextEvidence):
     """Self-hashed deterministic context evidence for one complete run."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.1"] = "1.1"
     generated_by: Literal["mmaudit"] = "mmaudit"
     run_id: str = Field(pattern=_RUN_ID_PATTERN)
     requests: tuple[ContextManifestRequestEvidence, ...] = Field(max_length=_MAX_CONTEXT_REQUESTS)
@@ -997,6 +1053,7 @@ class ContextManifest(FrozenContextEvidence):
         request_ids = tuple(request.request_id for request in self.requests)
         if request_ids != tuple(sorted(set(request_ids))):
             raise ValueError("context requests must have unique sorted request IDs")
+        _validate_logical_request_joins(self.requests)
         if self.totals != ContextManifestTotals.build(self.requests):
             raise ValueError("context manifest totals differ from its request evidence")
         _require_self_hash(self, "manifest_sha256")
@@ -1006,7 +1063,7 @@ class ContextManifest(FrozenContextEvidence):
 class ContextManifestReportBinding(FrozenContextEvidence):
     """Small report projection binding client evidence to the forensic artifact."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.1"] = "1.1"
     artifact: Literal["context-manifest.json"] = "context-manifest.json"
     manifest_sha256: str = Field(pattern=_SHA256_PATTERN)
     request_count: int = Field(ge=0, le=_MAX_CONTEXT_REQUESTS)
@@ -1024,7 +1081,11 @@ class ContextManifestReportBinding(FrozenContextEvidence):
     provider_reported_completion_tokens: int = Field(ge=0)
     mock_reported_request_count: int = Field(ge=0, le=_MAX_CONTEXT_REQUESTS)
     unavailable_actual_usage_count: int = Field(ge=0, le=_MAX_CONTEXT_REQUESTS)
+    omission_record_count: int = Field(ge=0)
+    omission_evidence_occurrence_count: int = Field(ge=0)
     omitted_item_count: int = Field(ge=0)
+    sampled_omitted_item_count: int = Field(ge=0)
+    truncated_omission_record_count: int = Field(ge=0)
     preflight_evidence_sha256s: tuple[str, ...] = Field(max_length=_MAX_CONTEXT_REQUESTS)
     binding_sha256: str = Field(pattern=_SHA256_PATTERN)
 
@@ -1032,7 +1093,7 @@ class ContextManifestReportBinding(FrozenContextEvidence):
     def build(cls, manifest: ContextManifest) -> Self:
         totals = manifest.totals
         payload: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": "1.1",
             "artifact": "context-manifest.json",
             "manifest_sha256": manifest.manifest_sha256,
             "request_count": totals.request_count,
@@ -1050,7 +1111,11 @@ class ContextManifestReportBinding(FrozenContextEvidence):
             "provider_reported_completion_tokens": totals.provider_reported_completion_tokens,
             "mock_reported_request_count": totals.mock_reported_request_count,
             "unavailable_actual_usage_count": totals.unavailable_actual_usage_count,
+            "omission_record_count": totals.omission_record_count,
+            "omission_evidence_occurrence_count": (totals.omission_evidence_occurrence_count),
             "omitted_item_count": totals.omitted_item_count,
+            "sampled_omitted_item_count": totals.sampled_omitted_item_count,
+            "truncated_omission_record_count": totals.truncated_omission_record_count,
             "preflight_evidence_sha256s": tuple(
                 sorted(
                     {
@@ -1091,16 +1156,17 @@ def build_context_manifest(
     request_ids = tuple(request.request_id for request in requests)
     if len(request_ids) != len(set(request_ids)):
         raise ContextManifestError("context manifest requires unique provider request IDs")
+    _validate_logical_request_joins(requests)
     totals = ContextManifestTotals.build(requests)
     payload: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "generated_by": "mmaudit",
         "run_id": run_id,
         "requests": requests,
         "totals": totals,
     }
     return ContextManifest(
-        schema_version="1.0",
+        schema_version="1.1",
         generated_by="mmaudit",
         run_id=run_id,
         requests=requests,
@@ -1136,41 +1202,113 @@ def validate_context_manifest_against_usage(
 
 
 def write_context_manifest(path: Path, manifest: ContextManifest) -> None:
-    """Write one typed artifact without following a destination link."""
+    """Atomically write one bounded artifact through descriptor-bound directories."""
 
-    if path.is_symlink() or path.is_junction():
-        raise ContextManifestError("context manifest destination may not be a link")
-    write_json(path, manifest)
+    serialized = stable_json(manifest).encode("utf-8")
+    if len(serialized) > _MAX_CONTEXT_MANIFEST_BYTES:
+        raise ContextManifestError("context manifest exceeds its serialized byte limit")
+    parent_descriptor = -1
+    temporary_descriptor = -1
+    temporary_name: str | None = None
+    try:
+        parent_descriptor, leaf_name = _open_manifest_parent(path, create=True)
+        original_metadata = _manifest_leaf_metadata(
+            parent_descriptor,
+            leaf_name,
+            missing_ok=True,
+            byte_limit=None,
+        )
+        temporary_descriptor, temporary_name = _create_manifest_temporary(
+            parent_descriptor,
+            leaf_name,
+        )
+        _write_descriptor(temporary_descriptor, serialized)
+        os.fsync(temporary_descriptor)
+        temporary_metadata = os.fstat(temporary_descriptor)
+        if (
+            not stat.S_ISREG(temporary_metadata.st_mode)
+            or temporary_metadata.st_nlink != 1
+            or temporary_metadata.st_size != len(serialized)
+        ):
+            raise ContextManifestError("context manifest temporary file is not unique and regular")
+        os.close(temporary_descriptor)
+        temporary_descriptor = -1
+
+        current_metadata = _manifest_leaf_metadata(
+            parent_descriptor,
+            leaf_name,
+            missing_ok=True,
+            byte_limit=None,
+        )
+        if _manifest_metadata_signature(current_metadata) != _manifest_metadata_signature(
+            original_metadata
+        ):
+            raise ContextManifestError("context manifest destination changed during atomic write")
+        os.replace(
+            temporary_name,
+            leaf_name,
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+        )
+        temporary_name = None
+        os.fsync(parent_descriptor)
+    except (OSError, ContextManifestError) as exc:
+        if isinstance(exc, ContextManifestError):
+            raise
+        raise ContextManifestError("context manifest could not be written safely") from exc
+    finally:
+        if temporary_descriptor >= 0:
+            with suppress(OSError):
+                os.close(temporary_descriptor)
+        if temporary_name is not None and parent_descriptor >= 0:
+            with suppress(OSError):
+                os.unlink(temporary_name, dir_fd=parent_descriptor)
+        if parent_descriptor >= 0:
+            with suppress(OSError):
+                os.close(parent_descriptor)
 
 
 def load_context_manifest(path: Path) -> ContextManifest:
-    """Load one bounded unique non-link manifest with duplicate-key rejection."""
+    """Load bounded JSON through a stable unique descriptor and non-link parents."""
 
+    parent_descriptor = -1
+    descriptor = -1
     try:
-        metadata = path.lstat()
-    except OSError as exc:
-        raise ContextManifestError("context manifest is unavailable") from exc
-    if (
-        not stat.S_ISREG(metadata.st_mode)
-        or path.is_symlink()
-        or path.is_junction()
-        or metadata.st_nlink != 1
-        or metadata.st_size > _MAX_CONTEXT_MANIFEST_BYTES
-    ):
-        raise ContextManifestError("context manifest must be a bounded unique regular file")
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as exc:
-        raise ContextManifestError("context manifest could not be opened safely") from exc
-    try:
-        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
-            payload = json.load(
-                handle,
-                object_pairs_hook=_unique_json_object,
-                parse_constant=_reject_nonfinite,
-            )
+        parent_descriptor, leaf_name = _open_manifest_parent(path, create=False)
+        descriptor = os.open(
+            leaf_name,
+            _manifest_leaf_open_flags(write=False),
+            dir_fd=parent_descriptor,
+        )
+        os.close(parent_descriptor)
+        parent_descriptor = -1
+        before = os.fstat(descriptor)
+        _validate_manifest_metadata(before, byte_limit=_MAX_CONTEXT_MANIFEST_BYTES)
+        serialized = _read_bounded_descriptor(descriptor, expected_size=before.st_size)
+        after = os.fstat(descriptor)
+        if (
+            _manifest_metadata_signature(before) != _manifest_metadata_signature(after)
+            or len(serialized) != before.st_size
+        ):
+            raise ContextManifestError("context manifest changed while being read")
+        os.close(descriptor)
+        descriptor = -1
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ContextManifestError("context manifest could not be read safely") from exc
+    finally:
+        if descriptor >= 0:
+            with suppress(OSError):
+                os.close(descriptor)
+        if parent_descriptor >= 0:
+            with suppress(OSError):
+                os.close(parent_descriptor)
+    try:
+        payload = json.loads(
+            serialized.decode("utf-8"),
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_nonfinite,
+        )
+    except (UnicodeError, json.JSONDecodeError) as exc:
         raise ContextManifestError("context manifest is not valid bounded JSON") from exc
     if not isinstance(payload, dict):
         raise ContextManifestError("context manifest root must be an object")
@@ -1183,6 +1321,175 @@ def load_context_manifest(path: Path) -> ContextManifest:
             allow_nan=False,
         )
     )
+
+
+def _open_manifest_parent(path: Path, *, create: bool) -> tuple[int, str]:
+    """Resolve each parent relative to a non-link directory descriptor."""
+
+    directory_flags = _manifest_directory_open_flags()
+    absolute_path = Path(os.path.abspath(os.fspath(path)))
+    leaf_name = absolute_path.name
+    if not leaf_name:
+        raise ContextManifestError("context manifest path must name a file")
+    descriptor = -1
+    try:
+        descriptor = os.open(os.path.sep, directory_flags)
+        for component in absolute_path.parent.parts:
+            if component == os.path.sep:
+                continue
+            try:
+                next_descriptor = os.open(
+                    component,
+                    directory_flags,
+                    dir_fd=descriptor,
+                )
+            except FileNotFoundError:
+                if not create:
+                    raise
+                try:
+                    os.mkdir(component, mode=0o700, dir_fd=descriptor)
+                    os.fsync(descriptor)
+                except FileExistsError:
+                    pass
+                next_descriptor = os.open(
+                    component,
+                    directory_flags,
+                    dir_fd=descriptor,
+                )
+            os.close(descriptor)
+            descriptor = next_descriptor
+        return descriptor, leaf_name
+    except ContextManifestError:
+        if descriptor >= 0:
+            with suppress(OSError):
+                os.close(descriptor)
+        raise
+    except OSError as exc:
+        if descriptor >= 0:
+            with suppress(OSError):
+                os.close(descriptor)
+        raise ContextManifestError(
+            "context manifest parent path is unavailable or contains a link"
+        ) from exc
+
+
+def _manifest_directory_open_flags() -> int:
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if (
+        not isinstance(no_follow, int)
+        or no_follow <= 0
+        or not isinstance(directory, int)
+        or directory <= 0
+    ):
+        raise ContextManifestError("descriptor-safe context manifest I/O is unavailable")
+    return os.O_RDONLY | no_follow | directory | getattr(os, "O_CLOEXEC", 0)
+
+
+def _manifest_leaf_open_flags(*, write: bool) -> int:
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if not isinstance(no_follow, int) or no_follow <= 0:
+        raise ContextManifestError("descriptor-safe context manifest I/O is unavailable")
+    access = os.O_WRONLY if write else os.O_RDONLY
+    flags = access | no_follow | getattr(os, "O_CLOEXEC", 0)
+    if not write:
+        flags |= getattr(os, "O_NONBLOCK", 0)
+        flags |= getattr(os, "O_NOCTTY", 0)
+    return flags
+
+
+def _manifest_leaf_metadata(
+    parent_descriptor: int,
+    leaf_name: str,
+    *,
+    missing_ok: bool,
+    byte_limit: int | None,
+) -> os.stat_result | None:
+    try:
+        metadata = os.stat(
+            leaf_name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        if missing_ok:
+            return None
+        raise
+    _validate_manifest_metadata(metadata, byte_limit=byte_limit)
+    return metadata
+
+
+def _validate_manifest_metadata(
+    metadata: os.stat_result,
+    *,
+    byte_limit: int | None,
+) -> None:
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or (byte_limit is not None and metadata.st_size > byte_limit)
+    ):
+        raise ContextManifestError(
+            "context manifest must be a bounded unique non-link regular file"
+        )
+
+
+def _manifest_metadata_signature(
+    metadata: os.stat_result | None,
+) -> tuple[int, int, int, int, int, int, int] | None:
+    if metadata is None:
+        return None
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _create_manifest_temporary(parent_descriptor: int, leaf_name: str) -> tuple[int, str]:
+    flags = _manifest_leaf_open_flags(write=True) | os.O_CREAT | os.O_EXCL
+    for _attempt in range(128):
+        temporary_name = f".{leaf_name}.{secrets.token_hex(16)}.tmp"
+        try:
+            return (
+                os.open(
+                    temporary_name,
+                    flags,
+                    0o600,
+                    dir_fd=parent_descriptor,
+                ),
+                temporary_name,
+            )
+        except FileExistsError:
+            continue
+    raise ContextManifestError("context manifest temporary file is unavailable")
+
+
+def _write_descriptor(descriptor: int, serialized: bytes) -> None:
+    offset = 0
+    while offset < len(serialized):
+        written = os.write(descriptor, serialized[offset:])
+        if written <= 0:
+            raise ContextManifestError("context manifest temporary write did not progress")
+        offset += written
+
+
+def _read_bounded_descriptor(descriptor: int, *, expected_size: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = expected_size
+    while remaining:
+        chunk = os.read(descriptor, min(remaining, 64 * 1024))
+        if not chunk:
+            raise ContextManifestError("context manifest changed while being read")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    if os.read(descriptor, 1):
+        raise ContextManifestError("context manifest changed while being read")
+    return b"".join(chunks)
 
 
 def _request_token_plan_from_usage(usage: UsageRecord) -> RequestTokenPlan:
@@ -1248,6 +1555,7 @@ def _actual_usage_source(usage: UsageRecord) -> ActualTokenUsageSource:
 def _context_totals_payload(
     requests: Sequence[ContextManifestRequestEvidence],
 ) -> dict[str, Any]:
+    _validate_logical_request_joins(requests)
     request_plans = [
         request.request_plan for request in requests if request.request_plan is not None
     ]
@@ -1294,12 +1602,11 @@ def _context_totals_payload(
         isinstance(request, ContextPreflightRequestEvidence) for request in requests
     )
     states = [request.request_state for request in requests]
-    omissions = [
-        omission
-        for request in requests
-        if isinstance(request, ContextRequestEvidence)
-        for omission in request.omissions
-    ]
+    (
+        unique_omission_record_count,
+        omission_evidence_occurrence_count,
+        unique_context_omissions,
+    ) = _context_omission_inventory(requests)
     provider_requests = [
         request for request in requests if isinstance(request, ContextRequestEvidence)
     ]
@@ -1355,10 +1662,91 @@ def _context_totals_payload(
             "completion_tokens",
         ),
         "unavailable_actual_usage_count": unavailable_count,
-        "omission_record_count": len(omissions),
-        "omitted_item_count": sum(omission.omitted_item_count for omission in omissions),
+        "omission_record_count": unique_omission_record_count,
+        "omission_evidence_occurrence_count": omission_evidence_occurrence_count,
+        "omitted_item_count": sum(
+            omission.omitted_item_count for omission in unique_context_omissions
+        ),
+        "sampled_omitted_item_count": sum(
+            len(omission.sampled_item_sha256s) for omission in unique_context_omissions
+        ),
+        "truncated_omission_record_count": sum(
+            omission.samples_truncated for omission in unique_context_omissions
+        ),
         "categories": tuple(category_totals),
     }
+
+
+def _validate_logical_request_joins(
+    requests: Sequence[ContextManifestRequestEvidence],
+) -> None:
+    logical_requests: dict[str, list[ContextManifestRequestEvidence]] = {}
+    for request in requests:
+        logical_request_id = (
+            request.request_id
+            if isinstance(request, ContextRequestEvidence)
+            else request.logical_request_id
+        )
+        logical_requests.setdefault(logical_request_id, []).append(request)
+
+    for joined_requests in logical_requests.values():
+        if len(joined_requests) < 2:
+            continue
+        expected = joined_requests[0]
+        expected_plan = expected.request_plan
+        if expected_plan is None or any(
+            request.request_plan is None
+            or request.role != expected.role
+            or request.requested_model != expected.requested_model
+            or request.request_plan != expected_plan
+            for request in joined_requests[1:]
+        ):
+            raise ContextManifestError("context records differ from their logical request plan")
+
+
+def _context_omission_inventory(
+    requests: Sequence[ContextManifestRequestEvidence],
+) -> tuple[int, int, tuple[ContextOmissionItem, ...]]:
+    """Return unique logical inventories plus the raw evidence occurrence count."""
+
+    unique_records: set[tuple[str, str, str]] = set()
+    unique_context_omissions: dict[tuple[str, str], ContextOmissionItem] = {}
+    occurrence_count = 0
+    for request in requests:
+        if isinstance(request, ContextRequestEvidence):
+            logical_request_id = request.request_id
+            for omission in request.omissions:
+                occurrence_count += 1
+                if omission.provenance is ContextOmissionProvenance.HASHED_CONTEXT_PACKAGE:
+                    item = _context_omission_item_from_evidence(omission)
+                    key = (logical_request_id, item.evidence_sha256)
+                    unique_records.add((logical_request_id, "HASHED_CONTEXT_PACKAGE", key[1]))
+                    existing = unique_context_omissions.setdefault(key, item)
+                    if existing != item:
+                        raise ContextManifestError(
+                            "context omission commitment collision is inconsistent"
+                        )
+                else:
+                    unique_records.add(
+                        (
+                            logical_request_id,
+                            omission.provenance.value,
+                            omission.evidence_sha256,
+                        )
+                    )
+            continue
+        for item in _preflight_context_omissions(request):
+            occurrence_count += 1
+            key = (request.logical_request_id, item.evidence_sha256)
+            unique_records.add((request.logical_request_id, "HASHED_CONTEXT_PACKAGE", key[1]))
+            existing = unique_context_omissions.setdefault(key, item)
+            if existing != item:
+                raise ContextManifestError("context omission commitment collision is inconsistent")
+    return (
+        len(unique_records),
+        occurrence_count,
+        tuple(unique_context_omissions.values()),
+    )
 
 
 def _sum_actual_tokens(
@@ -1370,8 +1758,41 @@ def _sum_actual_tokens(
 
 def _omission_sort_key(
     omission: ContextOmissionEvidence,
-) -> tuple[str, str, str]:
-    return omission.category.value, omission.reason.value, omission.evidence_sha256
+) -> tuple[str, str]:
+    return omission.category.value, omission.reason.value
+
+
+def _context_omission_item_from_evidence(
+    omission: ContextOmissionEvidence,
+) -> ContextOmissionItem:
+    if (
+        omission.provenance is not ContextOmissionProvenance.HASHED_CONTEXT_PACKAGE
+        or omission.inventory_commitment_method is None
+        or omission.inventory_sha256 is None
+        or omission.context_omission_evidence_sha256 is None
+    ):
+        raise ValueError("context omission evidence is not a hashed context aggregate")
+    return ContextOmissionItem(
+        schema_version="1.1",
+        category=omission.category,
+        reason=omission.reason,
+        inventory_commitment_method=omission.inventory_commitment_method,
+        omitted_item_sha256=omission.inventory_sha256,
+        omitted_item_count=omission.omitted_item_count,
+        sampled_item_sha256s=omission.omitted_item_sha256s,
+        samples_truncated=omission.samples_truncated,
+        evidence_sha256=omission.context_omission_evidence_sha256,
+    )
+
+
+def _preflight_context_omissions(
+    request: ContextPreflightRequestEvidence,
+) -> tuple[ContextOmissionItem, ...]:
+    if request.request_plan is not None:
+        return request.request_plan.context_omissions
+    if request.planning_snapshot is not None:
+        return request.planning_snapshot.context_omissions
+    return ()
 
 
 def _require_self_hash(model: BaseModel, field: str) -> None:

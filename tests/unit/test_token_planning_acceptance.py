@@ -305,7 +305,8 @@ def _request_plan_from_context(
         reserved_reasoning_tokens=0,
         global_input_token_budget=2_000_000,
         global_output_token_budget=200_000,
-        maximum_source_tokens_per_request=200_000,
+        maximum_source_tokens_per_request=(package.configured_maximum_source_tokens_per_request),
+        context_package_source_byte_ceiling=package.effective_source_byte_ceiling,
         prompt_envelope_byte_upper_bound_tokens=sum(
             allocation.estimate.byte_upper_bound_tokens for allocation in allocations
         ),
@@ -463,6 +464,9 @@ def test_large_metadata_pressure_compacts_before_source_is_exhausted(
     }
 
     assert package.bytes_used <= package.byte_budget == 120_000
+    assert package.configured_maximum_source_tokens_per_request == 200_000
+    assert package.effective_source_byte_ceiling is not None
+    assert package.effective_source_byte_ceiling <= package.byte_budget
     assert categories["source"] >= 8_192
     assert package.solidity_graphs is None or len(package.solidity_graphs.edges) < len(graphs.edges)
     assert package.solidity_index is None or len(package.solidity_index.entities) < len(
@@ -479,9 +483,12 @@ def test_large_metadata_pressure_compacts_before_source_is_exhausted(
         if item.category in expected_metadata_omissions
     )
     assert all(len(item.omitted_item_sha256) == 64 for item in package.omissions)
+    assert all(
+        item.omitted_item_count >= len(item.sampled_item_sha256s) for item in package.omissions
+    )
 
 
-def test_metadata_omission_hashes_bind_each_actual_inventory_reduction(
+def test_metadata_omission_aggregate_binds_every_actual_inventory_reduction(
     tmp_path: Path,
     config_factory: Callable[..., AuditConfig],
 ) -> None:
@@ -526,22 +533,30 @@ def test_metadata_omission_hashes_bind_each_actual_inventory_reduction(
         scanner_findings=scanner_findings,
         requested_budget=120_000,
     )
-    original_graph_hashes = {
-        item.omitted_item_sha256
+    original_graph_omissions = [
+        item
         for item in original.omissions
         if item.category is ContextOmissionCategory.GRAPH
         and item.reason is ContextOmissionReason.METADATA_BUDGET_EXCLUDED
-    }
-    changed_graph_hashes = {
-        item.omitted_item_sha256
+    ]
+    changed_graph_omissions = [
+        item
         for item in changed.omissions
         if item.category is ContextOmissionCategory.GRAPH
         and item.reason is ContextOmissionReason.METADATA_BUDGET_EXCLUDED
-    }
+    ]
 
-    assert len(original_graph_hashes) >= 6
-    assert len(changed_graph_hashes) >= 6
-    assert original_graph_hashes != changed_graph_hashes
+    assert len(original_graph_omissions) == len(changed_graph_omissions) == 1
+    original_graph = original_graph_omissions[0]
+    changed_graph = changed_graph_omissions[0]
+    assert original_graph.omitted_item_count >= 6
+    assert changed_graph.omitted_item_count >= 6
+    assert original_graph.omitted_item_sha256 != changed_graph.omitted_item_sha256
+    assert original_graph.evidence_sha256 != changed_graph.evidence_sha256
+    assert len(original_graph.sampled_item_sha256s) <= 8
+    assert original_graph.samples_truncated == (
+        original_graph.omitted_item_count > len(original_graph.sampled_item_sha256s)
+    )
     assert marker not in json.dumps(
         [item.model_dump(mode="json") for item in changed.omissions],
         sort_keys=True,

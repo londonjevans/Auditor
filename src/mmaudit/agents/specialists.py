@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from mmaudit.agents.base import FindingReviewResult, load_prompt
+from mmaudit.agents.base import FindingReviewResult, ValidatedAgentResult, load_prompt
 from mmaudit.config import AuditConfig, model_family
 from mmaudit.constants import (
     ALL_SPECIALIST_ROLES,
@@ -17,19 +18,24 @@ from mmaudit.constants import (
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterSchemaError
 from mmaudit.models.schemas import (
     CandidateReviewBatch,
+    ContextExecutionEvidence,
     ContextPackage,
+    ContextRequestEvidence,
     Evidence,
     Finding,
     ModelVote,
     QualityGateResult,
     ReportQualityReview,
     SolidityCoverage,
+    SpecialistAcceptedOutcome,
+    SpecialistAcceptedOutcomeKind,
     SpecialistExecutionRecord,
     SpecialistExecutionStatus,
     UsageRecord,
 )
+from mmaudit.models.token_planning import UTF8_BYTES_PER_ESTIMATED_TOKEN
 from mmaudit.models.usage import is_creditable_usage_record
-from mmaudit.orchestration.context import render_context
+from mmaudit.orchestration.context import render_context, revalidate_context_package
 from mmaudit.orchestration.model_review_evidence import (
     ModelReviewEvidenceError,
     seal_model_surface_review_artifact,
@@ -46,7 +52,6 @@ class SpecialistRoleDefinition:
     role_kind: Literal["investigator", "auxiliary"] = "investigator"
     response_schema: str = "CandidateReviewBatch"
     schema_name: str = ""
-    max_context_bytes: int = 256_000
 
     def effective_schema_name(self) -> str:
         return self.schema_name or f"mmaudit_specialist_{self.name}"
@@ -62,7 +67,6 @@ class SpecialistRoleDefinition:
                 "scope_exclusions": self.exclusions,
                 "response_schema": self.response_schema,
                 "schema_name": self.effective_schema_name(),
-                "max_context_bytes": self.max_context_bytes,
             },
             sort_keys=True,
         )
@@ -290,7 +294,6 @@ SPECIALIST_ROLE_REGISTRY: dict[str, SpecialistRoleDefinition] = {
         role_kind="auxiliary",
         response_schema="InvariantReviewBatch",
         schema_name="mmaudit_invariant_review",
-        max_context_bytes=192_000,
     ),
     "test_generation": SpecialistRoleDefinition(
         name="test_generation",
@@ -313,7 +316,6 @@ SPECIALIST_ROLE_REGISTRY: dict[str, SpecialistRoleDefinition] = {
         role_kind="auxiliary",
         response_schema="GeneratedFoundryTestBatch",
         schema_name="mmaudit_test_generation",
-        max_context_bytes=192_000,
     ),
     "exploit_reproduction_planner": SpecialistRoleDefinition(
         name="exploit_reproduction_planner",
@@ -336,7 +338,6 @@ SPECIALIST_ROLE_REGISTRY: dict[str, SpecialistRoleDefinition] = {
         role_kind="auxiliary",
         response_schema="GeneratedFoundryTestBatch",
         schema_name="mmaudit_exploit_reproduction_plan",
-        max_context_bytes=192_000,
     ),
     "falsifier": SpecialistRoleDefinition(
         name="falsifier",
@@ -359,7 +360,6 @@ SPECIALIST_ROLE_REGISTRY: dict[str, SpecialistRoleDefinition] = {
         role_kind="auxiliary",
         response_schema="FalsificationBatch",
         schema_name="mmaudit_falsification",
-        max_context_bytes=192_000,
     ),
     "report_quality": SpecialistRoleDefinition(
         name="report_quality",
@@ -382,7 +382,6 @@ SPECIALIST_ROLE_REGISTRY: dict[str, SpecialistRoleDefinition] = {
         role_kind="auxiliary",
         response_schema="ReportQualityReview",
         schema_name="mmaudit_report_quality_review",
-        max_context_bytes=192_000,
     ),
 }
 
@@ -418,9 +417,7 @@ def _validate_specialist_registry() -> None:
     if len(schema_names) != len(SPECIALIST_ROLE_REGISTRY):
         raise RuntimeError("specialist structured schema names must be distinct")
     if any(
-        definition.name != role
-        or not definition.response_schema
-        or definition.max_context_bytes <= 0
+        definition.name != role or not definition.response_schema
         for role, definition in SPECIALIST_ROLE_REGISTRY.items()
     ):
         raise RuntimeError("specialist role metadata is incomplete")
@@ -429,28 +426,113 @@ def _validate_specialist_registry() -> None:
 _validate_specialist_registry()
 
 
+SPECIALIST_METADATA_RESERVE_BYTES = 64 * 1_024
+
+
 def specialist_context_budget(
     role: str,
     *,
     total_context_bytes: int,
-    planned_packages: int,
+    maximum_source_tokens_per_request: int,
 ) -> int:
-    """Return one role's local serialization cap without peer-count coupling."""
+    """Return the configured package cap for one source-bounded specialist request.
 
-    definition = SPECIALIST_ROLE_REGISTRY[role]
-    if planned_packages < 1:
-        raise ValueError("planned package count must be positive")
-    return min(definition.max_context_bytes, max(1, total_context_bytes))
+    The source token ceiling is converted with the same conservative estimator
+    used by context construction. A small, explicit metadata allocation sits
+    outside that source capacity; the repository package limit remains the
+    outer bound. Endpoint-specific request planning may reduce this cap further.
+    """
+
+    SPECIALIST_ROLE_REGISTRY[role]
+    if isinstance(total_context_bytes, bool) or total_context_bytes <= 0:
+        raise ValueError("total context byte limit must be positive")
+    if (
+        isinstance(maximum_source_tokens_per_request, bool)
+        or maximum_source_tokens_per_request <= 0
+    ):
+        raise ValueError("maximum source token limit must be positive")
+    source_byte_ceiling = maximum_source_tokens_per_request * UTF8_BYTES_PER_ESTIMATED_TOKEN
+    return min(
+        total_context_bytes,
+        source_byte_ceiling + SPECIALIST_METADATA_RESERVE_BYTES,
+    )
 
 
 def canonical_specialist_role(request_role: str) -> str | None:
-    """Resolve a usage-ledger request role to one configured specialist role."""
+    """Resolve only request roles that execute their named specialist responsibility."""
 
-    parts = request_role.split(":", 2)
-    if len(parts) < 2 or parts[0] != "specialist":
+    parts = request_role.split(":")
+    if len(parts) not in {2, 3} or parts[0] != "specialist":
         return None
     role = parts[1]
-    return role if role in SPECIALIST_ROLE_REGISTRY else None
+    if role not in SPECIALIST_ROLE_REGISTRY:
+        return None
+    if len(parts) == 2:
+        return None if role in {"test_generation", "exploit_reproduction_planner"} else role
+    if parts[2] == "exploit_test" and role in {"test_generation", "exploit_reproduction_planner"}:
+        return role
+    return None
+
+
+def _context_execution_evidence(package: ContextPackage) -> ContextExecutionEvidence:
+    sealed = revalidate_context_package(package)
+    rendered = render_context(sealed).encode("utf-8")
+    return ContextExecutionEvidence(
+        context_role=sealed.role,
+        byte_budget=sealed.byte_budget,
+        declared_bytes_used=sealed.bytes_used,
+        rendered_bytes=len(rendered),
+        source_bytes=sum(len(excerpt.content.encode("utf-8")) for excerpt in sealed.excerpts),
+        configured_maximum_source_tokens_per_request=(
+            sealed.configured_maximum_source_tokens_per_request
+        ),
+        effective_source_byte_ceiling=sealed.effective_source_byte_ceiling,
+        rendered_sha256=hashlib.sha256(rendered).hexdigest(),
+    )
+
+
+def _usage_context_evidence(record: UsageRecord) -> ContextRequestEvidence | None:
+    raw_evidence = record.routing.get("context_request_evidence")
+    if not isinstance(raw_evidence, dict):
+        return None
+    try:
+        evidence = ContextRequestEvidence.model_validate(raw_evidence)
+    except ValueError:
+        return None
+    if evidence.request_id != record.request_id or evidence.request_role != record.role:
+        return None
+    if record.routing.get("context_request_evidence_sha256") != evidence.evidence_sha256:
+        return None
+    return evidence
+
+
+def completed_specialist_roles(
+    records: list[SpecialistExecutionRecord],
+) -> set[str]:
+    """Return completed roles that carry the evidence required for runtime credit."""
+
+    completed: set[str] = set()
+    for record in records:
+        try:
+            sealed = SpecialistExecutionRecord.model_validate(record.model_dump(mode="python"))
+        except ValueError:
+            continue
+        definition = SPECIALIST_ROLE_REGISTRY.get(sealed.role)
+        if definition is None or (
+            sealed.role_kind != definition.role_kind
+            or sealed.responsibility != definition.mission
+            or sealed.response_schema != definition.response_schema
+            or sealed.schema_name != definition.effective_schema_name()
+        ):
+            continue
+        if sealed.status is not SpecialistExecutionStatus.COMPLETED:
+            continue
+        if (
+            sealed.role_kind == "auxiliary"
+            or sealed.derived_source_review_creditable_requests() > 0
+        ):
+            completed.add(sealed.role)
+    return completed
 
 
 def build_specialist_execution_records(
@@ -458,32 +540,109 @@ def build_specialist_execution_records(
     *,
     usage_records: list[UsageRecord],
     contexts: list[ContextPackage],
+    accepted_outcomes: Sequence[SpecialistAcceptedOutcome] = (),
 ) -> list[SpecialistExecutionRecord]:
-    """Normalize configured, scheduled, failed, and completed specialist evidence."""
+    """Normalize provider attempts against host-accepted specialist workflow results."""
 
     configured_roles = set(config.models.specialists)
+    normalized_outcomes = tuple(
+        SpecialistAcceptedOutcome.model_validate(outcome.model_dump(mode="python"))
+        for outcome in accepted_outcomes
+    )
+    accepted_ids = [outcome.request_id for outcome in normalized_outcomes]
+    if len(accepted_ids) != len(set(accepted_ids)):
+        raise ValueError("accepted specialist outcome request IDs are not unique")
+    usage_by_id = {record.request_id: record for record in usage_records}
+    if len(usage_by_id) != len(usage_records):
+        raise ValueError("specialist usage request IDs are not unique")
+    if set(accepted_ids) - set(usage_by_id):
+        raise ValueError("accepted specialist outcome lacks provider usage evidence")
     records: list[SpecialistExecutionRecord] = []
     for role in ALL_SPECIALIST_ROLES:
         definition = SPECIALIST_ROLE_REGISTRY[role]
+        configured_context_limit = specialist_context_budget(
+            role,
+            total_context_bytes=config.repository.max_total_context_bytes,
+            maximum_source_tokens_per_request=(
+                config.token_budgets.maximum_source_tokens_per_request
+            ),
+        )
         request_prefix = f"specialist:{role}"
         role_usage = [
             record for record in usage_records if canonical_specialist_role(record.role) == role
         ]
-        context = next(
-            (package for package in contexts if package.role == request_prefix),
-            None,
+        role_outcomes = tuple(
+            outcome for outcome in normalized_outcomes if outcome.specialist_role == role
         )
-        successful_requests = sum(is_creditable_usage_record(record) for record in role_usage)
-        failed_requests = len(role_usage) - successful_requests
+        if role_outcomes and role not in configured_roles:
+            raise ValueError(f"unconfigured specialist {role} has an accepted outcome")
+        role_contexts = [
+            _context_execution_evidence(package)
+            for package in contexts
+            if package.role == request_prefix
+        ]
+        if any(context.byte_budget > configured_context_limit for context in role_contexts):
+            raise ValueError(
+                f"specialist {role} context exceeds its effective configured package limit"
+            )
+        request_contexts = tuple(
+            evidence
+            for record in role_usage
+            if (evidence := _usage_context_evidence(record)) is not None
+        )
+        request_ids = [record.request_id for record in role_usage]
+        if len(request_ids) != len(set(request_ids)):
+            raise ValueError(f"specialist {role} request IDs are not unique")
+        retained_context_bindings = {context.context_binding() for context in role_contexts}
+        request_contexts_by_id = {evidence.request_id: evidence for evidence in request_contexts}
+        outcomes_by_id = {outcome.request_id: outcome for outcome in role_outcomes}
+        successful_usage = [
+            record
+            for record in role_usage
+            if is_creditable_usage_record(record)
+            and (evidence := request_contexts_by_id.get(record.request_id)) is not None
+            and evidence.context_binding() in retained_context_bindings
+            and (outcome := outcomes_by_id.get(record.request_id)) is not None
+            and outcome.request_role == record.role
+            and outcome.validated_response_sha256 == record.validated_response_sha256
+            and outcome.context_request_evidence_sha256 == evidence.evidence_sha256
+        ]
+        successful_request_ids = tuple(sorted(record.request_id for record in successful_usage))
+        successful_request_id_set = set(successful_request_ids)
+        failed_request_ids = tuple(
+            sorted(
+                record.request_id
+                for record in role_usage
+                if record.request_id not in successful_request_id_set
+            )
+        )
+        successful_requests = len(successful_request_ids)
+        failed_requests = len(failed_request_ids)
+        source_review_creditable_requests = sum(
+            evidence.request_id in successful_request_id_set
+            and evidence.context_binding() in retained_context_bindings
+            and evidence.source_bytes > 0
+            and (
+                (outcome := outcomes_by_id.get(evidence.request_id)) is not None
+                and outcome.outcome_kind is SpecialistAcceptedOutcomeKind.CANDIDATE_REVIEW
+                and outcome.request_role == request_prefix
+                and outcome.requested_surface_count > 0
+                and outcome.surface_review_artifact_sha256 is not None
+            )
+            for evidence in request_contexts
+        )
         configured = role in configured_roles
         if not configured:
             status = SpecialistExecutionStatus.NOT_CONFIGURED
+        elif successful_requests and failed_requests:
+            status = SpecialistExecutionStatus.PARTIAL
         elif successful_requests:
             status = SpecialistExecutionStatus.COMPLETED
         elif failed_requests:
             status = SpecialistExecutionStatus.FAILED
         else:
             status = SpecialistExecutionStatus.NOT_SCHEDULED
+        single_context = role_contexts[0] if len(role_contexts) == 1 else None
         records.append(
             SpecialistExecutionRecord(
                 role=role,
@@ -492,12 +651,22 @@ def build_specialist_execution_records(
                 response_schema=definition.response_schema,
                 schema_name=definition.effective_schema_name(),
                 configured=configured,
-                context_limit_bytes=definition.max_context_bytes,
-                context_budget_bytes=context.byte_budget if context is not None else None,
-                context_bytes_used=context.bytes_used if context is not None else None,
+                context_limit_bytes=configured_context_limit,
+                context_budget_bytes=(
+                    single_context.byte_budget if single_context is not None else None
+                ),
+                context_bytes_used=(
+                    single_context.rendered_bytes if single_context is not None else None
+                ),
+                contexts=tuple(role_contexts),
+                request_contexts=request_contexts,
+                accepted_outcomes=role_outcomes,
                 request_roles=sorted({record.role for record in role_usage}),
+                successful_request_ids=successful_request_ids,
+                failed_request_ids=failed_request_ids,
                 successful_requests=successful_requests,
                 failed_requests=failed_requests,
+                source_review_creditable_requests=source_review_creditable_requests,
                 status=status,
             )
         )
@@ -608,6 +777,7 @@ class SpecialistFindingAgent:
             findings=tuple(stamped),
             surface_review_artifact=surface_review_artifact,
             surface_review_context=request_context,
+            completion_usage=usage,
         )
 
 
@@ -699,6 +869,29 @@ class ReportQualityAgent:
         context: ContextPackage,
         prepared_input: PreparedReportQualityInput | None = None,
     ) -> ReportQualityReview:
+        return (
+            await self.run_with_evidence(
+                findings=findings,
+                rejected_count=rejected_count,
+                coverage=coverage,
+                quality_gates=quality_gates,
+                incomplete_reasons=incomplete_reasons,
+                context=context,
+                prepared_input=prepared_input,
+            )
+        ).value
+
+    async def run_with_evidence(
+        self,
+        *,
+        findings: list[Finding],
+        rejected_count: int,
+        coverage: SolidityCoverage | None,
+        quality_gates: list[QualityGateResult],
+        incomplete_reasons: list[str],
+        context: ContextPackage,
+        prepared_input: PreparedReportQualityInput | None = None,
+    ) -> ValidatedAgentResult[ReportQualityReview]:
         configured = self.config.models.role("report_quality")
         definition = SPECIALIST_ROLE_REGISTRY["report_quality"]
         expected_input = self.prepare_input(
@@ -713,7 +906,7 @@ class ReportQualityAgent:
                 "prepared report-quality workflow differs from the reviewed evidence"
             )
         effective_input = prepared_input or expected_input
-        return await self.client.complete(
+        completion = await self.client.complete_with_evidence(
             role="specialist:report_quality",
             models=[configured.primary, *configured.fallbacks],
             system_prompt="\n\n".join(
@@ -729,4 +922,8 @@ class ReportQualityAgent:
             context_package=context,
             response_model=ReportQualityReview,
             schema_name=definition.effective_schema_name(),
+        )
+        return ValidatedAgentResult(
+            value=completion.value,
+            completion_usage=completion.usage_record,
         )

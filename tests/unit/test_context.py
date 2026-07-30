@@ -19,27 +19,27 @@ from mmaudit.orchestration.context import (
     context_category_measurements,
     context_json_escape_overhead_tokens,
     render_context,
+    revalidate_context_package,
 )
 from mmaudit.repository.discovery import discover_repository
 from mmaudit.repository.ignore import IgnoreMatcher
 from mmaudit.repository.mapping import build_repository_map
 
 
-def test_specialist_context_budget_is_independent_of_unrelated_peer_roles() -> None:
-    """Adding unrelated model roles must not reduce one endpoint-bound review budget."""
-
-    few_roles = specialist_context_budget(
+def test_specialist_context_budget_uses_source_and_package_bounds() -> None:
+    source_bounded = specialist_context_budget(
         "access_control",
         total_context_bytes=2_000_000,
-        planned_packages=7,
+        maximum_source_tokens_per_request=200_000,
     )
-    many_roles = specialist_context_budget(
-        "access_control",
-        total_context_bytes=2_000_000,
-        planned_packages=31,
+    package_bounded = specialist_context_budget(
+        "invariant_review",
+        total_context_bytes=400_000,
+        maximum_source_tokens_per_request=200_000,
     )
 
-    assert few_roles == many_roles
+    assert source_bounded == 665_536
+    assert package_bounded == 400_000
 
 
 def test_context_builder_package_is_independent_of_unrelated_peer_roles(
@@ -195,7 +195,7 @@ def test_context_builder_accounts_for_trusted_surface_request_manifest(
     )
     rendered = render_context(package)
 
-    assert package.requested_model_surfaces == [request]
+    assert package.requested_model_surfaces == (request,)
     assert package.bytes_used == len(rendered.encode())
     assert "<TRUSTED_MODEL_SURFACE_REQUESTS_JSON>" in rendered
     assert "</TRUSTED_MODEL_SURFACE_REQUESTS_JSON>" in rendered
@@ -245,6 +245,90 @@ def test_context_json_escape_overhead_matches_provider_visible_string_encoding(
 
     assert context_json_escape_overhead_tokens(package) == escaped_bytes - raw_bytes
     assert escaped_bytes > raw_bytes
+
+
+def test_context_boundary_returns_a_detached_package(
+    vulnerable_repo: Path,
+    config_factory,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    discovery = discover_repository(vulnerable_repo, config.repository, IgnoreMatcher())
+    package = ContextBuilder(
+        discovery=discovery,
+        repository_map=build_repository_map(discovery),
+        repository_config=config.repository,
+        privacy=config.privacy,
+        scanner_findings=[],
+    ).build("source_audit")
+
+    sealed = revalidate_context_package(package)
+    original_frameworks = tuple(sealed.repository_map.frameworks)
+    package.repository_map.frameworks.append("SyntheticNestedMutation")
+
+    assert sealed is not package
+    assert sealed.repository_map is not package.repository_map
+    assert sealed.repository_map.frameworks is not package.repository_map.frameworks
+    assert tuple(sealed.repository_map.frameworks) == original_frameworks
+
+
+def test_context_boundary_rejects_nested_mutation_with_stale_rendered_bytes(
+    vulnerable_repo: Path,
+    config_factory,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    discovery = discover_repository(vulnerable_repo, config.repository, IgnoreMatcher())
+    package = ContextBuilder(
+        discovery=discovery,
+        repository_map=build_repository_map(discovery),
+        repository_config=config.repository,
+        privacy=config.privacy,
+        scanner_findings=[],
+    ).build("source_audit")
+    package.repository_map.frameworks.append("SyntheticNestedMutation")
+
+    with pytest.raises(ContextBudgetError, match="exact rendered UTF-8 bytes"):
+        revalidate_context_package(package)
+
+
+def test_context_boundary_rejects_stale_declared_bytes(
+    vulnerable_repo: Path,
+    config_factory,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    discovery = discover_repository(vulnerable_repo, config.repository, IgnoreMatcher())
+    package = ContextBuilder(
+        discovery=discovery,
+        repository_map=build_repository_map(discovery),
+        repository_config=config.repository,
+        privacy=config.privacy,
+        scanner_findings=[],
+    ).build("source_audit")
+    payload = dict(package.__dict__)
+    payload["bytes_used"] = package.bytes_used - 1
+    stale = ContextPackage.model_construct(**payload)
+
+    with pytest.raises(ContextBudgetError, match="exact rendered UTF-8 bytes"):
+        revalidate_context_package(stale)
+
+
+def test_context_boundary_rejects_malformed_nested_models(
+    vulnerable_repo: Path,
+    config_factory,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    discovery = discover_repository(vulnerable_repo, config.repository, IgnoreMatcher())
+    package = ContextBuilder(
+        discovery=discovery,
+        repository_map=build_repository_map(discovery),
+        repository_config=config.repository,
+        privacy=config.privacy,
+        scanner_findings=[],
+    ).build("source_audit")
+    assert package.repository_map.files
+    package.repository_map.files[0].size = -1
+
+    with pytest.raises(ContextBudgetError, match="detached boundary validation"):
+        revalidate_context_package(package)
 
 
 def test_model_surface_context_rejects_zero_source_before_transport(

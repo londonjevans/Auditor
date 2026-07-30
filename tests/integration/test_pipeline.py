@@ -1846,12 +1846,14 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
         *,
         usage_records: list[UsageRecord],
         contexts: list[ContextPackage],
+        accepted_outcomes: Any = (),
     ) -> Any:
         execution_contexts.extend(contexts)
         return build_specialist_execution_records(
             execution_config,
             usage_records=usage_records,
             contexts=contexts,
+            accepted_outcomes=accepted_outcomes,
         )
 
     monkeypatch.setattr(

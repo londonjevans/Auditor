@@ -401,7 +401,8 @@ def test_oversized_logical_symbol_is_reported_not_split() -> None:
     content = "def giant():\n" + "\n".join(f"    value_{i} = {i}" for i in range(100))
     result = chunk_text(path="giant.py", content=content, max_chunk_bytes=100)
     assert result.excerpts == ()
-    assert any("logical construct" in omission for omission in result.omissions)
+    assert len(result.omissions) == 1
+    assert "logical construct" in result.omissions[0]
 
 
 def test_location_validation_checks_range_symbol_and_snapshot(

@@ -49,6 +49,7 @@ from mmaudit.models.schemas import ExecutionEvidenceKind, StrictModel, UsageReco
 from mmaudit.models.usage import (
     _is_structurally_creditable_usage_record,
     is_creditable_usage_record,
+    source_backed_whole_protocol_context,
 )
 from mmaudit.orchestration.manifest import canonical_sha256
 
@@ -2610,7 +2611,7 @@ def evaluate_certified_ensemble(
                 require_real=True,
                 require_certification=True,
             )
-            and _usage_role_is_approved(record.role, selected_model.approved_roles)
+            and _usage_role_is_approved(record, selected_model.approved_roles)
             and _usage_matches_certified_selection(
                 record=record,
                 selected_model=selected_model,
@@ -2636,8 +2637,7 @@ def evaluate_certified_ensemble(
         {
             selected[record.requested_model].root_lineage
             for record in qualifying.values()
-            if record.role == "whole_protocol_review"
-            or record.role.startswith("whole_protocol_review:")
+            if source_backed_whole_protocol_context(record) is not None
         }
     )
 
@@ -2787,14 +2787,21 @@ def _is_falsifier_role(role: str) -> bool:
     )
 
 
-def _usage_role_is_approved(role: str, approved_roles: tuple[str, ...]) -> bool:
+def _usage_role_is_approved(
+    record: UsageRecord,
+    approved_roles: tuple[str, ...],
+) -> bool:
+    role = record.role
     specialist = canonical_specialist_role(role)
     if specialist is not None:
         return specialist in approved_roles
     if role.startswith("candidate_falsifier:"):
         return "falsifier" in approved_roles
-    if role == "whole_protocol_review" or role.startswith("whole_protocol_review:"):
-        return "whole_protocol_review" in approved_roles
+    if role.startswith("whole_protocol_review"):
+        return (
+            source_backed_whole_protocol_context(record) is not None
+            and "whole_protocol_review" in approved_roles
+        )
     return role in approved_roles
 
 

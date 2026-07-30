@@ -17,6 +17,7 @@ from decimal import Decimal
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
+from mmaudit.agents.base import FindingReviewResult
 from mmaudit.agents.business_logic import BusinessLogicAgent
 from mmaudit.agents.configuration import ConfigurationAgent
 from mmaudit.agents.invariant_review import InvariantReviewAgent
@@ -28,6 +29,7 @@ from mmaudit.agents.specialists import (
     SpecialistFindingAgent,
     build_specialist_execution_records,
     canonical_specialist_role,
+    completed_specialist_roles,
     specialist_context_budget,
 )
 from mmaudit.agents.threat_model import ThreatModelAgent
@@ -79,6 +81,7 @@ from mmaudit.models.openrouter import (
     OpenRouterError,
     OpenRouterPrivacyError,
     OpenRouterQualificationRoutingEvidence,
+    OpenRouterSchemaError,
 )
 from mmaudit.models.qualification import VerifiedProductionQualification
 from mmaudit.models.registry import (
@@ -102,6 +105,7 @@ from mmaudit.models.schemas import (
     CandidateReproductionResolution,
     CompilationStatus,
     ContextPackage,
+    ContextRequestEvidence,
     DependencyPreparationStatus,
     EconomicSimulationKind,
     EconomicSimulationPlan,
@@ -152,6 +156,8 @@ from mmaudit.models.schemas import (
     SolidityProjectMetadata,
     SolidityProjectType,
     SoliditySymbolIndex,
+    SpecialistAcceptedOutcome,
+    SpecialistAcceptedOutcomeKind,
     ThreatModel,
     TransactionOrderingCapability,
     UsageRecord,
@@ -181,10 +187,13 @@ from mmaudit.orchestration.consensus import (
     preliminary_status,
 )
 from mmaudit.orchestration.context import (
+    ContextBoundaryError,
     ContextBudgetError,
     ContextBuilder,
     context_hash_index,
     context_json_escape_overhead_tokens,
+    render_context,
+    revalidate_context_package,
 )
 from mmaudit.orchestration.context_manifest import (
     ContextManifest,
@@ -284,6 +293,166 @@ from mmaudit.traceability import (
     validate_traceability_evidence,
     write_traceability_artifact,
 )
+
+
+def _exact_completed_usage(
+    usage_records: list[UsageRecord],
+    completion_usage: UsageRecord,
+    *,
+    expected_role: str,
+) -> UsageRecord:
+    """Join one host-validated result to exactly one immutable ledger request."""
+
+    try:
+        normalized = UsageRecord.model_validate(completion_usage.model_dump(mode="python"))
+    except ValueError as exc:
+        raise OpenRouterSchemaError(
+            "validated agent result carried invalid completion evidence"
+        ) from exc
+    matches = [record for record in usage_records if record.request_id == normalized.request_id]
+    if len(matches) != 1:
+        raise OpenRouterSchemaError(
+            "validated agent result did not join exactly one provider usage record"
+        )
+    selected = matches[0]
+    if (
+        selected.model_dump(mode="json") != normalized.model_dump(mode="json")
+        or selected.role != expected_role
+        or normalized.role != expected_role
+        or not is_creditable_usage_record(selected)
+    ):
+        raise OpenRouterSchemaError(
+            "validated agent result differed from its exact completed provider request"
+        )
+    return selected
+
+
+def _bound_context_request_evidence(
+    usage_record: UsageRecord,
+    context: ContextPackage,
+) -> tuple[ContextPackage, ContextRequestEvidence]:
+    """Revalidate one exact request/context binding from detached evidence."""
+
+    try:
+        sealed_context = revalidate_context_package(context)
+    except ContextBoundaryError as exc:
+        raise OpenRouterSchemaError(
+            "validated agent context failed detached boundary validation"
+        ) from exc
+    raw_evidence = usage_record.routing.get("context_request_evidence")
+    if not isinstance(raw_evidence, dict):
+        raise OpenRouterSchemaError("validated agent result lacks typed request/context evidence")
+    try:
+        evidence = ContextRequestEvidence.model_validate(raw_evidence)
+    except ValueError as exc:
+        raise OpenRouterSchemaError(
+            "validated agent request/context evidence failed validation"
+        ) from exc
+    rendered_sha256 = hashlib.sha256(render_context(sealed_context).encode("utf-8")).hexdigest()
+    source_bytes = sum(len(excerpt.content.encode("utf-8")) for excerpt in sealed_context.excerpts)
+    if (
+        evidence.request_id != usage_record.request_id
+        or evidence.request_role != usage_record.role
+        or evidence.context_role != sealed_context.role
+        or evidence.declared_bytes_used != sealed_context.bytes_used
+        or evidence.byte_budget != sealed_context.byte_budget
+        or evidence.rendered_sha256 != rendered_sha256
+        or evidence.source_bytes != source_bytes
+        or evidence.configured_maximum_source_tokens_per_request
+        != sealed_context.configured_maximum_source_tokens_per_request
+        or evidence.effective_source_byte_ceiling != sealed_context.effective_source_byte_ceiling
+        or usage_record.routing.get("context_request_evidence_sha256") != evidence.evidence_sha256
+    ):
+        raise OpenRouterSchemaError(
+            "validated agent request/context evidence differed from its exact package"
+        )
+    return sealed_context, evidence
+
+
+def _validated_finding_result(
+    result: FindingReviewResult,
+    *,
+    expected_role: str,
+    usage_records: list[UsageRecord],
+) -> tuple[ContextPackage, UsageRecord]:
+    """Bind a candidate batch to its exact completed request and source package."""
+
+    usage_record = _exact_completed_usage(
+        usage_records,
+        result.completion_usage,
+        expected_role=expected_role,
+    )
+    context, context_evidence = _bound_context_request_evidence(
+        usage_record,
+        result.surface_review_context,
+    )
+    if (
+        context.role != expected_role
+        or usage_record.user_prompt_sha256 != context_evidence.rendered_sha256
+    ):
+        raise OpenRouterSchemaError(
+            "candidate review completion was not bound to its exact source context"
+        )
+    artifact = result.surface_review_artifact
+    if artifact is None:
+        if context.requested_model_surfaces:
+            raise OpenRouterSchemaError("candidate review omitted required surface-review evidence")
+    else:
+        try:
+            artifact = ModelSurfaceReviewArtifact.model_validate(artifact.model_dump(mode="python"))
+        except ValueError as exc:
+            raise OpenRouterSchemaError(
+                "candidate review carried invalid surface-review evidence"
+            ) from exc
+        try:
+            artifact.require_exact_requested_surface_manifest(context.requested_model_surfaces)
+        except ValueError as exc:
+            raise OpenRouterSchemaError(
+                "candidate review artifact differed from its requested surface manifest"
+            ) from exc
+        if (
+            artifact.request_id != usage_record.request_id
+            or artifact.review_role != expected_role
+            or artifact.prompt_sha256 != usage_record.prompt_sha256
+            or artifact.rendered_context_sha256 != context_evidence.rendered_sha256
+            or artifact.rendered_context_sha256 != usage_record.user_prompt_sha256
+            or artifact.response_sha256 != usage_record.response_sha256
+            or artifact.validated_response_sha256 != usage_record.validated_response_sha256
+            or artifact.response_schema_sha256 != usage_record.schema_sha256
+        ):
+            raise OpenRouterSchemaError(
+                "candidate review artifact differed from its exact provider evidence"
+            )
+    return context, usage_record
+
+
+def _register_candidate_origin_packages(
+    origin_packages: dict[str, ContextPackage],
+    *,
+    candidate_ids: list[str],
+    context: ContextPackage,
+) -> None:
+    """Register each candidate exactly once against one detached source package."""
+
+    if len(candidate_ids) != len(set(candidate_ids)) or any(
+        candidate_id in origin_packages for candidate_id in candidate_ids
+    ):
+        raise OpenRouterSchemaError(
+            "candidate review returned a duplicate or conflicting candidate ID"
+        )
+    sealed = revalidate_context_package(context)
+    for candidate_id in candidate_ids:
+        origin_packages[candidate_id] = sealed
+
+
+def _candidate_origin_context_hashes(
+    origin_packages: dict[str, ContextPackage],
+    candidate_id: str,
+) -> dict[tuple[str, int, int], str]:
+    """Return only the source hashes delivered to the candidate's originating request."""
+
+    context = origin_packages.get(candidate_id)
+    return context_hash_index([context]) if context is not None else {}
 
 
 @dataclass(frozen=True)
@@ -581,6 +750,7 @@ class AuditPipeline:
         terminal_code = ExitCode.SUCCESS
         budget_halted = False
         candidates: list[CandidateFinding] = []
+        candidate_origin_packages: dict[str, ContextPackage] = {}
         verifications = VerificationBatch(decisions=[])
         decisions: dict[str, VerificationDecision] = {}
         cross_examinations: list[CandidateCrossExaminationDecision] = []
@@ -1419,7 +1589,6 @@ class AuditPipeline:
                     economic_simulations=economic_simulations,
                     formal_runs=formal_runs,
                     solidity_coverage=solidity_coverage,
-                    planned_packages=6 + len(self.config.models.specialists),
                     maximum_source_tokens_per_request=(
                         self.config.token_budgets.maximum_source_tokens_per_request
                     ),
@@ -1441,7 +1610,8 @@ class AuditPipeline:
                 incomplete.append(str(exc))
                 terminal_code = ExitCode.MODEL_FAILURE
 
-        packages = []
+        packages: list[ContextPackage] = []
+        accepted_specialist_outcomes: list[SpecialistAcceptedOutcome] = []
         if context_builder is not None and self.client is not None:
             client = self.client
             semaphore = asyncio.Semaphore(self.config.execution.concurrency)
@@ -1449,6 +1619,102 @@ class AuditPipeline:
             async def bounded_call(coroutine: Any) -> Any:
                 async with semaphore:
                     return await coroutine
+
+            def accept_specialist_outcome(
+                *,
+                completion_usage: UsageRecord,
+                validated_context: ContextPackage,
+                specialist_role: str,
+                request_role: str,
+                outcome_kind: SpecialistAcceptedOutcomeKind,
+                requested_surface_count: int = 0,
+                surface_artifact: ModelSurfaceReviewArtifact | None = None,
+            ) -> None:
+                """Record one role result only after all host-side validation returned."""
+
+                record = _exact_completed_usage(
+                    usage.records,
+                    completion_usage,
+                    expected_role=request_role,
+                )
+                sealed_context, context_evidence = _bound_context_request_evidence(
+                    record,
+                    validated_context,
+                )
+                if record.validated_response_sha256 is None:
+                    raise OpenRouterSchemaError(
+                        "accepted specialist workflow lacks bound response/context evidence"
+                    )
+                if surface_artifact is not None:
+                    try:
+                        surface_artifact = ModelSurfaceReviewArtifact.model_validate(
+                            surface_artifact.model_dump(mode="python")
+                        )
+                    except ValueError as exc:
+                        raise OpenRouterSchemaError(
+                            "accepted specialist surface artifact failed validation"
+                        ) from exc
+                    try:
+                        surface_artifact.require_exact_requested_surface_manifest(
+                            sealed_context.requested_model_surfaces
+                        )
+                    except ValueError as exc:
+                        raise OpenRouterSchemaError(
+                            "accepted specialist surface artifact differed from its "
+                            "requested surface manifest"
+                        ) from exc
+                    if (
+                        surface_artifact.request_id != record.request_id
+                        or surface_artifact.review_role != request_role
+                        or surface_artifact.prompt_sha256 != record.prompt_sha256
+                        or surface_artifact.response_sha256 != record.response_sha256
+                        or surface_artifact.validated_response_sha256
+                        != record.validated_response_sha256
+                        or surface_artifact.response_schema_sha256 != record.schema_sha256
+                        or surface_artifact.rendered_context_sha256
+                        != context_evidence.rendered_sha256
+                        or surface_artifact.rendered_context_sha256 != record.user_prompt_sha256
+                        or requested_surface_count != len(sealed_context.requested_model_surfaces)
+                    ):
+                        raise OpenRouterSchemaError(
+                            "accepted specialist surface artifact differs from its request"
+                        )
+                accepted_specialist_outcomes.append(
+                    SpecialistAcceptedOutcome.build(
+                        request_id=record.request_id,
+                        specialist_role=specialist_role,
+                        request_role=request_role,
+                        outcome_kind=outcome_kind,
+                        validated_response_sha256=record.validated_response_sha256,
+                        context_request_evidence_sha256=context_evidence.evidence_sha256,
+                        requested_surface_count=requested_surface_count,
+                        surface_review_artifact_sha256=(
+                            surface_artifact.artifact_sha256
+                            if surface_artifact is not None
+                            else None
+                        ),
+                    )
+                )
+
+            def register_finding_result(
+                result: FindingReviewResult,
+                *,
+                expected_role: str,
+            ) -> tuple[ContextPackage, UsageRecord]:
+                """Bind every candidate ID to exactly one accepted request package."""
+
+                sealed_context, completion_usage = _validated_finding_result(
+                    result,
+                    expected_role=expected_role,
+                    usage_records=usage.records,
+                )
+                result_ids = [candidate.candidate_id for candidate in result.findings]
+                _register_candidate_origin_packages(
+                    candidate_origin_packages,
+                    candidate_ids=result_ids,
+                    context=sealed_context,
+                )
+                return sealed_context, completion_usage
 
             def context_models(role: str) -> tuple[str, ...]:
                 configured_role = role
@@ -1544,7 +1810,9 @@ class AuditPipeline:
                     requested_budget=specialist_context_budget(
                         role,
                         total_context_bytes=(self.config.repository.max_total_context_bytes),
-                        planned_packages=context_builder.planned_packages,
+                        maximum_source_tokens_per_request=(
+                            self.config.token_budgets.maximum_source_tokens_per_request
+                        ),
                     ),
                     request_model_surface_reviews=request_model_surface_reviews,
                     **kwargs,
@@ -1645,6 +1913,10 @@ class AuditPipeline:
             for role, task in tasks:
                 try:
                     batch = await task
+                    sealed_context, _completion_usage = register_finding_result(
+                        batch,
+                        expected_role=role,
+                    )
                     candidates.extend(batch.findings)
                     if batch.surface_review_artifact is not None:
                         artifact = batch.surface_review_artifact
@@ -1652,7 +1924,7 @@ class AuditPipeline:
                         model_surface_review_contexts.setdefault(
                             artifact.request_id,
                             [],
-                        ).append(batch.surface_review_context)
+                        ).append(sealed_context)
                     if batch.findings and time_to_first_candidate_seconds is None:
                         time_to_first_candidate_seconds = time.monotonic() - run_started_monotonic
                 except BudgetExhaustedError as exc:
@@ -1687,6 +1959,21 @@ class AuditPipeline:
             for role, task in specialist_tasks:
                 try:
                     batch = await task
+                    sealed_context, completion_usage = register_finding_result(
+                        batch,
+                        expected_role=f"specialist:{role}",
+                    )
+                    accept_specialist_outcome(
+                        completion_usage=completion_usage,
+                        validated_context=sealed_context,
+                        specialist_role=role,
+                        request_role=f"specialist:{role}",
+                        outcome_kind=SpecialistAcceptedOutcomeKind.CANDIDATE_REVIEW,
+                        requested_surface_count=len(
+                            batch.surface_review_context.requested_model_surfaces
+                        ),
+                        surface_artifact=batch.surface_review_artifact,
+                    )
                     candidates.extend(batch.findings)
                     if batch.surface_review_artifact is not None:
                         artifact = batch.surface_review_artifact
@@ -1694,7 +1981,7 @@ class AuditPipeline:
                         model_surface_review_contexts.setdefault(
                             artifact.request_id,
                             [],
-                        ).append(batch.surface_review_context)
+                        ).append(sealed_context)
                     if batch.findings and time_to_first_candidate_seconds is None:
                         time_to_first_candidate_seconds = time.monotonic() - run_started_monotonic
                 except BudgetExhaustedError as exc:
@@ -1719,14 +2006,25 @@ class AuditPipeline:
                 if invariant_context is not None:
                     packages.append(invariant_context)
                     try:
-                        invariant_review_batch = await bounded_call(
-                            InvariantReviewAgent(self.config, self.client).run(invariant_context)
+                        invariant_result = await bounded_call(
+                            InvariantReviewAgent(
+                                self.config,
+                                self.client,
+                            ).run_with_evidence(invariant_context)
                         )
+                        invariant_review_batch = invariant_result.value
                         invariant_review = validate_invariant_review(
                             discovery.root,
                             invariant_review_batch,
                             index=solidity_index,
                             context_hashes=context_hash_index([invariant_context]),
+                        )
+                        accept_specialist_outcome(
+                            completion_usage=invariant_result.completion_usage,
+                            validated_context=invariant_context,
+                            specialist_role="invariant_review",
+                            request_role="specialist:invariant_review",
+                            outcome_kind=SpecialistAcceptedOutcomeKind.INVARIANT_REVIEW,
                         )
                     except BudgetExhaustedError as exc:
                         incomplete.append(f"specialist:invariant_review: {exc}")
@@ -1738,12 +2036,14 @@ class AuditPipeline:
                             terminal_code = ExitCode.MODEL_FAILURE
                 check_accounted_budget()
 
-            hashes = context_hash_index(packages)
             validations = {
                 candidate.candidate_id: validate_candidate(
                     discovery.root,
                     candidate,
-                    context_hashes=hashes,
+                    context_hashes=_candidate_origin_context_hashes(
+                        candidate_origin_packages,
+                        candidate.candidate_id,
+                    ),
                 )
                 for candidate in candidates
             }
@@ -1847,7 +2147,9 @@ class AuditPipeline:
                                 total_context_bytes=(
                                     self.config.repository.max_total_context_bytes
                                 ),
-                                planned_packages=context_builder.planned_packages,
+                                maximum_source_tokens_per_request=(
+                                    self.config.token_budgets.maximum_source_tokens_per_request
+                                ),
                             ),
                             workflow_byte_upper_bound_tokens=(
                                 prepared_cross_examination.workflow_byte_upper_bound_tokens
@@ -1960,7 +2262,7 @@ class AuditPipeline:
                 and self.config.reproduction.enabled
                 and not budget_halted
             ):
-                planner_tasks: list[tuple[str, asyncio.Task[Any]]] = []
+                planner_tasks: list[tuple[str, str | None, ContextPackage, asyncio.Task[Any]]] = []
                 configured_planners = [
                     role
                     for role in ("test_generation", "exploit_reproduction_planner")
@@ -1990,9 +2292,11 @@ class AuditPipeline:
                         planner_tasks.append(
                             (
                                 planner_role,
+                                planner_role,
+                                planner_context,
                                 asyncio.create_task(
                                     bounded_call(
-                                        planner.run(
+                                        planner.run_with_evidence(
                                             eligible_for_reproduction,
                                             planner_context,
                                             prepared_input=prepared_planner_input,
@@ -2040,9 +2344,11 @@ class AuditPipeline:
                         planner_tasks.append(
                             (
                                 role,
+                                None,
+                                planner_context,
                                 asyncio.create_task(
                                     bounded_call(
-                                        planner.run(
+                                        planner.run_with_evidence(
                                             role_candidates,
                                             planner_context,
                                             prepared_input=prepared_planner_input,
@@ -2052,9 +2358,22 @@ class AuditPipeline:
                                 ),
                             )
                         )
-                for planner_label, task in planner_tasks:
+                for planner_label, specialist_role, planner_context, task in planner_tasks:
                     try:
-                        batch = await task
+                        planner_result = await task
+                        if planner_result is None:
+                            raise OpenRouterSchemaError(
+                                "scheduled planner returned no completion evidence"
+                            )
+                        batch = planner_result.value
+                        if specialist_role is not None:
+                            accept_specialist_outcome(
+                                completion_usage=planner_result.completion_usage,
+                                validated_context=planner_context,
+                                specialist_role=specialist_role,
+                                request_role=f"specialist:{specialist_role}:exploit_test",
+                                outcome_kind=(SpecialistAcceptedOutcomeKind.TEST_GENERATION),
+                            )
                         generated_tests.extend(batch.tests)
                     except BudgetExhaustedError as exc:
                         incomplete.append(f"{planner_label}:exploit_test: {exc}")
@@ -2150,8 +2469,8 @@ class AuditPipeline:
                         packages.append(falsifier_context)
                     if falsifier_context is not None and not budget_halted:
                         try:
-                            falsifications = await bounded_call(
-                                falsifier_agent.run(
+                            falsifier_result = await bounded_call(
+                                falsifier_agent.run_with_evidence(
                                     candidates=eligible_for_reproduction,
                                     tests=generated_tests,
                                     results=reproductions,
@@ -2159,6 +2478,15 @@ class AuditPipeline:
                                     prepared_input=prepared_falsifier_input,
                                 )
                             )
+                            if "falsifier" in self.config.models.specialists:
+                                accept_specialist_outcome(
+                                    completion_usage=falsifier_result.completion_usage,
+                                    validated_context=falsifier_context,
+                                    specialist_role="falsifier",
+                                    request_role="specialist:falsifier",
+                                    outcome_kind=(SpecialistAcceptedOutcomeKind.FALSIFICATION),
+                                )
+                            falsifications = falsifier_result.value
                         except BudgetExhaustedError as exc:
                             incomplete.append(f"falsifier: {exc}")
                             terminal_code = ExitCode.INCOMPLETE
@@ -2254,7 +2582,10 @@ class AuditPipeline:
                 candidate.candidate_id: validate_candidate(
                     discovery.root,
                     candidate,
-                    context_hashes=hashes,
+                    context_hashes=_candidate_origin_context_hashes(
+                        candidate_origin_packages,
+                        candidate.candidate_id,
+                    ),
                 )
                 for candidate in candidates
             }
@@ -2380,7 +2711,14 @@ class AuditPipeline:
             eligible_candidates=eligible_for_reproduction,
             reproductions=reproductions,
             usage_roles={
-                record.role for record in usage.records if is_creditable_usage_record(record)
+                record.role
+                for record in usage.records
+                if is_creditable_usage_record(record)
+                and (
+                    not record.role.startswith("specialist:")
+                    or record.request_id
+                    in {outcome.request_id for outcome in accepted_specialist_outcomes}
+                )
             },
             scanner_only=scanner_only,
             model_surface_assignment_gate=model_surface_assignment_gate,
@@ -2420,7 +2758,7 @@ class AuditPipeline:
                 )
                 if report_quality_context is not None:
                     packages.append(report_quality_context)
-                    report_quality_review = await report_quality_agent.run(
+                    report_quality_result = await report_quality_agent.run_with_evidence(
                         findings=final_findings,
                         rejected_count=len(rejected_findings),
                         coverage=solidity_coverage,
@@ -2429,6 +2767,14 @@ class AuditPipeline:
                         context=report_quality_context,
                         prepared_input=prepared_report_quality_input,
                     )
+                    accept_specialist_outcome(
+                        completion_usage=report_quality_result.completion_usage,
+                        validated_context=report_quality_context,
+                        specialist_role="report_quality",
+                        request_role="specialist:report_quality",
+                        outcome_kind=SpecialistAcceptedOutcomeKind.REPORT_QUALITY,
+                    )
+                    report_quality_review = report_quality_result.value
             except ContextBudgetError as exc:
                 incomplete.append(f"report_quality: {exc}")
                 budget_halted = True
@@ -2480,6 +2826,11 @@ class AuditPipeline:
             self.config,
             usage_records=model_credit_usage,
             contexts=packages,
+            accepted_outcomes=tuple(
+                outcome
+                for outcome in accepted_specialist_outcomes
+                if outcome.request_id in {record.request_id for record in model_credit_usage}
+            ),
         )
         write_json(
             run_dir / "specialist-execution.json",
@@ -2490,13 +2841,20 @@ class AuditPipeline:
                 ],
             },
         )
-        successful_usage_roles = {
+        raw_successful_usage_roles = {
             record.role for record in model_credit_usage if is_creditable_usage_record(record)
         }
-        successful_specialist_roles = {
-            specialist_role
-            for request_role in successful_usage_roles
-            if (specialist_role := canonical_specialist_role(request_role)) is not None
+        successful_specialist_roles = completed_specialist_roles(specialist_execution_records)
+        successful_usage_roles = {
+            request_role
+            for request_role in raw_successful_usage_roles
+            if (
+                (
+                    (specialist_role := canonical_specialist_role(request_role)) is None
+                    and not request_role.startswith("specialist:")
+                )
+                or specialist_role in successful_specialist_roles
+            )
         }
         if solidity_coverage is not None:
             high_critical_candidate_ids = {

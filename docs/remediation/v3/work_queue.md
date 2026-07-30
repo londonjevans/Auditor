@@ -951,7 +951,12 @@ are invisible to source review by construction.
   context omission and manifest schemas, `tests/unit/test_context.py`,
   `tests/unit/test_context_manifest.py`, new realistic-scale regressions.
 - **Dependencies:** `V3-FORKSUITE-001` may finish first; do not interrupt it.
-- **Status:** `QUEUED`
+- **Status:** `COMPLETE`
+- **Current action:** None. Bounded omission accounting, graceful degradation,
+  exact context/request evidence, source-origin validation, substantive review
+  credit, 5k/15k/35k scale regressions, Ruff, strict mypy, release schemas, the
+  trusted compiler integration, and the final `3095`-test suite all passed.
+  Create the isolated checkpoint, then begin `V3-EXECORIGIN-001`.
 
 ## V3-FIXTURE-001 — Realistic-scale Solidity fixtures
 

@@ -282,6 +282,11 @@
           "title": "Not Sent Request Count",
           "type": "integer"
         },
+        "omission_evidence_occurrence_count": {
+          "minimum": 0,
+          "title": "Omission Evidence Occurrence Count",
+          "type": "integer"
+        },
         "omission_record_count": {
           "minimum": 0,
           "title": "Omission Record Count",
@@ -356,10 +361,20 @@
           "title": "Reserved Reasoning Tokens",
           "type": "integer"
         },
+        "sampled_omitted_item_count": {
+          "minimum": 0,
+          "title": "Sampled Omitted Item Count",
+          "type": "integer"
+        },
         "totals_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Totals Sha256",
           "type": "string"
+        },
+        "truncated_omission_record_count": {
+          "minimum": 0,
+          "title": "Truncated Omission Record Count",
+          "type": "integer"
         },
         "truncated_request_count": {
           "maximum": 100000,
@@ -399,7 +414,10 @@
         "mock_reported_completion_tokens",
         "unavailable_actual_usage_count",
         "omission_record_count",
+        "omission_evidence_occurrence_count",
         "omitted_item_count",
+        "sampled_omitted_item_count",
+        "truncated_omission_record_count",
         "categories",
         "totals_sha256"
       ],
@@ -425,12 +443,34 @@
       "title": "ContextOmissionCategory",
       "type": "string"
     },
+    "ContextOmissionCommitmentMethod": {
+      "description": "Bounded commitment construction used for one omission aggregate.",
+      "enum": [
+        "MMAUDIT_SINGLE_OMISSION_ITEM_SHA256_V1",
+        "MMAUDIT_ORDERED_OMISSION_EVENT_STREAM_SHA256_V1"
+      ],
+      "title": "ContextOmissionCommitmentMethod",
+      "type": "string"
+    },
     "ContextOmissionEvidence": {
       "additionalProperties": false,
-      "description": "Hash-only inventory for one typed omission class.",
+      "description": "Bounded aggregate inventory for one typed omission class.",
       "properties": {
         "category": {
           "$ref": "#/$defs/ContextOmissionCategory"
+        },
+        "context_omission_evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Omission Evidence Sha256"
         },
         "estimated_tokens": {
           "default": null,
@@ -442,8 +482,31 @@
           "title": "Evidence Sha256",
           "type": "string"
         },
+        "inventory_commitment_method": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContextOmissionCommitmentMethod"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "inventory_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Inventory Sha256"
+        },
         "omitted_item_count": {
-          "maximum": 100000,
           "minimum": 0,
           "title": "Omitted Item Count",
           "type": "integer"
@@ -452,7 +515,7 @@
           "items": {
             "type": "string"
           },
-          "maxItems": 100000,
+          "maxItems": 8,
           "title": "Omitted Item Sha256S",
           "type": "array"
         },
@@ -462,9 +525,13 @@
         "reason": {
           "$ref": "#/$defs/ContextOmissionReason"
         },
+        "samples_truncated": {
+          "title": "Samples Truncated",
+          "type": "boolean"
+        },
         "schema_version": {
-          "const": "1.0",
-          "default": "1.0",
+          "const": "1.1",
+          "default": "1.1",
           "title": "Schema Version",
           "type": "string"
         },
@@ -481,6 +548,7 @@
         "provenance",
         "omitted_item_sha256s",
         "omitted_item_count",
+        "samples_truncated",
         "evidence_sha256"
       ],
       "title": "ContextOmissionEvidence",
@@ -488,7 +556,7 @@
     },
     "ContextOmissionItem": {
       "additionalProperties": false,
-      "description": "One category- and reason-bound omitted item represented only by hashes.",
+      "description": "One bounded category/reason aggregate over omitted item identities.",
       "properties": {
         "category": {
           "$ref": "#/$defs/ContextOmissionCategory"
@@ -498,6 +566,15 @@
           "title": "Evidence Sha256",
           "type": "string"
         },
+        "inventory_commitment_method": {
+          "$ref": "#/$defs/ContextOmissionCommitmentMethod"
+        },
+        "omitted_item_count": {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "title": "Omitted Item Count",
+          "type": "integer"
+        },
         "omitted_item_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Omitted Item Sha256",
@@ -506,9 +583,22 @@
         "reason": {
           "$ref": "#/$defs/ContextOmissionReason"
         },
+        "sampled_item_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Sampled Item Sha256S",
+          "type": "array"
+        },
+        "samples_truncated": {
+          "title": "Samples Truncated",
+          "type": "boolean"
+        },
         "schema_version": {
-          "const": "1.0",
-          "default": "1.0",
+          "const": "1.1",
+          "default": "1.1",
           "title": "Schema Version",
           "type": "string"
         }
@@ -516,7 +606,11 @@
       "required": [
         "category",
         "reason",
+        "inventory_commitment_method",
         "omitted_item_sha256",
+        "omitted_item_count",
+        "sampled_item_sha256s",
+        "samples_truncated",
         "evidence_sha256"
       ],
       "title": "ContextOmissionItem",
@@ -584,7 +678,7 @@
           "items": {
             "type": "string"
           },
-          "maxItems": 100000,
+          "maxItems": 64,
           "title": "Context Omission Sha256S",
           "type": "array"
         },
@@ -593,7 +687,7 @@
           "items": {
             "$ref": "#/$defs/ContextOmissionItem"
           },
-          "maxItems": 100000,
+          "maxItems": 64,
           "title": "Context Omissions",
           "type": "array"
         },
@@ -971,7 +1065,7 @@
           "items": {
             "$ref": "#/$defs/ContextOmissionEvidence"
           },
-          "maxItems": 32,
+          "maxItems": 65,
           "minItems": 1,
           "title": "Omissions",
           "type": "array"
@@ -1475,7 +1569,7 @@
           "items": {
             "type": "string"
           },
-          "maxItems": 4096,
+          "maxItems": 64,
           "title": "Context Omission Sha256S",
           "type": "array"
         },
@@ -1484,7 +1578,7 @@
           "items": {
             "$ref": "#/$defs/ContextOmissionItem"
           },
-          "maxItems": 4096,
+          "maxItems": 64,
           "title": "Context Omissions",
           "type": "array"
         },
@@ -1677,6 +1771,20 @@
           "title": "Configured Maximum Source Tokens Per Request",
           "type": "integer"
         },
+        "context_package_source_byte_ceiling": {
+          "anyOf": [
+            {
+              "maximum": 2147483647,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context Package Source Byte Ceiling"
+        },
         "evidence_sha256": {
           "pattern": "^[0-9a-f]{64}$",
           "title": "Evidence Sha256",
@@ -1731,8 +1839,8 @@
           "type": "integer"
         },
         "schema_version": {
-          "const": "1.0",
-          "default": "1.0",
+          "const": "1.1",
+          "default": "1.1",
           "title": "Schema Version",
           "type": "string"
         },
@@ -1932,8 +2040,8 @@
       "type": "string"
     },
     "schema_version": {
-      "const": "1.0",
-      "default": "1.0",
+      "const": "1.1",
+      "default": "1.1",
       "title": "Schema Version",
       "type": "string"
     },

@@ -7,9 +7,15 @@ from typing import Any
 import pytest
 
 from mmaudit.agents.specialists import specialist_context_budget
-from mmaudit.models.schemas import ContextPackage, SolidityGraphKind
+from mmaudit.models.schemas import ContextPackage, SolidityCoverage, SolidityGraphKind
+from mmaudit.models.token_planning import (
+    CONTEXT_OMISSION_GROUP_CAP,
+    CONTEXT_OMISSION_SAMPLE_CAP,
+    UTF8_BYTES_PER_ESTIMATED_TOKEN,
+    ContextOmissionCategory,
+    ContextOmissionReason,
+)
 from mmaudit.orchestration.context import (
-    ContextBudgetError,
     ContextBuilder,
     context_category_byte_counts,
 )
@@ -168,80 +174,107 @@ def test_realistic_scale_has_stable_bounded_semantic_sharding_inputs(
 
 @pytest.mark.parametrize(
     "profile_id",
-    (
-        "solidity_005k",
-        pytest.param(
-            "solidity_015k",
-            marks=pytest.mark.xfail(
-                raises=ContextBudgetError,
-                strict=True,
-                reason=(
-                    "V3-OMISSION-001: per-item omission evidence currently exhausts "
-                    "the specialist package budget"
-                ),
-            ),
-        ),
-        "solidity_035k",
-    ),
+    PROFILE_IDS,
 )
 def test_realistic_scale_specialist_context_degrades_with_bounded_omissions(
     profile_id: str,
     config_factory,
 ) -> None:
-    """Desired V3-OMISSION-001 behavior; current failure is never treated as success."""
-
-    try:
-        package, budget = _build_specialist_context(profile_id, config_factory)
-    except ContextBudgetError as error:
-        assert str(error) == (
-            "serialized metadata for role specialist:access_control exceeds "
-            "its 256000-byte allocation"
+    package, budget, available_source_paths, available_source_lines, coverage = (
+        _build_specialist_context(
+            profile_id,
+            config_factory,
         )
-        raise
+    )
 
     categories = context_category_byte_counts(package)
+    delivered_source_paths = {excerpt.path for excerpt in package.excerpts}
+    delivered_source_lines = {
+        (excerpt.path, line)
+        for excerpt in package.excerpts
+        for line in range(excerpt.start_line, excerpt.end_line + 1)
+    }
+    source_omissions = [
+        omission
+        for omission in package.omissions
+        if omission.category is ContextOmissionCategory.SOURCE
+    ]
+    missing_source_paths = available_source_paths - delivered_source_paths
+    omission_groups = {(omission.category, omission.reason) for omission in package.omissions}
+    omission_categories = {omission.category for omission in package.omissions}
+
+    assert package.byte_budget == budget
     assert package.bytes_used <= budget
     assert package.excerpts
     assert categories["source"] > 0
+    assert 0 < len(delivered_source_lines) <= available_source_lines
 
+    configured_source_tokens = package.configured_maximum_source_tokens_per_request
+    effective_source_bytes = package.effective_source_byte_ceiling
+    assert configured_source_tokens is not None
+    assert (
+        configured_source_tokens
+        == _scale_config(config_factory).token_budgets.maximum_source_tokens_per_request
+    )
+    assert effective_source_bytes is not None
+    assert effective_source_bytes <= budget
+    assert effective_source_bytes <= configured_source_tokens * UTF8_BYTES_PER_ESTIMATED_TOKEN
+    assert categories["source"] <= effective_source_bytes
 
-@pytest.mark.parametrize(
-    "profile_id",
-    (
-        "solidity_005k",
-        pytest.param(
-            "solidity_035k",
-            marks=pytest.mark.xfail(
-                raises=AssertionError,
-                strict=True,
-                reason=(
-                    "V3-OMISSION-001: the successful package still exceeds the "
-                    "declared 64-record omission bound"
-                ),
-            ),
-        ),
-    ),
-)
-def test_realistic_scale_successful_context_has_bounded_omission_ledger(
-    profile_id: str,
-    config_factory,
-) -> None:
-    package, _ = _build_specialist_context(profile_id, config_factory)
+    assert len(package.omissions) <= CONTEXT_OMISSION_GROUP_CAP
+    assert len(omission_groups) == len(package.omissions)
+    for omission in package.omissions:
+        assert 1 <= len(omission.sampled_item_sha256s) <= CONTEXT_OMISSION_SAMPLE_CAP
+        assert omission.omitted_item_count >= len(omission.sampled_item_sha256s)
+        assert omission.samples_truncated is (
+            omission.omitted_item_count > len(omission.sampled_item_sha256s)
+        )
+        assert omission.reason is not ContextOmissionReason.SERIALIZED_BUDGET_EXCLUDED
 
-    assert len(package.omissions) <= 64
+    if len(delivered_source_lines) < available_source_lines:
+        assert source_omissions
+    if source_omissions:
+        assert len(delivered_source_lines) < available_source_lines
+    if missing_source_paths:
+        assert sum(omission.omitted_item_count for omission in source_omissions) >= len(
+            missing_source_paths
+        )
+    if coverage.functions_indexed > 500:
+        assert ContextOmissionCategory.FRAMEWORK in omission_categories
+    graph_edge_count = sum(coverage.graph_edge_counts.values())
+    if graph_edge_count > 700:
+        graph_omitted_count = sum(
+            omission.omitted_item_count
+            for omission in package.omissions
+            if omission.category is ContextOmissionCategory.GRAPH
+        )
+        assert graph_omitted_count >= graph_edge_count - 700
+
+    # Context delivery is not substantive model-review evidence. In particular,
+    # omitted source never earns review credit or disappears from a denominator.
+    assert not package.requested_model_surfaces
+    assert coverage.functions_reviewed_by_models == 0
+    for metric_name in (
+        "public_external_entry_points_reviewed",
+        "privileged_entry_points_reviewed",
+    ):
+        metric = coverage.quality_metrics[metric_name]
+        assert metric.numerator == 0
+        assert metric.denominator > 0
 
 
 def _build_specialist_context(
     profile_id: str,
     config_factory,
-) -> tuple[ContextPackage, int]:
-    config = _scale_config(config_factory)
-    root = FIXTURE_ROOT / profile_id
-    discovery = discover_repository(root, config.repository, IgnoreMatcher())
+) -> tuple[ContextPackage, int, set[str], int, SolidityCoverage]:
+    config, discovery, projects, index_build, graphs, coverage = _analyze(
+        profile_id,
+        config_factory,
+    )
     budget = specialist_context_budget(
         "access_control",
         total_context_bytes=config.repository.max_total_context_bytes,
-        planned_packages=31,
+        maximum_source_tokens_per_request=(config.token_budgets.maximum_source_tokens_per_request),
     )
     package = ContextBuilder(
         discovery=discovery,
@@ -249,9 +282,14 @@ def _build_specialist_context(
         repository_config=config.repository,
         privacy=config.privacy,
         scanner_findings=[],
-        maximum_source_tokens_per_request=200_000,
+        solidity_projects=projects,
+        solidity_index=index_build.index,
+        solidity_graphs=graphs,
+        maximum_source_tokens_per_request=(config.token_budgets.maximum_source_tokens_per_request),
     ).build(
         "specialist:access_control",
         requested_budget=budget,
     )
-    return package, budget
+    available_source_lines = sum(len(item.content.splitlines()) for item in discovery.files)
+    available_source_paths = {item.relative_path for item in discovery.files}
+    return package, budget, available_source_paths, available_source_lines, coverage

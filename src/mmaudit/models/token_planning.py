@@ -11,6 +11,7 @@ import hashlib
 import json
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from decimal import ROUND_FLOOR, Decimal
 from enum import StrEnum
 from typing import Any, Literal, Self
@@ -25,9 +26,12 @@ _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _SHA256_RE = re.compile(_SHA256_PATTERN)
 _MAX_TOKENS = 2**31 - 1
 
+CONTEXT_OMISSION_GROUP_CAP = 64
+CONTEXT_OMISSION_SAMPLE_CAP = 8
 MINIMUM_CONTEXT_UTILIZATION = Decimal("0.65")
 MAXIMUM_CONTEXT_UTILIZATION = Decimal("0.75")
 DEFAULT_CONTEXT_UTILIZATION = Decimal("0.70")
+UTF8_BYTES_PER_ESTIMATED_TOKEN = 3
 UTF8_TOKEN_ESTIMATOR: Literal["MMAUDIT_UTF8_BYTES_DIV3_V1"] = "MMAUDIT_UTF8_BYTES_DIV3_V1"
 PROMPT_UPPER_BOUND_METHOD: Literal["MMAUDIT_UTF8_BYTES_PLUS_FRAMING_V1"] = (
     "MMAUDIT_UTF8_BYTES_PLUS_FRAMING_V1"
@@ -97,6 +101,83 @@ class ContextOmissionReason(StrEnum):
     SOURCE_BUDGET_EXCLUDED = "SOURCE_BUDGET_EXCLUDED"
 
 
+class ContextOmissionNoticeLevel(StrEnum):
+    """Bounded provider-visible limitation detail; full evidence remains host-only."""
+
+    COUNTS_BY_GROUP = "COUNTS_BY_GROUP"
+    TOTALS_ONLY = "TOTALS_ONLY"
+    MANIFEST_ONLY = "MANIFEST_ONLY"
+
+
+class ContextOmissionCommitmentMethod(StrEnum):
+    """Bounded commitment construction used for one omission aggregate."""
+
+    SINGLE_ITEM_SHA256 = "MMAUDIT_SINGLE_OMISSION_ITEM_SHA256_V1"
+    ORDERED_EVENT_STREAM_SHA256 = "MMAUDIT_ORDERED_OMISSION_EVENT_STREAM_SHA256_V1"
+
+
+_PERMITTED_CONTEXT_OMISSION_CATEGORIES = {
+    ContextOmissionReason.BLIND_DISCOVERY_WITHHELD: {ContextOmissionCategory.PRIOR_AUDIT},
+    ContextOmissionReason.CONTEXT_BUDGET_EXCLUDED: {ContextOmissionCategory.CONTEXT_PACKAGE},
+    ContextOmissionReason.LOGICAL_BLOCK_EXCEEDS_LIMIT: {ContextOmissionCategory.SOURCE},
+    ContextOmissionReason.METADATA_BUDGET_EXCLUDED: {
+        ContextOmissionCategory.FRAMEWORK,
+        ContextOmissionCategory.GRAPH,
+        ContextOmissionCategory.INVARIANT,
+        ContextOmissionCategory.METADATA,
+        ContextOmissionCategory.SCANNER,
+    },
+    ContextOmissionReason.REVIEW_CONTRACT_WITHHELD: {ContextOmissionCategory.METADATA},
+    ContextOmissionReason.SERIALIZED_BUDGET_EXCLUDED: {ContextOmissionCategory.SOURCE},
+    ContextOmissionReason.SOURCE_BUDGET_EXCLUDED: {ContextOmissionCategory.SOURCE},
+}
+_OMISSION_STREAM_DOMAIN = b"MMAUDIT_CONTEXT_OMISSION_EVENT_STREAM_V1\x00"
+
+
+def _initial_omission_stream_sha256(
+    category: ContextOmissionCategory,
+    reason: ContextOmissionReason,
+) -> str:
+    return hashlib.sha256(
+        _OMISSION_STREAM_DOMAIN
+        + b"INITIAL\x00"
+        + category.value.encode("utf-8")
+        + b"\x00"
+        + reason.value.encode("utf-8")
+    ).hexdigest()
+
+
+def _extend_omission_stream_sha256(
+    *,
+    previous_sha256: str,
+    item_sha256: str,
+    item_index: int,
+) -> str:
+    return hashlib.sha256(
+        _OMISSION_STREAM_DOMAIN
+        + b"ITEM\x00"
+        + bytes.fromhex(previous_sha256)
+        + item_index.to_bytes(8, byteorder="big", signed=False)
+        + bytes.fromhex(item_sha256)
+    ).hexdigest()
+
+
+def _complete_omission_stream_sha256(
+    *,
+    category: ContextOmissionCategory,
+    reason: ContextOmissionReason,
+    item_sha256s: Sequence[str],
+) -> str:
+    commitment = _initial_omission_stream_sha256(category, reason)
+    for item_index, item_sha256 in enumerate(item_sha256s, start=1):
+        commitment = _extend_omission_stream_sha256(
+            previous_sha256=commitment,
+            item_sha256=item_sha256,
+            item_index=item_index,
+        )
+    return commitment
+
+
 class OutputAllocationCategory(StrEnum):
     """Visible-output partitions required for a substantive review response."""
 
@@ -123,12 +204,21 @@ class FrozenTokenEvidence(BaseModel):
 
 
 class ContextOmissionItem(FrozenTokenEvidence):
-    """One category- and reason-bound omitted item represented only by hashes."""
+    """One bounded category/reason aggregate over omitted item identities."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.1"] = "1.1"
     category: ContextOmissionCategory
     reason: ContextOmissionReason
+    inventory_commitment_method: ContextOmissionCommitmentMethod
+    # Retained for compatibility: for an aggregate this is the full inventory
+    # commitment, not an arbitrary representative item.
     omitted_item_sha256: str = Field(pattern=_SHA256_PATTERN)
+    omitted_item_count: int = Field(ge=1, le=_MAX_TOKENS)
+    sampled_item_sha256s: tuple[str, ...] = Field(
+        min_length=1,
+        max_length=CONTEXT_OMISSION_SAMPLE_CAP,
+    )
+    samples_truncated: bool
     evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
 
     @classmethod
@@ -140,42 +230,164 @@ class ContextOmissionItem(FrozenTokenEvidence):
         omitted_item_sha256: str,
     ) -> Self:
         payload: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": "1.1",
             "category": category,
             "reason": reason,
+            "inventory_commitment_method": (ContextOmissionCommitmentMethod.SINGLE_ITEM_SHA256),
             "omitted_item_sha256": omitted_item_sha256,
+            "omitted_item_count": 1,
+            "sampled_item_sha256s": (omitted_item_sha256,),
+            "samples_truncated": False,
         }
         return cls(
-            schema_version="1.0",
+            **payload,
+            evidence_sha256=_canonical_sha256(payload),
+        )
+
+    @classmethod
+    def build_aggregate(
+        cls,
+        *,
+        category: ContextOmissionCategory,
+        reason: ContextOmissionReason,
+        omitted_item_sha256s: Sequence[str],
+    ) -> Self:
+        """Stream an exact event sequence without retaining the full digest inventory."""
+
+        accumulator = ContextOmissionAccumulator(category=category, reason=reason)
+        for item_sha256 in omitted_item_sha256s:
+            accumulator.add(item_sha256)
+        if accumulator.omitted_item_count == 0:
+            raise ContextTokenPlanError("context omission aggregate requires at least one item")
+        return cls._build_streaming_aggregate(
             category=category,
             reason=reason,
-            omitted_item_sha256=omitted_item_sha256,
+            inventory_sha256=accumulator.inventory_sha256,
+            omitted_item_count=accumulator.omitted_item_count,
+            sampled_item_sha256s=accumulator.sampled_item_sha256s,
+        )
+
+    @classmethod
+    def _build_streaming_aggregate(
+        cls,
+        *,
+        category: ContextOmissionCategory,
+        reason: ContextOmissionReason,
+        inventory_sha256: str,
+        omitted_item_count: int,
+        sampled_item_sha256s: Sequence[str],
+    ) -> Self:
+        samples = tuple(sampled_item_sha256s)
+        payload: dict[str, Any] = {
+            "schema_version": "1.1",
+            "category": category,
+            "reason": reason,
+            "inventory_commitment_method": (
+                ContextOmissionCommitmentMethod.ORDERED_EVENT_STREAM_SHA256
+            ),
+            "omitted_item_sha256": inventory_sha256,
+            "omitted_item_count": omitted_item_count,
+            "sampled_item_sha256s": samples,
+            "samples_truncated": omitted_item_count > len(samples),
+        }
+        return cls(
+            **payload,
             evidence_sha256=_canonical_sha256(payload),
         )
 
     @model_validator(mode="after")
     def omission_is_typed_and_self_hashed(self) -> ContextOmissionItem:
-        permitted_categories = {
-            ContextOmissionReason.BLIND_DISCOVERY_WITHHELD: {ContextOmissionCategory.PRIOR_AUDIT},
-            ContextOmissionReason.CONTEXT_BUDGET_EXCLUDED: {
-                ContextOmissionCategory.CONTEXT_PACKAGE
-            },
-            ContextOmissionReason.LOGICAL_BLOCK_EXCEEDS_LIMIT: {ContextOmissionCategory.SOURCE},
-            ContextOmissionReason.METADATA_BUDGET_EXCLUDED: {
-                ContextOmissionCategory.FRAMEWORK,
-                ContextOmissionCategory.GRAPH,
-                ContextOmissionCategory.INVARIANT,
-                ContextOmissionCategory.METADATA,
-                ContextOmissionCategory.SCANNER,
-            },
-            ContextOmissionReason.REVIEW_CONTRACT_WITHHELD: {ContextOmissionCategory.METADATA},
-            ContextOmissionReason.SERIALIZED_BUDGET_EXCLUDED: {ContextOmissionCategory.SOURCE},
-            ContextOmissionReason.SOURCE_BUDGET_EXCLUDED: {ContextOmissionCategory.SOURCE},
-        }
-        if self.category not in permitted_categories[self.reason]:
+        if self.category not in _PERMITTED_CONTEXT_OMISSION_CATEGORIES[self.reason]:
             raise ValueError("context omission category differs from its reason")
+        if any(_SHA256_RE.fullmatch(value) is None for value in self.sampled_item_sha256s):
+            raise ValueError("context omission samples contain a non-SHA-256 value")
+        if len(self.sampled_item_sha256s) != len(set(self.sampled_item_sha256s)):
+            raise ValueError("context omission samples must be unique")
+        if self.omitted_item_count < len(self.sampled_item_sha256s):
+            raise ValueError("context omission count is below its retained samples")
+        if self.samples_truncated != (self.omitted_item_count > len(self.sampled_item_sha256s)):
+            raise ValueError("context omission truncation state differs from its sample count")
+        if not self.samples_truncated:
+            if (
+                self.inventory_commitment_method
+                is ContextOmissionCommitmentMethod.SINGLE_ITEM_SHA256
+            ):
+                expected_inventory = self.sampled_item_sha256s[0]
+            else:
+                expected_inventory = _complete_omission_stream_sha256(
+                    category=self.category,
+                    reason=self.reason,
+                    item_sha256s=self.sampled_item_sha256s,
+                )
+            if self.omitted_item_sha256 != expected_inventory:
+                raise ValueError(
+                    "context omission inventory hash differs from its complete samples"
+                )
+        if (
+            self.inventory_commitment_method is ContextOmissionCommitmentMethod.SINGLE_ITEM_SHA256
+            and (
+                self.omitted_item_count != 1
+                or len(self.sampled_item_sha256s) != 1
+                or self.samples_truncated
+            )
+        ):
+            raise ValueError("single-item context omission commitment is inconsistent")
         _require_self_hash(self, "evidence_sha256")
         return self
+
+
+@dataclass(slots=True)
+class ContextOmissionAccumulator:
+    """Bounded streaming state for one exact omission-event sequence."""
+
+    category: ContextOmissionCategory
+    reason: ContextOmissionReason
+    omitted_item_count: int = 0
+    inventory_sha256: str = field(init=False)
+    _samples: list[str] = field(default_factory=list, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.category not in _PERMITTED_CONTEXT_OMISSION_CATEGORIES[self.reason]:
+            raise ContextTokenPlanError("context omission category differs from its reason")
+        self.inventory_sha256 = _initial_omission_stream_sha256(
+            self.category,
+            self.reason,
+        )
+
+    @property
+    def sampled_item_sha256s(self) -> tuple[str, ...]:
+        """Return the fixed-cap deterministic representative inventory."""
+
+        return tuple(self._samples)
+
+    def add(self, item_sha256: str) -> None:
+        """Commit one event while retaining no unbounded per-event inventory."""
+
+        if not isinstance(item_sha256, str) or _SHA256_RE.fullmatch(item_sha256) is None:
+            raise ContextTokenPlanError("context omission item SHA-256 is invalid")
+        if self.omitted_item_count >= _MAX_TOKENS:
+            raise ContextTokenPlanError("context omission item count exceeds its evidence bound")
+        self.omitted_item_count += 1
+        self.inventory_sha256 = _extend_omission_stream_sha256(
+            previous_sha256=self.inventory_sha256,
+            item_sha256=item_sha256,
+            item_index=self.omitted_item_count,
+        )
+        if len(self._samples) < CONTEXT_OMISSION_SAMPLE_CAP and item_sha256 not in self._samples:
+            self._samples.append(item_sha256)
+
+    def build(self) -> ContextOmissionItem:
+        """Freeze the current non-empty stream as bounded typed evidence."""
+
+        if self.omitted_item_count <= 0:
+            raise ContextTokenPlanError("context omission aggregate requires at least one item")
+        return ContextOmissionItem._build_streaming_aggregate(
+            category=self.category,
+            reason=self.reason,
+            inventory_sha256=self.inventory_sha256,
+            omitted_item_count=self.omitted_item_count,
+            sampled_item_sha256s=self.sampled_item_sha256s,
+        )
 
 
 class Utf8TokenEstimate(FrozenTokenEvidence):
@@ -532,11 +744,16 @@ class EndpointRouteIntersection(FrozenTokenEvidence):
 class SourceTokenBudgetEvidence(FrozenTokenEvidence):
     """Conservation proof for the maximum source allocation in one request."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.1"] = "1.1"
     usable_prompt_tokens: int = Field(ge=0, le=_MAX_TOKENS)
     non_source_prompt_tokens: int = Field(ge=0, le=_MAX_TOKENS)
     reserved_non_source_prompt_tokens: int = Field(ge=0, le=_MAX_TOKENS)
     configured_maximum_source_tokens_per_request: int = Field(gt=0, le=_MAX_TOKENS)
+    context_package_source_byte_ceiling: int | None = Field(
+        default=None,
+        ge=0,
+        le=_MAX_TOKENS,
+    )
     maximum_source_tokens_per_request: int = Field(ge=0, le=_MAX_TOKENS)
     maximum_source_byte_upper_bound_tokens: int = Field(ge=0, le=_MAX_TOKENS)
     planned_source_tokens: int = Field(ge=0, le=_MAX_TOKENS)
@@ -554,6 +771,7 @@ class SourceTokenBudgetEvidence(FrozenTokenEvidence):
         non_source_prompt_tokens: int,
         reserved_non_source_prompt_tokens: int,
         configured_maximum_source_tokens_per_request: int,
+        context_package_source_byte_ceiling: int | None = None,
         planned_source_tokens: int,
         planned_source_byte_upper_bound_tokens: int,
     ) -> Self:
@@ -571,12 +789,27 @@ class SourceTokenBudgetEvidence(FrozenTokenEvidence):
             raise ContextTokenPlanError("configured maximum source tokens must be positive")
         configured_source_byte_upper = min(
             _MAX_TOKENS,
-            configured_maximum_source_tokens_per_request * 3,
+            configured_maximum_source_tokens_per_request * UTF8_BYTES_PER_ESTIMATED_TOKEN,
         )
-        maximum_source_byte_upper = min(available_source, configured_source_byte_upper)
+        if isinstance(context_package_source_byte_ceiling, bool) or (
+            context_package_source_byte_ceiling is not None
+            and context_package_source_byte_ceiling < 0
+        ):
+            raise ContextTokenPlanError("context-package source byte ceiling is invalid")
+        package_source_byte_upper = (
+            _MAX_TOKENS
+            if context_package_source_byte_ceiling is None
+            else context_package_source_byte_ceiling
+        )
+        maximum_source_byte_upper = min(
+            available_source,
+            configured_source_byte_upper,
+            package_source_byte_upper,
+        )
         maximum_source = min(
             configured_maximum_source_tokens_per_request,
-            (maximum_source_byte_upper + 2) // 3,
+            (maximum_source_byte_upper + UTF8_BYTES_PER_ESTIMATED_TOKEN - 1)
+            // UTF8_BYTES_PER_ESTIMATED_TOKEN,
         )
         if (
             planned_source_tokens > maximum_source
@@ -589,13 +822,14 @@ class SourceTokenBudgetEvidence(FrozenTokenEvidence):
         )
         unallocated_prompt = available_source - maximum_source_byte_upper
         payload: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": "1.1",
             "usable_prompt_tokens": usable_prompt_tokens,
             "non_source_prompt_tokens": non_source_prompt_tokens,
             "reserved_non_source_prompt_tokens": reserved_non_source_prompt_tokens,
             "configured_maximum_source_tokens_per_request": (
                 configured_maximum_source_tokens_per_request
             ),
+            "context_package_source_byte_ceiling": (context_package_source_byte_ceiling),
             "maximum_source_tokens_per_request": maximum_source,
             "maximum_source_byte_upper_bound_tokens": maximum_source_byte_upper,
             "planned_source_tokens": planned_source_tokens,
@@ -605,13 +839,14 @@ class SourceTokenBudgetEvidence(FrozenTokenEvidence):
             "unallocated_prompt_tokens": unallocated_prompt,
         }
         return cls(
-            schema_version="1.0",
+            schema_version="1.1",
             usable_prompt_tokens=usable_prompt_tokens,
             non_source_prompt_tokens=non_source_prompt_tokens,
             reserved_non_source_prompt_tokens=reserved_non_source_prompt_tokens,
             configured_maximum_source_tokens_per_request=(
                 configured_maximum_source_tokens_per_request
             ),
+            context_package_source_byte_ceiling=(context_package_source_byte_ceiling),
             maximum_source_tokens_per_request=maximum_source,
             maximum_source_byte_upper_bound_tokens=maximum_source_byte_upper,
             planned_source_tokens=planned_source_tokens,
@@ -624,6 +859,34 @@ class SourceTokenBudgetEvidence(FrozenTokenEvidence):
 
     @model_validator(mode="after")
     def source_budget_conserves_tokens(self) -> SourceTokenBudgetEvidence:
+        available_source = self.usable_prompt_tokens - self.reserved_non_source_prompt_tokens
+        if available_source < 0:
+            raise ValueError("non-source reserves exceed usable prompt capacity")
+        configured_source_byte_upper = min(
+            _MAX_TOKENS,
+            (self.configured_maximum_source_tokens_per_request * UTF8_BYTES_PER_ESTIMATED_TOKEN),
+        )
+        package_source_byte_upper = (
+            _MAX_TOKENS
+            if self.context_package_source_byte_ceiling is None
+            else self.context_package_source_byte_ceiling
+        )
+        expected_source_byte_upper = min(
+            available_source,
+            configured_source_byte_upper,
+            package_source_byte_upper,
+        )
+        expected_source_tokens = min(
+            self.configured_maximum_source_tokens_per_request,
+            (expected_source_byte_upper + UTF8_BYTES_PER_ESTIMATED_TOKEN - 1)
+            // UTF8_BYTES_PER_ESTIMATED_TOKEN,
+        )
+        if (
+            self.maximum_source_byte_upper_bound_tokens != expected_source_byte_upper
+            or self.maximum_source_tokens_per_request != expected_source_tokens
+            or self.unallocated_prompt_tokens != available_source - expected_source_byte_upper
+        ):
+            raise ValueError("effective source budget is not derived from its governing limits")
         if (
             self.reserved_non_source_prompt_tokens
             + self.maximum_source_byte_upper_bound_tokens
@@ -638,6 +901,12 @@ class SourceTokenBudgetEvidence(FrozenTokenEvidence):
             > self.configured_maximum_source_tokens_per_request
         ):
             raise ValueError("effective source budget exceeds its configured maximum")
+        if (
+            self.context_package_source_byte_ceiling is not None
+            and self.maximum_source_byte_upper_bound_tokens
+            > self.context_package_source_byte_ceiling
+        ):
+            raise ValueError("effective source budget exceeds the context-package ceiling")
         if (
             self.planned_source_tokens + self.remaining_source_tokens
             != self.maximum_source_tokens_per_request
@@ -781,9 +1050,12 @@ class RequestTokenPlan(FrozenTokenEvidence):
     reserved_workflow_tokens: int = Field(ge=0, le=_MAX_TOKENS)
     context_omissions: tuple[ContextOmissionItem, ...] = Field(
         default=(),
-        max_length=4_096,
+        max_length=CONTEXT_OMISSION_GROUP_CAP,
     )
-    context_omission_sha256s: tuple[str, ...] = Field(default=(), max_length=4_096)
+    context_omission_sha256s: tuple[str, ...] = Field(
+        default=(),
+        max_length=CONTEXT_OMISSION_GROUP_CAP,
+    )
     source_budget: SourceTokenBudgetEvidence
     global_budget: GlobalTokenBudgetEvidence
     plan_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -917,8 +1189,10 @@ class RequestTokenPlan(FrozenTokenEvidence):
         if self.context_omissions != canonical_omissions:
             raise ValueError("context omissions must be canonically sorted")
         omission_hashes = tuple(sorted(item.omitted_item_sha256 for item in self.context_omissions))
+        omission_groups = tuple((item.category, item.reason) for item in self.context_omissions)
         if (
-            len(omission_hashes) != len(set(omission_hashes))
+            len(omission_groups) != len(set(omission_groups))
+            or len(omission_hashes) != len(set(omission_hashes))
             or self.context_omission_sha256s != omission_hashes
         ):
             raise ValueError("context omission inventory differs from its hash index")
@@ -956,6 +1230,7 @@ def build_request_token_plan(
     configured_reserved_protocol_tokens: int = 0,
     configured_reserved_workflow_tokens: int = 0,
     maximum_source_tokens_per_request: int = 200_000,
+    context_package_source_byte_ceiling: int | None = None,
     context_omissions: Sequence[ContextOmissionItem] = (),
     prompt_envelope_byte_upper_bound_tokens: int,
 ) -> RequestTokenPlan:
@@ -1081,6 +1356,7 @@ def build_request_token_plan(
         non_source_prompt_tokens=non_source_tokens,
         reserved_non_source_prompt_tokens=reserved_non_source_tokens,
         configured_maximum_source_tokens_per_request=maximum_source_tokens_per_request,
+        context_package_source_byte_ceiling=context_package_source_byte_ceiling,
         planned_source_tokens=source_estimate.estimated_tokens,
         planned_source_byte_upper_bound_tokens=source_estimate.byte_upper_bound_tokens,
     )
@@ -1256,9 +1532,11 @@ def _canonical_context_omissions(
             ),
         )
     )
-    hashes = tuple(item.omitted_item_sha256 for item in canonical)
-    if len(hashes) != len(set(hashes)):
-        raise ContextTokenPlanError("context omission inventory contains duplicate items")
+    groups = tuple((item.category, item.reason) for item in canonical)
+    if len(groups) != len(set(groups)):
+        raise ContextTokenPlanError("context omission inventory contains duplicate groups")
+    if len(canonical) > CONTEXT_OMISSION_GROUP_CAP:
+        raise ContextTokenPlanError("context omission inventory exceeds its group cap")
     return canonical
 
 
@@ -1304,6 +1582,8 @@ def _canonical_json_default(value: Any) -> Any:
 
 
 __all__ = [
+    "CONTEXT_OMISSION_GROUP_CAP",
+    "CONTEXT_OMISSION_SAMPLE_CAP",
     "DEFAULT_CONTEXT_UTILIZATION",
     "MAXIMUM_CONTEXT_UTILIZATION",
     "MINIMUM_CONTEXT_UTILIZATION",
@@ -1313,9 +1593,13 @@ __all__ = [
     "OUTPUT_ALLOCATION_CATEGORIES",
     "PROMPT_ALLOCATION_CATEGORIES",
     "PROMPT_UPPER_BOUND_METHOD",
+    "UTF8_BYTES_PER_ESTIMATED_TOKEN",
     "UTF8_TOKEN_ESTIMATOR",
+    "ContextOmissionAccumulator",
     "ContextOmissionCategory",
+    "ContextOmissionCommitmentMethod",
     "ContextOmissionItem",
+    "ContextOmissionNoticeLevel",
     "ContextOmissionReason",
     "ContextTokenPlanError",
     "EndpointRouteIntersection",

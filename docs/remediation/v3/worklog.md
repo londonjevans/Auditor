@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED
-CURRENT_MILESTONE: Paused after realistic-scale Solidity fixture validation
-CURRENT_TICKET: NONE — operator-requested pause boundary
-LAST_COMPLETED_TICKET: V3-FORKDIFF-001
-NEXT_ACTION: On operator resume, begin V3-OMISSION-001 against the committed 5k/15k/35k corpus; revisit V3-FIXTURE-001 when V3-SHARD-001 can supply the missing semantic-sharding regression.
-LAST_COMMAND: git commit -m "Add realistic Solidity scale fixtures"
-LAST_RESULT: PASS — isolated V3-FIXTURE-001 implementation checkpoint 7c65c26003e294072534513f7d78d61eee3c42d0 created after all validation and artifact checks passed.
+AUTORUN_STATUS: ACTIVE
+CURRENT_MILESTONE: Bounded omission accounting and graceful context degradation
+CURRENT_TICKET: V3-OMISSION-001
+LAST_COMPLETED_TICKET: V3-OMISSION-001
+NEXT_ACTION: Create and SSH-push the isolated V3-OMISSION-001 checkpoint, then immediately begin V3-EXECORIGIN-001.
+LAST_COMMAND: .venv/bin/pytest -q
+LAST_RESULT: PASS — exact final source state passed 3095 tests with 11 explicit external-engine, rootless-isolation, compiler, replay, fork, and paid-provider prerequisite skips in 426.94s; two inherited immutable-toolchain cleanup warnings were non-failing.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,241 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 7c65c26003e294072534513f7d78d61eee3c42d0
+LAST_CHECKPOINT_COMMIT: 0994a6c6e274fa96d4f57fbb248c07e1c8f4f1ba
+
+## 2026-07-30 — V3-OMISSION-001
+
+- **Status:** `COMPLETE`.
+- **Defensive objective:** Bound omission evidence independently from source
+  analysis capacity and return the largest honest bounded context package at
+  realistic repository sizes instead of entering a self-reinforcing
+  omission-growth failure.
+- **Starting evidence:** Clean synchronized checkpoint
+  `0994a6c6e274fa96d4f57fbb248c07e1c8f4f1ba`. The marked realistic-scale suite
+  currently retains two strict expected reds: 15k raises the exact recorded
+  `ContextBudgetError`, while 35k returns `73` omission records against the
+  declared `64`-record target. The 5k case already succeeds.
+- **Exact next safe action:** Inspect typed omission models, renderer accounting,
+  recovery ordering, manifest joins, specialist byte/token caps, and review
+  coverage consumers; then replace the expected reds with positive
+  realistic-scale regressions. No provider, secret, public RPC, wallet, signing,
+  broadcast, or paid operation is in scope.
+- **Expected-red reproduction:** `.venv/bin/pytest -q -m large_scale
+  tests/large_scale/test_realistic_solidity_scale.py` completed with `5 passed,
+  2 xfailed in 9.05s`; the 15k case raised the recorded context-budget failure
+  and the 35k case exceeded the bounded-ledger target.
+- **Implementation slice before operator pause:** Began typed aggregate omission
+  groups with bounded representative samples, package-level effective source
+  ceilings, and omission-detail degradation ahead of source removal in
+  `token_planning.py`, `schemas.py`, and `context.py`. The provider-visible
+  renderer still needs its bounded limitation payload, request-plan propagation
+  is not complete, and no post-edit tests have been credited.
+- **Pause checkpoint:** At `2026-07-30T01:12:02Z`, the operator requested a pause.
+  `git diff --check` passed. No commit was created because the cohesive ticket is
+  incomplete. All edits are preserved in the working tree; no provider call,
+  secret access, public RPC, wallet, signing, broadcast, or paid operation
+  occurred.
+- **Resume evidence:** Autorun resumed at `2026-07-30T01:21:09Z` from the
+  preserved checkpoint. Provider-visible limitation rendering now carries only
+  bounded counts while full commitments and representative digests remain
+  host-side; request-token planning binds the actual package source ceiling;
+  and static specialist role caps have been replaced by a configuration-derived
+  source-plus-metadata bound. Focused evidence so far: core context,
+  token-planning, and OpenRouter tests `204 passed`; expanded token-planning
+  tests `27 passed`; omission-renderer regressions `3 passed`; token-planning
+  acceptance `5 passed`; source-ceiling OpenRouter join `1 passed`; specialist
+  cap unit/integration slice `17 passed`. The strict 15k and 35k expected reds
+  now XPASS and are being converted into positive regressions. No paid or
+  external operation occurred.
+- **Integrity correction:** The first broad focused run returned `2 failed,
+  428 passed in 3.52s`. Both failures proved that removing all omission bytes
+  from provider rendering also removed post-hoc context-substitution detection.
+  The renderer now includes one constant-size SHA-256 commitment over the
+  host-only aggregate ledger while withholding every per-record inventory and
+  sample digest. The two original failures plus four omission-rendering
+  regressions then passed (`6 passed in 0.30s`).
+- **Expanded focused evidence:** The combined context, token-plan, manifest,
+  OpenRouter, specialist, model-coverage, assurance, and pipeline slice passed
+  `589` tests in `96.20s`. The realistic 5k/15k/35k run first exposed three
+  test-harness defects in newly added assertions; after passing the real
+  index/graph evidence into context construction and fixing the missing typed
+  import, it passed `5` tests in `18.57s`. Release-schema regeneration and
+  drift verification passed.
+- **Independent adversarial findings:** Three read-only reviews reproduced
+  additional fail-closed gaps: optional framework metadata could still force a
+  hard context failure; logical-block diagnostics and collection transitions
+  could misstate exact omission counts; source-budget evidence did not
+  recompute derived maxima; source inventory processing retained quadratic
+  suffix copies; context-manifest I/O followed linked path components and had
+  descriptor-identity races; logical retry/preflight evidence could splice a
+  different context plan and double-count the same omission inventory; and
+  specialist execution collapsed multiple contexts, trusted stale byte counts,
+  lacked request-role/context-role binding, and could grant role completion to
+  a source-less response.
+- **Correction state:** The source-budget validator now recomputes its exact
+  byte and estimated-token maxima from every governing ceiling; a separately
+  resealed impossible maximum is rejected. The exact focused negative and two
+  neighboring source-budget tests passed, followed by `38` token-planning and
+  omission tests. The other reproduced findings are being corrected in
+  disjoint bounded slices before ticket completion; no provider, secret,
+  public RPC, wallet, signing, broadcast, or paid operation is involved.
+- **Bounded slice checkpoint:** Descriptor-safe manifest I/O, logical retry-plan
+  identity, unique omission totals with explicit occurrence accounting, and
+  schema synchronization passed `71` focused tests, Ruff, strict mypy, and the
+  release-schema drift check. Specialist request/context binding, byte-evidence
+  validation, complete context inventories, partial-outcome honesty, immutable
+  omission tuples, and source-backed assurance credit passed `188` specialist
+  and OpenRouter tests, `220` assurance/model-evidence tests, `12` context
+  tests, one maximum-assurance pipeline integration, Ruff, and strict mypy.
+- **Remaining acceptance blocker:** Independent read-only re-review found that
+  repository-map compaction reserves a slot for a synthesized file summary but
+  does not commit one displaced original `omitted_files` item. A reproduced
+  case reports `198` omissions for `199` removed original file/list items, and
+  inputs differing only in the displaced item can produce identical omission
+  evidence. Exact forensic accounting is therefore not yet proven and
+  `V3-OMISSION-001` remains `IN_PROGRESS`.
+- **Operator pause:** At `2026-07-30T02:20:25Z`, all three in-flight bounded
+  reviews reached checkpoints and stopped. Autorun is paused with the working
+  tree preserved. No commit or push was attempted because the cohesive ticket
+  is incomplete; no provider call, secret access, public RPC, wallet, signing,
+  broadcast, or paid operation occurred during this resumed slice.
+- **Second resume:** Autorun resumed at `2026-07-30T02:22:56Z` from synchronized
+  commit `0994a6c6e274fa96d4f57fbb248c07e1c8f4f1ba`. The only implementation
+  action in progress is the reproduced repository-map omission-accounting
+  correction and its negative regression; no next ticket has begun.
+- **Map-accounting correction:** The old negative reproduced `198` recorded
+  omissions for `199` removed original repository-map items. Compaction now
+  retains original-list inventory separately from its synthesized summary.
+  Two inputs differing only in the formerly displaced item produce equal
+  provider maps but different omission commitments. The focused context slice
+  passed `68` tests; Ruff, strict mypy, and scoped diff checks passed.
+- **Pre-gate evidence review:** The complete focused gate was deliberately not
+  started after independent review reproduced three further integrity gaps:
+  context execution evidence accepted a source ceiling above its configured
+  token-derived/package bound; different retry preflights could share one
+  logical request without agreeing on a plan when no provider record existed;
+  and deserialized specialist records could claim source-review credit without
+  joining request evidence to an actual retained source-bearing context.
+  Disjoint fail-closed regressions and corrections are in progress.
+- **Evidence-join corrections:** Repeated logical provider/preflight records now
+  require one exact role, model, and request plan even when no provider record
+  exists; valid retry occurrences remain separately counted while their logical
+  omission inventory remains unique. Context execution evidence rejects source
+  ceilings above either its package budget or configured token-derived limit.
+  Specialist records retain canonical successful/failed request IDs, join each
+  request context to exact retained rendered/source/config evidence, and
+  recompute source-review credit instead of trusting a serialized counter.
+  Focused evidence: manifest `71` passed; specialist compatibility `498`
+  passed; Ruff and strict mypy passed both slices.
+- **Complete focused gate:** The context, omission, token-plan, manifest,
+  OpenRouter, specialist, coverage, assurance, reproduction, repository, and
+  pipeline matrix passed `672` tests in `97.06s`. Only non-failing cleanup
+  warnings for immutable test toolchain directories were emitted.
+- **Scale and schema gate:** The positive realistic-scale suite passed all `5`
+  tests in `18.70s`. Release schemas were regenerated and immediately verified
+  synchronized. Full Ruff formatting changed `3` affected files and the
+  complete Ruff check passed.
+- **Static type gate:** Configured strict mypy passed all `148` source files.
+- **Complete local gate:** With only test-owned numeric-loopback listeners
+  permitted and paid-provider execution disabled, `.venv/bin/pytest -q` passed
+  `3051` tests with `11` explicit external-engine, rootless-isolation,
+  compiler, fork, replay, and paid-provider prerequisite skips in `394.66s`.
+  Two inherited immutable-toolchain cleanup warnings were non-failing.
+- **Trusted compiler scale integration:** The external immutable Solidity
+  `0.8.30` compiler remained a unique regular non-writable executable with
+  recorded SHA-256
+  `738dcdc6afddeb505ee4e4ef24f1c1fdba2b8c924e614cbbf5801a5b062dd683`.
+  The explicit offline realistic-scale AST/inheritance integration passed `1`
+  test in `1.88s` using only disposable output.
+- **Final manifest review:** Pre-commit review withheld completion after
+  reproducing three further evidence-integrity gaps: a FIFO/device manifest
+  leaf could block before regular-file rejection; effective configuration
+  validation did not derive and compare utilization and all configured token
+  reserves; and incompatible manifest/binding evidence still claimed
+  top-level schema `1.0`. Bounded regressions and corrections are in progress;
+  the earlier green suite remains historical evidence, not post-fix credit.
+- **Final context/specialist review:** Two further read-only reviews withheld
+  completion. They reproduced remaining-budget exclusions mislabeled as
+  oversized logical constructs; uncommitted nested index/graph metadata
+  removals; mutable or unvalidated package copies exceeding declared bounds;
+  workflow-rejected provider responses receiving raw-usage specialist credit;
+  derivative `:exploit_test` calls satisfying investigator review; and the
+  required indexed whole-protocol request role being rejected before
+  transport. Disjoint context and specialist corrections are in progress.
+- **Operator pause after bounded review slices:** At
+  `2026-07-30T03:09:16Z`, the context slice completed with `7` focused
+  regressions and `5` realistic-scale tests passing, plus Ruff, strict mypy,
+  and `git diff --check`. The manifest slice had already passed `96` focused
+  tests, schema regeneration, Ruff, and strict mypy. The specialist slice was
+  stopped mid-implementation at the requested pause boundary: four production
+  files contain incomplete, unvalidated edits and their compatibility tests
+  have not yet been updated. No commit or push was attempted, no next ticket
+  began, and no provider call, secret access, public RPC, wallet, signing,
+  broadcast, or paid operation occurred.
+- **Third resume:** Autorun resumed at `2026-07-30T03:11:25Z` from the exact
+  preserved working tree. The bounded specialist-evidence correction and its
+  compatibility regressions are the only implementation work in progress; the
+  validated context and manifest slices remain preserved, and no next ticket
+  has begun.
+- **Resumed adversarial evidence review:** Pre-gate review reproduced further
+  source-credit bypasses, so completion remains withheld. Accepted role
+  outcomes were inferred from a shared usage-ledger suffix instead of the exact
+  host-validated result; surface evidence was not fully joined to response and
+  context hashes; mutable accepted-outcome evidence retained a stale self-hash;
+  a constructed auxiliary `COMPLETED` record could receive role credit without
+  accepted evidence; and candidate locations were validated against the union
+  of every role's source packages, allowing one role to lend another omitted
+  source. Context packages also require detached resealing at all artifact and
+  coverage boundaries. These are being corrected with exact-request,
+  exact-context, and recomputed-credit regressions before any green gate is
+  credited.
+- **Evidence-integrity correction:** Host-accepted role outcomes now bind the
+  exact completion request, validated response, schema, context request
+  evidence, requested-surface manifest, and retained source package.
+  Candidate locations are checked only against their originating package in
+  both validation passes, and duplicate/conflicting candidate origins fail
+  closed. Investigator completion requires a nonempty accepted surface review;
+  derivative test-planning calls cannot satisfy investigator responsibility.
+  Serialized specialist records are registry-bound and revalidated, including
+  exact outcome-to-context evidence hashes. Whole-protocol lineage credit
+  requires a canonical indexed request with typed, source-bearing context
+  evidence. Detached context boundaries revalidate nested state and exact
+  rendered/source limits; unsupported scanner metadata is deterministically
+  normalized and serialization failures become typed boundary failures.
+  Agent-focused evidence passed `288` specialist/evidence tests, `68` pipeline
+  integration tests, `169` assurance tests, `31` specialist/qualification
+  tests, `4` whole-protocol binding tests, and `263` context-boundary tests.
+  Root-level combined validation is now running.
+- **Root focused gates:** The complete combined V3-OMISSION matrix passed `779`
+  tests in `114.10s`. Release schemas regenerated and verified current. Ruff
+  formatted `10` affected files, the complete Ruff check passed, and strict
+  mypy passed all `148` source files. The positive 5k/15k/35k scale suite
+  passed `5` tests in `21.21s`. The explicit trusted offline Solidity `0.8.30`
+  compiler remained a regular non-writable executable with SHA-256
+  `738dcdc6afddeb505ee4e4ef24f1c1fdba2b8c924e614cbbf5801a5b062dd683`;
+  its realistic-scale AST/inheritance integration passed `1` test in `1.94s`.
+- **Final review correction:** A last independent test review proved that
+  source-backed whole-protocol credit did not yet join typed context evidence
+  to the provider-visible prompt hash. Credit now requires a non-null exact
+  `user_prompt_sha256 == rendered_sha256` binding; missing, mismatched, and
+  independently resealed evidence all revoke lineage credit. The same-role
+  request-selection regression now selects an earlier exact completion while a
+  later same-role record exists. The post-fix focused matrix passed `455`
+  tests, the new negative subset passed `8`, Ruff passed, strict mypy passed all
+  `148` source files, release schemas regenerated and verified current, and
+  `git diff --check` passed.
+- **Final closure:** At `2026-07-30T04:15:44Z`, the exact final source state
+  passed `3095` tests with `11` explicit external-engine,
+  rootless-isolation, compiler, replay, fork, and paid-provider prerequisite
+  skips in `426.94s`. Two inherited immutable-toolchain cleanup warnings were
+  non-failing. Ruff formatting verification and the complete Ruff check passed;
+  strict mypy passed all `148` source files; release-schema drift verification,
+  JSON validation, and `git diff --check` passed. Three final independent
+  reviews found no remaining V3-OMISSION acceptance blocker. No provider call,
+  secret access, public RPC, wallet, signing, broadcast, or paid operation
+  occurred. `V3-OMISSION-001` is `COMPLETE`; the unavailable real integrations
+  remain accurately represented by their explicit suite skips and existing
+  external blockers.
 
 ## 2026-07-30 — V3-FIXTURE-001
 

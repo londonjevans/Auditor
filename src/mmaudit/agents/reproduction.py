@@ -7,7 +7,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from mmaudit.agents.base import load_prompt
+from mmaudit.agents.base import ValidatedAgentResult, load_prompt
 from mmaudit.agents.specialists import SPECIALIST_ROLE_REGISTRY
 from mmaudit.config import AuditConfig, model_family
 from mmaudit.models.openrouter import OpenRouterClient, OpenRouterSchemaError
@@ -187,13 +187,27 @@ class ExploitTestPlannerAgent:
         *,
         prepared_input: PreparedExploitTestInput | None = None,
     ) -> GeneratedFoundryTestBatch:
+        result = await self.run_with_evidence(
+            candidates,
+            context,
+            prepared_input=prepared_input,
+        )
+        return result.value if result is not None else GeneratedFoundryTestBatch(tests=[])
+
+    async def run_with_evidence(
+        self,
+        candidates: list[CandidateFinding],
+        context: ContextPackage,
+        *,
+        prepared_input: PreparedExploitTestInput | None = None,
+    ) -> ValidatedAgentResult[GeneratedFoundryTestBatch] | None:
         expected_input = self.prepare_input(candidates)
         if prepared_input is not None and prepared_input != expected_input:
             raise OpenRouterSchemaError(
                 "prepared exploit-test workflow differs from submitted planning evidence"
             )
         if not candidates:
-            return GeneratedFoundryTestBatch(tests=[])
+            return None
         effective_input = prepared_input or expected_input
         configured_role = self.planner_role or (
             "exploit_reproduction_planner"
@@ -203,7 +217,7 @@ class ExploitTestPlannerAgent:
         definition = SPECIALIST_ROLE_REGISTRY[self.planner_role or "exploit_reproduction_planner"]
         configured = self.config.models.role(configured_role)
         role = f"specialist:{configured_role}:exploit_test"
-        response = await self.client.complete(
+        completion = await self.client.complete_with_evidence(
             role=role,
             models=[configured.primary, *configured.fallbacks],
             system_prompt="\n\n".join(
@@ -220,6 +234,7 @@ class ExploitTestPlannerAgent:
             response_model=GeneratedFoundryTestBatch,
             schema_name=definition.effective_schema_name(),
         )
+        response = completion.value
         submitted = {candidate.candidate_id for candidate in candidates}
         counts: dict[str, int] = {}
         stamped: list[GeneratedFoundryTestSpec] = []
@@ -244,7 +259,10 @@ class ExploitTestPlannerAgent:
                     }
                 )
             )
-        return GeneratedFoundryTestBatch(tests=stamped)
+        return ValidatedAgentResult(
+            value=GeneratedFoundryTestBatch(tests=stamped),
+            completion_usage=completion.usage_record,
+        )
 
 
 class FalsifierAgent:
@@ -279,6 +297,25 @@ class FalsifierAgent:
         context: ContextPackage,
         prepared_input: PreparedFalsificationInput | None = None,
     ) -> FalsificationBatch:
+        return (
+            await self.run_with_evidence(
+                candidates=candidates,
+                tests=tests,
+                results=results,
+                context=context,
+                prepared_input=prepared_input,
+            )
+        ).value
+
+    async def run_with_evidence(
+        self,
+        *,
+        candidates: list[CandidateFinding],
+        tests: list[GeneratedFoundryTestSpec],
+        results: list[ReproductionResult],
+        context: ContextPackage,
+        prepared_input: PreparedFalsificationInput | None = None,
+    ) -> ValidatedAgentResult[FalsificationBatch]:
         expected_input = self.prepare_input(
             candidates=candidates,
             tests=tests,
@@ -294,7 +331,7 @@ class FalsifierAgent:
         )
         definition = SPECIALIST_ROLE_REGISTRY["falsifier"]
         verifier = self.config.models.role(configured_role)
-        response = await self.client.complete(
+        completion = await self.client.complete_with_evidence(
             role=("specialist:falsifier" if configured_role == "falsifier" else "falsifier"),
             models=[verifier.primary, *verifier.fallbacks],
             system_prompt="\n\n".join(
@@ -311,6 +348,7 @@ class FalsifierAgent:
             response_model=FalsificationBatch,
             schema_name=definition.effective_schema_name(),
         )
+        response = completion.value
         expected = {(test.candidate_id, test.name) for test in tests}
         returned = [(decision.candidate_id, decision.test_name) for decision in response.decisions]
         if (
@@ -321,4 +359,7 @@ class FalsifierAgent:
             raise OpenRouterSchemaError(
                 "falsifier returned an incomplete, duplicate, or unknown test decision set"
             )
-        return response
+        return ValidatedAgentResult(
+            value=response,
+            completion_usage=completion.usage_record,
+        )
