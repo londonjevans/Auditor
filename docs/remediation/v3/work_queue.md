@@ -586,10 +586,22 @@ are invisible to source review by construction.
   `src/mmaudit/orchestration/pipeline.py`, candidate and finding schemas, reporting,
   regressions.
 - **Dependencies:** `V3-FORKDIFF-001`.
-- **Status:** `IN_PROGRESS`
-- **Current action:** Reproduce the absent execution-origin path, then define a
-  typed source-location-validated execution candidate that can enter grouping
-  without model attribution or model authority over its identity and location.
+- **Status:** `COMPLETE`
+- **Evidence:** Typed deterministic-execution candidates bind exact runtime
+  provenance and current-source validation without model attribution. Host-owned
+  grouping preserves candidate identity and location, applies the existing
+  similarity/location constraints, and refuses unrelated model-candidate
+  merges. Impact, exploitability, remediation, verifier, falsifier, and judge
+  roles may analyze the candidate but cannot create, delete, or relocate it;
+  deterministic evidence remains the confirmation cap. JSON, Markdown, SARIF,
+  manifest, and replay artifacts preserve origin and terminal resolution, and
+  resealed semantic splices fail closed. The final focused matrix passed `154`
+  tests; schemas, Ruff, strict mypy over `149` source files, and diff integrity
+  passed; the complete loopback-enabled local suite passed `3203` tests with
+  `11` explicit prerequisite skips. The current hardened Foundry/solc
+  integration remains skipped because isolation is unavailable and is not
+  claimed as current real-engine evidence.
+- **Next action:** Begin `V3-TESTQUALITY-001`.
 
 ## V3-TESTQUALITY-001 — Audited-suite coverage and assertion strength
 
@@ -606,7 +618,10 @@ are invisible to source review by construction.
   `src/mmaudit/solidity/coverage.py`, `src/mmaudit/orchestration/model_coverage.py`,
   reporting, regressions.
 - **Dependencies:** `V3-EXECORIGIN-001`; reuse `V3-MUTATION-001` work where already built.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
+- **Current action:** Inventory existing audited-suite coverage, mutation,
+  indexed surface, and model-priority evidence; reproduce the smallest missing
+  denominator or assertion-strength join before changing production behavior.
 
 ## V3-CI-001 — Continuous integration execution mode
 

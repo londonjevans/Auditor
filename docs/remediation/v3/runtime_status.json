@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-07-30T06:31:59Z",
-  "candidate_commit": "ab3998d5d14cf30f3cd64d29af7cfff88267c3b8",
-  "autorun_status": "PAUSED",
-  "current_milestone": "execution_originated_candidate_consensus",
-  "current_ticket": "V3-EXECORIGIN-001",
-  "last_checkpoint_commit": "c1199ea305a839227961bf59739fc2365d140058",
+  "updated_at": "2026-07-30T07:38:23Z",
+  "candidate_commit": "7db592e572d2065703ec78808bf35bfefbe62151",
+  "autorun_status": "ACTIVE",
+  "current_milestone": "audited_suite_coverage_and_assertion_strength",
+  "current_ticket": "V3-TESTQUALITY-001",
+  "last_checkpoint_commit": "7db592e572d2065703ec78808bf35bfefbe62151",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,

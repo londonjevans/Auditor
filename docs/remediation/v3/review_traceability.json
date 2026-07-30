@@ -168,10 +168,16 @@
     {
       "id": "N",
       "title": "Deterministic consensus and cross-examination",
-      "tickets": ["V3-CONSENSUS-001"],
-      "status": "QUEUED",
+      "tickets": ["V3-EXECORIGIN-001", "V3-CONSENSUS-001"],
+      "status": "PARTIAL",
       "current_evidence_class": "LOCAL_IMPLEMENTATION",
-      "evidence": ["Evidence caps and monotonic judgment exist, but a single verifier can currently suppress candidates and cross-examination is underweighted."],
+      "evidence": [
+        "Execution-originated candidates bind exact deterministic runtime provenance and current-source location validation without model attribution.",
+        "Host-owned candidate linking and grouping preserve execution identity and location, retain existing similarity and location constraints, and reject unrelated model-candidate merges.",
+        "Impact, exploitability, remediation, verifier, falsifier, and judge roles have analysis-only authority over an execution-originated candidate; deterministic evidence remains the confirmation cap.",
+        "JSON, Markdown, SARIF, manifest, and replay evidence preserve execution origin and require coherent terminal candidate resolution; resealed semantic splices fail closed.",
+        "The final focused matrix passed 154 tests; schemas, Ruff, strict mypy over 149 source files, and diff integrity passed; the complete local suite passed 3203 tests with 11 explicit prerequisite skips."
+      ],
       "remaining_proof": "Independent SUPPORT/DISPUTE/INCONCLUSIVE matrix and multiple-lineage adjudication."
     },
     {
@@ -241,7 +247,8 @@
       "evidence": [
         "Baseline ticket followed reproduce, validate, trace, and checkpoint sequencing; normal tests did not enable paid calls.",
         "V3-FORKDIFF-001 reproduced two distinct replay defects, added fail-closed regressions, passed a real local clean/pinned Foundry matrix and manifest-bound default replay, then passed 574 focused tests, Ruff, strict mypy, schema synchronization, diff review, and the full 2992-test suite with 10 explicit prerequisite skips.",
-        "At its checkpoint, V3-FIXTURE-001 generated and verified 196 deterministic realistic-scale fixture files, passed its real local compiler integration, and passed the complete suite with 3005 tests, 11 explicit prerequisite skips, and the two then-open omission expected reds. That historical fixture ticket remains PARTIAL because semantic sharding is not implemented; the current V3-OMISSION-001 scale suite has since converted both expected reds to passing regressions."
+        "At its checkpoint, V3-FIXTURE-001 generated and verified 196 deterministic realistic-scale fixture files, passed its real local compiler integration, and passed the complete suite with 3005 tests, 11 explicit prerequisite skips, and the two then-open omission expected reds. That historical fixture ticket remains PARTIAL because semantic sharding is not implemented; the current V3-OMISSION-001 scale suite has since converted both expected reds to passing regressions.",
+        "V3-EXECORIGIN-001 closed two independent serialized-evidence false-complete gaps, passed its 154-test final focused matrix, schema synchronization, Ruff, strict mypy over 149 source files, diff and artifact review, and the complete local suite with 3203 tests and 11 explicit prerequisite skips. Paid-provider execution remained disabled."
       ],
       "remaining_proof": "Repeat focused/full validation and exact worklog evidence for every ticket."
     },

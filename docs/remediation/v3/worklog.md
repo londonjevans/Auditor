@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED
-CURRENT_MILESTONE: Execution-originated candidate consensus
-CURRENT_TICKET: V3-EXECORIGIN-001
-LAST_COMPLETED_TICKET: V3-OMISSION-001
-NEXT_ACTION: Resume `V3-EXECORIGIN-001` by reviewing the integrated execution-origin diff, running the complete focused execution-origin matrix and pipeline integrations, verifying release-schema synchronization, running Ruff and strict mypy, then running the complete local test gate. Update traceability and accept the ticket only from those actual results.
-LAST_COMMAND: `.venv/bin/pytest -q tests/integration/test_pipeline.py::test_mocked_runtime_post_judge_severity_fails_closed_across_pipeline_artifacts`
-LAST_RESULT: PASS — `1 passed in 1.16s`; two inherited pytest temporary-directory cleanup warnings were emitted. This is mocked pipeline-wiring evidence, not real engine evidence. The ticket remains `IN_PROGRESS` pending integrated and complete gates.
+AUTORUN_STATUS: ACTIVE
+CURRENT_MILESTONE: Audited-suite coverage and assertion strength
+CURRENT_TICKET: V3-TESTQUALITY-001
+LAST_COMPLETED_TICKET: V3-EXECORIGIN-001
+NEXT_ACTION: Inventory the existing coverage, mutation, indexed-surface, model-priority, and report evidence; reproduce the smallest missing concrete denominator or assertion-strength join before implementation.
+LAST_COMMAND: `git commit -m "Close execution-origin evidence obligations"`
+LAST_RESULT: PASS — isolated validated implementation checkpoint `7db592e572d2065703ec78808bf35bfefbe62151` contains only the V3-EXECORIGIN production and regression changes.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: c1199ea305a839227961bf59739fc2365d140058
+LAST_CHECKPOINT_COMMIT: 7db592e572d2065703ec78808bf35bfefbe62151
 
 ## 2026-07-30 — V3-OMISSION-001
 
@@ -257,7 +257,7 @@ LAST_CHECKPOINT_COMMIT: c1199ea305a839227961bf59739fc2365d140058
 
 ## 2026-07-30 — V3-EXECORIGIN-001
 
-- **Status:** `IN_PROGRESS`.
+- **Status:** `COMPLETE`.
 - **Defensive objective:** Permit a location-validated deterministic execution
   witness to originate a candidate group without model attribution, while
   preserving deterministic evidence caps and preventing model roles from
@@ -414,6 +414,131 @@ LAST_CHECKPOINT_COMMIT: c1199ea305a839227961bf59739fc2365d140058
   fail-closed execution-origin slice and its mocked pipeline regression. It is
   a recovery checkpoint, not ticket-completion, real-engine, or release
   acceptance evidence.
+- **Resume:** Autorun resumed at `2026-07-30T06:36:53Z` from clean synchronized
+  state commit `be7b57b80f375ac7cf4c5040e3b3a1c929d6631f`. The objective hash,
+  repository policy, queue priority, acceptance criteria, worklog, and Git
+  state were re-verified. Independent read-only acceptance review, the focused
+  unit matrix, and credential-free pipeline integrations are running in
+  parallel. No provider call, secret access, public RPC, wallet, signing,
+  broadcast, external target, reservation, or paid operation is in scope.
+- **Integrated validation:** The complete focused execution-candidate,
+  artifact, consensus, reporting, model-boundary, post-judge, replay, manifest,
+  assurance, and scanner/reporting matrix passed `421` tests in `29.05s`.
+  Full pipeline integration passed `69` tests in `75.95s`. The conditional real
+  execution-origin integration remained an explicit skip (`1 skipped in
+  0.38s`) because hardened local isolation is unavailable in this runtime; it
+  is not counted as current real-engine evidence. The passing commands emitted
+  only inherited pytest cleanup warnings for stale temporary
+  `clean-anvil/toolchain` paths. No provider, network, secret, public RPC,
+  wallet, signing, broadcast, external target, reservation, or paid operation
+  occurred.
+- **Pre-complete static gate:** Release-schema synchronization passed without
+  drift; `.venv/bin/ruff format --check .` reported `358 files already
+  formatted`; `.venv/bin/ruff check .` passed; and configured strict
+  `.venv/bin/mypy` passed all `149` source files. The independent acceptance
+  review and complete pytest gate remain before ticket acceptance.
+- **Independent fail-closed finding:** A local negative assay proved that the
+  pipeline's post-judge correction was not independently enforced by serialized
+  artifact validation. An informational execution candidate with zero terminal
+  resolutions could be paired with a `HIGH/CONFIRMED` final execution finding,
+  and both replay-artifact parsing and manifest consistency accepted the
+  resealed semantics. Candidate/current-source provenance, no-model-attribution,
+  model authority, host-linked grouping, evidence cap, and report-origin checks
+  otherwise had no material blocker; the reviewer ran `84` focused tests.
+- **Obsolete full gate stopped:** The pre-fix `.venv/bin/pytest -q` run was
+  interrupted after `127 passed, 15 skipped in 171.30s` so it would not waste
+  time or be misrepresented as ticket evidence. The narrow corrective slice
+  will join final HIGH/CRITICAL execution impact back to exact candidate
+  resolutions, reject accepted post-judge status, require a non-complete run,
+  and prove resealed manifest/offline replay tampering fails closed.
+- **Cross-artifact correction:** Current report schema `1.2` now type-loads
+  reproduction evidence, binds results and falsifier decisions exactly to the
+  final report, requires every serialized HIGH/CRITICAL candidate and every
+  active HIGH/CRITICAL execution-origin finding to have a terminal resolution,
+  and validates every `REPRODUCED` resolution against exact qualifying
+  integrity evidence. A post-judge execution severity elevation cannot retain
+  `CONFIRMED`, `STRONGLY_SUPPORTED`, `HIGH_CONFIDENCE`, or `PLAUSIBLE`, and
+  cannot coexist with a `COMPLETE` report. Legacy schema `1.0` compatibility is
+  preserved without granting current execution-origin semantics.
+- **Producer correction:** Resolution serialization now considers every saved
+  candidate while the existing helper filters to HIGH/CRITICAL or explicitly
+  forced post-judge IDs. This gives an invalid-location HIGH candidate a typed
+  `INCONCLUSIVE` terminal record without admitting it into the separate
+  location-valid assurance denominator.
+- **Corrective validation:** Four expected-red cases initially failed because
+  no exception was raised: accepted post-judge status, missing terminal
+  resolution, false COMPLETE state, and forged reproduced evidence. After the
+  correction, focused artifact/integration tests passed `43`; the
+  manifest/replay/certification/release set passed `134`; full pipeline
+  integration passed `69`; affected Ruff and mypy passed; and
+  `git diff --check` passed. The integration regression deletes the forced
+  resolution, reseals artifact and manifest hashes, observes `STALE`, and proves
+  offline replay refuses the tampered evidence before execution.
+- **Fresh post-fix gate:** The complete eleven-file execution-origin unit matrix
+  passed `426` tests in `28.43s`, and the exact post-judge plus invalid-location
+  pipeline regressions passed `2` tests in `1.48s`. Release-schema
+  synchronization passed without drift; Ruff reported all `358` files already
+  formatted and passed checks; strict mypy passed all `149` source files; and
+  `git diff --check` passed. Four inherited pytest cleanup warnings concerned
+  stale temporary `clean-anvil/toolchain` paths and did not affect tests.
+- **Second adversarial finding and correction:** A fully validated schema `1.2`
+  report could splice a `HIGH/REJECTED` execution finding into the active
+  `findings` inventory, omit its resolution, and claim `COMPLETE`; the
+  manifest correctly treated the status as rejected and skipped the active
+  obligation. Current reports now require the active inventory to contain no
+  rejected statuses and the rejected inventory to contain only rejected
+  statuses. A rejected deterministic-execution finding additionally requires
+  invalid source-location evidence and a non-complete report, preventing a
+  model-driven deletion from being serialized as a valid rejection. Exact
+  positive, reverse-splice, bypass, location, completion, and legacy `1.0/1.1`
+  compatibility regressions pass.
+- **Final pre-pytest gate:** The second-fix focused unit/pipeline set passed
+  `71` tests in `1.87s`. `.venv/bin/ruff format .` left all `358` files
+  unchanged; Ruff check passed; strict mypy passed all `149` source files;
+  release-schema synchronization and `git diff --check` passed.
+- **First complete-suite result:** The sandboxed `.venv/bin/pytest -q` completed
+  with `22 failed, 3106 passed, 15 skipped, 71 errors in 344.66s`. All `71`
+  setup errors were the same sandbox-only `PermissionError` when the
+  read-only RPC bridge tests attempted to bind a numeric loopback listener.
+  The `22` assertion failures were isolated to synthetic release-artifact and
+  release-run writers that did not yet emit the now-mandatory typed candidate
+  inventory before production manifest validation. Production validation was
+  not weakened.
+- **Release-fixture correction:** Both synthetic release writers now emit and
+  inventory a typed empty candidate artifact and complete empty reproduction
+  artifact before sealing. Their two exact files passed `38` tests, and the
+  combined release-fixture, execution-origin artifact, and full pipeline
+  integration matrix passed `154` tests in `81.53s`. Only inherited cleanup
+  warnings for stale temporary `clean-anvil/toolchain` paths were emitted.
+- **Pre-retry gate:** `.venv/bin/python scripts/generate_release_schemas.py`
+  verified schema synchronization; `.venv/bin/ruff format .` left all `358`
+  files unchanged; Ruff check passed; strict mypy passed all `149` source
+  files; and `git diff --check` passed. The materially different complete-suite
+  retry grants only local loopback binding to test-owned listeners; it does not
+  authorize a provider call, public RPC, target network, secret access, wallet,
+  signing, broadcast, reservation, or paid operation.
+- **Complete local gate:** With only test-owned numeric-loopback binding
+  permitted, `.venv/bin/pytest -q` passed `3203` tests with `11` explicit
+  external-engine, compiler, isolation, replay, fork, and paid-provider
+  prerequisite skips in `411.75s`. The paid-provider integration remained
+  disabled. Two inherited immutable-toolchain cleanup warnings were non-failing.
+- **Acceptance result:** `V3-EXECORIGIN-001` is `COMPLETE`. Exact execution
+  provenance and current-source location validation originate the candidate;
+  host-owned linking and grouping preserve identity and location; model roles
+  have analysis-only authority; deterministic evidence remains the confirmation
+  cap; report formats identify execution origin; and current manifest/replay
+  validation requires coherent runtime inventories and terminal resolution.
+  The current conditional hardened Foundry/solc integration remains an explicit
+  skip because hardened isolation is unavailable, so this checkpoint is
+  classified as validated local implementation rather than current real-engine
+  evidence. No provider, secret, public RPC, wallet, signing, broadcast,
+  external target, reservation, or paid operation occurred.
+- **Implementation checkpoint:** Commit
+  `7db592e572d2065703ec78808bf35bfefbe62151` contains the validated
+  execution-origin artifact obligations, current report-inventory partition,
+  producer correction, tamper regressions, and corrected synthetic release
+  fixtures. The state transition begins `V3-TESTQUALITY-001`; release status
+  remains incomplete.
 
 ## 2026-07-30 — V3-FIXTURE-001
 
