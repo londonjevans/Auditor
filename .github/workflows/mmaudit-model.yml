@@ -1,26 +1,48 @@
-name: mmaudit trusted provider checks
+name: mmaudit model metadata refresh
 
 on:
   workflow_dispatch:
-    inputs:
-      upload_reports:
-        description: Retain any non-secret provider diagnostics
-        required: true
-        default: true
-        type: boolean
   schedule:
-    - cron: "17 3 * * 1"
+    - cron: "17 3 * * *"
 
 permissions:
   contents: read
 
 concurrency:
-  group: mmaudit-provider-${{ github.workflow }}-${{ github.ref }}
+  group: mmaudit-model-refresh-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  refresh-artifact-validation:
+    name: Provider-free refresh artifact validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install provider-free validation dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Validate refresh artifacts and deterministic diff without provider access
+        env:
+          MMAUDIT_RUN_REAL_PROVIDER_TESTS: "0"
+          MMAUDIT_SECRETS_ENV_FILE: ""
+          OPENROUTER_API_KEY: ""
+        run: >-
+          python -m pytest -q
+          tests/unit/test_model_refresh.py
+          tests/unit/test_model_refresh_cli.py
+          tests/unit/test_model_refresh_staging.py
+          tests/unit/test_model_refresh_workflow.py
+
   provider-check:
-    name: Trusted default-branch provider preflight
+    name: Trusted default-branch model metadata refresh
+    needs: [refresh-artifact-validation]
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -28,23 +50,34 @@ jobs:
     env:
       HAS_PROVIDER_KEY: ${{ secrets.OPENROUTER_API_KEY != '' }}
     steps:
+      - name: Create fresh runner-temporary refresh roots
+        run: |
+          umask 077
+          refresh_root="$(mktemp -d "$RUNNER_TEMP/mmaudit-model-refresh-root.XXXXXX")"
+          output_dir="$refresh_root/output"
+          staging_root="$(mktemp -d "$RUNNER_TEMP/mmaudit-model-refresh-staging.XXXXXX")"
+          staging_dir="$staging_root/evidence"
+          chmod 700 "$refresh_root" "$staging_root"
+          test ! -e "$output_dir"
+          test ! -e "$staging_dir"
+          printf 'REFRESH_OUTPUT_DIR=%s\n' "$output_dir" >> "$GITHUB_ENV"
+          printf 'REFRESH_STAGING_DIR=%s\n' "$staging_dir" >> "$GITHUB_ENV"
+          printf 'MMAUDIT_REFRESH_EXIT=70\n' >> "$GITHUB_ENV"
+          printf 'MMAUDIT_REFRESH_STAGE_EXIT=70\n' >> "$GITHUB_ENV"
+      - name: Record protected provider prerequisite
+        if: env.HAS_PROVIDER_KEY != 'true'
+        run: |
+          echo "The protected mmaudit-provider environment has no provider credential."
+          printf 'MMAUDIT_REFRESH_EXIT=78\n' >> "$GITHUB_ENV"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
-        if: env.HAS_PROVIDER_KEY == 'true'
         with:
           fetch-depth: 1
           persist-credentials: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        if: env.HAS_PROVIDER_KEY == 'true'
         with:
           python-version: "3.12"
           cache: pip
-      - name: Require the protected provider credential
-        if: env.HAS_PROVIDER_KEY != 'true'
-        run: |
-          echo "The protected mmaudit-provider environment has no provider credential."
-          exit 78
       - name: Install mmaudit
-        if: env.HAS_PROVIDER_KEY == 'true'
         run: python -m pip install .
       - name: Prepare explicit operator secret file
         if: env.HAS_PROVIDER_KEY == 'true'
@@ -53,47 +86,77 @@ jobs:
         run: |
           umask 077
           secret_file="$(mktemp "$RUNNER_TEMP/mmaudit-operator-secrets.XXXXXX.env")"
+          printf 'MMAUDIT_SECRETS_ENV_FILE=%s\n' "$secret_file" >> "$GITHUB_ENV"
           printf 'OPENROUTER_API_KEY=%s\n' "$OPENROUTER_API_KEY" > "$secret_file"
           chmod 600 "$secret_file"
-          printf 'MMAUDIT_SECRETS_ENV_FILE=%s\n' "$secret_file" >> "$GITHUB_ENV"
-      - name: Validate exact provider configuration
+          test -f "$secret_file"
+          test ! -L "$secret_file"
+      - name: Refresh exact provider metadata and capture its gate
         if: env.HAS_PROVIDER_KEY == 'true'
         run: |
-          test -f mmaudit.toml
-          mmaudit doctor \
-            --config mmaudit.toml \
+          set +e
+          mmaudit models refresh \
+            --candidate-registry config/models.candidates.toml \
             --secrets-env-file "$MMAUDIT_SECRETS_ENV_FILE" \
-            --repo . \
-            --output .mmaudit \
-            --allow-code-egress \
+            --output-dir "$REFRESH_OUTPUT_DIR" \
+            --soft-max-age-hours 30 \
+            --hard-max-age-hours 72 \
+            --pricing-tolerance-fraction 0.05 \
             --no-color
-          mmaudit models check \
-            --config mmaudit.toml \
-            --secrets-env-file "$MMAUDIT_SECRETS_ENV_FILE" \
-            --no-color
-      - name: Record paid-execution boundary
-        if: env.HAS_PROVIDER_KEY == 'true'
-        run: >-
-          echo "This workflow validates the protected exact-provider boundary only.
-          Paid reviews require an operator-owned persistent ledger and explicit
-          provider-test opt-in; they are not inferred from this preflight."
+          refresh_exit=$?
+          set -e
+          printf 'MMAUDIT_REFRESH_EXIT=%s\n' "$refresh_exit" >> "$GITHUB_ENV"
       - name: Remove operator secret file
-        if: env.HAS_PROVIDER_KEY == 'true' && always()
+        if: always()
         run: |
-          if [[ -n "${MMAUDIT_SECRETS_ENV_FILE:-}" && -f "$MMAUDIT_SECRETS_ENV_FILE" ]]; then
-            rm -f -- "$MMAUDIT_SECRETS_ENV_FILE"
+          secret_file="${MMAUDIT_SECRETS_ENV_FILE:-}"
+          if [[ -n "$secret_file" &&
+                "$secret_file" == "$RUNNER_TEMP"/mmaudit-operator-secrets.*.env &&
+                ( -f "$secret_file" || -L "$secret_file" ) ]]; then
+            rm -f -- "$secret_file"
           fi
-      - name: Upload non-secret provider diagnostics
-        if: >-
-          always() &&
-          env.HAS_PROVIDER_KEY == 'true' &&
-          (github.event_name != 'workflow_dispatch' || inputs.upload_reports)
+          printf 'MMAUDIT_SECRETS_ENV_FILE=\n' >> "$GITHUB_ENV"
+      - name: Stage exact non-secret refresh artifacts
+        if: always()
+        env:
+          WORKFLOW_SOURCE_COMMIT: ${{ github.sha }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set +e
+          refresh_exit="${MMAUDIT_REFRESH_EXIT:-70}"
+          python scripts/stage_model_refresh_artifacts.py \
+            --output-dir "$REFRESH_OUTPUT_DIR" \
+            --staging-dir "$REFRESH_STAGING_DIR" \
+            --candidate-registry config/models.candidates.toml \
+            --refresh-exit-status "$refresh_exit" \
+            --source-commit "$WORKFLOW_SOURCE_COMMIT" \
+            --workflow-run-id "$WORKFLOW_RUN_ID" \
+            --workflow-run-attempt "$WORKFLOW_RUN_ATTEMPT" \
+            --pricing-tolerance-fraction 0.05 \
+            --soft-max-age-hours 30 \
+            --hard-max-age-hours 72
+          stage_exit=$?
+          printf 'MMAUDIT_REFRESH_STAGE_EXIT=%s\n' "$stage_exit" >> "$GITHUB_ENV"
+          set -e
+          exit 0
+      - name: Upload exact non-secret refresh evidence
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: mmaudit-provider-diagnostics
-          path: |
-            .mmaudit/doctor.json
-            .mmaudit/model-check.json
-          include-hidden-files: true
-          if-no-files-found: warn
-          retention-days: 7
+          name: mmaudit-model-refresh-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.REFRESH_STAGING_DIR }}
+          include-hidden-files: false
+          if-no-files-found: error
+          retention-days: 14
+      - name: Propagate refresh and artifact gates
+        if: always()
+        run: |
+          refresh_exit="${MMAUDIT_REFRESH_EXIT:-70}"
+          stage_exit="${MMAUDIT_REFRESH_STAGE_EXIT:-70}"
+          if [[ "$stage_exit" -ne 0 ]]; then
+            exit "$stage_exit"
+          fi
+          if [[ "$refresh_exit" -ne 0 ]]; then
+            exit "$refresh_exit"
+          fi

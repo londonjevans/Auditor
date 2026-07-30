@@ -1,0 +1,138 @@
+{
+  "$defs": {
+    "ModelRefreshWorkflowDisposition": {
+      "enum": [
+        "COMPLETED",
+        "PRODUCTION_BLOCKED",
+        "FAILED",
+        "PREREQUISITE_MISSING"
+      ],
+      "title": "ModelRefreshWorkflowDisposition",
+      "type": "string"
+    },
+    "StagedModelRefreshArtifact": {
+      "additionalProperties": false,
+      "description": "Content and internal identity for one validated staged artifact.",
+      "properties": {
+        "artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Artifact Sha256",
+          "type": "string"
+        },
+        "byte_count": {
+          "maximum": 20000000,
+          "minimum": 1,
+          "title": "Byte Count",
+          "type": "integer"
+        },
+        "content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "filename": {
+          "enum": [
+            "model-refresh-snapshot.json",
+            "model-refresh-diff.json",
+            "model-refresh-attempt.json",
+            "model-refresh-freshness.json"
+          ],
+          "title": "Filename",
+          "type": "string"
+        }
+      },
+      "required": [
+        "filename",
+        "content_sha256",
+        "artifact_sha256",
+        "byte_count"
+      ],
+      "title": "StagedModelRefreshArtifact",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/model_refresh_workflow_status.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Commit-bound inventory for one scheduled refresh attempt.",
+  "properties": {
+    "artifacts": {
+      "items": {
+        "$ref": "#/$defs/StagedModelRefreshArtifact"
+      },
+      "title": "Artifacts",
+      "type": "array"
+    },
+    "candidate_registry_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Candidate Registry Sha256",
+      "type": "string"
+    },
+    "disposition": {
+      "$ref": "#/$defs/ModelRefreshWorkflowDisposition"
+    },
+    "hard_max_age_hours": {
+      "maximum": 2160,
+      "minimum": 2,
+      "title": "Hard Max Age Hours",
+      "type": "integer"
+    },
+    "pricing_tolerance_fraction": {
+      "title": "Pricing Tolerance Fraction",
+      "type": "string"
+    },
+    "refresh_exit_status": {
+      "maximum": 255,
+      "minimum": 0,
+      "title": "Refresh Exit Status",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "soft_max_age_hours": {
+      "maximum": 720,
+      "minimum": 1,
+      "title": "Soft Max Age Hours",
+      "type": "integer"
+    },
+    "source_commit": {
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+      "title": "Source Commit",
+      "type": "string"
+    },
+    "workflow_run_attempt": {
+      "pattern": "^[1-9][0-9]{0,19}$",
+      "title": "Workflow Run Attempt",
+      "type": "string"
+    },
+    "workflow_run_id": {
+      "pattern": "^[1-9][0-9]{0,19}$",
+      "title": "Workflow Run Id",
+      "type": "string"
+    },
+    "workflow_status_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Workflow Status Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "disposition",
+    "refresh_exit_status",
+    "source_commit",
+    "workflow_run_id",
+    "workflow_run_attempt",
+    "candidate_registry_sha256",
+    "pricing_tolerance_fraction",
+    "soft_max_age_hours",
+    "hard_max_age_hours",
+    "artifacts",
+    "workflow_status_sha256"
+  ],
+  "title": "mmaudit model refresh workflow status",
+  "type": "object"
+}

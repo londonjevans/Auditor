@@ -11,6 +11,13 @@ from pydantic import BaseModel
 from mmaudit.benchmark.engine import BenchmarkReport
 from mmaudit.models.calibration import ModelCalibrationArtifact
 from mmaudit.models.qualification import ModelQualificationArtifact
+from mmaudit.models.refresh import (
+    ModelRefreshAttempt,
+    ModelRefreshDiff,
+    ModelRefreshFreshness,
+    ModelRefreshSnapshot,
+)
+from mmaudit.models.refresh_staging import ModelRefreshWorkflowStatus
 from mmaudit.orchestration.context_manifest import ContextManifest
 from mmaudit.privacy import PrivacyRetentionConsent
 from mmaudit.release_candidate import ReleaseCandidateObservation
@@ -30,6 +37,11 @@ MODELS: dict[str, type[BaseModel]] = {
     "context_manifest.schema.json": ContextManifest,
     "model_calibration.schema.json": ModelCalibrationArtifact,
     "model_qualification.schema.json": ModelQualificationArtifact,
+    "model_refresh_attempt.schema.json": ModelRefreshAttempt,
+    "model_refresh_diff.schema.json": ModelRefreshDiff,
+    "model_refresh_freshness.schema.json": ModelRefreshFreshness,
+    "model_refresh_snapshot.schema.json": ModelRefreshSnapshot,
+    "model_refresh_workflow_status.schema.json": ModelRefreshWorkflowStatus,
     "privacy_retention_consent.schema.json": PrivacyRetentionConsent,
     "release_candidate_observation.schema.json": ReleaseCandidateObservation,
     "release_bound_gate_result.schema.json": BoundReleaseGateResult,
@@ -44,6 +56,11 @@ TITLE_OVERRIDES = {
     "benchmark_report.schema.json": "mmaudit benchmark report",
     "model_calibration.schema.json": "mmaudit model calibration artifact",
     "model_qualification.schema.json": "mmaudit model qualification artifact",
+    "model_refresh_attempt.schema.json": "mmaudit model refresh attempt",
+    "model_refresh_diff.schema.json": "mmaudit model refresh diff",
+    "model_refresh_freshness.schema.json": "mmaudit model refresh freshness",
+    "model_refresh_snapshot.schema.json": "mmaudit model refresh snapshot",
+    "model_refresh_workflow_status.schema.json": "mmaudit model refresh workflow status",
 }
 
 

@@ -1,0 +1,480 @@
+{
+  "$defs": {
+    "CatalogModelState": {
+      "additionalProperties": false,
+      "description": "One exact catalogue model and every normalized observed route.",
+      "properties": {
+        "canonical_model_slug": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Canonical Model Slug",
+          "type": "string"
+        },
+        "context_limit": {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "title": "Context Limit",
+          "type": "integer"
+        },
+        "eligible_provider_endpoints": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Eligible Provider Endpoints",
+          "type": "array"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "output_limit": {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "title": "Output Limit",
+          "type": "integer"
+        },
+        "reasoning_supported": {
+          "title": "Reasoning Supported",
+          "type": "boolean"
+        },
+        "routes": {
+          "items": {
+            "$ref": "#/$defs/ProviderRouteState"
+          },
+          "maxItems": 256,
+          "title": "Routes",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "state_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "State Sha256",
+          "type": "string"
+        },
+        "structured_output_supported": {
+          "title": "Structured Output Supported",
+          "type": "boolean"
+        },
+        "supported_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Supported Parameters",
+          "type": "array"
+        },
+        "variant_family_key": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Variant Family Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "canonical_model_slug",
+        "variant_family_key",
+        "context_limit",
+        "output_limit",
+        "supported_parameters",
+        "structured_output_supported",
+        "reasoning_supported",
+        "routes",
+        "eligible_provider_endpoints",
+        "state_sha256"
+      ],
+      "title": "CatalogModelState",
+      "type": "object"
+    },
+    "ModelDriftKind": {
+      "enum": [
+        "NEW_ELIGIBLE_MODEL",
+        "WITHDRAWN_MODEL",
+        "MODEL_IDENTITY_CHANGED",
+        "PRICING_CHANGED",
+        "CONTEXT_LIMIT_CHANGED",
+        "OUTPUT_LIMIT_CHANGED",
+        "STRUCTURED_OUTPUT_SUPPORT_CHANGED",
+        "REASONING_SUPPORT_CHANGED",
+        "ZDR_ELIGIBILITY_CHANGED",
+        "ENDPOINT_AVAILABILITY_CHANGED",
+        "ENDPOINT_IDENTITY_CHANGED",
+        "LINEAGE_REVIEW_REQUIRED"
+      ],
+      "title": "ModelDriftKind",
+      "type": "string"
+    },
+    "ModelDriftRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CatalogModelState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "before": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CatalogModelState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "change_kinds": {
+          "items": {
+            "$ref": "#/$defs/ModelDriftKind"
+          },
+          "minItems": 1,
+          "title": "Change Kinds",
+          "type": "array"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "lineage_review_required": {
+          "title": "Lineage Review Required",
+          "type": "boolean"
+        },
+        "pricing_comparison": {
+          "$ref": "#/$defs/PricingComparisonState"
+        },
+        "pricing_increase_fields": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "title": "Pricing Increase Fields",
+          "type": "array"
+        },
+        "production_blocking": {
+          "title": "Production Blocking",
+          "type": "boolean"
+        },
+        "production_selected": {
+          "title": "Production Selected",
+          "type": "boolean"
+        },
+        "record_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Record Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "change_kinds",
+        "before",
+        "after",
+        "pricing_comparison",
+        "pricing_increase_fields",
+        "production_selected",
+        "production_blocking",
+        "lineage_review_required",
+        "record_sha256"
+      ],
+      "title": "ModelDriftRecord",
+      "type": "object"
+    },
+    "ModelRefreshAttemptStatus": {
+      "enum": [
+        "UNCHANGED",
+        "CHANGED",
+        "PRODUCTION_BLOCKED",
+        "FAILED"
+      ],
+      "title": "ModelRefreshAttemptStatus",
+      "type": "string"
+    },
+    "PricingComparisonState": {
+      "enum": [
+        "EVALUATED",
+        "NOT_EVALUABLE",
+        "NOT_APPLICABLE"
+      ],
+      "title": "PricingComparisonState",
+      "type": "string"
+    },
+    "PricingObservationKind": {
+      "enum": [
+        "EXACT",
+        "HASH_ONLY"
+      ],
+      "title": "PricingObservationKind",
+      "type": "string"
+    },
+    "ProviderRouteState": {
+      "additionalProperties": false,
+      "description": "Allowlisted exact route facts needed for safety and cost drift checks.",
+      "properties": {
+        "context_limit": {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "title": "Context Limit",
+          "type": "integer"
+        },
+        "endpoint_slug": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Slug"
+        },
+        "endpoint_tag": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Tag"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "operational": {
+          "title": "Operational",
+          "type": "boolean"
+        },
+        "operational_status": {
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Operational Status",
+          "type": "string"
+        },
+        "output_limit": {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "title": "Output Limit",
+          "type": "integer"
+        },
+        "pricing": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "maxProperties": 64,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pricing"
+        },
+        "pricing_observation": {
+          "$ref": "#/$defs/PricingObservationKind"
+        },
+        "pricing_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Pricing Sha256",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "provider_name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider Name",
+          "type": "string"
+        },
+        "reasoning_supported": {
+          "title": "Reasoning Supported",
+          "type": "boolean"
+        },
+        "route_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Route Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "structured_output_supported": {
+          "title": "Structured Output Supported",
+          "type": "boolean"
+        },
+        "supported_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Supported Parameters",
+          "type": "array"
+        },
+        "zdr_eligible": {
+          "title": "Zdr Eligible",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "provider_endpoint",
+        "provider_name",
+        "operational",
+        "operational_status",
+        "zdr_eligible",
+        "context_limit",
+        "output_limit",
+        "supported_parameters",
+        "structured_output_supported",
+        "reasoning_supported",
+        "pricing_observation",
+        "pricing_sha256",
+        "route_sha256"
+      ],
+      "title": "ProviderRouteState",
+      "type": "object"
+    },
+    "RefreshBaselineKind": {
+      "enum": [
+        "PREVIOUS_SNAPSHOT",
+        "CANDIDATE_REGISTRY_HASH_ONLY"
+      ],
+      "title": "RefreshBaselineKind",
+      "type": "string"
+    },
+    "SelectedModelRoute": {
+      "additionalProperties": false,
+      "properties": {
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+          "title": "Provider Endpoint",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "provider_endpoint"
+      ],
+      "title": "SelectedModelRoute",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/model_refresh_diff.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Deterministic exact-state comparison against a frozen baseline.",
+  "properties": {
+    "baseline_kind": {
+      "$ref": "#/$defs/RefreshBaselineKind"
+    },
+    "baseline_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Baseline Sha256",
+      "type": "string"
+    },
+    "candidate_registry_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Candidate Registry Sha256",
+      "type": "string"
+    },
+    "changes": {
+      "items": {
+        "$ref": "#/$defs/ModelDriftRecord"
+      },
+      "title": "Changes",
+      "type": "array"
+    },
+    "compared_at": {
+      "format": "date-time",
+      "title": "Compared At",
+      "type": "string"
+    },
+    "current_snapshot_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Current Snapshot Sha256",
+      "type": "string"
+    },
+    "diff_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Diff Sha256",
+      "type": "string"
+    },
+    "pricing_tolerance_fraction": {
+      "title": "Pricing Tolerance Fraction",
+      "type": "string"
+    },
+    "production_block_reasons": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Production Block Reasons",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "selected_routes": {
+      "items": {
+        "$ref": "#/$defs/SelectedModelRoute"
+      },
+      "title": "Selected Routes",
+      "type": "array"
+    },
+    "semantic_unchanged": {
+      "title": "Semantic Unchanged",
+      "type": "boolean"
+    },
+    "status": {
+      "$ref": "#/$defs/ModelRefreshAttemptStatus"
+    }
+  },
+  "required": [
+    "compared_at",
+    "baseline_kind",
+    "baseline_sha256",
+    "current_snapshot_sha256",
+    "candidate_registry_sha256",
+    "pricing_tolerance_fraction",
+    "selected_routes",
+    "changes",
+    "semantic_unchanged",
+    "status",
+    "production_block_reasons",
+    "diff_sha256"
+  ],
+  "title": "mmaudit model refresh diff",
+  "type": "object"
+}

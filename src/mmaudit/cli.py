@@ -62,6 +62,8 @@ from mmaudit.config import (
     AuditConfig,
     AuditConfigOverrides,
     ConfigError,
+    ExecutionConfig,
+    PrivacyConfig,
     audit_config_overrides,
     configured_model_ids,
     load_config,
@@ -95,7 +97,14 @@ from mmaudit.models.endpoint_snapshots import (
 )
 from mmaudit.models.generation_evidence import TrustedGenerationVerification
 from mmaudit.models.identifiers import is_exact_openrouter_model_id
-from mmaudit.models.openrouter import OpenRouterClient, OpenRouterError
+from mmaudit.models.openrouter import (
+    OpenRouterAuthenticationError,
+    OpenRouterClient,
+    OpenRouterError,
+    OpenRouterProviderUnavailableError,
+    OpenRouterRateLimitError,
+    OpenRouterTimeoutError,
+)
 from mmaudit.models.output_modes import supported_output_modes
 from mmaudit.models.qualification import (
     CandidateRegistry,
@@ -115,6 +124,19 @@ from mmaudit.models.qualification_workflow import (
     seal_qualification_release_bindings,
     validate_qualification_portfolio_readiness,
     write_qualification_workflow_bundle,
+)
+from mmaudit.models.refresh import (
+    ModelRefreshFailureCode,
+    ModelRefreshValidationError,
+    SelectedModelRoute,
+    build_model_refresh_snapshot,
+    diff_model_refresh,
+    evaluate_model_refresh_freshness,
+    load_model_refresh_snapshot,
+    reject_model_refresh_secret_reflection,
+    seal_model_refresh_attempt,
+    write_model_refresh_failure,
+    write_model_refresh_success,
 )
 from mmaudit.models.registry import ModelRegistry, extract_zdr_model_ids
 from mmaudit.models.release_attestation import (
@@ -776,6 +798,224 @@ def models_discover(
             f"{output_dir.resolve()}; run {provenance.run_id}; manifest "
             f"{manifest.manifest_sha256}; no model completion was requested.[/green]"
         )
+
+    _run_async_cli(execute)
+
+
+@models_app.command("refresh")
+def models_refresh(
+    candidate_registry: Annotated[
+        Path,
+        typer.Option(
+            "--candidate-registry",
+            help="Frozen candidate registry used only as the comparison baseline.",
+        ),
+    ] = Path("config/models.candidates.toml"),
+    previous_snapshot: Annotated[
+        Path | None,
+        typer.Option(
+            "--previous-snapshot",
+            help="Optional prior canonical refresh snapshot with exact historical pricing.",
+        ),
+    ] = None,
+    selected_route: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--selected-route",
+            help="Current production MODEL_ID=PROVIDER_ENDPOINT route; repeat as needed.",
+        ),
+    ] = None,
+    secrets_env_file: SecretsEnvFileOption = None,
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            help="Fresh private directory for exact refresh evidence.",
+        ),
+    ] = Path(".mmaudit/private/model-refresh"),
+    soft_max_age_hours: Annotated[
+        int,
+        typer.Option("--soft-max-age-hours", min=1, max=24 * 30),
+    ] = 30,
+    hard_max_age_hours: Annotated[
+        int,
+        typer.Option("--hard-max-age-hours", min=2, max=24 * 90),
+    ] = 72,
+    pricing_tolerance_fraction: Annotated[
+        str,
+        typer.Option(
+            "--pricing-tolerance-fraction",
+            help="Canonical Decimal fraction; exact increases beyond it block selected routes.",
+        ),
+    ] = "0.05",
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Refresh authenticated metadata without completions, qualification, or promotion."""
+
+    local_console = Console(no_color=no_color)
+
+    async def execute() -> None:
+        registry = load_candidate_registry(candidate_registry)
+        previous = (
+            load_model_refresh_snapshot(previous_snapshot)
+            if previous_snapshot is not None
+            else None
+        )
+        selected = _parse_model_refresh_selected_routes(selected_route or [])
+        approved_routes = {
+            (candidate.exact_model_id, candidate.approved_provider_endpoint)
+            for candidate in registry.candidates
+        }
+        if any(
+            (route.exact_model_id, route.provider_endpoint) not in approved_routes
+            for route in selected
+        ):
+            raise ConfigError(
+                "models refresh selected route is absent from the frozen candidate registry"
+            )
+        if OpenRouterClient is not _TRUSTED_OPENROUTER_CLIENT_TYPE:
+            raise ConfigError("models refresh requires the trusted concrete OpenRouter client")
+        _preflight_model_discovery_output_dir(output_dir)
+        attempted_at = datetime.now(UTC).replace(microsecond=0)
+        execution = ExecutionConfig(max_model_retries=1)
+        privacy = PrivacyConfig()
+        usage = UsageLedger()
+        budget = BudgetManager(
+            total_usd=execution.budget_usd,
+            max_output_tokens=execution.max_output_tokens_per_request,
+            conservative_usd_per_million_tokens=(execution.conservative_usd_per_million_tokens),
+            max_requests_per_agent=execution.max_requests_per_agent,
+        )
+        client: OpenRouterClient | None = None
+        try:
+            with load_operator_secrets(
+                secrets_env_file,
+                required=True,
+            ) as operator_secrets:
+                if not operator_secrets.openrouter_api_key_present:
+                    raise OperatorSecretError(
+                        "OPENROUTER_API_KEY is missing from the operator secret file"
+                    )
+                client = OpenRouterClient(
+                    api_key=operator_secrets.openrouter_api_key,
+                    execution=execution,
+                    privacy=privacy,
+                    budget=budget,
+                    usage=usage,
+                )
+                if type(client) is not _TRUSTED_OPENROUTER_CLIENT_TYPE:
+                    raise ConfigError(
+                        "models refresh requires the trusted concrete OpenRouter client"
+                    )
+                await client.validate_authentication()
+                catalog_payload = await client.get_certification_model_metadata()
+                zdr_payload = await client.get_zdr_endpoint_metadata()
+                endpoint_payloads = {
+                    candidate.exact_model_id: (
+                        await client.get_refresh_model_endpoint_metadata(candidate.exact_model_id)
+                    )
+                    for candidate in registry.candidates
+                }
+                reject_model_refresh_secret_reflection(
+                    catalog_payload,
+                    zdr_payload,
+                    endpoint_payloads,
+                    forbidden_values=(operator_secrets.openrouter_api_key,),
+                )
+        except (OperatorSecretError, OpenRouterError, ModelRefreshValidationError) as exc:
+            failure_code = _model_refresh_failure_code(exc)
+            failure = seal_model_refresh_attempt(
+                attempted_at=attempted_at,
+                candidate_registry_sha256=registry.registry_sha256,
+                failure_code=failure_code,
+            )
+            try:
+                write_model_refresh_failure(output_dir, attempt=failure)
+            except (OSError, ValueError):
+                local_console.print(
+                    "[red]mmaudit failed safely: refresh failure evidence "
+                    "could not be persisted.[/red]"
+                )
+                raise typer.Exit(ExitCode.CONFIGURATION) from None
+            local_console.print(
+                f"[red]Model metadata refresh failed safely: {failure_code.value}.[/red]"
+            )
+            raise typer.Exit(ExitCode.MODEL_FAILURE) from None
+        finally:
+            if client is not None:
+                await client.close()
+
+        if usage.records:
+            raise ConfigError("metadata refresh unexpectedly created model usage records")
+        retrieved_at = datetime.now(UTC).replace(microsecond=0)
+        try:
+            snapshot = build_model_refresh_snapshot(
+                retrieved_at=retrieved_at,
+                catalog_payload=catalog_payload,
+                zdr_payload=zdr_payload,
+                candidate_registry=registry,
+                candidate_endpoint_payloads=endpoint_payloads,
+                authenticated_metadata=True,
+            )
+            diff = diff_model_refresh(
+                current=snapshot,
+                previous=previous,
+                candidate_registry=registry,
+                pricing_tolerance_fraction=pricing_tolerance_fraction,
+                compared_at=retrieved_at,
+                selected_routes=selected,
+            )
+            attempt = seal_model_refresh_attempt(
+                attempted_at=attempted_at,
+                candidate_registry_sha256=registry.registry_sha256,
+                snapshot=snapshot,
+                diff=diff,
+            )
+            freshness = evaluate_model_refresh_freshness(
+                observed_at=retrieved_at,
+                snapshot=snapshot,
+                soft_max_age_hours=soft_max_age_hours,
+                hard_max_age_hours=hard_max_age_hours,
+                production_selection_present=bool(selected),
+            )
+        except ValueError:
+            failure = seal_model_refresh_attempt(
+                attempted_at=attempted_at,
+                candidate_registry_sha256=registry.registry_sha256,
+                failure_code=ModelRefreshFailureCode.MALFORMED_METADATA,
+            )
+            try:
+                write_model_refresh_failure(output_dir, attempt=failure)
+            except (OSError, ValueError):
+                local_console.print(
+                    "[red]mmaudit failed safely: malformed-metadata evidence "
+                    "could not be persisted.[/red]"
+                )
+                raise typer.Exit(ExitCode.CONFIGURATION) from None
+            local_console.print(
+                "[red]Model metadata refresh failed safely: MALFORMED_METADATA.[/red]"
+            )
+            raise typer.Exit(ExitCode.MODEL_FAILURE) from None
+        try:
+            write_model_refresh_success(
+                output_dir,
+                snapshot=snapshot,
+                diff=diff,
+                attempt=attempt,
+                freshness=freshness,
+            )
+        except (OSError, ValueError):
+            local_console.print(
+                "[red]mmaudit failed safely: refresh success evidence could not be persisted.[/red]"
+            )
+            raise typer.Exit(ExitCode.CONFIGURATION) from None
+        local_console.print(
+            f"[green]Model metadata refresh {attempt.status.value}; "
+            f"{len(snapshot.models)} exact catalogue models, "
+            f"{len(diff.changes)} drift records; no completion was requested.[/green]"
+        )
+        if attempt.status.value == "PRODUCTION_BLOCKED":
+            raise typer.Exit(ExitCode.INCOMPLETE)
 
     _run_async_cli(execute)
 
@@ -3213,6 +3453,59 @@ def _parse_model_discovery_candidates(values: list[str]) -> tuple[tuple[str, str
     if len({model_id for model_id, _endpoint in parsed}) != len(parsed):
         raise ConfigError("models discover candidate model IDs must be unique")
     return tuple(sorted(parsed))
+
+
+def _parse_model_refresh_selected_routes(
+    values: list[str],
+) -> tuple[SelectedModelRoute, ...]:
+    """Parse optional production routes before secret or provider access."""
+
+    if len(values) > 128:
+        raise ConfigError("models refresh accepts at most 128 selected routes")
+    parsed: list[SelectedModelRoute] = []
+    endpoint_pattern = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}\Z")
+    for value in values:
+        if value != value.strip() or value.count("=") != 1:
+            raise ConfigError(
+                "models refresh routes must use canonical MODEL_ID=PROVIDER_ENDPOINT form"
+            )
+        model_id, provider_endpoint = value.split("=", 1)
+        if (
+            not is_exact_openrouter_model_id(model_id)
+            or endpoint_pattern.fullmatch(provider_endpoint) is None
+        ):
+            raise ConfigError("models refresh requires exact non-alias model and endpoint IDs")
+        parsed.append(
+            SelectedModelRoute(
+                exact_model_id=model_id,
+                provider_endpoint=provider_endpoint,
+            )
+        )
+    ordered = tuple(
+        sorted(
+            parsed,
+            key=lambda route: (route.exact_model_id, route.provider_endpoint),
+        )
+    )
+    if len(ordered) != len({(route.exact_model_id, route.provider_endpoint) for route in ordered}):
+        raise ConfigError("models refresh selected routes must be unique")
+    return ordered
+
+
+def _model_refresh_failure_code(
+    error: Exception,
+) -> ModelRefreshFailureCode:
+    if isinstance(error, OperatorSecretError):
+        return ModelRefreshFailureCode.SECRET_PREREQUISITE
+    if isinstance(error, OpenRouterAuthenticationError):
+        return ModelRefreshFailureCode.AUTHENTICATION
+    if isinstance(error, OpenRouterTimeoutError):
+        return ModelRefreshFailureCode.NETWORK_TIMEOUT
+    if isinstance(error, OpenRouterRateLimitError):
+        return ModelRefreshFailureCode.RATE_LIMIT
+    if isinstance(error, OpenRouterProviderUnavailableError):
+        return ModelRefreshFailureCode.PROVIDER_UNAVAILABLE
+    return ModelRefreshFailureCode.MALFORMED_METADATA
 
 
 def _require_real_qualification_portfolio(

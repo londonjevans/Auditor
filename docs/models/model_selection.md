@@ -92,6 +92,43 @@ request-level blinded qualification evidence, not a private holdout or a
 superiority benchmark. Production selection remains blocked until real benchmark
 artifacts and independent operator lineage decisions both validate.
 
+## Daily catalogue refresh evidence
+
+`mmaudit models refresh` performs an authenticated, metadata-only observation of the
+complete model catalogue, the complete ZDR endpoint listing, and the exact endpoint
+response for every frozen candidate. It issues no completion and creates no
+model-usage record. The command writes a fresh mode-`0700` directory containing
+canonical mode-`0600` snapshot, diff, terminal-attempt, and freshness artifacts. A
+provider or parsing failure instead writes only a typed failed-attempt artifact and
+cannot be represented as `UNCHANGED`.
+
+The deterministic diff records exact before/after states for eligibility, withdrawal,
+pricing, context/output limits, structured output, reasoning support, ZDR status, and
+endpoint availability. The exact candidate endpoint response is authoritative for
+withdrawal; an older ZDR listing cannot keep a removed route alive. Selected routes
+must match the frozen candidate registry, and loss of status, required parameters,
+provider identity, ZDR, or exact endpoint availability produces a blocking result.
+When the frozen registry contains only a pricing hash, a different first observation
+is `NOT_EVALUABLE` and blocks a selected route rather than inventing historical
+prices. A prior exact price is usable for tolerance comparison only when its hash
+matches the frozen candidate pricing hash.
+
+The daily protected-branch workflow stages evidence only after a provider-free
+validator re-parses canonical JSON, checks self-hashes and cross-artifact bindings,
+enforces the exact status-dependent inventory, and reconstructs private upload files.
+Exit `0` accepts only `UNCHANGED` or `CHANGED`; exit `6` accepts only
+`PRODUCTION_BLOCKED`; exit `4` accepts only a typed `FAILED` attempt; and exit `78`
+records a missing protected prerequisite without claiming provider execution. The
+workflow-status artifact binds staged content hashes, the candidate-registry hash,
+source commit, and workflow identity.
+
+These artifacts remain structural discovery evidence, not provider-signed authority.
+They cannot qualify, promote, or assign a lineage to a model. The current scheduled
+bootstrap compares against the frozen candidate set and does not yet retrieve and
+validate a prior workflow snapshot, bind an existing production selection, execute
+automatic benchmarking, or enforce hard expiry inside the audit pipeline. Those
+limitations keep `V3-MODELREFRESH-001` partial and production selection blocked.
+
 ## Calibration and role-scoped policy
 
 The frozen policy above is historical schema v1 evidence and remains intentionally

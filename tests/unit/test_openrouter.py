@@ -5470,6 +5470,30 @@ async def test_models_metadata_shape(config_factory) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content",
+    [
+        b'{"data":[],"data":[]}',
+        b'{"data":[{"id":"alpha/atlas-secure","score":NaN}]}',
+        b'{"data":[{"id":"alpha/atlas-secure","score":1e999}]}',
+    ],
+)
+async def test_metadata_json_rejects_duplicate_keys_and_nonfinite_values(
+    config_factory,
+    content: bytes,
+) -> None:
+    client, http_client, _usage = _client(
+        config_factory(),
+        lambda _request: httpx.Response(200, content=content),
+    )
+    try:
+        with pytest.raises(OpenRouterModelError, match="valid object"):
+            await client.list_models()
+    finally:
+        await http_client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_certification_catalog_does_not_filter_privacy_or_output_mode(
     config_factory,
 ) -> None:
@@ -5487,6 +5511,51 @@ async def test_certification_catalog_does_not_filter_privacy_or_output_mode(
 
     assert observed[0].url.path == "/api/v1/models"
     assert dict(observed[0].url.params) == {}
+
+
+@pytest.mark.asyncio
+async def test_refresh_zdr_metadata_preserves_authenticated_empty_catalogue(
+    config_factory,
+) -> None:
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(200, json={"data": []})
+
+    client, http_client, usage = _client(config_factory(), handler)
+    try:
+        assert await client.get_zdr_endpoint_metadata() == {"data": []}
+        with pytest.raises(OpenRouterPrivacyError, match="invalid ZDR"):
+            await client.list_zdr_endpoints()
+    finally:
+        await http_client.aclose()
+
+    assert [request.url.path for request in observed] == [
+        "/api/v1/endpoints/zdr",
+        "/api/v1/endpoints/zdr",
+    ]
+    assert usage.records == []
+
+
+@pytest.mark.asyncio
+async def test_refresh_exact_endpoint_metadata_preserves_withdrawn_empty_set(
+    config_factory,
+) -> None:
+    model_id = "alpha/atlas-secure"
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": {"id": model_id, "endpoints": []}})
+
+    client, http_client, usage = _client(config_factory(), handler)
+    try:
+        response = await client.get_refresh_model_endpoint_metadata(model_id)
+        assert response["data"]["endpoints"] == []
+        with pytest.raises(OpenRouterModelError, match="invalid endpoint"):
+            await client.get_model_endpoint_metadata(model_id)
+    finally:
+        await http_client.aclose()
+    assert usage.records == []
 
 
 @pytest.mark.asyncio

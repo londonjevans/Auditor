@@ -1,0 +1,102 @@
+{
+  "$defs": {
+    "ModelRefreshAttemptStatus": {
+      "enum": [
+        "UNCHANGED",
+        "CHANGED",
+        "PRODUCTION_BLOCKED",
+        "FAILED"
+      ],
+      "title": "ModelRefreshAttemptStatus",
+      "type": "string"
+    },
+    "ModelRefreshFailureCode": {
+      "enum": [
+        "AUTHENTICATION",
+        "NETWORK_TIMEOUT",
+        "RATE_LIMIT",
+        "PROVIDER_UNAVAILABLE",
+        "MALFORMED_METADATA",
+        "LOCAL_PERSISTENCE",
+        "SECRET_PREREQUISITE"
+      ],
+      "title": "ModelRefreshFailureCode",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/model_refresh_attempt.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Terminal refresh result; failure can never masquerade as unchanged.",
+  "properties": {
+    "attempt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Attempt Sha256",
+      "type": "string"
+    },
+    "attempted_at": {
+      "format": "date-time",
+      "title": "Attempted At",
+      "type": "string"
+    },
+    "candidate_registry_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Candidate Registry Sha256",
+      "type": "string"
+    },
+    "diff_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Diff Sha256"
+    },
+    "failure_code": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ModelRefreshFailureCode"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "snapshot_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Snapshot Sha256"
+    },
+    "status": {
+      "$ref": "#/$defs/ModelRefreshAttemptStatus"
+    }
+  },
+  "required": [
+    "attempted_at",
+    "candidate_registry_sha256",
+    "status",
+    "failure_code",
+    "attempt_sha256"
+  ],
+  "title": "mmaudit model refresh attempt",
+  "type": "object"
+}

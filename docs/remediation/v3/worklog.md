@@ -5,12 +5,12 @@ The objective source has SHA-256
 Do not record credentials, raw private prompts, or raw provider completions here.
 
 AUTORUN_STATUS: ACTIVE
-CURRENT_MILESTONE: Calibration implementation checkpoint and registry-refresh transition
-CURRENT_TICKET: V3-CALIBRATE-001 (PARTIAL; checkpoint finalization)
+CURRENT_MILESTONE: Current model catalogue discovery and drift detection
+CURRENT_TICKET: V3-MODELREFRESH-001 (IN_PROGRESS; discovery/diff portion)
 LAST_COMPLETED_TICKET: V3-EXECORIGIN-001
-NEXT_ACTION: Review the complete diff and changed-file secret/artifact scan, checkpoint and SSH-push this explicitly partial slice, then begin the discovery/diff portion of V3-MODELREFRESH-001.
-LAST_COMMAND: `.venv/bin/pytest -q` (numeric local-loopback enabled; external network and paid-provider execution disabled)
-LAST_RESULT: PASS — `3464 passed, 11 skipped in 781.73s`; two inherited pytest temporary-tree cleanup warnings were non-failing. All skips name explicit unavailable external prerequisites.
+NEXT_ACTION: Audit and checkpoint the corrected source inventory; then execute one explicitly opted-in authenticated metadata-only refresh against that exact commit.
+LAST_COMMAND: `.venv/bin/pytest -q`
+LAST_RESULT: PASS — `3534 passed, 11 skipped in 493.12s`. Every skip names an explicit external-integration prerequisite. Two non-fatal post-run cleanup warnings concerned already-restricted temporary `clean-anvil/toolchain` paths.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,101 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 937d97e1d337305ac56cd792fe0d6c2b8bd50674
+LAST_CHECKPOINT_COMMIT: ad27e950b1508f448bb9d0667f64acfe494bd305
+
+## 2026-07-30 — V3-MODELREFRESH-001
+
+- **Status:** `IN_PROGRESS` (discovery/diff portion only).
+- **Defensive objective:** Refresh and compare time-bound provider catalogue evidence without
+  allowing discovery to qualify, promote, or silently substitute a model.
+- **Starting boundary:** No paid benchmark, provider completion, lineage inference, or production
+  promotion is authorized by this slice. Synthetic local snapshots and fake transports will
+  establish deterministic classification, stale/failure distinction, idempotence, and fail-closed
+  selection gates before any explicitly opted-in metadata refresh.
+- **Architecture audit:** Existing exact-route discovery and runtime request preflight already
+  reject endpoint, pricing, capability, ZDR, and model-metadata drift, but discovery only records
+  successful operator-named routes. It cannot represent catalogue withdrawal or endpoint loss,
+  and production selection has no independent current-catalogue freshness input. The scheduled
+  workflow is weekly, references an absent default config, and emits no refresh artifact.
+  Persisted self-hashes alone will not be treated as live provider authority.
+- **Static policy slice:** Added exact canonical Decimal pricing tolerance, soft/hard snapshot age,
+  and disabled-by-default daily/per-model automatic benchmark ceilings beneath
+  `models.catalog_refresh`. Dynamic observations remain outside configuration and candidate
+  registry hashes. Two focused configuration regressions and affected Ruff passed.
+- **Qualification freshness correction:** A fresh benchmark campaign can no longer qualify a
+  candidate whose bound discovery predates the policy's maximum evidence age. The synthetic
+  negative regression and affected Ruff check pass.
+- **Normalized discovery evidence:** Added strict self-hashed snapshot, diff, terminal-attempt,
+  freshness, and workflow-status models plus five published JSON Schemas. Snapshot normalization
+  covers the full exact-ID catalogue, ZDR routes, and authoritative exact candidate endpoint
+  responses. Every required drift class retains exact before/after state; aliases and
+  `-fast`/`:batch` variants can trigger lineage review but never acquire lineage authority.
+- **Fail-closed route and price handling:** Empty exact endpoint results override stale ZDR
+  entries. Withdrawn, non-operational, provider-changed, required-parameter-deficient,
+  canonical-identity-changed, non-ZDR, and unobserved selected routes block with exact top-level
+  reasons. Selected routes must match the frozen registry before secret access. A hash-only price
+  baseline never fabricates values; exact tolerance comparison is credited only when prior exact
+  pricing hashes to the frozen candidate value. A repeated observation can be semantically
+  unchanged while remaining production-blocked when its live price no longer matches the frozen
+  qualified binding.
+- **Typed provider boundary:** Added `mmaudit models refresh`, using only authenticated metadata
+  GETs and no completion or usage record. Duplicate-key, non-finite, exponent-overflow, malformed
+  nested metadata, authentication, timeout, rate-limit, provider-unavailable, and secret
+  prerequisite failures remain typed. Operator-credential reflection anywhere in metadata is
+  rejected before raw payload hashing or persistence. A canary regression confirms no reflected
+  value reaches output or diagnostics.
+- **Strict scheduled staging:** The daily protected-default-branch workflow now runs provider-free
+  regressions before the protected job, removes its explicit mode-`0600` secret before staging,
+  and uploads only a reconstructed exact inventory. The staging validator checks private
+  unshared files, canonical JSON, self/cross-hashes, registry/baseline/selected-route joins,
+  source/workflow identity, exact `0.05` pricing and `30`/`72` freshness controls, and a current
+  observation. Exit `0`, `4`, `6`, and `78` have disjoint exact contracts. A failed final
+  inventory is atomically quarantined away from the upload path.
+- **Adversarial corrections:** Independent read-only reviews identified and regressions now cover
+  stale-ZDR endpoint resurrection, skipped selected-route checks, omitted withdrawn-model
+  blockers, canonical identity drift, nested Pydantic failures without a receipt, exponent
+  overflow, credential reflection, policy-mismatched staging, hard-expired staging, and
+  injected-file upload residue. A final independent review also found four provider-shape and
+  identity gaps before checkpointing: valid trailing-zero prices and numeric non-billable
+  discount metadata were rejected; legitimate routed aliases in the full ZDR inventory failed
+  the entire refresh; secondary endpoint identity drift was neither classified nor blocking; and
+  a mismatched ZDR row could confer eligibility by sharing only one endpoint label. Refresh now
+  reuses the production pricing and tag/slug/provider-name normalizers, ignores only syntactically
+  valid routed ZDR aliases while retaining the raw inventory hash, validates optional item model
+  bindings, compares exact prior tag/slug identities, and grants ZDR only after the authoritative
+  exact endpoint and ZDR counterpart agree across normalized identity, provider, status,
+  capabilities, limits, and billable pricing.
+- **Validation so far:** The joined refresh/config/qualification/schema slice passed `95` tests in
+  `2.53s`; the later adversarially hardened refresh/schema slice passed `62` tests in `1.26s`.
+  A workflow validation attempt passed `16` tests but then found PyYAML absent and used a flawed
+  regex shell extractor; both validation commands failed without changing code. The corrected
+  Ruby YAML traversal parsed the workflow and validated all `10` `run` scripts with `bash -n`.
+  Ruff and strict mypy pass on the affected implementation. The sandboxed complete pytest run
+  reached `3454 passed, 15 skipped, 71 errors in 660.72s`; every error was a setup-time
+  `PermissionError [Errno 1]` from the sandbox denying the local read-only RPC bridge permission
+  to bind `127.0.0.1`. The bridge file was therefore rerun with only local-loopback permission:
+  `.venv/bin/pytest -x -vv tests/unit/test_read_only_rpc_bridge.py` passed all `76` tests in
+  `40.68s`. One failure seen in an earlier interrupted attempt did not reproduce. The complete
+  run under the same local-only permission then passed `3529` tests with `11` explicit
+  external-integration skips in `516.92s`. Pytest emitted two non-fatal cleanup warnings for
+  already-restricted temporary `clean-anvil/toolchain` paths; no test or gate failed.
+  After the final independent review corrections, the complete affected refresh, endpoint,
+  OpenRouter, configuration, qualification, workflow, and schema slice passed `422` tests in
+  `39.60s`; generated release schemas matched. Repository-wide Ruff formatting/checking, strict
+  mypy over `154` source files, generated-schema verification, and `git diff --check` then passed.
+  The corrected complete suite passed `3534` tests with `11` explicit external-integration skips
+  in `493.12s`.
+- **External effects so far:** No provider request, completion, model spend, target access, public
+  RPC, wallet, signing, or broadcast occurred in the implementation/test slice. `.env` was not
+  read. The cumulative OpenRouter ledger remains `0.0033415625` USD spent with zero reservation.
+- **Remaining partial work:** The scheduled workflow does not yet retrieve a durable prior
+  snapshot or bind a real production selection; the audit pipeline does not consume the refresh
+  freshness artifact. Automatic benchmark reservation/execution, refreshed-price runtime
+  authority, lineage re-evaluation, and production promotion remain gated by calibration,
+  qualification, lineage review, and the cumulative ledger.
+- **Exact next safe action:** Review and checkpoint this fully validated source slice, then perform
+  one explicit authenticated metadata-only refresh into a disposable private directory without
+  issuing a completion.
 
 ## 2026-07-30 — V3-CALIBRATE-001
 

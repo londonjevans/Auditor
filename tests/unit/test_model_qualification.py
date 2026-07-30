@@ -131,6 +131,7 @@ def _discovery_run(
     *,
     model_id: str,
     index: int,
+    retrieved_at: datetime = _NOW,
 ) -> tuple[OpenRouterModelDiscoveryRunManifest, OpenRouterModelDiscoveryEvidence]:
     endpoint_id = f"provider-{index}/exact"
     provider_name = f"Approved Provider {index}"
@@ -207,7 +208,7 @@ def _discovery_run(
     provenance_payload = {
         "schema_version": "1.0",
         "run_id": f"{index + 1:032x}",
-        "retrieved_at": _NOW.isoformat().replace("+00:00", "Z"),
+        "retrieved_at": retrieved_at.isoformat().replace("+00:00", "Z"),
         "execution_evidence": "real",
         "authenticated_metadata": True,
         "source_api_identity": "https://openrouter.ai/api/v1",

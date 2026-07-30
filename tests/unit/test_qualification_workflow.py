@@ -79,10 +79,12 @@ ROOT_LINEAGE = "sha256:" + ("a" * 64)
 def _candidate_inputs(
     *,
     lineage_status: LineageReviewStatus = LineageReviewStatus.APPROVED,
+    discovery_at: datetime = NOW,
 ):
     manifest, evidence = qualification_fixtures._discovery_run(
         model_id=MODEL_ID,
         index=0,
+        retrieved_at=discovery_at,
     )
     review_arguments = {
         "status": lineage_status,
@@ -662,6 +664,40 @@ async def test_stale_campaign_cannot_be_reissued_with_refreshed_times() -> None:
         _run(
             report=report,
             evaluated_at=NOW + timedelta(hours=2),
+        )
+
+
+@pytest.mark.asyncio
+async def test_stale_candidate_discovery_cannot_receive_fresh_qualification() -> None:
+    manifest, evidence, registry = _candidate_inputs(discovery_at=NOW - timedelta(days=8))
+    report = _as_real_report(
+        await _mock_report(),
+        candidate=registry.candidates[0],
+    )
+    portfolio, campaign_verification = _portfolio_evidence(
+        registry=registry,
+        report=report,
+    )
+    release_bindings = _release_bindings(report)
+
+    with pytest.raises(ValueError, match="candidate discovery exceeds"):
+        run_qualification_workflow(
+            candidate_registry=registry,
+            discovery_run_manifest=manifest,
+            discovery_evidence=evidence,
+            policy=_policy(),
+            benchmark_suite=load_model_benchmark_corpus(CORPUS_PATH),
+            benchmark_portfolio=portfolio,
+            benchmark_reports=(report,),
+            release_bindings=release_bindings,
+            trusted_campaign_verification=campaign_verification,
+            trusted_generation_verification=None,
+            trusted_release_observation=synthetic_release_observation(
+                release_bindings,
+                observed_at=NOW + timedelta(hours=1),
+            ),
+            evaluated_at=NOW + timedelta(hours=1),
+            qualification_expires_at=NOW + timedelta(days=6),
         )
 
 

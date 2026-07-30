@@ -1,0 +1,336 @@
+{
+  "$defs": {
+    "CatalogModelState": {
+      "additionalProperties": false,
+      "description": "One exact catalogue model and every normalized observed route.",
+      "properties": {
+        "canonical_model_slug": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Canonical Model Slug",
+          "type": "string"
+        },
+        "context_limit": {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "title": "Context Limit",
+          "type": "integer"
+        },
+        "eligible_provider_endpoints": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Eligible Provider Endpoints",
+          "type": "array"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "output_limit": {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "title": "Output Limit",
+          "type": "integer"
+        },
+        "reasoning_supported": {
+          "title": "Reasoning Supported",
+          "type": "boolean"
+        },
+        "routes": {
+          "items": {
+            "$ref": "#/$defs/ProviderRouteState"
+          },
+          "maxItems": 256,
+          "title": "Routes",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "state_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "State Sha256",
+          "type": "string"
+        },
+        "structured_output_supported": {
+          "title": "Structured Output Supported",
+          "type": "boolean"
+        },
+        "supported_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Supported Parameters",
+          "type": "array"
+        },
+        "variant_family_key": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Variant Family Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "canonical_model_slug",
+        "variant_family_key",
+        "context_limit",
+        "output_limit",
+        "supported_parameters",
+        "structured_output_supported",
+        "reasoning_supported",
+        "routes",
+        "eligible_provider_endpoints",
+        "state_sha256"
+      ],
+      "title": "CatalogModelState",
+      "type": "object"
+    },
+    "PricingObservationKind": {
+      "enum": [
+        "EXACT",
+        "HASH_ONLY"
+      ],
+      "title": "PricingObservationKind",
+      "type": "string"
+    },
+    "ProviderRouteState": {
+      "additionalProperties": false,
+      "description": "Allowlisted exact route facts needed for safety and cost drift checks.",
+      "properties": {
+        "context_limit": {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "title": "Context Limit",
+          "type": "integer"
+        },
+        "endpoint_slug": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Slug"
+        },
+        "endpoint_tag": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Tag"
+        },
+        "exact_model_id": {
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._:-]{0,255}$",
+          "title": "Exact Model Id",
+          "type": "string"
+        },
+        "operational": {
+          "title": "Operational",
+          "type": "boolean"
+        },
+        "operational_status": {
+          "maxLength": 32,
+          "minLength": 1,
+          "title": "Operational Status",
+          "type": "string"
+        },
+        "output_limit": {
+          "maximum": 2147483647,
+          "minimum": 1,
+          "title": "Output Limit",
+          "type": "integer"
+        },
+        "pricing": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "maxProperties": 64,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pricing"
+        },
+        "pricing_observation": {
+          "$ref": "#/$defs/PricingObservationKind"
+        },
+        "pricing_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Pricing Sha256",
+          "type": "string"
+        },
+        "provider_endpoint": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$",
+          "title": "Provider Endpoint",
+          "type": "string"
+        },
+        "provider_name": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider Name",
+          "type": "string"
+        },
+        "reasoning_supported": {
+          "title": "Reasoning Supported",
+          "type": "boolean"
+        },
+        "route_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Route Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "structured_output_supported": {
+          "title": "Structured Output Supported",
+          "type": "boolean"
+        },
+        "supported_parameters": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 256,
+          "title": "Supported Parameters",
+          "type": "array"
+        },
+        "zdr_eligible": {
+          "title": "Zdr Eligible",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "exact_model_id",
+        "provider_endpoint",
+        "provider_name",
+        "operational",
+        "operational_status",
+        "zdr_eligible",
+        "context_limit",
+        "output_limit",
+        "supported_parameters",
+        "structured_output_supported",
+        "reasoning_supported",
+        "pricing_observation",
+        "pricing_sha256",
+        "route_sha256"
+      ],
+      "title": "ProviderRouteState",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/model_refresh_snapshot.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Complete allowlisted semantic snapshot from one provider observation.",
+  "properties": {
+    "authenticated_metadata": {
+      "const": true,
+      "title": "Authenticated Metadata",
+      "type": "boolean"
+    },
+    "candidate_registry_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Candidate Registry Sha256",
+      "type": "string"
+    },
+    "catalog_model_count": {
+      "maximum": 10000,
+      "minimum": 1,
+      "title": "Catalog Model Count",
+      "type": "integer"
+    },
+    "catalog_snapshot_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Catalog Snapshot Sha256",
+      "type": "string"
+    },
+    "excluded_routed_model_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 10000,
+      "title": "Excluded Routed Model Ids",
+      "type": "array"
+    },
+    "models": {
+      "items": {
+        "$ref": "#/$defs/CatalogModelState"
+      },
+      "maxItems": 10000,
+      "minItems": 1,
+      "title": "Models",
+      "type": "array"
+    },
+    "retrieved_at": {
+      "format": "date-time",
+      "title": "Retrieved At",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "semantic_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Semantic Sha256",
+      "type": "string"
+    },
+    "snapshot_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Snapshot Sha256",
+      "type": "string"
+    },
+    "source_api_identity": {
+      "const": "https://openrouter.ai/api/v1",
+      "default": "https://openrouter.ai/api/v1",
+      "title": "Source Api Identity",
+      "type": "string"
+    },
+    "zdr_snapshot_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Zdr Snapshot Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "retrieved_at",
+    "authenticated_metadata",
+    "candidate_registry_sha256",
+    "catalog_snapshot_sha256",
+    "zdr_snapshot_sha256",
+    "catalog_model_count",
+    "excluded_routed_model_ids",
+    "models",
+    "semantic_sha256",
+    "snapshot_sha256"
+  ],
+  "title": "mmaudit model refresh snapshot",
+  "type": "object"
+}

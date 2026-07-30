@@ -74,8 +74,66 @@ def test_load_configuration_and_defaults(tmp_path: Path) -> None:
     assert config.execution.max_request_bytes == 4_000_000
     assert config.reporting.json_report is True
     assert config.models.provider_policy.allow_fallbacks is False
+    assert config.models.catalog_refresh.enabled is True
+    assert config.models.catalog_refresh.soft_max_age_hours == 30
+    assert config.models.catalog_refresh.hard_max_age_hours == 72
+    assert config.models.catalog_refresh.pricing_increase_tolerance_fraction == "0.05"
+    assert config.models.catalog_refresh.automatic_benchmark_daily_budget_usd == "0"
+    assert config.models.catalog_refresh.automatic_benchmark_per_model_budget_usd == "0"
     assert config.privacy.profile is PrivacyProfile.STRICT_ZDR
     assert config.privacy.require_zdr is True
+
+
+def test_model_catalog_refresh_policy_is_exact_and_fail_closed(config_factory) -> None:
+    config = config_factory(
+        models={
+            "catalog_refresh": {
+                "soft_max_age_hours": 24,
+                "hard_max_age_hours": 48,
+                "pricing_increase_tolerance_fraction": "0.125",
+                "automatic_benchmark_daily_budget_usd": "5",
+                "automatic_benchmark_per_model_budget_usd": "1.25",
+            }
+        }
+    )
+
+    assert config.models.catalog_refresh.pricing_increase_tolerance_fraction == "0.125"
+    assert config.models.catalog_refresh.automatic_benchmark_per_model_budget_usd == "1.25"
+
+    with pytest.raises(ValueError, match="hard age"):
+        config_factory(
+            models={
+                "catalog_refresh": {
+                    "soft_max_age_hours": 48,
+                    "hard_max_age_hours": 48,
+                }
+            }
+        )
+    with pytest.raises(ValueError, match="canonical decimal"):
+        config_factory(
+            models={
+                "catalog_refresh": {
+                    "pricing_increase_tolerance_fraction": "0.050",
+                }
+            }
+        )
+    with pytest.raises(ValueError, match="cannot exceed one"):
+        config_factory(
+            models={
+                "catalog_refresh": {
+                    "pricing_increase_tolerance_fraction": "1.1",
+                }
+            }
+        )
+    with pytest.raises(ValueError, match="cannot exceed the daily budget"):
+        config_factory(
+            models={
+                "catalog_refresh": {
+                    "automatic_benchmark_daily_budget_usd": "1",
+                    "automatic_benchmark_per_model_budget_usd": "1.01",
+                }
+            }
+        )
 
 
 def test_strict_privacy_profile_cannot_be_weakened_by_boolean_only(

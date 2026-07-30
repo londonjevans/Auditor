@@ -1,0 +1,96 @@
+{
+  "$defs": {
+    "ModelRefreshFreshnessState": {
+      "enum": [
+        "CURRENT",
+        "STALE",
+        "HARD_EXPIRED",
+        "NO_SUCCESS"
+      ],
+      "title": "ModelRefreshFreshnessState",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/model_refresh_freshness.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Time-bound availability evidence used only as a fail-closed gate.",
+  "properties": {
+    "freshness_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Freshness Sha256",
+      "type": "string"
+    },
+    "hard_max_age_hours": {
+      "maximum": 2160,
+      "minimum": 2,
+      "title": "Hard Max Age Hours",
+      "type": "integer"
+    },
+    "last_success_retrieved_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Last Success Retrieved At"
+    },
+    "observed_at": {
+      "format": "date-time",
+      "title": "Observed At",
+      "type": "string"
+    },
+    "production_blocked": {
+      "title": "Production Blocked",
+      "type": "boolean"
+    },
+    "production_selection_present": {
+      "title": "Production Selection Present",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "snapshot_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Snapshot Sha256"
+    },
+    "soft_max_age_hours": {
+      "maximum": 720,
+      "minimum": 1,
+      "title": "Soft Max Age Hours",
+      "type": "integer"
+    },
+    "state": {
+      "$ref": "#/$defs/ModelRefreshFreshnessState"
+    }
+  },
+  "required": [
+    "observed_at",
+    "last_success_retrieved_at",
+    "soft_max_age_hours",
+    "hard_max_age_hours",
+    "state",
+    "production_selection_present",
+    "production_blocked",
+    "freshness_sha256"
+  ],
+  "title": "mmaudit model refresh freshness",
+  "type": "object"
+}

@@ -280,7 +280,7 @@ def validate_openrouter_endpoint_snapshot(
         )
     )
     identity_inventory = sorted(
-        (_endpoint_identity_projection(endpoint) for endpoint in raw_endpoints),
+        (canonicalize_openrouter_endpoint_identity(endpoint) for endpoint in raw_endpoints),
         key=lambda item: json.dumps(
             item,
             sort_keys=True,
@@ -544,7 +544,11 @@ def _endpoint_identities(endpoint: Mapping[str, Any]) -> frozenset[str]:
     return identities
 
 
-def _endpoint_identity_projection(endpoint: Mapping[str, Any]) -> dict[str, str | None]:
+def canonicalize_openrouter_endpoint_identity(
+    endpoint: Mapping[str, Any],
+) -> dict[str, str | None]:
+    """Return the shared exact tag, slug, and provider-name projection."""
+
     identities = _endpoint_identities(endpoint)
     tag = _optional_endpoint_id(endpoint.get("tag"), "endpoint tag")
     slug_values = [
@@ -619,7 +623,7 @@ def _normalize_endpoint(
         raise EndpointSnapshotValidationError(
             "configured endpoint lacks emitted request parameter support: " + ", ".join(missing)
         )
-    pricing = _canonical_pricing(raw_endpoint.get("pricing"))
+    pricing = canonicalize_openrouter_pricing(raw_endpoint.get("pricing"))
     context_length = _positive_integer(
         raw_endpoint.get("context_length"),
         "endpoint context length",
@@ -716,7 +720,9 @@ def _effective_token_limit(
     return _positive_integer(value, label), "metadata"
 
 
-def _canonical_pricing(value: Any) -> dict[str, str]:
+def canonicalize_openrouter_pricing(value: Any) -> dict[str, str]:
+    """Return the shared exact billable-price projection from endpoint metadata."""
+
     if (
         not isinstance(value, dict)
         or not 1 <= len(value) <= _MAX_PRICING_FIELDS

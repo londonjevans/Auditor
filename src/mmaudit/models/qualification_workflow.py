@@ -520,6 +520,10 @@ def run_qualification_workflow(
     )
     if candidate_registry.created_at > campaign_completed_at + _FUTURE_SKEW:
         raise ValueError("candidate discovery postdates qualification evaluation")
+    if campaign_completed_at - candidate_registry.created_at > timedelta(
+        days=policy.maximum_benchmark_evidence_age_days
+    ):
+        raise ValueError("candidate discovery exceeds the qualification policy age")
     if policy.created_at > campaign_completed_at + _FUTURE_SKEW:
         raise ValueError("qualification policy postdates evaluation")
 

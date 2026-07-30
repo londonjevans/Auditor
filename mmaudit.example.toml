@@ -288,6 +288,21 @@ allow_non_independent_models = false
 # quality_measurement = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 # retention_policy = "zero" # zero, temporary, or persistent
 
+[models.catalog_refresh]
+# Provider catalogue observations are soft-stale after 30 hours and hard-expired
+# after 72 hours. Dynamic snapshots are separate evidence and are not folded into
+# the stable configuration hash.
+enabled = true
+soft_max_age_hours = 30
+hard_max_age_hours = 72
+# Exact Decimal fraction. A larger increase blocks the affected route; no refreshed
+# price may silently inherit the former budget estimate.
+pricing_increase_tolerance_fraction = "0.05"
+# Discovery never spends. Automated benchmarking remains disabled until both
+# nonzero ceilings are explicitly configured and the qualification/lineage gates run.
+automatic_benchmark_daily_budget_usd = "0"
+automatic_benchmark_per_model_budget_usd = "0"
+
 [models.provider_policy]
 # Qualification and certification require an exact, operator-approved endpoint
 # allowlist. Use either `only` or `order`, never both. Empty lists are not

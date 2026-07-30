@@ -1669,6 +1669,18 @@ class OpenRouterClient:
     async def get_model_endpoint_metadata(self, model: str) -> dict[str, Any]:
         """Return the exact-model endpoint response envelope after basic validation."""
 
+        response = await self.get_refresh_model_endpoint_metadata(model)
+        data = response["data"]
+        assert isinstance(data, dict)
+        endpoints = data["endpoints"]
+        assert isinstance(endpoints, list)
+        if not endpoints:
+            raise OpenRouterModelError("OpenRouter returned invalid endpoint metadata")
+        return response
+
+    async def get_refresh_model_endpoint_metadata(self, model: str) -> dict[str, Any]:
+        """Return exact endpoint metadata while preserving an empty withdrawn set."""
+
         _require_exact_model_id(model)
         response = await self._request_metadata(openrouter_endpoint_query(model))
         data = response.get("data")
@@ -1679,10 +1691,8 @@ class OpenRouterClient:
                 "OpenRouter endpoint metadata does not bind the exact requested model"
             )
         endpoints = data.get("endpoints")
-        if (
-            not isinstance(endpoints, list)
-            or not endpoints
-            or any(not isinstance(endpoint, dict) for endpoint in endpoints)
+        if not isinstance(endpoints, list) or any(
+            not isinstance(endpoint, dict) for endpoint in endpoints
         ):
             raise OpenRouterModelError("OpenRouter returned invalid endpoint metadata")
         return response
@@ -1722,13 +1732,19 @@ class OpenRouterClient:
         return list(endpoints)
 
     async def list_zdr_endpoints(self) -> dict[str, Any]:
+        response = await self.get_zdr_endpoint_metadata()
+        data = response["data"]
+        assert isinstance(data, list)
+        if not data:
+            raise OpenRouterPrivacyError("OpenRouter returned invalid ZDR endpoint metadata")
+        return response
+
+    async def get_zdr_endpoint_metadata(self) -> dict[str, Any]:
+        """Return the complete ZDR listing, including an authenticated empty result."""
+
         response = await self._request_metadata(OPENROUTER_ZDR_QUERY)
         data = response.get("data")
-        if (
-            not isinstance(data, list)
-            or not data
-            or any(not isinstance(endpoint, dict) for endpoint in data)
-        ):
+        if not isinstance(data, list) or any(not isinstance(endpoint, dict) for endpoint in data):
             raise OpenRouterPrivacyError("OpenRouter returned invalid ZDR endpoint metadata")
         return response
 
@@ -3206,16 +3222,13 @@ class OpenRouterClient:
                 )
             break
         try:
-            payload = (
-                json.loads(
-                    response.content,
-                    parse_float=Decimal,
-                    parse_constant=_reject_nonfinite_json_constant,
-                    object_pairs_hook=_unique_json_object,
-                )
-                if exact_decimal_json
-                else response.json()
+            payload = json.loads(
+                response.content,
+                parse_float=Decimal if exact_decimal_json else float,
+                parse_constant=_reject_nonfinite_json_constant,
+                object_pairs_hook=_unique_json_object,
             )
+            _require_finite_json_numbers(payload)
         except ValueError:
             payload = None
         if not isinstance(payload, dict):
@@ -5389,6 +5402,18 @@ def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def _reject_nonfinite_json_constant(_value: str) -> None:
     raise ValueError("non-finite JSON number")
+
+
+def _require_finite_json_numbers(value: Any) -> None:
+    pending = [value]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, float) and not math.isfinite(current):
+            raise ValueError("non-finite decoded JSON number")
+        if isinstance(current, dict):
+            pending.extend(current.values())
+        elif isinstance(current, list):
+            pending.extend(current)
 
 
 def _canonical_sha256(value: Any) -> str:

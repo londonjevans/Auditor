@@ -1208,7 +1208,15 @@ are invisible to source review by construction.
   `src/mmaudit/cli.py`, drift-report schema, `.github/workflows/`, documentation, regressions.
 - **Dependencies:** `V3-CALIBRATE-001` and `V3-LINEAGE-001` for the promotion path; the
   discovery, diffing, and alerting portion can land before either and is useful immediately.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
+- **Starting scope:** Implement and validate only discovery, immutable snapshotting, deterministic
+  drift classification, staleness/production blocking, and the scheduled provider-free test path
+  first. Automatic paid benchmarking and production promotion remain gated by calibration,
+  qualification, lineage review, and the cumulative cost ledger.
+- **Next action:** Run the complete repository validation and an explicitly opted-in
+  authenticated metadata-only refresh. If both are valid, checkpoint the discovery/diff/workflow
+  slice as `PARTIAL`; durable prior-artifact retrieval, production-selection/freshness wiring,
+  automatic benchmark spend, lineage re-evaluation, and promotion remain separate gated work.
 
 ## V3-AUTONOMY-001 — Zero-operator-input managed run profile
 

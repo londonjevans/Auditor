@@ -11,6 +11,7 @@ import tomllib
 import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -1104,6 +1105,13 @@ _SHA256_IDENTIFIER = re.compile(r"sha256:[0-9a-f]{64}")
 _PROVIDER_ENDPOINT_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}")
 
 
+def _canonical_decimal_text(value: Decimal) -> str:
+    normalized = format(value, "f")
+    if "." in normalized:
+        normalized = normalized.rstrip("0").rstrip(".")
+    return normalized or "0"
+
+
 class ModelLineageConfig(ConfigModel):
     """Immutable operator-reviewed identity, quality, and retention metadata."""
 
@@ -1232,12 +1240,61 @@ class ModelReasoningConfig(ConfigModel):
         return self
 
 
+class ModelCatalogRefreshConfig(ConfigModel):
+    """Static fail-closed policy for current provider-catalogue evidence."""
+
+    enabled: bool = True
+    soft_max_age_hours: int = Field(default=30, ge=1, le=24 * 30)
+    hard_max_age_hours: int = Field(default=72, ge=2, le=24 * 90)
+    pricing_increase_tolerance_fraction: str = Field(
+        default="0.05",
+        pattern=r"^(?:0|[1-9][0-9]{0,5})(?:\.[0-9]{1,9})?$",
+    )
+    automatic_benchmark_daily_budget_usd: str = Field(
+        default="0",
+        pattern=r"^(?:0|[1-9][0-9]{0,5})(?:\.[0-9]{1,9})?$",
+    )
+    automatic_benchmark_per_model_budget_usd: str = Field(
+        default="0",
+        pattern=r"^(?:0|[1-9][0-9]{0,5})(?:\.[0-9]{1,9})?$",
+    )
+
+    @field_validator(
+        "pricing_increase_tolerance_fraction",
+        "automatic_benchmark_daily_budget_usd",
+        "automatic_benchmark_per_model_budget_usd",
+    )
+    @classmethod
+    def decimal_controls_are_canonical(cls, value: str) -> str:
+        try:
+            parsed = Decimal(value)
+        except InvalidOperation as exc:
+            raise ValueError("model refresh decimal controls must be finite decimals") from exc
+        if not parsed.is_finite() or parsed < 0 or _canonical_decimal_text(parsed) != value:
+            raise ValueError("model refresh decimal controls must use canonical decimal text")
+        return value
+
+    @model_validator(mode="after")
+    def freshness_and_budget_bounds_are_consistent(self) -> ModelCatalogRefreshConfig:
+        if self.hard_max_age_hours <= self.soft_max_age_hours:
+            raise ValueError("catalogue hard age must exceed the soft age")
+        tolerance = Decimal(self.pricing_increase_tolerance_fraction)
+        if tolerance > 1:
+            raise ValueError("catalogue pricing tolerance cannot exceed one")
+        daily = Decimal(self.automatic_benchmark_daily_budget_usd)
+        per_model = Decimal(self.automatic_benchmark_per_model_budget_usd)
+        if per_model > daily:
+            raise ValueError("per-model refresh benchmark budget cannot exceed the daily budget")
+        return self
+
+
 class ModelsConfig(ConfigModel):
     minimum_distinct_families: int = Field(default=3, ge=3)
     minimum_high_quality_slots: int = Field(default=0, ge=0, le=64)
     allow_non_independent_models: bool = False
     provider_policy: ModelProviderPolicyConfig = Field(default_factory=ModelProviderPolicyConfig)
     reasoning: ModelReasoningConfig = Field(default_factory=ModelReasoningConfig)
+    catalog_refresh: ModelCatalogRefreshConfig = Field(default_factory=ModelCatalogRefreshConfig)
     registry: tuple[ModelLineageConfig, ...] = ()
     threat_model: ModelRoleConfig
     source_audit: ModelRoleConfig
