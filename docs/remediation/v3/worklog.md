@@ -9,8 +9,8 @@ CURRENT_MILESTONE: Paused after realistic-scale Solidity fixture validation
 CURRENT_TICKET: NONE — operator-requested pause boundary
 LAST_COMPLETED_TICKET: V3-FORKDIFF-001
 NEXT_ACTION: On operator resume, begin V3-OMISSION-001 against the committed 5k/15k/35k corpus; revisit V3-FIXTURE-001 when V3-SHARD-001 can supply the missing semantic-sharding regression.
-LAST_COMMAND: .venv/bin/pytest -q
-LAST_RESULT: PASS — loopback-enabled complete suite: 3005 passed, 11 explicit prerequisite skips, and 2 exact V3-OMISSION-001 expected reds in 383.22s; no public network or provider call was in scope.
+LAST_COMMAND: git commit -m "Add realistic Solidity scale fixtures"
+LAST_RESULT: PASS — isolated V3-FIXTURE-001 implementation checkpoint 7c65c26003e294072534513f7d78d61eee3c42d0 created after all validation and artifact checks passed.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: f719a8772bec2b934c8c5e077dab0d2d8581865e
+LAST_CHECKPOINT_COMMIT: 7c65c26003e294072534513f7d78d61eee3c42d0
 
 ## 2026-07-30 — V3-FIXTURE-001
 
@@ -134,6 +134,11 @@ LAST_CHECKPOINT_COMMIT: f719a8772bec2b934c8c5e077dab0d2d8581865e
   these three committed scale roots; `V3-FIXTURE-001` remains `PARTIAL` until
   `V3-SHARD-001` supplies a genuine sharding regression. No model, provider,
   secret, public RPC, wallet, signing, broadcast, or paid operation is in scope.
+- **Implementation checkpoint:** The validated fixture generator, golden corpus,
+  marked regressions, and pause state were committed as
+  `7c65c26003e294072534513f7d78d61eee3c42d0`
+  (`Add realistic Solidity scale fixtures`). This state-only update binds the
+  durable candidate fields to that implementation commit before SSH publication.
 
 ## 2026-07-29 — V3-FORKDIFF-001
 
