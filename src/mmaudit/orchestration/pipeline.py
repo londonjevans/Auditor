@@ -81,6 +81,7 @@ from mmaudit.models.openrouter import (
     OpenRouterError,
     OpenRouterPrivacyError,
     OpenRouterQualificationRoutingEvidence,
+    OpenRouterQualifiedReasoningRoutingBinding,
     OpenRouterSchemaError,
 )
 from mmaudit.models.qualification import VerifiedProductionQualification
@@ -1753,7 +1754,7 @@ class AuditPipeline:
                     run_dir=run_dir / "private",
                     logger=self.logger,
                     provider_policy=controls.provider_policy,
-                    reasoning=controls.reasoning,
+                    reasoning_policy=controls.reasoning_policy,
                     qualification_routing=_openrouter_qualification_routing(
                         self.production_qualification
                     ),
@@ -1942,6 +1943,7 @@ class AuditPipeline:
                     def endpoint_budget(*, context_escape_overhead: int = 0) -> int:
                         return client.context_package_byte_budget(
                             models,
+                            role=role,
                             workflow_byte_upper_bound_tokens=(workflow_byte_upper_bound_tokens),
                             workflow_prompt=workflow_prompt,
                             context_json_escape_overhead_tokens=(context_escape_overhead),
@@ -4672,6 +4674,26 @@ def _openrouter_qualification_routing(
             production_selection_sha256=qualification.production_selection_sha256,
             selection_verification_sha256=qualification.selection_verification_sha256,
             qualification_result_sha256=model.qualification_result_sha256,
+            benchmark_report_sha256=model.benchmark_report_sha256,
+            reasoning_bindings=tuple(
+                OpenRouterQualifiedReasoningRoutingBinding(
+                    exact_model_id=binding.exact_model_id,
+                    approved_provider_endpoint=binding.approved_provider_endpoint,
+                    approved_provider_name=binding.approved_provider_name,
+                    qualified_role=binding.qualified_role,
+                    configured_policy_role=binding.configured_policy_role,
+                    control_profile=binding.control_profile,
+                    control_profile_sha256=binding.control_profile_sha256,
+                    endpoint_reasoning_capability_sha256=(
+                        binding.endpoint_reasoning_capability_sha256
+                    ),
+                    qualification_report_sha256=binding.qualification_report_sha256,
+                    qualification_result_sha256=binding.qualification_result_sha256,
+                    qualification_verification_sha256=(binding.qualification_verification_sha256),
+                    binding_sha256=binding.binding_sha256,
+                )
+                for binding in model.reasoning_bindings
+            ),
         )
         for model in qualification.models
     )

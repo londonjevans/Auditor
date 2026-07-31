@@ -25,6 +25,7 @@ from mmaudit.models.output_modes import (
     structured_output_parameters,
     supported_output_modes,
 )
+from mmaudit.models.reasoning import ReasoningControlProfile
 
 _MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
 _ENDPOINT_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
@@ -51,6 +52,8 @@ _MAX_PARAMETERS = 256
 _MAX_PRICING_FIELDS = 64
 _SNAPSHOT_SCHEMA_VERSION = "1.0"
 _NON_BILLABLE_PRICING_METADATA = frozenset({"discount"})
+
+ReasoningParameterSupport = Literal["supported", "unsupported", "unknown"]
 
 
 class EndpointSnapshotValidationError(ValueError):
@@ -155,6 +158,204 @@ class OpenRouterEndpointEvidence(BaseModel):
         if self.endpoint_snapshot_sha256 != expected:
             raise ValueError("endpoint evidence hash is inconsistent")
         return self
+
+
+class OpenRouterReasoningCapabilityEvidence(BaseModel):
+    """Frozen endpoint reasoning capability without qualification authority.
+
+    The evidence records only explicit normalized provider metadata. ``None`` and
+    ``unknown`` values remain first-class states and are never promoted to
+    supported behavior.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        revalidate_instances="always",
+    )
+
+    schema_version: Literal["1.0"] = "1.0"
+    exact_model_id: str = Field(pattern=_MODEL_ID_PATTERN)
+    provider_endpoint: str = Field(pattern=_ENDPOINT_ID_PATTERN)
+    endpoint_tag: str | None = Field(default=None, pattern=_ENDPOINT_ID_PATTERN)
+    endpoint_slug: str | None = Field(default=None, pattern=_ENDPOINT_ID_PATTERN)
+    provider_name: str = Field(min_length=1, max_length=_PROVIDER_NAME_MAX_LENGTH)
+    endpoint_metadata_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    model_metadata_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reasoning_parameter_support: ReasoningParameterSupport
+    reasoning_metadata_available: bool
+    reasoning_mandatory: bool | None
+    reasoning_default_enabled: bool | None
+    reasoning_supports_max_tokens: bool | None
+    max_output_tokens: int = Field(gt=0, le=2**31 - 1)
+    max_reasoning_tokens: int | None = Field(default=None, gt=0, le=65_536)
+    capability_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def from_endpoint(
+        cls,
+        *,
+        endpoint: OpenRouterEndpointEvidence,
+        model_metadata_snapshot_sha256: str,
+        reasoning_parameter_support: ReasoningParameterSupport,
+        reasoning_metadata_available: bool,
+        reasoning_mandatory: bool | None,
+        reasoning_default_enabled: bool | None,
+        reasoning_supports_max_tokens: bool | None,
+        max_reasoning_tokens: int | None = None,
+    ) -> OpenRouterReasoningCapabilityEvidence:
+        """Seal explicit normalized metadata for one exact endpoint."""
+
+        if not isinstance(endpoint, OpenRouterEndpointEvidence):
+            raise EndpointSnapshotValidationError(
+                "reasoning capability requires sealed endpoint evidence"
+            )
+        try:
+            endpoint = OpenRouterEndpointEvidence.model_validate(endpoint.model_dump(mode="json"))
+        except ValueError as exc:
+            raise EndpointSnapshotValidationError(
+                "reasoning capability endpoint evidence is invalid"
+            ) from exc
+        explicit_parameter_support: ReasoningParameterSupport = (
+            "supported" if "reasoning" in endpoint.supported_parameters else "unsupported"
+        )
+        if reasoning_parameter_support != explicit_parameter_support:
+            raise EndpointSnapshotValidationError(
+                "reasoning parameter support contradicts the endpoint snapshot"
+            )
+        payload: dict[str, Any] = {
+            "schema_version": "1.0",
+            "exact_model_id": endpoint.exact_model_id,
+            "provider_endpoint": endpoint.provider_endpoint,
+            "endpoint_tag": endpoint.endpoint_tag,
+            "endpoint_slug": endpoint.endpoint_slug,
+            "provider_name": endpoint.provider_name,
+            "endpoint_metadata_snapshot_sha256": endpoint.endpoint_snapshot_sha256,
+            "model_metadata_snapshot_sha256": model_metadata_snapshot_sha256,
+            "reasoning_parameter_support": reasoning_parameter_support,
+            "reasoning_metadata_available": reasoning_metadata_available,
+            "reasoning_mandatory": reasoning_mandatory,
+            "reasoning_default_enabled": reasoning_default_enabled,
+            "reasoning_supports_max_tokens": reasoning_supports_max_tokens,
+            "max_output_tokens": endpoint.max_completion_tokens,
+            "max_reasoning_tokens": max_reasoning_tokens,
+        }
+        payload["capability_sha256"] = _canonical_sha256(payload)
+        try:
+            return cls.model_validate(payload)
+        except ValueError as exc:
+            raise EndpointSnapshotValidationError(
+                "reasoning capability metadata is invalid"
+            ) from exc
+
+    @model_validator(mode="after")
+    def capability_is_explicit_consistent_and_self_bound(
+        self,
+    ) -> OpenRouterReasoningCapabilityEvidence:
+        _validate_exact_model_id(self.exact_model_id)
+        if self.endpoint_tag is None and self.endpoint_slug is None:
+            raise ValueError("reasoning capability requires an endpoint tag or slug")
+        if self.provider_endpoint not in {self.endpoint_tag, self.endpoint_slug}:
+            raise ValueError("reasoning capability endpoint identity is inconsistent")
+        if _provider_display_name(self.provider_name) != self.provider_name:
+            raise ValueError("reasoning capability provider name is not canonical")
+
+        semantic_states = (
+            self.reasoning_mandatory,
+            self.reasoning_default_enabled,
+            self.reasoning_supports_max_tokens,
+        )
+        if not self.reasoning_metadata_available and any(
+            state is not None for state in semantic_states
+        ):
+            raise ValueError("unavailable reasoning metadata cannot contain inferred states")
+
+        if self.reasoning_supports_max_tokens is not True and self.max_reasoning_tokens is not None:
+            raise ValueError("reasoning token ceiling requires explicit max-token support")
+        if not self.reasoning_metadata_available and self.max_reasoning_tokens is not None:
+            raise ValueError("unavailable reasoning metadata cannot claim a token ceiling")
+
+        expected = _canonical_sha256(self.model_dump(mode="json", exclude={"capability_sha256"}))
+        if self.capability_sha256 != expected:
+            raise ValueError("reasoning capability hash is inconsistent")
+        return self
+
+    def require_compatible_profile(self, profile: ReasoningControlProfile) -> None:
+        """Require endpoint compatibility without granting benchmark qualification."""
+
+        try:
+            sealed_profile = ReasoningControlProfile.model_validate(profile)
+        except ValueError as exc:
+            raise EndpointSnapshotValidationError(
+                "reasoning control profile is not valid sealed evidence"
+            ) from exc
+
+        if sealed_profile.mode == "disabled":
+            if (
+                self.reasoning_parameter_support == "unsupported"
+                and not self.reasoning_metadata_available
+            ):
+                return
+            if self.reasoning_parameter_support == "unknown":
+                raise EndpointSnapshotValidationError(
+                    "disabled reasoning lacks explicit parameter-support evidence"
+                )
+            self._require_reasoning_metadata()
+            if self.reasoning_mandatory is not False:
+                raise EndpointSnapshotValidationError(
+                    "disabled reasoning is incompatible with mandatory reasoning"
+                )
+            if self.reasoning_default_enabled is not False:
+                raise EndpointSnapshotValidationError(
+                    "disabled reasoning is incompatible with default-enabled reasoning"
+                )
+            return
+
+        if self.reasoning_parameter_support != "supported":
+            raise EndpointSnapshotValidationError(
+                "active reasoning requires explicit endpoint parameter support"
+            )
+        self._require_reasoning_metadata()
+        if sealed_profile.reserved_reasoning_tokens > self.max_output_tokens:
+            raise EndpointSnapshotValidationError(
+                "reasoning token reservation exceeds the frozen output limit"
+            )
+
+        if sealed_profile.mode == "default":
+            if self.reasoning_default_enabled is None:
+                raise EndpointSnapshotValidationError(
+                    "default reasoning lacks a frozen default-enabled state"
+                )
+            return
+        if sealed_profile.mode == "effort":
+            assert sealed_profile.effort is not None
+            if sealed_profile.effort == "none" and self.reasoning_mandatory is not False:
+                raise EndpointSnapshotValidationError(
+                    "effort=none is incompatible with mandatory reasoning"
+                )
+            return
+        if sealed_profile.mode == "max_tokens":
+            if self.reasoning_supports_max_tokens is not True:
+                raise EndpointSnapshotValidationError(
+                    "max-token reasoning lacks exact frozen support"
+                )
+            assert sealed_profile.max_tokens is not None
+            if (
+                self.max_reasoning_tokens is not None
+                and sealed_profile.max_tokens > self.max_reasoning_tokens
+            ):
+                raise EndpointSnapshotValidationError(
+                    "requested reasoning tokens exceed the published reasoning ceiling"
+                )
+            return
+        raise AssertionError("unreachable reasoning control mode")
+
+    def _require_reasoning_metadata(self) -> None:
+        if not self.reasoning_metadata_available:
+            raise EndpointSnapshotValidationError(
+                "reasoning compatibility requires frozen metadata"
+            )
 
 
 class OpenRouterEndpointSnapshotEvidence(BaseModel):

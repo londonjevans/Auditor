@@ -75,6 +75,12 @@ from mmaudit.models.qualification_workflow import (
     candidate_generation_verification_requests,
     run_qualification_workflow,
 )
+from mmaudit.models.reasoning import (
+    CANONICAL_REASONING_POLICY_ROLES,
+    ReasoningControlProfile,
+    ReasoningPolicyArtifact,
+    ReasoningRequestPlanEvidence,
+)
 from mmaudit.models.schemas import (
     ContextRequestEvidence,
     ExecutionEvidenceKind,
@@ -112,6 +118,16 @@ def _sha(label: str) -> str:
 
 
 _PRODUCTION_CONFIG_SHA256 = _sha("production-effective-config")
+
+
+def _reasoning_policy() -> ReasoningPolicyArtifact:
+    disabled = ReasoningControlProfile.build(
+        mode="disabled",
+        reserved_reasoning_tokens=0,
+    )
+    return ReasoningPolicyArtifact.build(
+        controls_by_role={role: disabled for role in CANONICAL_REASONING_POLICY_ROLES}
+    )
 
 
 def _specialist_request_role(role: str) -> str:
@@ -368,6 +384,15 @@ def _usage_record(
     if context_evidence is not None:
         routing["context_request_evidence"] = context_evidence.model_dump(mode="json")
         routing["context_request_evidence_sha256"] = context_evidence.evidence_sha256
+    request_reasoning_plan = (
+        ReasoningRequestPlanEvidence.build(
+            request_role=role,
+            policy=_reasoning_policy(),
+            endpoint_capability_sha256=_sha(f"reasoning-capability-{candidate.exact_model_id}"),
+        )
+        if role == "model_benchmark"
+        else None
+    )
     return bind_synthetic_usage_identity(
         UsageRecord(
             request_id=request_id,
@@ -404,7 +429,9 @@ def _usage_record(
             validation_status=ModelRequestValidationStatus.VALID,
             status="success",
             attempts=1,
-        )
+        ),
+        reasoning_plan=request_reasoning_plan,
+        observed_reasoning_tokens=(0 if request_reasoning_plan is not None else None),
     )
 
 
@@ -760,6 +787,7 @@ def _resolve_for_test(
             observed_at=_NOW + timedelta(hours=3),
         ),
         "production_effective_config_sha256": _PRODUCTION_CONFIG_SHA256,
+        "reasoning_policy": _reasoning_policy(),
         "now": _NOW + timedelta(hours=3),
     }
     arguments.update(overrides)
@@ -939,6 +967,15 @@ def test_verified_production_capability_is_opaque_current_and_exact() -> None:
         assert model.quality_measurement_sha256 == result.quality_measurement_sha256
         assert model.quality_measurement == f"sha256:{result.quality_measurement_sha256}"
         assert model.benchmark_case_count > 0
+        assert model.reasoning_bindings
+        assert all(
+            binding.control_profile == _reasoning_policy().control_for_request("model_benchmark")
+            and binding.qualification_report_sha256 == result.benchmark_report_sha256
+            and binding.qualification_result_sha256 == result.result_sha256
+            and binding.qualification_verification_sha256
+            == capability.qualification_verification_sha256
+            for binding in model.reasoning_bindings
+        )
     assert capability.model_for(_model_id(0), now=verified_at).exact_model_id == _model_id(0)
     assert len(capability.production_selection_sha256) == 64
     assert len(capability.selection_verification_sha256) == 64
@@ -954,6 +991,26 @@ def test_verified_production_capability_is_opaque_current_and_exact() -> None:
     object.__setattr__(capability, "capability_sha256", _sha("tampered-capability"))
     with pytest.raises(ValueError, match="integrity"):
         capability.require_current(now=verified_at)
+
+
+def test_production_reasoning_effort_must_match_measured_qualification_profile() -> None:
+    bundle = _bundle()
+    measured_policy = _reasoning_policy()
+    controls = {
+        role: measured_policy.role_policy(role).control for role in CANONICAL_REASONING_POLICY_ROLES
+    }
+    controls["judge"] = ReasoningControlProfile.build(
+        mode="effort",
+        effort="high",
+        reserved_reasoning_tokens=4_096,
+    )
+    production_policy = ReasoningPolicyArtifact.build(controls_by_role=controls)
+
+    with pytest.raises(
+        ValueError,
+        match=r"differs from production policy|was not measured by the qualification benchmark",
+    ):
+        _resolve_for_test(bundle, reasoning_policy=production_policy)
 
 
 def test_verified_production_capability_records_fresh_full_benchmark_evidence() -> None:
@@ -1245,6 +1302,7 @@ def test_serialized_qualification_bundle_alone_cannot_mint_production_capability
                 observed_at=_NOW + timedelta(hours=3),
             ),
             production_effective_config_sha256=_PRODUCTION_CONFIG_SHA256,
+            reasoning_policy=_reasoning_policy(),
             now=_NOW + timedelta(hours=3),
         )
 

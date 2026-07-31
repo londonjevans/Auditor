@@ -294,6 +294,7 @@ allow_fallbacks = false
 
 [models.reasoning]
 effort = "high"
+reserved_tokens = 32768
 # max_tokens = 4096
 exclude = false
 

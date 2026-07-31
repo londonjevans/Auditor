@@ -444,6 +444,22 @@ def _has_valid_token_plan_routing(record: UsageRecord) -> bool:
         return False
     if plan is None:
         return False
+    reasoning_plan = plan.reasoning_plan
+    reasoning = record.reasoning_evidence
+    if (reasoning_plan is None) != (reasoning is None):
+        return False
+    if reasoning is not None and (
+        reasoning.request_plan != reasoning_plan
+        or reasoning.request_token_plan_sha256 != plan.plan_sha256
+        or reasoning.request_body_sha256 != record.request_body_sha256
+        or reasoning.provider_completion_tokens != record.completion_tokens
+        or (
+            reasoning.observation_available
+            and reasoning.observed_reasoning_tokens != record.reasoning_tokens
+        )
+        or (not reasoning.observation_available and record.reasoning_tokens != 0)
+    ):
+        return False
     limits = plan.route_intersection
     return (
         record.prompt_tokens <= plan.prompt_byte_upper_bound_tokens

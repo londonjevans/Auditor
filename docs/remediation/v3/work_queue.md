@@ -853,9 +853,19 @@ are invisible to source review by construction.
   It will not make paid calls, infer endpoint support, or promote an unqualified model.
 - **Pause boundary:** Atomic reservations now preserve and self-hash separate visible-output and
   reasoning-token ceilings; reconciliation, provider validation, and usage credit fail closed when
-  either observed slice exceeds its reserve or active reasoning lacks observable accounting.
-  Per-role policy resolution, capability binding, qualification binding, and report/run evidence
-  remain unimplemented. The operator requested a pause before those changes.
+  either observed slice exceeds its reserve or active reasoning lacks observable accounting. The
+  continuation adds exact per-role policy resolution, frozen endpoint-capability validation,
+  typed usage/context/manifest/report evidence, and post-verification reasoning qualification
+  bindings. Production selection rejects any role/profile/capability tuple not measured by its
+  qualification evidence. The current slice remains non-release-authoritative: certification still
+  needs to reject absent/legacy reasoning policies before transport, runtime credit must consume
+  the exact opaque qualification binding rather than a public projection, frozen endpoint evidence
+  must enumerate the exact supported effort levels, and serialized qualification/manifest evidence
+  must enforce complete role-route and parent-authority joins. Active reasoning also still needs a
+  positive observation or explicit provider attestation, and split token reservations need exact
+  downstream joins. The remaining campaign gap is multi-profile qualification: the current
+  candidate benchmark measures one `model_benchmark` profile, so deliberately different production
+  role profiles fail closed instead of inheriting that measurement.
 
 ## V3-RETRIEVAL-001 — Bounded read-only retrieval loop
 

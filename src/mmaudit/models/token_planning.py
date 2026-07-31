@@ -18,6 +18,8 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from mmaudit.models.reasoning import ReasoningRequestPlanEvidence
+
 _MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
 _ENDPOINT_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$"
 _REQUEST_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"
@@ -1014,9 +1016,10 @@ class GlobalTokenBudgetEvidence(FrozenTokenEvidence):
 class RequestTokenPlan(FrozenTokenEvidence):
     """Self-hashed endpoint-bound input, reasoning, and output request plan."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "2.0"] = "2.0"
     request_id: str = Field(pattern=_REQUEST_ID_PATTERN)
     role: str = Field(pattern=_ROLE_PATTERN)
+    reasoning_plan: ReasoningRequestPlanEvidence | None = None
     route_intersection: EndpointRouteIntersection
     context_utilization: Decimal = Field(
         ge=MINIMUM_CONTEXT_UTILIZATION,
@@ -1062,6 +1065,14 @@ class RequestTokenPlan(FrozenTokenEvidence):
 
     @model_validator(mode="after")
     def plan_is_endpoint_bound_conservative_and_self_hashed(self) -> RequestTokenPlan:
+        if self.schema_version == "1.0" and self.reasoning_plan is not None:
+            raise ValueError("legacy request token plans cannot contain reasoning evidence")
+        if self.reasoning_plan is not None and (
+            self.reasoning_plan.resolution.request_role != self.role
+            or self.reasoning_plan.control_profile.reserved_reasoning_tokens
+            != self.reserved_reasoning_tokens
+        ):
+            raise ValueError("request reasoning evidence differs from its role or token reserve")
         if any(
             route.max_completion_tokens_source != "metadata"
             for route in self.route_intersection.routes
@@ -1207,7 +1218,11 @@ class RequestTokenPlan(FrozenTokenEvidence):
             or self.global_budget.request_output_tokens != self.requested_completion_tokens
         ):
             raise ValueError("global token budget differs from the request plan")
-        _require_self_hash(self, "plan_sha256")
+        hash_payload = self.model_dump(mode="json", exclude={"plan_sha256"})
+        if self.schema_version == "1.0":
+            hash_payload.pop("reasoning_plan")
+        if self.plan_sha256 != _canonical_sha256(hash_payload):
+            raise ValueError("plan_sha256 does not match the canonical evidence")
         return self
 
 
@@ -1220,6 +1235,7 @@ def build_request_token_plan(
     requested_surface_count: int = 0,
     required_output_tokens: int,
     reserved_reasoning_tokens: int,
+    reasoning_plan: ReasoningRequestPlanEvidence | None = None,
     global_input_token_budget: int,
     global_output_token_budget: int,
     input_tokens_reserved_before: int = 0,
@@ -1252,6 +1268,14 @@ def build_request_token_plan(
         raise ContextTokenPlanError("requested surface count is invalid")
     if isinstance(reserved_reasoning_tokens, bool) or reserved_reasoning_tokens < 0:
         raise ContextTokenPlanError("reasoning token reserve cannot be negative")
+    if reasoning_plan is not None and (
+        not isinstance(reasoning_plan, ReasoningRequestPlanEvidence)
+        or reasoning_plan.resolution.request_role != role
+        or reasoning_plan.control_profile.reserved_reasoning_tokens != reserved_reasoning_tokens
+    ):
+        raise ContextTokenPlanError(
+            "request reasoning evidence differs from its role or token reserve"
+        )
     if any(route.max_completion_tokens_source != "metadata" for route in route_intersection.routes):
         raise EndpointTokenCapacityError(
             "endpoint completion capacity requires an explicit metadata limit"
@@ -1371,9 +1395,10 @@ def build_request_token_plan(
     canonical_omissions = _canonical_context_omissions(context_omissions)
     omission_hashes = tuple(sorted(item.omitted_item_sha256 for item in canonical_omissions))
     payload: dict[str, Any] = {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "request_id": request_id,
         "role": role,
+        "reasoning_plan": reasoning_plan,
         "route_intersection": route_intersection,
         "context_utilization": context_utilization,
         "allocations": canonical_allocations,
@@ -1400,9 +1425,10 @@ def build_request_token_plan(
         "global_budget": global_budget,
     }
     return RequestTokenPlan(
-        schema_version="1.0",
+        schema_version="2.0",
         request_id=request_id,
         role=role,
+        reasoning_plan=reasoning_plan,
         route_intersection=route_intersection,
         context_utilization=context_utilization,
         allocations=canonical_allocations,

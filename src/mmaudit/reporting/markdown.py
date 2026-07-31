@@ -1379,17 +1379,46 @@ def render_markdown(report: AuditReport) -> str:
             f"- Run ID: {_inline(report.run_id)}",
             f"- Generated at (UTC): {_inline(report.generated_at.isoformat())}",
             "",
-            "| Role | Requested model | Returned model | Provider | Tokens | Cost (USD) | ZDR requested |",
-            "| --- | --- | --- | --- | ---: | ---: | --- |",
+            "| Role | Requested model | Returned model | Provider | Tokens | Cost (USD) | "
+            "ZDR requested | Reasoning control | Reserved | Observed | Profile | "
+            "Capability | Qualification |",
+            "| --- | --- | --- | --- | ---: | ---: | --- | --- | ---: | ---: | --- | --- | --- |",
         ]
     )
     for usage in report.usage:
+        reasoning = usage.reasoning_evidence
+        if reasoning is None:
+            reasoning_control = "legacy/unrecorded"
+            reserved_reasoning = "unrecorded"
+            observed_reasoning = "unavailable"
+            profile_sha256 = "unrecorded"
+            capability_sha256 = "unbound"
+            qualification_sha256 = "unbound"
+        else:
+            control = reasoning.request_plan.control_profile
+            reasoning_control = (
+                "disabled"
+                if control.mode == "disabled"
+                else f"{control.mode}:{control.effort or control.max_tokens or 'provider-default'}"
+            )
+            reserved_reasoning = str(reasoning.reserved_reasoning_tokens)
+            observed_reasoning = (
+                str(reasoning.observed_reasoning_tokens)
+                if reasoning.observation_available
+                else "unavailable"
+            )
+            profile_sha256 = control.profile_sha256
+            capability_sha256 = reasoning.request_plan.endpoint_capability_sha256 or "unbound"
+            qualification_sha256 = reasoning.request_plan.qualification_binding_sha256 or "unbound"
         lines.append(
             f"| {_text(usage.role)} | {_text(usage.requested_model)} | "
             f"{_text(usage.returned_model or 'not returned')} | "
             f"{_text(usage.provider or 'not returned')} | {usage.total_tokens} | "
             f"{usage.accounted_cost_usd:.4f} | "
-            f"{bool(usage.routing.get('zdr_requested'))} |"
+            f"{bool(usage.routing.get('zdr_requested'))} | "
+            f"{_text(reasoning_control)} | {_text(reserved_reasoning)} | "
+            f"{_text(observed_reasoning)} | {_inline(profile_sha256)} | "
+            f"{_inline(capability_sha256)} | {_inline(qualification_sha256)} |"
         )
     effective_privacy = report.privacy.get("effective_policy")
     effective_privacy = effective_privacy if isinstance(effective_privacy, dict) else {}

@@ -34,12 +34,14 @@ from mmaudit.models.output_modes import (
     mode_for_supported_parameters,
     output_mode_request_parameters,
 )
+from mmaudit.models.reasoning import ReasoningExecutionEvidence
 from mmaudit.models.structured_output import StructuredOutputRepairEvidence
 from mmaudit.models.token_planning import (
     CONTEXT_OMISSION_GROUP_CAP,
     UTF8_BYTES_PER_ESTIMATED_TOKEN,
     ContextOmissionItem,
     ContextOmissionNoticeLevel,
+    RequestTokenPlan,
 )
 
 
@@ -10484,6 +10486,7 @@ class UsageRecord(StrictModel):
     latency_ms: int | None = Field(default=None, ge=0)
     finish_reason: str | None = Field(default=None, max_length=100)
     reasoning_tokens: int = Field(default=0, ge=0)
+    reasoning_evidence: ReasoningExecutionEvidence | None = None
     cached_tokens: int = Field(default=0, ge=0)
     retry_count: int | None = Field(default=None, ge=0)
     provider_error_classification: str | None = Field(default=None, max_length=100)
@@ -10496,6 +10499,52 @@ class UsageRecord(StrictModel):
 
     @model_validator(mode="after")
     def request_evidence_is_consistent(self) -> UsageRecord:
+        raw_token_plan = self.routing.get("request_token_plan")
+        token_plan: RequestTokenPlan | None = None
+        if raw_token_plan is not None:
+            try:
+                serialized_plan = json.dumps(
+                    raw_token_plan,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                    allow_nan=False,
+                )
+                token_plan = RequestTokenPlan.model_validate_json(serialized_plan)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("usage request token plan is invalid") from exc
+            if (
+                self.routing.get("request_token_plan_sha256") != token_plan.plan_sha256
+                or token_plan.request_id != self.request_id
+                or token_plan.role != self.role
+            ):
+                raise ValueError("usage request token plan differs from its request identity")
+        if self.reasoning_evidence is not None and token_plan is None:
+            raise ValueError("typed reasoning evidence requires its routed request token plan")
+        if token_plan is not None and (
+            (token_plan.reasoning_plan is None) != (self.reasoning_evidence is None)
+        ):
+            raise ValueError("usage reasoning evidence differs from its routed reasoning plan")
+        if self.reasoning_evidence is not None:
+            reasoning = self.reasoning_evidence
+            assert token_plan is not None
+            if (
+                token_plan.reasoning_plan != reasoning.request_plan
+                or reasoning.request_token_plan_sha256 != token_plan.plan_sha256
+                or reasoning.request_plan.resolution.request_role != self.role
+                or reasoning.request_body_sha256 != self.request_body_sha256
+                or (reasoning.provider_completion_tokens is None and self.completion_tokens != 0)
+                or (
+                    reasoning.provider_completion_tokens is not None
+                    and reasoning.provider_completion_tokens != self.completion_tokens
+                )
+                or (
+                    reasoning.observation_available
+                    and reasoning.observed_reasoning_tokens != self.reasoning_tokens
+                )
+                or (not reasoning.observation_available and self.reasoning_tokens != 0)
+            ):
+                raise ValueError("typed reasoning evidence differs from provider usage")
         if (
             self.ended_at is not None
             and self.started_at is not None

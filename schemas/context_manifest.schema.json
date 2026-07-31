@@ -22,6 +22,19 @@
           "title": "Evidence Sha256",
           "type": "string"
         },
+        "observed_reasoning_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed Reasoning Tokens"
+        },
         "openrouter_generation_id_sha256": {
           "anyOf": [
             {
@@ -47,6 +60,50 @@
           ],
           "default": null,
           "title": "Prompt Tokens"
+        },
+        "reasoning_evidence_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Evidence Sha256"
+        },
+        "reasoning_execution_state": {
+          "anyOf": [
+            {
+              "enum": [
+                "disabled_observed",
+                "disabled_unreported",
+                "active_observed",
+                "active_unavailable",
+                "failed_before_observation"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Execution State"
+        },
+        "reasoning_observation_available": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Observation Available"
         },
         "schema_version": {
           "const": "1.0",
@@ -147,6 +204,18 @@
           "title": "Planned Prompt Tokens",
           "type": "integer"
         },
+        "planned_reasoning_tokens": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Planned Reasoning Tokens",
+          "type": "integer"
+        },
+        "planned_visible_output_tokens": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Planned Visible Output Tokens",
+          "type": "integer"
+        },
         "request_id": {
           "title": "Request Id",
           "type": "string"
@@ -161,8 +230,8 @@
           "type": "string"
         },
         "schema_version": {
-          "const": "1.0",
-          "default": "1.0",
+          "const": "2.0",
+          "default": "2.0",
           "title": "Schema Version",
           "type": "string"
         }
@@ -173,6 +242,8 @@
         "role",
         "request_token_plan_sha256",
         "planned_prompt_tokens",
+        "planned_visible_output_tokens",
+        "planned_reasoning_tokens",
         "planned_completion_tokens",
         "before",
         "after",
@@ -1551,6 +1622,230 @@
       "title": "PromptTokenAllocation",
       "type": "object"
     },
+    "ReasoningControlProfile": {
+      "additionalProperties": false,
+      "description": "One effective reasoning control with an explicit token reservation.",
+      "properties": {
+        "effort": {
+          "anyOf": [
+            {
+              "enum": [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effort"
+        },
+        "exclude": {
+          "default": false,
+          "title": "Exclude",
+          "type": "boolean"
+        },
+        "max_tokens": {
+          "anyOf": [
+            {
+              "maximum": 65536,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Tokens"
+        },
+        "mode": {
+          "enum": [
+            "disabled",
+            "default",
+            "effort",
+            "max_tokens"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "profile_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Profile Sha256",
+          "type": "string"
+        },
+        "reserved_reasoning_tokens": {
+          "maximum": 65536,
+          "minimum": 0,
+          "title": "Reserved Reasoning Tokens",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "reserved_reasoning_tokens",
+        "profile_sha256"
+      ],
+      "title": "ReasoningControlProfile",
+      "type": "object"
+    },
+    "ReasoningRequestPlanEvidence": {
+      "additionalProperties": false,
+      "description": "Exact role, control, capability, and qualification joins for one request plan.",
+      "properties": {
+        "binding_state": {
+          "enum": [
+            "policy_only",
+            "capability_bound",
+            "qualification_bound"
+          ],
+          "title": "Binding State",
+          "type": "string"
+        },
+        "control_profile": {
+          "$ref": "#/$defs/ReasoningControlProfile"
+        },
+        "endpoint_capability_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Capability Sha256"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "policy_artifact_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Artifact Sha256",
+          "type": "string"
+        },
+        "policy_role_binding_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Role Binding Sha256",
+          "type": "string"
+        },
+        "qualification_binding_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Qualification Binding Sha256"
+        },
+        "resolution": {
+          "$ref": "#/$defs/ReasoningRequestRoleResolution"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resolution",
+        "control_profile",
+        "policy_artifact_sha256",
+        "policy_role_binding_sha256",
+        "binding_state",
+        "evidence_sha256"
+      ],
+      "title": "ReasoningRequestPlanEvidence",
+      "type": "object"
+    },
+    "ReasoningRequestRoleResolution": {
+      "additionalProperties": false,
+      "description": "Exact host request-role meaning, policy routing, and qualification role.",
+      "properties": {
+        "configured_policy_role": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Configured Policy Role",
+          "type": "string"
+        },
+        "mapping_kind": {
+          "enum": [
+            "base_exact",
+            "specialist_investigator",
+            "specialist_auxiliary",
+            "dedicated_exploit_test",
+            "fallback_exploit_test",
+            "falsifier_fallback",
+            "candidate_cross_examination_context",
+            "candidate_cross_examination",
+            "whole_protocol_indexed",
+            "prequalification_benchmark"
+          ],
+          "title": "Mapping Kind",
+          "type": "string"
+        },
+        "qualification_role": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Qualification Role",
+          "type": "string"
+        },
+        "request_role": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Request Role",
+          "type": "string"
+        },
+        "resolution_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Resolution Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "semantic_role": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Semantic Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_role",
+        "semantic_role",
+        "configured_policy_role",
+        "qualification_role",
+        "mapping_kind",
+        "resolution_sha256"
+      ],
+      "title": "ReasoningRequestRoleResolution",
+      "type": "object"
+    },
     "RequestTokenPlan": {
       "additionalProperties": false,
       "description": "Self-hashed endpoint-bound input, reasoning, and output request plan.",
@@ -1649,6 +1944,17 @@
           "title": "Prompt Upper Bound Method",
           "type": "string"
         },
+        "reasoning_plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningRequestPlanEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "request_id": {
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$",
           "title": "Request Id",
@@ -1717,8 +2023,11 @@
           "$ref": "#/$defs/EndpointRouteIntersection"
         },
         "schema_version": {
-          "const": "1.0",
-          "default": "1.0",
+          "default": "2.0",
+          "enum": [
+            "1.0",
+            "2.0"
+          ],
           "title": "Schema Version",
           "type": "string"
         },

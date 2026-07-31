@@ -51,6 +51,7 @@ def test_qualification_runtime_config_loads_without_secrets_or_claims() -> None:
     assert config.models.provider_policy.allow_fallbacks is False
     assert config.models.reasoning.effort is None
     assert config.models.reasoning.max_tokens == 4_096
+    assert config.models.reasoning.reserved_tokens == 4_096
     assert config.models.reasoning.exclude is False
 
 
@@ -117,6 +118,13 @@ def test_explicit_output_reserve_cannot_drift_from_request_limit() -> None:
 def test_reasoning_effort_and_token_budget_are_mutually_exclusive_at_config_load() -> None:
     with pytest.raises(ValidationError, match="mutually exclusive"):
         ModelReasoningConfig(effort="high", max_tokens=4_096)
+
+
+def test_named_reasoning_effort_requires_an_explicit_positive_reserve() -> None:
+    with pytest.raises(ValidationError, match="positive token reserve"):
+        ModelReasoningConfig(effort="high")
+    with pytest.raises(ValidationError, match="must equal"):
+        ModelReasoningConfig(max_tokens=4_096, reserved_tokens=2_048)
 
 
 def test_reasoning_can_be_explicitly_disabled_for_optional_reasoning_models() -> None:

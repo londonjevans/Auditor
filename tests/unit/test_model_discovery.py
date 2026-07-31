@@ -134,6 +134,10 @@ def _model(
             "reasoning",
             "max_tokens",
         ],
+        "reasoning": {
+            "mandatory": False,
+            "default_enabled": True,
+        },
         "description": "provider-controlled prose excluded from evidence",
         "benchmarks": {"untrusted": [1, 2, 3]},
         "links": {"details": "https://invalid.example/provider-controlled"},
@@ -286,6 +290,21 @@ def test_current_like_null_limits_are_derived_and_exact_endpoint_is_bound() -> N
     assert evidence.structured_output_mode is StructuredOutputMode.NATIVE_JSON_SCHEMA
     assert len(evidence.output_capability_sha256) == 64
     assert evidence.reasoning_supported is True
+    assert evidence.reasoning_capability.reasoning_parameter_support == "supported"
+    assert evidence.reasoning_capability.reasoning_metadata_available is True
+    assert evidence.reasoning_capability.reasoning_mandatory is False
+    assert evidence.reasoning_capability.reasoning_default_enabled is True
+    assert evidence.reasoning_capability.reasoning_supports_max_tokens is None
+    assert evidence.reasoning_capability.max_reasoning_tokens is None
+    assert (
+        evidence.reasoning_capability.model_metadata_snapshot_sha256
+        == evidence.model_metadata_snapshot_sha256
+    )
+    assert (
+        evidence.reasoning_capability.endpoint_metadata_snapshot_sha256
+        == evidence.endpoint_record_sha256
+    )
+    assert len(evidence.reasoning_capability.capability_sha256) == 64
     assert len(evidence.catalog_identity_binding_sha256) == 64
     assert len(evidence.model_metadata_snapshot_sha256) == 64
     assert len(evidence.discovery_evidence_sha256) == 64
@@ -376,6 +395,128 @@ def test_reasoning_aliases_do_not_authorize_the_emitted_reasoning_request() -> N
 
     assert payload.reasoning_parameters == ("reasoning_effort",)
     assert payload.reasoning_supported is False
+    assert payload.reasoning_capability.reasoning_parameter_support == "unsupported"
+    assert payload.reasoning_capability.reasoning_metadata_available is True
+    assert payload.reasoning_capability.reasoning_default_enabled is True
+
+
+def test_missing_reasoning_object_preserves_unknown_states_without_inference() -> None:
+    model = _model()
+    model.pop("reasoning")
+
+    payload = _discover(models=[model])
+    capability = payload.reasoning_capability
+
+    assert capability.reasoning_parameter_support == "supported"
+    assert capability.reasoning_metadata_available is False
+    assert capability.reasoning_mandatory is None
+    assert capability.reasoning_default_enabled is None
+    assert capability.reasoning_supports_max_tokens is None
+    assert capability.max_reasoning_tokens is None
+    serialized = payload.model_dump(mode="json")
+    assert serialized["reasoning_capability"]["reasoning_mandatory"] is None
+    assert serialized["reasoning_capability"]["reasoning_supports_max_tokens"] is None
+
+
+def test_explicit_reasoning_max_token_ceiling_is_frozen_when_published() -> None:
+    model = _model()
+    model["reasoning"] = {
+        "mandatory": False,
+        "default_enabled": True,
+        "supports_max_tokens": True,
+        "max_tokens": 4_096,
+    }
+
+    payload = _discover(models=[model])
+
+    assert payload.reasoning_capability.reasoning_supports_max_tokens is True
+    assert payload.reasoning_capability.max_reasoning_tokens == 4_096
+    assert len(payload.reasoning_capability.capability_sha256) == 64
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("mandatory", True),
+        ("default_enabled", False),
+        ("max_tokens", 2_048),
+    ],
+)
+def test_catalog_and_single_model_reasoning_metadata_must_agree(
+    field: str,
+    value: object,
+) -> None:
+    catalog = _model()
+    catalog["reasoning"] = {
+        "mandatory": False,
+        "default_enabled": True,
+        "supports_max_tokens": True,
+        "max_tokens": 4_096,
+    }
+    single = copy.deepcopy(catalog)
+    single["reasoning"][field] = value
+
+    with pytest.raises(ModelDiscoveryValidationError, match="frozen catalog projection"):
+        validate_openrouter_model_discovery(
+            exact_model_id="alpha/atlas-secure",
+            models_payload={"data": [catalog]},
+            single_model_payload={"data": single},
+            endpoint_snapshot=_endpoint_snapshot(),
+        )
+
+
+def test_catalog_and_single_model_max_token_support_state_must_agree() -> None:
+    catalog = _model()
+    catalog["reasoning"]["supports_max_tokens"] = True
+    catalog["reasoning"]["max_tokens"] = 4_096
+    single = copy.deepcopy(catalog)
+    single["reasoning"]["supports_max_tokens"] = False
+    single["reasoning"].pop("max_tokens")
+
+    with pytest.raises(ModelDiscoveryValidationError, match="frozen catalog projection"):
+        validate_openrouter_model_discovery(
+            exact_model_id="alpha/atlas-secure",
+            models_payload={"data": [catalog]},
+            single_model_payload={"data": single},
+            endpoint_snapshot=_endpoint_snapshot(),
+        )
+
+
+@pytest.mark.parametrize(
+    "reasoning",
+    [
+        "enabled",
+        {"mandatory": "false"},
+        {"default_enabled": 1},
+        {"supports_max_tokens": "yes"},
+        {"supports_max_tokens": True, "max_tokens": True},
+        {"supports_max_tokens": True, "max_tokens": 65_537},
+        {"supports_max_tokens": False, "max_tokens": 1_024},
+        {"max_tokens": 1_024},
+    ],
+)
+def test_malformed_reasoning_metadata_fails_closed(reasoning: object) -> None:
+    model = _model()
+    model["reasoning"] = reasoning
+
+    with pytest.raises(ModelDiscoveryValidationError, match="reasoning metadata"):
+        _discover(models=[model])
+
+
+def test_reasoning_metadata_is_bound_into_model_and_discovery_capability_hashes() -> None:
+    baseline = _model()
+    changed = copy.deepcopy(baseline)
+    changed["reasoning"]["default_enabled"] = False
+
+    first = _discover(models=[baseline])
+    second = _discover(models=[changed])
+
+    assert first.model_metadata_snapshot_sha256 != second.model_metadata_snapshot_sha256
+    assert (
+        first.reasoning_capability.capability_sha256
+        != second.reasoning_capability.capability_sha256
+    )
+    assert first.output_capability_sha256 != second.output_capability_sha256
 
 
 def test_discovery_rejects_a_runtime_specific_reasoning_request_profile() -> None:
@@ -564,6 +705,11 @@ def test_discovery_rejects_tampered_negotiated_output_mode_and_capability_hash()
     payload = _discover().model_dump(mode="json")
     payload["output_capability_sha256"] = "0" * 64
     with pytest.raises(ValidationError, match="output-capability hash"):
+        OpenRouterModelDiscoveryPayload.model_validate(payload)
+
+    payload = _discover().model_dump(mode="json")
+    payload["reasoning_capability"]["capability_sha256"] = "0" * 64
+    with pytest.raises(ValidationError, match="capability hash"):
         OpenRouterModelDiscoveryPayload.model_validate(payload)
 
 

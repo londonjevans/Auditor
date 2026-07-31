@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 import pytest
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 import mmaudit.models.openrouter as openrouter_module
 from mmaudit.constants import OPENROUTER_DEFAULT_BASE_URL
@@ -51,6 +51,7 @@ from mmaudit.models.openrouter import (
     OpenRouterProviderPolicyError,
     OpenRouterQualificationError,
     OpenRouterQualificationRoutingEvidence,
+    OpenRouterQualifiedReasoningRoutingBinding,
     OpenRouterReasoning,
     OpenRouterRequestLimitError,
     OpenRouterSchemaError,
@@ -64,6 +65,12 @@ from mmaudit.models.openrouter import (
     strict_json_schema,
 )
 from mmaudit.models.output_modes import StructuredOutputMode
+from mmaudit.models.reasoning import (
+    CANONICAL_REASONING_POLICY_ROLES,
+    ReasoningControlProfile,
+    ReasoningExecutionEvidence,
+    ReasoningPolicyArtifact,
+)
 from mmaudit.models.schemas import (
     ContextExcerpt,
     ContextPackage,
@@ -101,6 +108,7 @@ from mmaudit.orchestration.context_manifest import (
     build_context_manifest,
 )
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
+from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.privacy import (
     REQUIRED_PROHIBITED_CONTENT,
     EffectivePrivacyPolicyEvidence,
@@ -180,6 +188,7 @@ def _qualification_routing(
     structured_output_mode: StructuredOutputMode = StructuredOutputMode.JSON_OBJECT,
     model_metadata_snapshot_sha256: str = "7" * 64,
     pricing_snapshot_sha256: str = "8" * 64,
+    reasoning_bindings: tuple[OpenRouterQualifiedReasoningRoutingBinding, ...] = (),
 ) -> OpenRouterQualificationRoutingEvidence:
     now = datetime.now(UTC)
     verification_time = verified_at or now
@@ -202,6 +211,8 @@ def _qualification_routing(
         production_selection_sha256="3" * 64,
         selection_verification_sha256="4" * 64,
         qualification_result_sha256="5" * 64,
+        benchmark_report_sha256="b" * 64,
+        reasoning_bindings=reasoning_bindings,
     )
 
 
@@ -856,6 +867,7 @@ def _client(
     run_dir: Path | None = None,
     provider_policy: OpenRouterProviderPolicy | None = None,
     reasoning: OpenRouterReasoning | None = None,
+    reasoning_policy: ReasoningPolicyArtifact | None = None,
     qualification_routing: tuple[OpenRouterQualificationRoutingEvidence, ...] | None = None,
     privacy_models: tuple[str, ...] = ("alpha/atlas-secure",),
 ) -> tuple[OpenRouterClient, httpx.AsyncClient, UsageLedger]:
@@ -895,6 +907,7 @@ def _client(
         run_dir=run_dir,
         provider_policy=policy,
         reasoning=reasoning,
+        reasoning_policy=reasoning_policy,
         token_budgets=config.token_budgets,
         qualification_routing=qualification_routing or (),
         effective_privacy_policy=effective_privacy_policy,
@@ -6194,6 +6207,214 @@ def test_reasoning_payload_can_explicitly_disable_optional_reasoning() -> None:
         "exclude": True,
         "effort": "none",
     }
+
+
+def _per_role_reasoning_policy() -> ReasoningPolicyArtifact:
+    disabled = ReasoningControlProfile.build(
+        mode="disabled",
+        reserved_reasoning_tokens=0,
+    )
+    controls = {role: disabled for role in CANONICAL_REASONING_POLICY_ROLES}
+    controls["source_audit"] = ReasoningControlProfile.build(
+        mode="effort",
+        effort="high",
+        exclude=True,
+        reserved_reasoning_tokens=3,
+    )
+    return ReasoningPolicyArtifact.build(controls_by_role=controls)
+
+
+def _qualified_reasoning_routing(
+    profile: ReasoningControlProfile,
+) -> OpenRouterQualifiedReasoningRoutingBinding:
+    payload: dict[str, Any] = {
+        "schema_version": "1.0",
+        "binding_status": "exact_evidence_bound",
+        "selection_authority": False,
+        "exact_model_id": "alpha/atlas-secure",
+        "approved_provider_endpoint": "approved-provider",
+        "approved_provider_name": "approved-provider",
+        "qualified_role": "source_audit",
+        "configured_policy_role": "source_audit",
+        "control_profile": profile.model_dump(mode="json"),
+        "control_profile_sha256": profile.profile_sha256,
+        "endpoint_reasoning_capability_sha256": "a" * 64,
+        "qualification_report_sha256": "b" * 64,
+        "qualification_result_sha256": "5" * 64,
+        "qualification_verification_sha256": "2" * 64,
+    }
+    return OpenRouterQualifiedReasoningRoutingBinding(
+        exact_model_id=payload["exact_model_id"],
+        approved_provider_endpoint=payload["approved_provider_endpoint"],
+        approved_provider_name=payload["approved_provider_name"],
+        qualified_role=payload["qualified_role"],
+        configured_policy_role=payload["configured_policy_role"],
+        control_profile=profile,
+        control_profile_sha256=profile.profile_sha256,
+        endpoint_reasoning_capability_sha256="a" * 64,
+        qualification_report_sha256="b" * 64,
+        qualification_result_sha256="5" * 64,
+        qualification_verification_sha256="2" * 64,
+        binding_sha256=canonical_sha256(payload),
+    )
+
+
+def test_reasoning_qualification_routing_requires_exact_role_profile_and_capability() -> None:
+    profile = _per_role_reasoning_policy().control_for_request("source_audit")
+    binding = _qualified_reasoning_routing(profile)
+    qualification = _qualification_routing(reasoning_bindings=(binding,))
+
+    assert (
+        qualification.reasoning_binding_sha256_for(
+            role="source_audit",
+            control_profile=profile,
+            endpoint_capability_sha256="a" * 64,
+        )
+        == binding.binding_sha256
+    )
+    with pytest.raises(OpenRouterQualificationError, match="exact production request"):
+        qualification.reasoning_binding_sha256_for(
+            role="source_audit",
+            control_profile=profile,
+            endpoint_capability_sha256="c" * 64,
+        )
+    with pytest.raises(OpenRouterQualificationError, match="qualified reasoning profile"):
+        qualification.reasoning_binding_sha256_for(
+            role="judge",
+            control_profile=profile,
+            endpoint_capability_sha256="a" * 64,
+        )
+
+
+@pytest.mark.asyncio
+async def test_per_role_reasoning_policy_controls_reservation_request_and_usage(
+    config_factory,
+) -> None:
+    observed: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        observed.append(body)
+        return _completion_response(
+            '{"answer":"bounded"}',
+            reasoning_tokens=(3 if body["metadata"]["mmaudit_role"] == "source_audit" else None),
+        )
+
+    config = config_factory(execution={"max_json_repair_attempts": 0})
+    policy = _per_role_reasoning_policy()
+    client, http_client, usage = _client(
+        config,
+        handler,
+        reasoning_policy=policy,
+    )
+    try:
+        await client.complete(
+            role="source_audit",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="user",
+            response_model=Answer,
+            schema_name="answer",
+        )
+        await client.complete(
+            role="judge",
+            models=["alpha/atlas-secure"],
+            system_prompt="system",
+            user_prompt="user",
+            response_model=Answer,
+            schema_name="answer",
+        )
+    finally:
+        await http_client.aclose()
+
+    assert observed[0]["reasoning"] == {"exclude": True, "effort": "high"}
+    assert "reasoning" not in observed[1]
+    assert (
+        observed[0]["max_tokens"] - observed[1]["max_tokens"]
+        == policy.control_for_request("source_audit").reserved_reasoning_tokens
+    )
+    assert observed[0]["metadata"]["mmaudit_reasoning_policy_sha256"] == policy.artifact_sha256
+    source_evidence = usage.records[0].reasoning_evidence
+    judge_evidence = usage.records[1].reasoning_evidence
+    assert source_evidence is not None
+    assert source_evidence.state == "active_observed"
+    assert source_evidence.observed_reasoning_tokens == 3
+    assert source_evidence.request_plan.control_profile.effort == "high"
+    assert judge_evidence is not None
+    assert judge_evidence.state == "disabled_unreported"
+    assert judge_evidence.observed_reasoning_tokens is None
+    assert source_evidence.request_plan.binding_state == "policy_only"
+
+    missing_execution = usage.records[0].model_dump(mode="json")
+    missing_execution["reasoning_evidence"] = None
+    with pytest.raises(ValidationError, match="differs from its routed reasoning plan"):
+        UsageRecord.model_validate(missing_execution)
+
+    mismatched_execution = ReasoningExecutionEvidence.build(
+        request_plan=source_evidence.request_plan,
+        observed_reasoning_tokens=source_evidence.observed_reasoning_tokens,
+        provider_completion_tokens=source_evidence.provider_completion_tokens,
+        request_token_plan_sha256="f" * 64,
+        request_body_sha256=source_evidence.request_body_sha256,
+    )
+    mismatched_payload = usage.records[0].model_dump(mode="json")
+    mismatched_payload["reasoning_evidence"] = mismatched_execution.model_dump(mode="json")
+    with pytest.raises(ValidationError, match="differs from provider usage"):
+        UsageRecord.model_validate(mismatched_payload)
+
+
+@pytest.mark.asyncio
+async def test_per_role_reasoning_policy_rejects_unknown_role_before_transport(
+    config_factory,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"unexpected"}')
+
+    client, http_client, _usage = _client(
+        config_factory(),
+        handler,
+        reasoning_policy=_per_role_reasoning_policy(),
+    )
+    try:
+        with pytest.raises(ValueError, match="recognized exact form"):
+            await client.complete(
+                role="untrusted_dynamic_role",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="user",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+    assert calls == 0
+
+
+def test_global_and_per_role_reasoning_controls_are_mutually_exclusive(
+    config_factory,
+) -> None:
+    config = config_factory()
+    with pytest.raises(OpenRouterRequestLimitError, match="mutually exclusive"):
+        OpenRouterClient(
+            api_key="synthetic-key",
+            execution=config.execution,
+            privacy=config.privacy,
+            budget=BudgetManager(
+                total_usd=config.execution.budget_usd,
+                max_output_tokens=config.execution.max_output_tokens_per_request,
+                conservative_usd_per_million_tokens=(
+                    config.execution.conservative_usd_per_million_tokens
+                ),
+                max_requests_per_agent=config.execution.max_requests_per_agent,
+            ),
+            usage=UsageLedger(),
+            reasoning=OpenRouterReasoning(effort="high"),
+            reasoning_policy=_per_role_reasoning_policy(),
+        )
 
 
 @pytest.mark.parametrize("fault", ["missing", "role", "model", "provider", "expired"])

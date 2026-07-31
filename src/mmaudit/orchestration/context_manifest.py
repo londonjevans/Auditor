@@ -17,6 +17,7 @@ from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from mmaudit.models.reasoning import ReasoningExecutionState
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     ModelRequestValidationStatus,
@@ -478,6 +479,24 @@ class ActualTokenUsageEvidence(FrozenContextEvidence):
         default=None,
         pattern=_SHA256_PATTERN,
     )
+    reasoning_observation_available: bool | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    observed_reasoning_tokens: int | None = Field(
+        default=None,
+        ge=0,
+        exclude_if=lambda value: value is None,
+    )
+    reasoning_execution_state: ReasoningExecutionState | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    reasoning_evidence_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
     evidence_sha256: str = Field(pattern=_SHA256_PATTERN)
 
     @classmethod
@@ -489,6 +508,7 @@ class ActualTokenUsageEvidence(FrozenContextEvidence):
             if available and usage.openrouter_generation_id is not None
             else None
         )
+        reasoning = usage.reasoning_evidence
         payload: dict[str, Any] = {
             "schema_version": "1.0",
             "source": source,
@@ -497,6 +517,16 @@ class ActualTokenUsageEvidence(FrozenContextEvidence):
             "total_tokens": usage.total_tokens if available else None,
             "openrouter_generation_id_sha256": generation_id_sha256,
         }
+        if reasoning is not None:
+            payload.update(
+                {
+                    "reasoning_observation_available": reasoning.observation_available,
+                    "reasoning_execution_state": reasoning.state,
+                    "reasoning_evidence_sha256": reasoning.evidence_sha256,
+                }
+            )
+            if reasoning.observed_reasoning_tokens is not None:
+                payload["observed_reasoning_tokens"] = reasoning.observed_reasoning_tokens
         return cls(
             schema_version="1.0",
             source=source,
@@ -504,6 +534,16 @@ class ActualTokenUsageEvidence(FrozenContextEvidence):
             completion_tokens=payload["completion_tokens"],
             total_tokens=payload["total_tokens"],
             openrouter_generation_id_sha256=generation_id_sha256,
+            reasoning_observation_available=(
+                reasoning.observation_available if reasoning is not None else None
+            ),
+            observed_reasoning_tokens=(
+                reasoning.observed_reasoning_tokens if reasoning is not None else None
+            ),
+            reasoning_execution_state=(reasoning.state if reasoning is not None else None),
+            reasoning_evidence_sha256=(
+                reasoning.evidence_sha256 if reasoning is not None else None
+            ),
             evidence_sha256=_canonical_sha256(payload),
         )
 
@@ -525,6 +565,43 @@ class ActualTokenUsageEvidence(FrozenContextEvidence):
                 raise ValueError("actual token usage does not conserve prompt and completion")
             if self.prompt_tokens <= 0:
                 raise ValueError("reported token usage requires non-zero prompt tokens")
+        reasoning_projection = (
+            self.reasoning_observation_available,
+            self.observed_reasoning_tokens,
+            self.reasoning_execution_state,
+            self.reasoning_evidence_sha256,
+        )
+        if all(value is None for value in reasoning_projection):
+            _require_self_hash(self, "evidence_sha256")
+            return self
+        if (
+            self.reasoning_observation_available is None
+            or self.reasoning_execution_state is None
+            or self.reasoning_evidence_sha256 is None
+        ):
+            raise ValueError("reasoning observation evidence is incomplete")
+        observed_states: set[ReasoningExecutionState] = {
+            "active_observed",
+            "disabled_observed",
+        }
+        unavailable_states: set[ReasoningExecutionState] = {
+            "active_unavailable",
+            "disabled_unreported",
+            "failed_before_observation",
+        }
+        if self.reasoning_observation_available:
+            if (
+                self.observed_reasoning_tokens is None
+                or self.reasoning_execution_state not in observed_states
+                or self.completion_tokens is None
+                or self.observed_reasoning_tokens > self.completion_tokens
+            ):
+                raise ValueError("observed reasoning evidence is inconsistent")
+        elif (
+            self.observed_reasoning_tokens is not None
+            or self.reasoning_execution_state not in unavailable_states
+        ):
+            raise ValueError("unavailable reasoning evidence is inconsistent")
         _require_self_hash(self, "evidence_sha256")
         return self
 

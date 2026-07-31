@@ -15,6 +15,13 @@ from pydantic import ValidationError
 
 from mmaudit.config import AuditConfig
 from mmaudit.models import usage as usage_module
+from mmaudit.models.reasoning import (
+    CANONICAL_REASONING_POLICY_ROLES,
+    ReasoningControlProfile,
+    ReasoningExecutionEvidence,
+    ReasoningPolicyArtifact,
+    ReasoningRequestPlanEvidence,
+)
 from mmaudit.models.schemas import (
     AuditReport,
     ExecutionEvidenceKind,
@@ -39,6 +46,7 @@ from mmaudit.models.token_planning import (
 from mmaudit.orchestration import context_manifest as context_manifest_module
 from mmaudit.orchestration.budgets import AtomicTokenReservationEvidence
 from mmaudit.orchestration.context_manifest import (
+    ActualTokenUsageEvidence,
     ActualTokenUsageSource,
     ContextManifest,
     ContextManifestError,
@@ -98,6 +106,7 @@ def _plan(
     request_id: str = "request-1",
     raw_canary: str = "PRIVATE-SOURCE-CANARY",
     omitted_item_sha256s: Sequence[str] | None = None,
+    reasoning_plan: ReasoningRequestPlanEvidence | None = None,
 ) -> RequestTokenPlan:
     route = EndpointRouteTokenCapacity.build(
         exact_model_id="alpha/frontier-secure",
@@ -131,6 +140,7 @@ def _plan(
         allocations=allocations,
         required_output_tokens=2_048,
         reserved_reasoning_tokens=1_024,
+        reasoning_plan=reasoning_plan,
         global_input_token_budget=1_000_000,
         global_output_token_budget=100_000,
         context_utilization=Decimal("0.70"),
@@ -181,6 +191,10 @@ def _usage(
     *,
     request_id: str = "request-1",
     plan: RequestTokenPlan | None = None,
+    reasoning_evidence: ReasoningExecutionEvidence | None = None,
+    reasoning_tokens: int = 0,
+    status: str = "success",
+    validation_status: ModelRequestValidationStatus = ModelRequestValidationStatus.VALID,
 ) -> UsageRecord:
     token_plan = plan or _plan(request_id=request_id)
     token_reservation = AtomicTokenReservationEvidence.build(
@@ -234,11 +248,51 @@ def _usage(
         ended_at=started,
         latency_ms=0,
         finish_reason="stop",
+        reasoning_tokens=reasoning_tokens,
+        reasoning_evidence=reasoning_evidence,
         retry_count=0,
-        validation_status=ModelRequestValidationStatus.VALID,
+        validation_status=validation_status,
         identity_strength=ModelIdentityStrength.UNBOUND,
-        status="success",
+        status=status,
         attempts=1,
+    )
+
+
+def _usage_with_reasoning_observation(
+    observed_reasoning_tokens: int | None,
+) -> UsageRecord:
+    disabled = ReasoningControlProfile.build(
+        mode="disabled",
+        reserved_reasoning_tokens=0,
+    )
+    controls = {role: disabled for role in CANONICAL_REASONING_POLICY_ROLES}
+    controls["source_audit"] = ReasoningControlProfile.build(
+        mode="effort",
+        effort="high",
+        reserved_reasoning_tokens=1_024,
+    )
+    reasoning_plan = ReasoningRequestPlanEvidence.build(
+        request_role="source_audit",
+        policy=ReasoningPolicyArtifact.build(controls_by_role=controls),
+    )
+    plan = _plan(reasoning_plan=reasoning_plan)
+    reasoning_evidence = ReasoningExecutionEvidence.build(
+        request_plan=reasoning_plan,
+        observed_reasoning_tokens=observed_reasoning_tokens,
+        provider_completion_tokens=100,
+        request_token_plan_sha256=plan.plan_sha256,
+        request_body_sha256="5" * 64,
+    )
+    return _usage(
+        plan=plan,
+        reasoning_evidence=reasoning_evidence,
+        reasoning_tokens=observed_reasoning_tokens or 0,
+        status=("success" if observed_reasoning_tokens is not None else "provider_error"),
+        validation_status=(
+            ModelRequestValidationStatus.VALID
+            if observed_reasoning_tokens is not None
+            else ModelRequestValidationStatus.PROVIDER_ERROR
+        ),
     )
 
 
@@ -470,6 +524,83 @@ def test_synthetic_real_evidence_is_counted_only_as_provider_reported_usage() ->
     request = manifest.requests[0]
     assert isinstance(request, ContextRequestEvidence)
     assert request.actual_usage.source is ActualTokenUsageSource.PROVIDER_RESPONSE
+
+
+def test_actual_usage_distinguishes_observed_zero_from_unavailable_reasoning() -> None:
+    observed_usage = _usage_with_reasoning_observation(0)
+    unavailable_usage = _usage_with_reasoning_observation(None)
+    observed_manifest = build_context_manifest(
+        run_id="observed-zero",
+        usage_records=[observed_usage],
+    )
+    unavailable_manifest = build_context_manifest(
+        run_id="observation-unavailable",
+        usage_records=[unavailable_usage],
+    )
+    observed_request = observed_manifest.requests[0]
+    unavailable_request = unavailable_manifest.requests[0]
+    assert isinstance(observed_request, ContextRequestEvidence)
+    assert isinstance(unavailable_request, ContextRequestEvidence)
+
+    observed = observed_request.actual_usage
+    unavailable = unavailable_request.actual_usage
+    assert observed.reasoning_observation_available is True
+    assert observed.observed_reasoning_tokens == 0
+    assert observed.reasoning_execution_state == "active_observed"
+    assert unavailable.reasoning_observation_available is False
+    assert unavailable.observed_reasoning_tokens is None
+    assert unavailable.reasoning_execution_state == "active_unavailable"
+    assert observed_usage.reasoning_evidence is not None
+    assert unavailable_usage.reasoning_evidence is not None
+    assert observed.reasoning_evidence_sha256 == observed_usage.reasoning_evidence.evidence_sha256
+    assert (
+        unavailable.reasoning_evidence_sha256
+        == unavailable_usage.reasoning_evidence.evidence_sha256
+    )
+    assert observed.evidence_sha256 != unavailable.evidence_sha256
+    assert "observed_reasoning_tokens" in observed.model_dump(mode="json")
+    assert "observed_reasoning_tokens" not in unavailable.model_dump(mode="json")
+    assert (
+        ActualTokenUsageEvidence.model_validate_json(observed.model_dump_json(), strict=True)
+        == observed
+    )
+    assert (
+        ActualTokenUsageEvidence.model_validate_json(unavailable.model_dump_json(), strict=True)
+        == unavailable
+    )
+
+
+def test_actual_usage_reasoning_projection_is_semantic_and_self_hashed() -> None:
+    evidence = ActualTokenUsageEvidence.build(_usage_with_reasoning_observation(0))
+    unavailable_with_tokens = evidence.model_dump(mode="json")
+    unavailable_with_tokens["reasoning_observation_available"] = False
+    unavailable_with_tokens["evidence_sha256"] = context_manifest_module._canonical_sha256(
+        {key: value for key, value in unavailable_with_tokens.items() if key != "evidence_sha256"}
+    )
+
+    with pytest.raises(ValidationError, match="unavailable reasoning evidence"):
+        ActualTokenUsageEvidence.model_validate_json(
+            json.dumps(unavailable_with_tokens),
+            strict=True,
+        )
+
+    wrong_hash = evidence.model_dump(mode="json")
+    wrong_hash["evidence_sha256"] = "0" * 64
+    with pytest.raises(ValidationError, match="canonical evidence"):
+        ActualTokenUsageEvidence.model_validate_json(json.dumps(wrong_hash), strict=True)
+
+
+def test_actual_usage_legacy_projection_omits_new_optional_reasoning_fields() -> None:
+    evidence = ActualTokenUsageEvidence.build(_usage())
+    payload = evidence.model_dump(mode="json")
+
+    assert "reasoning_observation_available" not in payload
+    assert "observed_reasoning_tokens" not in payload
+    assert "reasoning_execution_state" not in payload
+    assert "reasoning_evidence_sha256" not in payload
+    assert evidence.evidence_sha256 == context_manifest_module._canonical_sha256(
+        {key: value for key, value in payload.items() if key != "evidence_sha256"}
+    )
 
 
 def test_truncated_provider_prompt_usage_is_preserved_without_fabricated_completion() -> None:

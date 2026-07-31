@@ -44,7 +44,6 @@ from mmaudit.models.endpoint_snapshots import validate_openrouter_endpoint_snaps
 from mmaudit.models.openrouter import (
     OpenRouterClient,
     OpenRouterProviderPolicy,
-    OpenRouterReasoning,
 )
 from mmaudit.models.qualification import (
     CandidateModel,
@@ -56,6 +55,7 @@ from mmaudit.models.qualification import (
     seal_operator_lineage_review,
     seal_qualification_policy,
 )
+from mmaudit.models.reasoning import ReasoningPolicyArtifact
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     ModelRequestValidationStatus,
@@ -92,7 +92,7 @@ class _MockClientFactory:
     orphan_usage_models: set[str] = field(default_factory=set)
     clients: list[OpenRouterClient] = field(default_factory=list)
     http_clients: list[httpx.AsyncClient] = field(default_factory=list)
-    calls: list[tuple[str, OpenRouterProviderPolicy, OpenRouterReasoning | None]] = field(
+    calls: list[tuple[str, OpenRouterProviderPolicy, ReasoningPolicyArtifact]] = field(
         default_factory=list
     )
     request_bodies: list[dict[str, Any]] = field(default_factory=list)
@@ -107,9 +107,9 @@ class _MockClientFactory:
         usage: UsageLedger,
         candidate: CandidateModel,
         provider_policy: OpenRouterProviderPolicy,
-        reasoning: OpenRouterReasoning | None,
+        reasoning_policy: ReasoningPolicyArtifact,
     ) -> OpenRouterClient:
-        self.calls.append((candidate.exact_model_id, provider_policy, reasoning))
+        self.calls.append((candidate.exact_model_id, provider_policy, reasoning_policy))
         if candidate.exact_model_id in self.orphan_usage_models:
             usage.add(
                 UsageRecord(
@@ -239,7 +239,7 @@ class _MockClientFactory:
             usage=usage,
             http_client=http_client,
             provider_policy=provider_policy,
-            reasoning=reasoning,
+            reasoning_policy=reasoning_policy,
         )
         self.clients.append(client)
         self.http_clients.append(http_client)
@@ -275,7 +275,7 @@ def _catalog_model(spec: _CandidateSpec) -> dict[str, Any]:
     parameters = ["max_tokens", "response_format", "temperature"]
     if spec.reasoning_supported:
         parameters.append("reasoning")
-    return {
+    payload: dict[str, Any] = {
         "id": spec.model_id,
         "canonical_slug": spec.canonical_model_id or spec.model_id,
         "context_length": 100_000,
@@ -285,6 +285,14 @@ def _catalog_model(spec: _CandidateSpec) -> dict[str, Any]:
         },
         "supported_parameters": sorted(parameters),
     }
+    if spec.reasoning_supported:
+        payload["reasoning"] = {
+            "mandatory": False,
+            "default_enabled": False,
+            "supports_max_tokens": True,
+            "max_reasoning_tokens": 8_192,
+        }
+    return payload
 
 
 def _canonical_hash(value: object) -> str:
@@ -471,7 +479,7 @@ def _budget(tmp_path: Path, config: AuditConfig) -> BudgetManager:
 def _config(config_factory: Callable[..., AuditConfig]) -> AuditConfig:
     return config_factory(
         execution={"max_requests_per_agent": 512},
-        models={"reasoning": {"effort": "high"}},
+        models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}},
     )
 
 
@@ -647,7 +655,7 @@ def test_candidate_usage_join_rejects_changed_public_evidence(
     changed = UsageRecord.model_validate(
         {
             **observed.model_dump(mode="json"),
-            "request_id": "changed-candidate-usage",
+            "prompt_sha256": "e" * 64,
         }
     )
 
@@ -739,7 +747,7 @@ async def test_candidate_benchmark_uses_exact_mock_certification_route(
         only=(spec.provider_endpoint,),
         allow_fallbacks=False,
     )
-    assert factory.calls[0][2] == OpenRouterReasoning(effort="high")
+    assert factory.calls[0][2].control_for_request("model_benchmark").effort == "high"
     assert any(path.endswith("/endpoints") for path in factory.metadata_requests)
     assert any(path.endswith("/endpoints/zdr") for path in factory.metadata_requests)
     assert f"/api/v1/model/{spec.model_id}" in factory.metadata_requests
@@ -912,7 +920,7 @@ async def test_candidate_benchmark_revalidates_alias_tampering(
 
 
 @pytest.mark.asyncio
-async def test_unsupported_reasoning_is_suppressed_without_changing_mock_provenance(
+async def test_unsupported_reasoning_fails_without_changing_mock_provenance(
     tmp_path: Path,
     config_factory: Callable[..., AuditConfig],
 ) -> None:
@@ -946,9 +954,12 @@ async def test_unsupported_reasoning_is_suppressed_without_changing_mock_provena
     finally:
         await factory.close()
 
-    assert factory.calls[0][2] is None
-    assert result.diagnostics[0].reasoning_suppressed is True
-    assert result.reports[0].execution_evidence is ExecutionEvidenceKind.MOCK
+    assert factory.calls[0][2].control_for_request("model_benchmark").effort == "high"
+    assert result.diagnostics[0].reasoning_suppressed is False
+    assert (
+        result.diagnostics[0].failure_stage is CandidateBenchmarkFailureStage.ENDPOINT_REGISTRATION
+    )
+    assert result.reports[0].execution_evidence is ExecutionEvidenceKind.UNVERIFIED
     assert all("reasoning" not in body for body in factory.request_bodies)
 
 
@@ -962,7 +973,7 @@ async def test_pending_lineage_candidate_can_be_measured_without_becoming_approv
         privacy={"approved_model_lineages": []},
         models={
             "registry": [],
-            "reasoning": {"effort": "high"},
+            "reasoning": {"effort": "high", "reserved_tokens": 4_096},
         },
     )
     manifest, evidence, registry = _discovery_and_registry(

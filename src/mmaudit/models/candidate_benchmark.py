@@ -34,7 +34,6 @@ from mmaudit.models.identifiers import (
 from mmaudit.models.openrouter import (
     OpenRouterClient,
     OpenRouterProviderPolicy,
-    OpenRouterReasoning,
 )
 from mmaudit.models.qualification import (
     CandidateModel,
@@ -42,6 +41,8 @@ from mmaudit.models.qualification import (
     QualificationPolicy,
     validate_candidate_registry_discovery,
 )
+from mmaudit.models.reasoning import ReasoningPolicyArtifact
+from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.schemas import ExecutionEvidenceKind, StrictModel, UsageRecord
 from mmaudit.models.usage import UsageLedger
 from mmaudit.orchestration.budgets import BudgetManager
@@ -323,7 +324,7 @@ class CandidateBenchmarkClientFactory(Protocol):
         usage: UsageLedger,
         candidate: CandidateModel,
         provider_policy: OpenRouterProviderPolicy,
-        reasoning: OpenRouterReasoning | None,
+        reasoning_policy: ReasoningPolicyArtifact,
     ) -> OpenRouterClient: ...
 
 
@@ -404,6 +405,7 @@ async def run_candidate_registry_benchmarks(
         raise ValueError("real candidate benchmarks require a durable campaign evidence sink")
     evidence_by_model = {item.exact_model_id: item for item in discovery_evidence}
     factory = client_factory or _build_concrete_client
+    reasoning_policy = build_reasoning_policy(config)
     reports = list(evidence_sink.reports if evidence_sink is not None else ())
     diagnostics = list(evidence_sink.diagnostics if evidence_sink is not None else ())
     candidate_ids = tuple(candidate.exact_model_id for candidate in candidate_registry.candidates)
@@ -428,7 +430,6 @@ async def run_candidate_registry_benchmarks(
                 model_id=candidate.exact_model_id,
                 root_lineage=candidate.root_lineage,
             )
-            reasoning, reasoning_suppressed = _candidate_reasoning(config, candidate)
             report, failure_stage, _requests_observed = await _execute_candidate(
                 config=config,
                 benchmark_suite=benchmark_suite,
@@ -439,7 +440,7 @@ async def run_candidate_registry_benchmarks(
                 endpoint_evidence=evidence_by_model[candidate.exact_model_id],
                 discovery_manifest=discovery_manifest,
                 operator_api_key=operator_api_key,
-                reasoning=reasoning,
+                reasoning_policy=reasoning_policy,
                 factory=factory,
             )
             observed_usage = tuple(usage.records[usage_start:])
@@ -453,7 +454,7 @@ async def run_candidate_registry_benchmarks(
             diagnostic = _candidate_diagnostic(
                 candidate=candidate,
                 report=report,
-                reasoning_suppressed=reasoning_suppressed,
+                reasoning_suppressed=False,
                 failure_stage=failure_stage,
                 observed_usage=observed_usage,
                 ledger_before=ledger_before,
@@ -493,7 +494,7 @@ def _build_concrete_client(
     usage: UsageLedger,
     candidate: CandidateModel,
     provider_policy: OpenRouterProviderPolicy,
-    reasoning: OpenRouterReasoning | None,
+    reasoning_policy: ReasoningPolicyArtifact,
 ) -> OpenRouterClient:
     del candidate
     return OpenRouterClient(
@@ -503,7 +504,7 @@ def _build_concrete_client(
         budget=budget,
         usage=usage,
         provider_policy=provider_policy,
-        reasoning=reasoning,
+        reasoning_policy=reasoning_policy,
     )
 
 
@@ -540,7 +541,7 @@ async def _execute_candidate(
     endpoint_evidence: OpenRouterModelDiscoveryEvidence,
     discovery_manifest: OpenRouterModelDiscoveryRunManifest,
     operator_api_key: str,
-    reasoning: OpenRouterReasoning | None,
+    reasoning_policy: ReasoningPolicyArtifact,
     factory: CandidateBenchmarkClientFactory,
 ) -> tuple[ModelBenchmarkReport, CandidateBenchmarkFailureStage | None, int]:
     before_usage = len(usage.records)
@@ -565,7 +566,7 @@ async def _execute_candidate(
                 usage=usage,
                 candidate=candidate,
                 provider_policy=provider_policy,
-                reasoning=reasoning,
+                reasoning_policy=reasoning_policy,
             )
             if type(created_client) is not OpenRouterClient:
                 raise TypeError("candidate benchmark client is not the concrete client")
@@ -634,10 +635,17 @@ async def _execute_candidate(
             )
             if current_model_evidence != frozen_model_evidence:
                 raise ValueError("current model metadata differs from frozen discovery evidence")
-            if reasoning is not None and "reasoning" not in (
-                current_endpoint_evidence.endpoints[0].supported_parameters
+            benchmark_reasoning_profile = reasoning_policy.control_for_request("model_benchmark")
+            current_model_evidence.reasoning_capability.require_compatible_profile(
+                benchmark_reasoning_profile
+            )
+            if (
+                current_model_evidence.reasoning_capability
+                != endpoint_evidence.reasoning_capability
             ):
-                raise ValueError("current endpoint does not support requested reasoning")
+                raise ValueError(
+                    "current reasoning capability differs from frozen discovery evidence"
+                )
             client.register_certification_model_discovery(
                 evidence=endpoint_evidence,
                 manifest=discovery_manifest,
@@ -704,28 +712,6 @@ def _usage_records_public_projection(records: tuple[UsageRecord, ...]) -> tuple[
     """Return ordered canonical bindings for serializable usage evidence only."""
 
     return tuple(canonical_sha256(record.model_dump(mode="json")) for record in records)
-
-
-def _candidate_reasoning(
-    config: AuditConfig,
-    candidate: CandidateModel,
-) -> tuple[OpenRouterReasoning | None, bool]:
-    configured = config.models.reasoning
-    requested = (
-        configured.effort is not None or configured.max_tokens is not None or configured.exclude
-    )
-    if not candidate.reasoning_supported:
-        return None, requested
-    if not requested:
-        return None, False
-    return (
-        OpenRouterReasoning(
-            effort=configured.effort,
-            max_tokens=configured.max_tokens,
-            exclude=configured.exclude,
-        ),
-        False,
-    )
 
 
 def validate_candidate_benchmark_egress(

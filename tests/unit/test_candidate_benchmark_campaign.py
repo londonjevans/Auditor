@@ -50,7 +50,7 @@ def test_campaign_authority_exposes_no_raw_capability_registrar() -> None:
 def _config(config_factory: Callable[..., AuditConfig]) -> AuditConfig:
     return config_factory(
         execution={"max_requests_per_agent": 512},
-        models={"reasoning": {"effort": "high"}},
+        models={"reasoning": {"effort": "high", "reserved_tokens": 4_096}},
     )
 
 

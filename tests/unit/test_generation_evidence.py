@@ -34,6 +34,13 @@ from mmaudit.models.openrouter import (
     OpenRouterRequestLimitError,
     OpenRouterSchemaError,
 )
+from mmaudit.models.reasoning import (
+    CANONICAL_REASONING_POLICY_ROLES,
+    ReasoningControlProfile,
+    ReasoningExecutionEvidence,
+    ReasoningPolicyArtifact,
+    ReasoningRequestPlanEvidence,
+)
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     ModelRequestValidationStatus,
@@ -65,6 +72,24 @@ _ENDED = datetime(2026, 7, 27, 8, 0, 1, tzinfo=UTC)
 _CATALOG_SNAPSHOT_SHA256 = "d" * 64
 _DISCOVERY_PROVENANCE_SHA256 = "e" * 64
 _DISCOVERY_EVIDENCE_SHA256 = "f" * 64
+
+
+def _reasoning_policy() -> ReasoningPolicyArtifact:
+    active = ReasoningControlProfile.build(
+        mode="max_tokens",
+        max_tokens=2,
+        reserved_reasoning_tokens=2,
+    )
+    disabled = ReasoningControlProfile.build(
+        mode="disabled",
+        reserved_reasoning_tokens=0,
+    )
+    return ReasoningPolicyArtifact.build(
+        controls_by_role={
+            role: active if role == "accounting_invariant" else disabled
+            for role in CANONICAL_REASONING_POLICY_ROLES
+        }
+    )
 
 
 def _catalog_identity_binding(
@@ -212,7 +237,7 @@ def _usage_record(
     )
     usage = UsageRecord(
         request_id=request_id,
-        role="accounting",
+        role="specialist:accounting_invariant",
         execution_evidence=execution_evidence,
         requested_model=_MODEL,
         returned_model=_MODEL,
@@ -247,7 +272,31 @@ def _usage_record(
         status="success",
         attempts=1,
     )
-    usage = usage.model_copy(update={"routing": synthetic_token_plan_routing(usage, usage.routing)})
+    reasoning_plan = ReasoningRequestPlanEvidence.build(
+        request_role=usage.role,
+        policy=_reasoning_policy(),
+        endpoint_capability_sha256="1" * 64,
+    )
+    routing = synthetic_token_plan_routing(
+        usage,
+        usage.routing,
+        reasoning_plan=reasoning_plan,
+    )
+    token_plan_sha256 = routing["request_token_plan_sha256"]
+    assert isinstance(token_plan_sha256, str)
+    reasoning_evidence = ReasoningExecutionEvidence.build(
+        request_plan=reasoning_plan,
+        observed_reasoning_tokens=usage.reasoning_tokens,
+        provider_completion_tokens=usage.completion_tokens,
+        request_token_plan_sha256=token_plan_sha256,
+        request_body_sha256=usage.request_body_sha256 or "",
+    )
+    usage = usage.model_copy(
+        update={
+            "routing": routing,
+            "reasoning_evidence": reasoning_evidence,
+        }
+    )
     if execution_evidence is ExecutionEvidenceKind.REAL:
         usage = _attest_owned_real_usage_record(usage)
     return usage

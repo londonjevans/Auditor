@@ -13,14 +13,14 @@ import stat
 import threading
 import tomllib
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal, Never, Self, SupportsIndex
 
-from pydantic import Field, TypeAdapter, field_validator, model_validator
+from pydantic import ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
 from mmaudit.agents.specialists import canonical_specialist_role
 from mmaudit.benchmark.models import (
@@ -44,6 +44,15 @@ from mmaudit.models.identifiers import (
     require_exact_openrouter_model_id,
 )
 from mmaudit.models.output_modes import StructuredOutputMode
+from mmaudit.models.reasoning import (
+    CANONICAL_REASONING_POLICY_ROLES,
+    ReasoningControlProfile,
+    ReasoningExecutionEvidence,
+    ReasoningPolicyArtifact,
+    ReasoningPolicyError,
+    reasoning_policy_roles_for_qualified_role,
+    resolve_reasoning_request_role,
+)
 from mmaudit.models.release_attestation import TrustedReleaseBindingObservation
 from mmaudit.models.schemas import ExecutionEvidenceKind, StrictModel, UsageRecord
 from mmaudit.models.usage import (
@@ -190,6 +199,150 @@ def _validate_utc_second(value: datetime, *, label: str) -> datetime:
 
 def _canonical_json_sha256(value: Any) -> str:
     return canonical_sha256(_JSON_ADAPTER.dump_python(value, mode="json"))
+
+
+class QualifiedReasoningRoleBinding(StrictModel):
+    """Immutable exact-profile qualification evidence without selection authority.
+
+    A whole effective-configuration hash is intentionally insufficient here. The
+    binding joins one exact model/provider/qualified-role/policy-role tuple to the
+    exact reasoning profile and endpoint capability that the benchmark qualified.
+    ``selection_authority`` is permanently false: callers must still match every
+    field through :meth:`require_exact` and consume the separate production
+    qualification capability.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        revalidate_instances="always",
+    )
+
+    schema_version: Literal["1.0"] = "1.0"
+    binding_status: Literal["exact_evidence_bound"] = "exact_evidence_bound"
+    selection_authority: Literal[False] = False
+    exact_model_id: str = Field(pattern=_MODEL_PATTERN, max_length=300)
+    approved_provider_endpoint: str = Field(pattern=_ENDPOINT_PATTERN)
+    approved_provider_name: str = Field(pattern=_PROVIDER_NAME_PATTERN)
+    qualified_role: str = Field(pattern=_ROLE_PATTERN)
+    configured_policy_role: str = Field(pattern=_ROLE_PATTERN)
+    control_profile: ReasoningControlProfile
+    control_profile_sha256: str = Field(pattern=_SHA256_PATTERN)
+    endpoint_reasoning_capability_sha256: str = Field(pattern=_SHA256_PATTERN)
+    qualification_report_sha256: str = Field(pattern=_SHA256_PATTERN)
+    qualification_result_sha256: str = Field(pattern=_SHA256_PATTERN)
+    qualification_verification_sha256: str = Field(pattern=_SHA256_PATTERN)
+    binding_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @field_validator("exact_model_id")
+    @classmethod
+    def model_id_is_exact(cls, value: str) -> str:
+        return _validate_exact_model_id(value)
+
+    @model_validator(mode="after")
+    def exact_profile_and_hash_are_consistent(self) -> Self:
+        if self.configured_policy_role not in CANONICAL_REASONING_POLICY_ROLES:
+            raise ValueError("reasoning qualification names an unknown configured policy role")
+        validated_profile = ReasoningControlProfile.model_validate(
+            self.control_profile.model_dump(mode="json")
+        )
+        if (
+            type(self.control_profile) is not ReasoningControlProfile
+            or validated_profile.profile_sha256 != self.control_profile_sha256
+        ):
+            raise ValueError("reasoning qualification profile binding is inconsistent")
+        expected = _canonical_json_sha256(self.model_dump(mode="json", exclude={"binding_sha256"}))
+        if self.binding_sha256 != expected:
+            raise ValueError("reasoning role qualification self-hash is inconsistent")
+        return self
+
+    def require_exact(
+        self,
+        *,
+        exact_model_id: str,
+        approved_provider_endpoint: str,
+        approved_provider_name: str,
+        qualified_role: str,
+        configured_policy_role: str,
+        control_profile: ReasoningControlProfile,
+        endpoint_reasoning_capability_sha256: str,
+        qualification_report_sha256: str,
+        qualification_result_sha256: str,
+        qualification_verification_sha256: str,
+    ) -> Self:
+        """Return this evidence only when every authorization-sensitive field matches."""
+
+        validated = QualifiedReasoningRoleBinding.model_validate(self.model_dump(mode="json"))
+        expected = {
+            "exact_model_id": _validate_exact_model_id(exact_model_id),
+            "approved_provider_endpoint": approved_provider_endpoint,
+            "approved_provider_name": approved_provider_name,
+            "qualified_role": qualified_role,
+            "configured_policy_role": configured_policy_role,
+            "control_profile_sha256": control_profile.profile_sha256,
+            "endpoint_reasoning_capability_sha256": endpoint_reasoning_capability_sha256,
+            "qualification_report_sha256": qualification_report_sha256,
+            "qualification_result_sha256": qualification_result_sha256,
+            "qualification_verification_sha256": qualification_verification_sha256,
+        }
+        observed = {
+            "exact_model_id": validated.exact_model_id,
+            "approved_provider_endpoint": validated.approved_provider_endpoint,
+            "approved_provider_name": validated.approved_provider_name,
+            "qualified_role": validated.qualified_role,
+            "configured_policy_role": validated.configured_policy_role,
+            "control_profile_sha256": validated.control_profile_sha256,
+            "endpoint_reasoning_capability_sha256": (
+                validated.endpoint_reasoning_capability_sha256
+            ),
+            "qualification_report_sha256": validated.qualification_report_sha256,
+            "qualification_result_sha256": validated.qualification_result_sha256,
+            "qualification_verification_sha256": (validated.qualification_verification_sha256),
+        }
+        mismatches = tuple(key for key in expected if observed[key] != expected[key])
+        if mismatches:
+            raise ValueError("reasoning qualification exact match failed: " + ", ".join(mismatches))
+        if validated.control_profile != ReasoningControlProfile.model_validate(
+            control_profile.model_dump(mode="json")
+        ):
+            raise ValueError("reasoning qualification exact control profile differs")
+        return self
+
+
+def seal_qualified_reasoning_role_binding(
+    *,
+    exact_model_id: str,
+    approved_provider_endpoint: str,
+    approved_provider_name: str,
+    qualified_role: str,
+    configured_policy_role: str,
+    control_profile: ReasoningControlProfile,
+    endpoint_reasoning_capability_sha256: str,
+    qualification_report_sha256: str,
+    qualification_result_sha256: str,
+    qualification_verification_sha256: str,
+) -> QualifiedReasoningRoleBinding:
+    """Seal one exact, provider-free reasoning qualification join."""
+
+    payload: dict[str, Any] = {
+        "schema_version": "1.0",
+        "binding_status": "exact_evidence_bound",
+        "selection_authority": False,
+        "exact_model_id": exact_model_id,
+        "approved_provider_endpoint": approved_provider_endpoint,
+        "approved_provider_name": approved_provider_name,
+        "qualified_role": qualified_role,
+        "configured_policy_role": configured_policy_role,
+        "control_profile": control_profile.model_dump(mode="json"),
+        "control_profile_sha256": control_profile.profile_sha256,
+        "endpoint_reasoning_capability_sha256": endpoint_reasoning_capability_sha256,
+        "qualification_report_sha256": qualification_report_sha256,
+        "qualification_result_sha256": qualification_result_sha256,
+        "qualification_verification_sha256": qualification_verification_sha256,
+    }
+    payload["binding_sha256"] = _canonical_json_sha256(payload)
+    return QualifiedReasoningRoleBinding.model_validate(payload)
 
 
 class OperatorLineageReview(StrictModel):
@@ -1657,6 +1810,124 @@ def seal_model_qualification_result(
     return ModelQualificationResult.model_validate(payload)
 
 
+def require_complete_reasoning_qualification_bindings(
+    *,
+    result: ModelQualificationResult,
+    qualification_verification_sha256: str,
+    endpoint_reasoning_capability_sha256: str,
+    expected_profiles_by_route: Mapping[tuple[str, str], ReasoningControlProfile],
+    bindings: tuple[QualifiedReasoningRoleBinding, ...],
+) -> tuple[QualifiedReasoningRoleBinding, ...]:
+    """Require exact reasoning qualification coverage for every approved role.
+
+    This helper is deliberately separate from model-selection authority. It lets
+    the production resolver fail closed while the result's existing self-hash
+    remains acyclic: the final bindings can include both the sealed result hash
+    and the later qualification-verification hash.
+    """
+
+    result = ModelQualificationResult.model_validate(result.model_dump(mode="json"))
+    if result.disposition is not QualificationDisposition.TIER_A:
+        raise ValueError("reasoning qualification coverage requires a Tier A result")
+    if result.benchmark_verification_sha256 is None:
+        raise ValueError("reasoning qualification coverage requires verified benchmark evidence")
+    if re.fullmatch(_SHA256_PATTERN, qualification_verification_sha256) is None:
+        raise ValueError("reasoning qualification verification hash is malformed")
+    if re.fullmatch(_SHA256_PATTERN, endpoint_reasoning_capability_sha256) is None:
+        raise ValueError("endpoint reasoning capability hash is malformed")
+
+    approved_roles = result.approved_roles
+    expected_routes = tuple(sorted(expected_profiles_by_route))
+    expected_roles = tuple(sorted({qualified_role for qualified_role, _ in expected_routes}))
+    if not approved_roles or expected_roles != approved_roles:
+        raise ValueError(
+            "reasoning qualification expectations must cover every approved role exactly"
+        )
+    binding_routes = tuple(
+        (binding.qualified_role, binding.configured_policy_role) for binding in bindings
+    )
+    if binding_routes != expected_routes or binding_routes != tuple(sorted(set(binding_routes))):
+        raise ValueError(
+            "reasoning qualification bindings must cover every approved role route exactly"
+        )
+
+    validated: list[QualifiedReasoningRoleBinding] = []
+    for binding in bindings:
+        expected_profile = expected_profiles_by_route[
+            (binding.qualified_role, binding.configured_policy_role)
+        ]
+        if type(expected_profile) is not ReasoningControlProfile:
+            raise ValueError("expected reasoning qualification profile is not sealed")
+        validated.append(
+            binding.require_exact(
+                exact_model_id=result.exact_model_id,
+                approved_provider_endpoint=result.approved_provider_endpoint,
+                approved_provider_name=result.approved_provider_name,
+                qualified_role=binding.qualified_role,
+                configured_policy_role=binding.configured_policy_role,
+                control_profile=expected_profile,
+                endpoint_reasoning_capability_sha256=(endpoint_reasoning_capability_sha256),
+                qualification_report_sha256=result.benchmark_report_sha256,
+                qualification_result_sha256=result.result_sha256,
+                qualification_verification_sha256=qualification_verification_sha256,
+            )
+        )
+    return tuple(validated)
+
+
+def _qualified_benchmark_reasoning_observation(
+    *,
+    evidence: TrustedBenchmarkVerificationEvidence,
+    reasoning_policy: ReasoningPolicyArtifact,
+) -> tuple[ReasoningControlProfile, str]:
+    """Require one uniform capability-bound profile across a real benchmark report."""
+
+    benchmark_policy = reasoning_policy.role_policy_for_request("model_benchmark")
+    observations: list[tuple[ReasoningControlProfile, str]] = []
+    for record in evidence.usage_records:
+        execution = record.reasoning_evidence
+        if type(execution) is not ReasoningExecutionEvidence:
+            raise ValueError(
+                f"Tier A benchmark lacks typed reasoning execution evidence: "
+                f"{evidence.exact_model_id}"
+            )
+        plan = execution.request_plan
+        if (
+            plan.resolution.request_role != "model_benchmark"
+            or plan.resolution.mapping_kind != "prequalification_benchmark"
+            or plan.policy_artifact_sha256 != reasoning_policy.artifact_sha256
+            or plan.policy_role_binding_sha256 != benchmark_policy.binding_sha256
+            or plan.control_profile != benchmark_policy.control
+            or plan.binding_state != "capability_bound"
+            or plan.endpoint_capability_sha256 is None
+            or plan.qualification_binding_sha256 is not None
+        ):
+            raise ValueError(
+                f"Tier A benchmark reasoning plan differs from production policy: "
+                f"{evidence.exact_model_id}"
+            )
+        if plan.control_profile.mode != "disabled" and execution.state != "active_observed":
+            raise ValueError(
+                f"Tier A benchmark lacks observable active reasoning accounting: "
+                f"{evidence.exact_model_id}"
+            )
+        observations.append((plan.control_profile, plan.endpoint_capability_sha256))
+    if not observations:
+        raise ValueError(
+            f"Tier A benchmark lacks reasoning observations: {evidence.exact_model_id}"
+        )
+    profile = observations[0][0]
+    capability_sha256 = observations[0][1]
+    if any(
+        observed_profile != profile or observed_capability != capability_sha256
+        for observed_profile, observed_capability in observations[1:]
+    ):
+        raise ValueError(
+            f"Tier A benchmark mixed reasoning profiles or capabilities: {evidence.exact_model_id}"
+        )
+    return profile, capability_sha256
+
+
 def evaluate_role_qualification_results(
     *,
     global_disposition: QualificationDisposition,
@@ -1901,6 +2172,7 @@ class VerifiedTierAModelQualification:
     benchmark_report_sha256: str
     benchmark_verification_sha256: str
     fresh_benchmark_evidence_sha256: str
+    reasoning_bindings: tuple[QualifiedReasoningRoleBinding, ...]
     evaluated_at: datetime
     expires_at: datetime
     benchmark_case_count: int
@@ -2040,6 +2312,28 @@ class VerifiedProductionQualification:
         for model in self.models:
             _validate_exact_model_id(model.exact_model_id)
             _validate_exact_model_id(model.canonical_model_slug)
+            try:
+                expected_reasoning_routes = tuple(
+                    sorted(
+                        (
+                            qualified_role,
+                            configured_policy_role,
+                        )
+                        for qualified_role in model.approved_roles
+                        for configured_policy_role in reasoning_policy_roles_for_qualified_role(
+                            qualified_role
+                        )
+                    )
+                )
+            except ReasoningPolicyError as exc:
+                raise ValueError(
+                    f"verified production model has an unknown qualified role: "
+                    f"{model.exact_model_id}"
+                ) from exc
+            observed_reasoning_routes = tuple(
+                (binding.qualified_role, binding.configured_policy_role)
+                for binding in model.reasoning_bindings
+            )
             if (
                 re.fullmatch(_LINEAGE_PATTERN, model.root_lineage) is None
                 or re.fullmatch(_ENDPOINT_PATTERN, model.approved_provider_endpoint) is None
@@ -2059,6 +2353,18 @@ class VerifiedProductionQualification:
                 or re.fullmatch(_SHA256_PATTERN, model.benchmark_report_sha256) is None
                 or re.fullmatch(_SHA256_PATTERN, model.benchmark_verification_sha256) is None
                 or re.fullmatch(_SHA256_PATTERN, model.fresh_benchmark_evidence_sha256) is None
+                or observed_reasoning_routes != expected_reasoning_routes
+                or any(
+                    type(binding) is not QualifiedReasoningRoleBinding
+                    or binding.exact_model_id != model.exact_model_id
+                    or binding.approved_provider_endpoint != model.approved_provider_endpoint
+                    or binding.approved_provider_name != model.approved_provider_name
+                    or binding.qualification_report_sha256 != model.benchmark_report_sha256
+                    or binding.qualification_result_sha256 != model.qualification_result_sha256
+                    or binding.qualification_verification_sha256
+                    != self.qualification_verification_sha256
+                    for binding in model.reasoning_bindings
+                )
                 or model.benchmark_case_count < 1
                 or model.evaluated_at > self.verified_at
                 or model.expires_at <= model.evaluated_at
@@ -2112,6 +2418,9 @@ def _verified_production_qualification_payload(
                 "benchmark_report_sha256": model.benchmark_report_sha256,
                 "benchmark_verification_sha256": model.benchmark_verification_sha256,
                 "fresh_benchmark_evidence_sha256": model.fresh_benchmark_evidence_sha256,
+                "reasoning_bindings": [
+                    binding.model_dump(mode="json") for binding in model.reasoning_bindings
+                ],
                 "evaluated_at": model.evaluated_at,
                 "expires_at": model.expires_at,
                 "benchmark_case_count": model.benchmark_case_count,
@@ -2374,6 +2683,7 @@ def resolve_verified_production_qualification(
     trusted_generation_verification: TrustedGenerationVerification,
     trusted_release_observation: TrustedReleaseBindingObservation,
     production_effective_config_sha256: str,
+    reasoning_policy: ReasoningPolicyArtifact,
     now: datetime,
     trusted_calibrated_policy: TrustedCalibratedQualificationPolicy | None = None,
 ) -> VerifiedProductionQualification:
@@ -2388,6 +2698,11 @@ def resolve_verified_production_qualification(
     for input_value, expected_type, label in inputs:
         if type(input_value) is not expected_type:
             raise ValueError(f"{label} must be a fully validated typed value")
+    if type(reasoning_policy) is not ReasoningPolicyArtifact:
+        raise ValueError("production qualification requires a sealed reasoning policy")
+    reasoning_policy = ReasoningPolicyArtifact.model_validate(
+        reasoning_policy.model_dump(mode="python")
+    )
     if (
         not isinstance(production_effective_config_sha256, str)
         or re.fullmatch(_SHA256_PATTERN, production_effective_config_sha256) is None
@@ -2502,6 +2817,49 @@ def resolve_verified_production_qualification(
             or evidence.stable_measurement_sha256 != result.benchmark_verification_sha256
         ):
             raise ValueError(f"Tier A model lacks complete REAL benchmark evidence: {model_id}")
+        benchmark_reasoning_profile, endpoint_reasoning_capability_sha256 = (
+            _qualified_benchmark_reasoning_observation(
+                evidence=evidence,
+                reasoning_policy=reasoning_policy,
+            )
+        )
+        expected_reasoning_profiles: dict[
+            tuple[str, str],
+            ReasoningControlProfile,
+        ] = {}
+        for qualified_role in result.approved_roles:
+            for configured_policy_role in reasoning_policy_roles_for_qualified_role(qualified_role):
+                profile = reasoning_policy.role_policy(configured_policy_role).control
+                if profile != benchmark_reasoning_profile:
+                    raise ValueError(
+                        "production role reasoning profile was not measured by qualification: "
+                        f"{model_id}/{qualified_role}/{configured_policy_role}"
+                    )
+                expected_reasoning_profiles[(qualified_role, configured_policy_role)] = profile
+        reasoning_bindings = tuple(
+            seal_qualified_reasoning_role_binding(
+                exact_model_id=result.exact_model_id,
+                approved_provider_endpoint=result.approved_provider_endpoint,
+                approved_provider_name=result.approved_provider_name,
+                qualified_role=qualified_role,
+                configured_policy_role=configured_policy_role,
+                control_profile=profile,
+                endpoint_reasoning_capability_sha256=(endpoint_reasoning_capability_sha256),
+                qualification_report_sha256=result.benchmark_report_sha256,
+                qualification_result_sha256=result.result_sha256,
+                qualification_verification_sha256=verification.verification_sha256,
+            )
+            for (qualified_role, configured_policy_role), profile in sorted(
+                expected_reasoning_profiles.items()
+            )
+        )
+        reasoning_bindings = require_complete_reasoning_qualification_bindings(
+            result=result,
+            qualification_verification_sha256=verification.verification_sha256,
+            endpoint_reasoning_capability_sha256=(endpoint_reasoning_capability_sha256),
+            expected_profiles_by_route=expected_reasoning_profiles,
+            bindings=reasoning_bindings,
+        )
         model = object.__new__(VerifiedTierAModelQualification)
         object.__setattr__(model, "exact_model_id", result.exact_model_id)
         object.__setattr__(model, "canonical_model_slug", result.canonical_model_slug)
@@ -2569,6 +2927,7 @@ def resolve_verified_production_qualification(
             "fresh_benchmark_evidence_sha256",
             evidence.fresh_evidence_sha256,
         )
+        object.__setattr__(model, "reasoning_bindings", reasoning_bindings)
         object.__setattr__(model, "evaluated_at", result.evaluated_at)
         object.__setattr__(model, "expires_at", result.expires_at)
         object.__setattr__(model, "benchmark_case_count", len(evidence.case_ids))
@@ -3486,17 +3845,16 @@ def _usage_role_is_approved(
     approved_roles: tuple[str, ...],
 ) -> bool:
     role = record.role
-    specialist = canonical_specialist_role(role)
-    if specialist is not None:
-        return specialist in approved_roles
-    if role.startswith("candidate_falsifier:"):
-        return "falsifier" in approved_roles
-    if role.startswith("whole_protocol_review"):
+    try:
+        resolution = resolve_reasoning_request_role(role)
+    except ReasoningPolicyError:
+        return False
+    if resolution.mapping_kind == "whole_protocol_indexed":
         return (
             source_backed_whole_protocol_context(record) is not None
-            and "whole_protocol_review" in approved_roles
+            and resolution.qualification_role in approved_roles
         )
-    return role in approved_roles
+    return resolution.qualification_role in approved_roles
 
 
 def _usage_matches_certified_selection(

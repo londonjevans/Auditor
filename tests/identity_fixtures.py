@@ -27,6 +27,10 @@ from mmaudit.models.output_modes import (
     structured_output_parameters,
     supported_output_modes,
 )
+from mmaudit.models.reasoning import (
+    ReasoningExecutionEvidence,
+    ReasoningRequestPlanEvidence,
+)
 from mmaudit.models.schemas import ModelIdentityStrength, StructuredOutputEvidence, UsageRecord
 from mmaudit.models.token_planning import (
     MINIMUM_FINDING_OUTPUT_TOKENS,
@@ -128,6 +132,8 @@ def synthetic_strict_zdr_privacy_routing(
 def synthetic_token_plan_routing(
     record: UsageRecord,
     routing: Mapping[str, object],
+    *,
+    reasoning_plan: ReasoningRequestPlanEvidence | None = None,
 ) -> dict[str, object]:
     """Complete wholly absent token evidence without masking partial-evidence tests."""
 
@@ -150,10 +156,16 @@ def synthetic_token_plan_routing(
         for category in PROMPT_ALLOCATION_CATEGORIES
     )
     prompt_ceiling = sum(item.estimate.byte_upper_bound_tokens for item in allocations)
-    completion_ceiling = max(
+    visible_completion_ceiling = max(
         1 + MINIMUM_FINDING_OUTPUT_TOKENS + MINIMUM_SUMMARY_OUTPUT_TOKENS,
         record.completion_tokens,
     )
+    reasoning_reserve = (
+        reasoning_plan.control_profile.reserved_reasoning_tokens
+        if reasoning_plan is not None
+        else 0
+    )
+    completion_ceiling = visible_completion_ceiling + reasoning_reserve
     hard_prompt_capacity = (prompt_ceiling * 4 + 2) // 3
     route = EndpointRouteTokenCapacity.build(
         exact_model_id=record.requested_model,
@@ -173,8 +185,9 @@ def synthetic_token_plan_routing(
         role=record.role,
         route_intersection=EndpointRouteIntersection.build((route,)),
         allocations=allocations,
-        required_output_tokens=completion_ceiling,
-        reserved_reasoning_tokens=0,
+        required_output_tokens=visible_completion_ceiling,
+        reserved_reasoning_tokens=reasoning_reserve,
+        reasoning_plan=reasoning_plan,
         global_input_token_budget=max(prompt_ceiling, 1_000_000),
         global_output_token_budget=max(completion_ceiling, 100_000),
         context_utilization=Decimal("0.75"),
@@ -224,6 +237,8 @@ def bind_synthetic_usage_identity(
     *,
     endpoint_supported_parameters: tuple[str, ...] | None = None,
     model_supported_parameters: tuple[str, ...] | None = None,
+    reasoning_plan: ReasoningRequestPlanEvidence | None = None,
+    observed_reasoning_tokens: int | None = None,
 ) -> UsageRecord:
     """Return a self-consistent test record with explicitly synthetic binding data."""
 
@@ -243,7 +258,11 @@ def bind_synthetic_usage_identity(
         record.routing,
         source_label=f"{record.request_id}:{record.prompt_sha256}",
     )
-    routing = synthetic_token_plan_routing(record, routing)
+    routing = synthetic_token_plan_routing(
+        record,
+        routing,
+        reasoning_plan=reasoning_plan,
+    )
     provider_fallback_used = routing.get("provider_fallback_used")
     host_model_fallback_used = routing.get("host_model_fallback_used")
     if not isinstance(provider_fallback_used, bool):
@@ -491,13 +510,25 @@ def bind_synthetic_usage_identity(
             "identity_binding_status": "generation_metadata_bound",
         }
     )
-    bound_record = UsageRecord.model_validate(
-        {
-            **record.model_dump(mode="json"),
-            "routing": routing,
-            "identity_strength": binding.strength,
-        }
-    )
+    record_payload = {
+        **record.model_dump(mode="json"),
+        "routing": routing,
+        "identity_strength": binding.strength,
+    }
+    if reasoning_plan is not None:
+        token_plan_sha256 = routing.get("request_token_plan_sha256")
+        if not isinstance(token_plan_sha256, str):
+            raise ValueError("synthetic reasoning fixture lacks a token-plan hash")
+        reasoning_evidence = ReasoningExecutionEvidence.build(
+            request_plan=reasoning_plan,
+            observed_reasoning_tokens=observed_reasoning_tokens,
+            provider_completion_tokens=record.completion_tokens,
+            request_token_plan_sha256=token_plan_sha256,
+            request_body_sha256=record.request_body_sha256,
+        )
+        record_payload["reasoning_evidence"] = reasoning_evidence.model_dump(mode="json")
+        record_payload["reasoning_tokens"] = observed_reasoning_tokens
+    bound_record = UsageRecord.model_validate(record_payload)
     if bound_record.execution_evidence.value == "real":
         # This is an explicit unit-test capability only. Serialized synthetic
         # evidence still loses runtime provenance and cannot earn REAL credit.

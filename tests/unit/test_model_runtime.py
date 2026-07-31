@@ -19,7 +19,11 @@ def test_standard_runtime_controls_require_one_exact_endpoint_without_provider_f
                 "only": ["anthropic", "google-vertex/us-east5"],
                 "allow_fallbacks": True,
             },
-            "reasoning": {"effort": "high", "exclude": True},
+            "reasoning": {
+                "effort": "high",
+                "reserved_tokens": 4_096,
+                "exclude": True,
+            },
         }
     )
 
@@ -32,18 +36,22 @@ def test_standard_runtime_controls_require_one_exact_endpoint_without_provider_f
                 "only": ["anthropic"],
                 "allow_fallbacks": False,
             },
-            "reasoning": {"effort": "high", "exclude": True},
+            "reasoning": {
+                "effort": "high",
+                "reserved_tokens": 4_096,
+                "exclude": True,
+            },
         }
     )
     controls = build_openrouter_runtime_controls(exact, certification=False)
     assert controls.provider_policy.certification is False
     assert controls.provider_policy.only == ("anthropic",)
     assert controls.provider_policy.allow_fallbacks is False
-    assert controls.reasoning is not None
-    assert controls.reasoning.as_request_payload() == {
-        "exclude": True,
-        "effort": "high",
-    }
+    profile = controls.reasoning_policy.control_for_request("source_audit")
+    assert profile.mode == "effort"
+    assert profile.effort == "high"
+    assert profile.exclude is True
+    assert profile.reserved_reasoning_tokens == 4_096
 
 
 def test_default_runtime_does_not_emit_an_unrequested_reasoning_parameter(
@@ -54,7 +62,79 @@ def test_default_runtime_does_not_emit_an_unrequested_reasoning_parameter(
         certification=False,
     )
 
-    assert controls.reasoning is None
+    assert controls.reasoning_policy.control_for_request("source_audit").mode == "disabled"
+
+
+def test_role_reasoning_override_is_exact_and_specialist_aware(config_factory) -> None:
+    base = config_factory()
+    config = config_factory(
+        models={
+            "reasoning": {"effort": "none", "exclude": True},
+            "judge": {
+                **base.models.judge.model_dump(mode="python"),
+                "reasoning": {
+                    "effort": "xhigh",
+                    "reserved_tokens": 8_192,
+                    "exclude": True,
+                },
+            },
+            "specialists": {
+                "falsifier": {
+                    "primary": "alpha/atlas-secure",
+                    "fallbacks": [],
+                    "reasoning": {
+                        "max_tokens": 2_048,
+                        "reserved_tokens": 2_048,
+                    },
+                }
+            },
+        }
+    )
+
+    policy = build_openrouter_runtime_controls(
+        config,
+        certification=False,
+    ).reasoning_policy
+
+    assert policy.control_for_request("source_audit").effort == "none"
+    assert policy.control_for_request("source_audit").reserved_reasoning_tokens == 0
+    assert policy.control_for_request("judge").effort == "xhigh"
+    assert policy.control_for_request("judge").reserved_reasoning_tokens == 8_192
+    assert (
+        policy.control_for_request("candidate_falsifier:" + ("a" * 64) + ":reviewer_1").max_tokens
+        == 2_048
+    )
+
+
+def test_certification_rejects_mixed_reasoning_parameter_shape_for_one_model(
+    config_factory,
+) -> None:
+    base = config_factory()
+    shared = base.models.source_audit.primary
+    config = config_factory(
+        execution={"max_json_repair_attempts": 0},
+        models={
+            "provider_policy": {"only": ["synthetic-provider"]},
+            "reasoning": {},
+            "threat_model": {
+                **base.models.threat_model.model_dump(mode="python"),
+                "primary": shared,
+            },
+            "source_audit": {
+                **base.models.source_audit.model_dump(mode="python"),
+                "reasoning": None,
+            },
+        },
+    )
+    payload = config.model_dump(mode="python")
+    payload["models"]["source_audit"]["reasoning"] = {
+        "effort": "high",
+        "reserved_tokens": 4_096,
+    }
+    config = type(config).model_validate(payload)
+
+    with pytest.raises(ConfigError, match="cannot mix reasoning-enabled"):
+        build_openrouter_runtime_controls(config, certification=True)
 
 
 def test_qualification_controls_require_endpoint_zdr_no_repair_and_no_provider_fallback(

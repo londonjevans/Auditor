@@ -44,6 +44,7 @@ from mmaudit.models.discovery import (
 )
 from mmaudit.models.endpoint_snapshots import (
     OpenRouterEndpointSnapshotEvidence,
+    OpenRouterReasoningCapabilityEvidence,
     validate_openrouter_endpoint_snapshot,
 )
 from mmaudit.models.generation_evidence import (
@@ -85,6 +86,15 @@ from mmaudit.models.output_modes import (
     output_mode_request_parameters,
     supports_provider_structured_output,
     supports_reasoning_request,
+)
+from mmaudit.models.reasoning import (
+    CANONICAL_REASONING_POLICY_ROLES,
+    ReasoningControlProfile,
+    ReasoningExecutionEvidence,
+    ReasoningPolicyArtifact,
+    ReasoningPolicyError,
+    ReasoningRequestPlanEvidence,
+    resolve_reasoning_request_role,
 )
 from mmaudit.models.schemas import (
     ContextPackage,
@@ -312,6 +322,127 @@ def _canonical_effective_privacy_policy(
 
 
 @dataclass(frozen=True, slots=True)
+class OpenRouterQualifiedReasoningRoutingBinding:
+    """Cycle-free projection of one exact qualified reasoning role/profile join."""
+
+    exact_model_id: str
+    approved_provider_endpoint: str
+    approved_provider_name: str
+    qualified_role: str
+    configured_policy_role: str
+    control_profile: ReasoningControlProfile
+    control_profile_sha256: str
+    endpoint_reasoning_capability_sha256: str
+    qualification_report_sha256: str
+    qualification_result_sha256: str
+    qualification_verification_sha256: str
+    binding_sha256: str
+    schema_version: Literal["1.0"] = "1.0"
+    binding_status: Literal["exact_evidence_bound"] = "exact_evidence_bound"
+    selection_authority: Literal[False] = False
+
+    def __post_init__(self) -> None:
+        _require_exact_model_id(self.exact_model_id)
+        if _PROVIDER_ID_PATTERN.fullmatch(self.approved_provider_endpoint) is None:
+            raise ValueError("reasoning qualification provider endpoint is malformed")
+        if _QUALIFICATION_PROVIDER_NAME_PATTERN.fullmatch(self.approved_provider_name) is None:
+            raise ValueError("reasoning qualification provider name is malformed")
+        if _QUALIFICATION_ROLE_PATTERN.fullmatch(self.qualified_role) is None:
+            raise ValueError("reasoning qualification role is malformed")
+        if self.configured_policy_role not in CANONICAL_REASONING_POLICY_ROLES:
+            raise ValueError("reasoning qualification policy role is unknown")
+        if type(self.control_profile) is not ReasoningControlProfile:
+            raise ValueError("reasoning qualification control profile has an invalid type")
+        validated_profile = ReasoningControlProfile.model_validate(
+            self.control_profile.model_dump(mode="json")
+        )
+        if validated_profile.profile_sha256 != self.control_profile_sha256:
+            raise ValueError("reasoning qualification control profile binding is inconsistent")
+        for value in (
+            self.control_profile_sha256,
+            self.endpoint_reasoning_capability_sha256,
+            self.qualification_report_sha256,
+            self.qualification_result_sha256,
+            self.qualification_verification_sha256,
+            self.binding_sha256,
+        ):
+            if _SHA256_PATTERN.fullmatch(value) is None:
+                raise ValueError("reasoning qualification contains a malformed evidence hash")
+        if self.binding_sha256 != _canonical_sha256(self._canonical_payload()):
+            raise ValueError("reasoning qualification binding self-hash is inconsistent")
+
+    def _canonical_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "binding_status": self.binding_status,
+            "selection_authority": self.selection_authority,
+            "exact_model_id": self.exact_model_id,
+            "approved_provider_endpoint": self.approved_provider_endpoint,
+            "approved_provider_name": self.approved_provider_name,
+            "qualified_role": self.qualified_role,
+            "configured_policy_role": self.configured_policy_role,
+            "control_profile": self.control_profile.model_dump(mode="json"),
+            "control_profile_sha256": self.control_profile_sha256,
+            "endpoint_reasoning_capability_sha256": (self.endpoint_reasoning_capability_sha256),
+            "qualification_report_sha256": self.qualification_report_sha256,
+            "qualification_result_sha256": self.qualification_result_sha256,
+            "qualification_verification_sha256": self.qualification_verification_sha256,
+        }
+
+    def require_exact(
+        self,
+        *,
+        exact_model_id: str,
+        approved_provider_endpoint: str,
+        approved_provider_name: str,
+        qualified_role: str,
+        configured_policy_role: str,
+        control_profile: ReasoningControlProfile,
+        endpoint_reasoning_capability_sha256: str,
+        qualification_report_sha256: str,
+        qualification_result_sha256: str,
+        qualification_verification_sha256: str,
+    ) -> str:
+        """Return this hash only when the exact production request is qualified."""
+
+        expected = {
+            "exact_model_id": exact_model_id,
+            "approved_provider_endpoint": approved_provider_endpoint,
+            "approved_provider_name": approved_provider_name,
+            "qualified_role": qualified_role,
+            "configured_policy_role": configured_policy_role,
+            "control_profile_sha256": control_profile.profile_sha256,
+            "endpoint_reasoning_capability_sha256": endpoint_reasoning_capability_sha256,
+            "qualification_report_sha256": qualification_report_sha256,
+            "qualification_result_sha256": qualification_result_sha256,
+            "qualification_verification_sha256": qualification_verification_sha256,
+        }
+        observed = {
+            "exact_model_id": self.exact_model_id,
+            "approved_provider_endpoint": self.approved_provider_endpoint,
+            "approved_provider_name": self.approved_provider_name,
+            "qualified_role": self.qualified_role,
+            "configured_policy_role": self.configured_policy_role,
+            "control_profile_sha256": self.control_profile_sha256,
+            "endpoint_reasoning_capability_sha256": (self.endpoint_reasoning_capability_sha256),
+            "qualification_report_sha256": self.qualification_report_sha256,
+            "qualification_result_sha256": self.qualification_result_sha256,
+            "qualification_verification_sha256": self.qualification_verification_sha256,
+        }
+        if any(observed[key] != value for key, value in expected.items()):
+            raise OpenRouterQualificationError(
+                "reasoning qualification does not match the exact production request"
+            )
+        if self.control_profile != ReasoningControlProfile.model_validate(
+            control_profile.model_dump(mode="json")
+        ):
+            raise OpenRouterQualificationError(
+                "reasoning qualification control profile differs from production"
+            )
+        return self.binding_sha256
+
+
+@dataclass(frozen=True, slots=True)
 class OpenRouterQualificationRoutingEvidence:
     """Sanitized, non-authoritative routing projection of verified qualification."""
 
@@ -333,6 +464,8 @@ class OpenRouterQualificationRoutingEvidence:
     production_selection_sha256: str
     selection_verification_sha256: str
     qualification_result_sha256: str
+    benchmark_report_sha256: str
+    reasoning_bindings: tuple[OpenRouterQualifiedReasoningRoutingBinding, ...] = ()
 
     def __post_init__(self) -> None:
         _require_exact_model_id(self.exact_model_id)
@@ -365,6 +498,7 @@ class OpenRouterQualificationRoutingEvidence:
             self.production_selection_sha256,
             self.selection_verification_sha256,
             self.qualification_result_sha256,
+            self.benchmark_report_sha256,
             self.endpoint_snapshot_sha256,
             self.output_capability_sha256,
             self.model_metadata_snapshot_sha256,
@@ -372,6 +506,24 @@ class OpenRouterQualificationRoutingEvidence:
         ):
             if _SHA256_PATTERN.fullmatch(value) is None:
                 raise ValueError("qualification routing contains a malformed evidence hash")
+        reasoning_routes = tuple(
+            (binding.qualified_role, binding.configured_policy_role)
+            for binding in self.reasoning_bindings
+        )
+        if reasoning_routes != tuple(sorted(set(reasoning_routes))):
+            raise ValueError(
+                "qualification routing reasoning bindings must be unique and route-sorted"
+            )
+        if any(
+            binding.exact_model_id != self.exact_model_id
+            or binding.approved_provider_endpoint != self.approved_provider_endpoint
+            or binding.approved_provider_name != self.approved_provider_name
+            or binding.qualification_report_sha256 != self.benchmark_report_sha256
+            or binding.qualification_result_sha256 != self.qualification_result_sha256
+            or binding.qualification_verification_sha256 != self.qualification_verification_sha256
+            for binding in self.reasoning_bindings
+        ):
+            raise ValueError("qualification routing reasoning bindings differ from their chain")
 
     def require_current(
         self,
@@ -442,6 +594,44 @@ class OpenRouterQualificationRoutingEvidence:
             allow_fallbacks=False,
         )
 
+    def reasoning_binding_sha256_for(
+        self,
+        *,
+        role: str,
+        control_profile: ReasoningControlProfile,
+        endpoint_capability_sha256: str,
+    ) -> str:
+        """Require exact role/profile/capability qualification before production use."""
+
+        try:
+            resolution = resolve_reasoning_request_role(role)
+        except ReasoningPolicyError as exc:
+            raise OpenRouterQualificationError(
+                "reasoning qualification received an unknown exact review role"
+            ) from exc
+        matches = tuple(
+            binding
+            for binding in self.reasoning_bindings
+            if binding.qualified_role == resolution.qualification_role
+            and binding.configured_policy_role == resolution.configured_policy_role
+        )
+        if len(matches) != 1:
+            raise OpenRouterQualificationError(
+                "exact review role lacks one qualified reasoning profile"
+            )
+        return matches[0].require_exact(
+            exact_model_id=self.exact_model_id,
+            approved_provider_endpoint=self.approved_provider_endpoint,
+            approved_provider_name=self.approved_provider_name,
+            qualified_role=resolution.qualification_role,
+            configured_policy_role=resolution.configured_policy_role,
+            control_profile=control_profile,
+            endpoint_reasoning_capability_sha256=endpoint_capability_sha256,
+            qualification_report_sha256=self.benchmark_report_sha256,
+            qualification_result_sha256=self.qualification_result_sha256,
+            qualification_verification_sha256=self.qualification_verification_sha256,
+        )
+
     def request_metadata(self) -> dict[str, str]:
         """Return bounded non-secret hashes for OpenRouter request metadata."""
 
@@ -451,6 +641,7 @@ class OpenRouterQualificationRoutingEvidence:
             "mmaudit_production_selection_sha256": self.production_selection_sha256,
             "mmaudit_selection_verification_sha256": self.selection_verification_sha256,
             "mmaudit_qualification_result_sha256": self.qualification_result_sha256,
+            "mmaudit_qualification_report_sha256": self.benchmark_report_sha256,
             "mmaudit_qualified_endpoint_snapshot_sha256": self.endpoint_snapshot_sha256,
             "mmaudit_qualified_output_capability_sha256": (self.output_capability_sha256),
             "mmaudit_qualified_output_mode": self.structured_output_mode.value,
@@ -480,6 +671,10 @@ class OpenRouterQualificationRoutingEvidence:
             "production_selection_sha256": self.production_selection_sha256,
             "selection_verification_sha256": self.selection_verification_sha256,
             "qualification_result_sha256": self.qualification_result_sha256,
+            "benchmark_report_sha256": self.benchmark_report_sha256,
+            "qualified_reasoning_binding_sha256": [
+                binding.binding_sha256 for binding in self.reasoning_bindings
+            ],
         }
 
 
@@ -1205,13 +1400,23 @@ def _validate_provider_token_usage(
 def _require_matching_request_parameter_profile(
     endpoint_policy: _RegisteredEndpointPolicy,
     plan: _StructuredOutputRequestPlan,
+    *,
+    dynamic_reasoning: bool,
 ) -> None:
     """Require frozen endpoint metadata to bind every emitted special parameter."""
 
     planned = set(plan.required_provider_parameters)
     for endpoint in endpoint_policy.endpoints:
         frozen = set(endpoint.required_request_parameters) - _BASE_ENDPOINT_REQUEST_PARAMETERS
-        if frozen != planned or not planned.issubset(endpoint.supported_parameters):
+        frozen_reasoning = REASONING_REQUEST_PARAMETER in frozen
+        planned_reasoning = REASONING_REQUEST_PARAMETER in planned
+        output_frozen = frozen - {REASONING_REQUEST_PARAMETER}
+        output_planned = planned - {REASONING_REQUEST_PARAMETER}
+        if (
+            output_frozen != output_planned
+            or (not dynamic_reasoning and frozen_reasoning != planned_reasoning)
+            or not planned.issubset(endpoint.supported_parameters)
+        ):
             raise OpenRouterProviderPolicyError(
                 "frozen endpoint request parameter profile differs from the emitted request"
             )
@@ -1273,6 +1478,7 @@ class OpenRouterClient:
         random_seed: int = 0,
         provider_policy: OpenRouterProviderPolicy | None = None,
         reasoning: OpenRouterReasoning | None = None,
+        reasoning_policy: ReasoningPolicyArtifact | None = None,
         token_budgets: TokenBudgetConfig | None = None,
         qualification_routing: tuple[OpenRouterQualificationRoutingEvidence, ...] = (),
         effective_privacy_policy: EffectivePrivacyPolicyEvidence | None = None,
@@ -1297,7 +1503,16 @@ class OpenRouterClient:
         self.provider_policy = _canonical_provider_policy(
             provider_policy if provider_policy is not None else OpenRouterProviderPolicy()
         )
+        if reasoning is not None and reasoning_policy is not None:
+            raise OpenRouterRequestLimitError(
+                "legacy global reasoning and per-role reasoning policy are mutually exclusive"
+            )
         self.reasoning = reasoning
+        self.reasoning_policy = (
+            ReasoningPolicyArtifact.model_validate(reasoning_policy.model_dump(mode="python"))
+            if reasoning_policy is not None
+            else None
+        )
         self.token_budgets = (
             TokenBudgetConfig.model_validate(token_budgets.model_dump(mode="python"))
             if token_budgets is not None
@@ -1334,6 +1549,10 @@ class OpenRouterClient:
         self._privacy_authorization = privacy_authorization
         self._endpoint_pricing: dict[str, _RegisteredEndpointPolicy] = {}
         self._model_identities: dict[str, _RegisteredModelIdentity] = {}
+        self._reasoning_capabilities: dict[
+            str,
+            OpenRouterReasoningCapabilityEvidence,
+        ] = {}
         qualification_model_ids = tuple(binding.exact_model_id for binding in qualification_routing)
         if qualification_model_ids != tuple(sorted(set(qualification_model_ids))):
             raise OpenRouterQualificationError(
@@ -2322,6 +2541,17 @@ class OpenRouterClient:
                 raise OpenRouterModelError(
                     "model discovery manifest does not bind the exact evidence artifact"
                 )
+        reasoning_capability = OpenRouterReasoningCapabilityEvidence.model_validate(
+            evidence.reasoning_capability.model_dump(mode="python")
+        )
+        existing_reasoning_capability = self._reasoning_capabilities.get(evidence.exact_model_id)
+        if (
+            existing_reasoning_capability is not None
+            and existing_reasoning_capability != reasoning_capability
+        ):
+            raise OpenRouterProviderPolicyError(
+                "conflicting reasoning capability evidence cannot replace a binding"
+            )
         identity = _RegisteredModelIdentity(
             exact_model_id=evidence.exact_model_id,
             canonical_slug=evidence.canonical_slug,
@@ -2364,6 +2594,7 @@ class OpenRouterClient:
             structured_output_mode=evidence.structured_output_mode,
             output_capability_sha256=evidence.output_capability_sha256,
         )
+        self._reasoning_capabilities[evidence.exact_model_id] = reasoning_capability
         self._model_identities[evidence.exact_model_id] = identity
 
     def registered_model_identity_snapshot(
@@ -2735,12 +2966,86 @@ class OpenRouterClient:
             configured if configured is not None else self.execution.max_output_tokens_per_request
         )
 
-    def _reserved_reasoning_tokens(self, required_output_tokens: int) -> int:
+    def _reasoning_profile_for_role(
+        self,
+        role: str | None,
+    ) -> ReasoningControlProfile | None:
+        if self.reasoning_policy is None:
+            return None
+        if role is None:
+            raise OpenRouterRequestLimitError(
+                "per-role reasoning policy requires an exact provider request role"
+            )
+        return self.reasoning_policy.control_for_request(role)
+
+    def _reasoning_for_role(
+        self,
+        role: str | None,
+    ) -> OpenRouterReasoning | None:
+        profile = self._reasoning_profile_for_role(role)
+        if profile is None:
+            return self.reasoning
+        if profile.mode == "disabled":
+            return None
+        return OpenRouterReasoning(
+            effort=profile.effort,
+            max_tokens=profile.max_tokens,
+            exclude=profile.exclude,
+        )
+
+    def _reserved_reasoning_tokens(
+        self,
+        required_output_tokens: int,
+        *,
+        role: str | None = None,
+    ) -> int:
+        profile = self._reasoning_profile_for_role(role)
+        if profile is not None:
+            return profile.reserved_reasoning_tokens
         if self.reasoning is None or self.reasoning.effort == "none":
             return 0
         if self.reasoning.max_tokens is not None:
             return self.reasoning.max_tokens
         return required_output_tokens
+
+    def _reasoning_request_plan(
+        self,
+        *,
+        role: str,
+        model: str,
+        qualification_binding: OpenRouterQualificationRoutingEvidence | None,
+    ) -> ReasoningRequestPlanEvidence | None:
+        if self.reasoning_policy is None:
+            return None
+        control = self.reasoning_policy.control_for_request(role)
+        capability = self._reasoning_capabilities.get(model)
+        if capability is None:
+            if self._requires_paid_controls:
+                raise OpenRouterProviderPolicyError(
+                    "paid per-role reasoning requires frozen endpoint capability evidence"
+                )
+        else:
+            if capability.exact_model_id != model:
+                raise OpenRouterProviderPolicyError(
+                    "reasoning capability differs from the exact requested model"
+                )
+            capability.require_compatible_profile(control)
+        return ReasoningRequestPlanEvidence.build(
+            request_role=role,
+            policy=self.reasoning_policy,
+            endpoint_capability_sha256=(
+                capability.capability_sha256 if capability is not None else None
+            ),
+            qualification_binding_sha256=(
+                qualification_binding.reasoning_binding_sha256_for(
+                    role=role,
+                    control_profile=control,
+                    endpoint_capability_sha256=capability.capability_sha256,
+                )
+                if qualification_binding is not None and capability is not None
+                else None
+            ),
+        )
 
     def _route_token_intersection(
         self,
@@ -2813,6 +3118,7 @@ class OpenRouterClient:
         self,
         models: Sequence[str],
         *,
+        role: str | None = None,
         workflow_byte_upper_bound_tokens: int | None = None,
         workflow_prompt: str | None = None,
         context_json_escape_overhead_tokens: int = 0,
@@ -2869,7 +3175,8 @@ class OpenRouterClient:
             effective_workflow_bound = len(_compact_json(workflow_prompt).encode("utf-8"))
         required_output_tokens = self._required_output_tokens()
         requested_completion_tokens = required_output_tokens + self._reserved_reasoning_tokens(
-            required_output_tokens
+            required_output_tokens,
+            role=role,
         )
         utilization = Decimal(
             str(
@@ -2879,6 +3186,11 @@ class OpenRouterClient:
         budgets: list[int] = []
         for model in canonical_models:
             qualification_binding = self._qualification_routing.get(model)
+            self._reasoning_request_plan(
+                role=role or "",
+                model=model,
+                qualification_binding=qualification_binding,
+            )
             provider_policy = (
                 qualification_binding.request_provider_policy()
                 if qualification_binding is not None and self.provider_policy.certification
@@ -2946,7 +3258,10 @@ class OpenRouterClient:
         """Retain independently measurable facts after full-plan rejection."""
 
         required_output_tokens = self._required_output_tokens()
-        reserved_reasoning_tokens = self._reserved_reasoning_tokens(required_output_tokens)
+        reserved_reasoning_tokens = self._reserved_reasoning_tokens(
+            required_output_tokens,
+            role=role,
+        )
         requested_completion_tokens = required_output_tokens + reserved_reasoning_tokens
         requested_surface_count = (
             len(context_package.requested_model_surfaces) if context_package is not None else 0
@@ -3009,6 +3324,7 @@ class OpenRouterClient:
         original_system_prompt: str,
         response_model: type[BaseModel],
         schema_name: str,
+        reasoning_plan: ReasoningRequestPlanEvidence | None,
         context_package: ContextPackage | None = None,
     ) -> tuple[RequestTokenPlan, ContextRequestEvidence | None]:
         if context_package is not None:
@@ -3024,7 +3340,10 @@ class OpenRouterClient:
                     "provider request cannot satisfy the bounded context plan"
                 ) from None
         required_output_tokens = self._required_output_tokens()
-        reserved_reasoning_tokens = self._reserved_reasoning_tokens(required_output_tokens)
+        reserved_reasoning_tokens = self._reserved_reasoning_tokens(
+            required_output_tokens,
+            role=role,
+        )
         requested_completion_tokens = required_output_tokens + reserved_reasoning_tokens
         global_input_budget = (
             self.token_budgets.global_input_token_budget
@@ -3096,6 +3415,7 @@ class OpenRouterClient:
                 allocations=allocations,
                 required_output_tokens=required_output_tokens,
                 reserved_reasoning_tokens=reserved_reasoning_tokens,
+                reasoning_plan=reasoning_plan,
                 global_input_token_budget=global_input_budget,
                 global_output_token_budget=global_output_budget,
                 input_tokens_reserved_before=(
@@ -3329,6 +3649,7 @@ class OpenRouterClient:
         provider_policy: OpenRouterProviderPolicy | None = None,
         structured_output_mode: StructuredOutputMode | None = None,
         request_token_plan: RequestTokenPlan | None = None,
+        request_role: str | None = None,
     ) -> dict[str, Any]:
         _require_exact_model_id(model)
         effective_provider_policy = provider_policy or self.provider_policy
@@ -3346,18 +3667,30 @@ class OpenRouterClient:
             raise OpenRouterProviderPolicyError(
                 "requested structured-output mode differs from frozen endpoint capability"
             )
+        if (
+            request_token_plan is not None
+            and request_role is not None
+            and request_token_plan.role != request_role
+        ):
+            raise OpenRouterRequestLimitError(
+                "explicit request role differs from its endpoint-bound token plan"
+            )
+        effective_request_role = (
+            request_token_plan.role if request_token_plan is not None else request_role
+        )
         request_plan = _structured_output_request_plan(
             mode=selected_mode,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             response_model=response_model,
             schema_name=schema_name,
-            reasoning=self.reasoning,
+            reasoning=self._reasoning_for_role(effective_request_role),
         )
         if endpoint_policy is not None:
             _require_matching_request_parameter_profile(
                 endpoint_policy,
                 request_plan,
+                dynamic_reasoning=self.reasoning_policy is not None,
             )
         if request_token_plan is not None:
             if (
@@ -3370,6 +3703,22 @@ class OpenRouterClient:
             ):
                 raise OpenRouterRequestLimitError(
                     "request metadata differs from its endpoint-bound token plan"
+                )
+            reasoning_plan = request_token_plan.reasoning_plan
+            if reasoning_plan is not None and (
+                request_metadata.get("mmaudit_reasoning_plan_sha256")
+                != reasoning_plan.evidence_sha256
+                or request_metadata.get("mmaudit_reasoning_policy_sha256")
+                != reasoning_plan.policy_artifact_sha256
+                or request_metadata.get("mmaudit_reasoning_profile_sha256")
+                != reasoning_plan.control_profile.profile_sha256
+                or request_metadata.get("mmaudit_reasoning_capability_sha256")
+                != reasoning_plan.endpoint_capability_sha256
+                or request_metadata.get("mmaudit_reasoning_qualification_sha256")
+                != reasoning_plan.qualification_binding_sha256
+            ):
+                raise OpenRouterRequestLimitError(
+                    "request metadata differs from its sealed reasoning plan"
                 )
             planned_endpoints = {
                 endpoint.casefold()
@@ -3468,6 +3817,7 @@ class OpenRouterClient:
 
         if not models:
             raise OpenRouterModelError(f"no model configured for role {role}")
+        self._reasoning_for_role(role)
         if len(self._unbound_completions) >= _MAX_RETAINED_UNBOUND_COMPLETIONS:
             raise OpenRouterRequestLimitError(
                 "unbound evidence retention is full; inspect and clear it before retrying"
@@ -3782,11 +4132,18 @@ class OpenRouterClient:
         request_id = str(uuid.uuid4())
         required_output_tokens = self._required_output_tokens()
         requested_completion_tokens = required_output_tokens + self._reserved_reasoning_tokens(
-            required_output_tokens
+            required_output_tokens,
+            role=role,
         )
         request_provider_policy = _canonical_provider_policy(self.provider_policy)
         structured_output_plan: _StructuredOutputRequestPlan | None = None
+        reasoning_plan: ReasoningRequestPlanEvidence | None = None
         try:
+            reasoning_plan = self._reasoning_request_plan(
+                role=role,
+                model=model,
+                qualification_binding=qualification_binding,
+            )
             request_provider_policy = (
                 qualification_binding.request_provider_policy()
                 if qualification_binding is not None and self.provider_policy.certification
@@ -3810,7 +4167,7 @@ class OpenRouterClient:
                 user_prompt=user_prompt,
                 response_model=response_model,
                 schema_name=schema_name,
-                reasoning=self.reasoning,
+                reasoning=self._reasoning_for_role(role),
             )
         except Exception as exc:
             reason = ContextPreflightReason.ROUTE_UNAVAILABLE
@@ -3849,6 +4206,7 @@ class OpenRouterClient:
                 original_system_prompt=system_prompt,
                 response_model=response_model,
                 schema_name=schema_name,
+                reasoning_plan=reasoning_plan,
                 context_package=context_package,
             )
         except Exception as exc:
@@ -3902,6 +4260,28 @@ class OpenRouterClient:
             ),
             "mmaudit_token_plan_sha256": request_token_plan.plan_sha256,
         }
+        if request_token_plan.reasoning_plan is not None:
+            request_metadata.update(
+                {
+                    "mmaudit_reasoning_plan_sha256": (
+                        request_token_plan.reasoning_plan.evidence_sha256
+                    ),
+                    "mmaudit_reasoning_policy_sha256": (
+                        request_token_plan.reasoning_plan.policy_artifact_sha256
+                    ),
+                    "mmaudit_reasoning_profile_sha256": (
+                        request_token_plan.reasoning_plan.control_profile.profile_sha256
+                    ),
+                }
+            )
+            if request_token_plan.reasoning_plan.endpoint_capability_sha256 is not None:
+                request_metadata["mmaudit_reasoning_capability_sha256"] = (
+                    request_token_plan.reasoning_plan.endpoint_capability_sha256
+                )
+            if request_token_plan.reasoning_plan.qualification_binding_sha256 is not None:
+                request_metadata["mmaudit_reasoning_qualification_sha256"] = (
+                    request_token_plan.reasoning_plan.qualification_binding_sha256
+                )
         if context_request_evidence is not None:
             request_metadata["mmaudit_context_request_evidence_sha256"] = (
                 context_request_evidence.evidence_sha256
@@ -3936,6 +4316,7 @@ class OpenRouterClient:
                 provider_policy=request_provider_policy,
                 structured_output_mode=structured_output_mode,
                 request_token_plan=request_token_plan,
+                request_role=role,
             )
             self._ensure_request_size(body)
             request_body_hash = _canonical_sha256(body)
@@ -4243,6 +4624,17 @@ class OpenRouterClient:
                 token_reservations=attempt_reservations,
                 context_request_evidence=context_request_evidence,
             )
+            reasoning_execution_evidence = (
+                ReasoningExecutionEvidence.build(
+                    request_plan=request_token_plan.reasoning_plan,
+                    observed_reasoning_tokens=active_actual_reasoning_tokens,
+                    provider_completion_tokens=active_actual_completion_tokens,
+                    request_token_plan_sha256=request_token_plan.plan_sha256,
+                    request_body_sha256=request_body_hash,
+                )
+                if request_token_plan.reasoning_plan is not None
+                else None
+            )
             usage_record = UsageRecord(
                 request_id=request_id,
                 role=role,
@@ -4273,6 +4665,7 @@ class OpenRouterClient:
                 latency_ms=latency_ms,
                 finish_reason=envelope.finish_reason,
                 reasoning_tokens=_reasoning_tokens(initial_usage),
+                reasoning_evidence=reasoning_execution_evidence,
                 cached_tokens=_cached_tokens(initial_usage),
                 retry_count=attempts - 1,
                 validation_status=(
@@ -4360,6 +4753,17 @@ class OpenRouterClient:
                     if raw_payload is not None
                     else None
                 )
+                failed_reasoning_evidence = (
+                    ReasoningExecutionEvidence.build(
+                        request_plan=request_token_plan.reasoning_plan,
+                        observed_reasoning_tokens=active_actual_reasoning_tokens,
+                        provider_completion_tokens=active_actual_completion_tokens,
+                        request_token_plan_sha256=request_token_plan.plan_sha256,
+                        request_body_sha256=request_body_hash,
+                    )
+                    if request_token_plan.reasoning_plan is not None
+                    else None
+                )
                 failed_usage = UsageRecord(
                     request_id=request_id,
                     role=role,
@@ -4410,6 +4814,7 @@ class OpenRouterClient:
                     latency_ms=latency_ms,
                     finish_reason=_optional_finish_reason(raw_payload),
                     reasoning_tokens=_reasoning_tokens(initial_usage),
+                    reasoning_evidence=failed_reasoning_evidence,
                     cached_tokens=_cached_tokens(initial_usage),
                     retry_count=max(0, attempts - 1),
                     provider_error_classification=_provider_error_classification(terminal_error),
@@ -5506,13 +5911,12 @@ def _require_exact_model_id(model: str) -> None:
 
 
 def _qualification_role(role: str) -> str:
-    if role.startswith("specialist:"):
-        return role.split(":", 2)[1]
-    if role.startswith("candidate_falsifier:"):
-        return "falsifier"
-    if role.startswith("whole_protocol_review:"):
-        return "whole_protocol_review"
-    return role
+    try:
+        return resolve_reasoning_request_role(role).qualification_role
+    except ReasoningPolicyError as exc:
+        raise OpenRouterQualificationError(
+            "qualification routing received an unknown exact review role"
+        ) from exc
 
 
 def _is_safe_metadata_pair(key: str, value: str) -> bool:

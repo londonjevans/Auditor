@@ -49,7 +49,7 @@ def _pending_config(config_factory: Callable[..., AuditConfig]) -> AuditConfig:
         privacy={"approved_model_lineages": []},
         models={
             "registry": [],
-            "reasoning": {"effort": "high"},
+            "reasoning": {"effort": "high", "reserved_tokens": 4_096},
         },
     )
 

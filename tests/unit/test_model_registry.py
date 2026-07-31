@@ -568,7 +568,13 @@ def test_serialized_production_qualification_validation_rejects_tampering() -> N
     payload = evidence.as_dict()
     payload["qualification_artifact_sha256"] = "0" * 64
 
-    with pytest.raises(ValidationError, match="self-hash is inconsistent"):
+    with pytest.raises(
+        ValidationError,
+        match=(
+            r"self-hash is inconsistent|"
+            "production reasoning qualification differs from its model binding"
+        ),
+    ):
         ProductionQualificationValidation.from_dict(payload)
 
 
@@ -600,5 +606,11 @@ def test_serialized_production_model_evidence_rejects_tampering(
     payload = evidence.as_dict()
     payload["model_bindings"][0][field] = value
 
-    with pytest.raises(ValidationError, match="self-hash is inconsistent"):
+    with pytest.raises(
+        ValidationError,
+        match=(
+            r"self-hash is inconsistent|"
+            "production reasoning qualification differs from its model binding"
+        ),
+    ):
         ProductionQualificationValidation.from_dict(payload)

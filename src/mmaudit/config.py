@@ -1168,10 +1168,44 @@ class ModelLineageConfig(ConfigModel):
         return (self.canonical_model_id, *self.aliases)
 
 
+class ModelReasoningConfig(ConfigModel):
+    """Bounded provider reasoning controls with an explicit completion reserve."""
+
+    effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None
+    max_tokens: int | None = Field(default=None, ge=1, le=65_536)
+    reserved_tokens: int | None = Field(default=None, ge=0, le=65_536)
+    exclude: bool = False
+
+    @model_validator(mode="after")
+    def reasoning_budget_mode_is_unambiguous(self) -> ModelReasoningConfig:
+        if self.effort is not None and self.max_tokens is not None:
+            raise ValueError("reasoning effort and max_tokens are mutually exclusive")
+        if self.max_tokens is not None and self.reserved_tokens not in {
+            None,
+            self.max_tokens,
+        }:
+            raise ValueError("reasoning max_tokens must equal its reserved token ceiling")
+        if self.effort == "none" and self.reserved_tokens not in {None, 0}:
+            raise ValueError("reasoning effort none requires a zero token reserve")
+        if self.effort not in {None, "none"} and (
+            self.reserved_tokens is None or self.reserved_tokens <= 0
+        ):
+            raise ValueError("named reasoning effort requires a positive token reserve")
+        default_requested = (
+            self.effort is None
+            and self.max_tokens is None
+            and (self.exclude or self.reserved_tokens is not None)
+        )
+        if default_requested and (self.reserved_tokens is None or self.reserved_tokens <= 0):
+            raise ValueError("default reasoning requires a positive token reserve")
+        return self
+
+
 class ModelRoleConfig(ConfigModel):
     primary: str
     fallbacks: list[str] = Field(default_factory=list)
     quality_tier: ModelQualityTier = "standard"
+    reasoning: ModelReasoningConfig | None = None
     capabilities: list[
         Literal[
             "structured_json",
@@ -1223,20 +1257,6 @@ class ModelProviderPolicyConfig(ConfigModel):
     def routing_modes_are_unambiguous(self) -> ModelProviderPolicyConfig:
         if self.only and self.order:
             raise ValueError("provider routing may configure only or order, not both")
-        return self
-
-
-class ModelReasoningConfig(ConfigModel):
-    """Bounded provider reasoning controls applied only when configured."""
-
-    effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None
-    max_tokens: int | None = Field(default=None, ge=1, le=65_536)
-    exclude: bool = False
-
-    @model_validator(mode="after")
-    def reasoning_budget_mode_is_unambiguous(self) -> ModelReasoningConfig:
-        if self.effort is not None and self.max_tokens is not None:
-            raise ValueError("reasoning effort and max_tokens are mutually exclusive")
         return self
 
 

@@ -26,16 +26,19 @@ from mmaudit.models.qualification import (
     _canonical_json_sha256,
     _register_verified_production_capability,
     _verified_production_qualification_payload,
+    seal_qualified_reasoning_role_binding,
 )
 from mmaudit.models.qualification_workflow import (
     QualificationReleaseBindings,
     seal_qualification_release_bindings,
 )
+from mmaudit.models.reasoning import reasoning_policy_roles_for_qualified_role
 from mmaudit.models.release_attestation import (
     ReleaseEnvironmentMeasurement,
     TrustedReleaseBindingObservation,
     observe_and_verify_qualification_release,
 )
+from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.schemas import UsageRecord
 from mmaudit.orchestration.manifest import canonical_sha256
 from tests.identity_fixtures import reattest_synthetic_real_usage
@@ -119,6 +122,7 @@ def synthetic_production_qualification(
         )
     )
     expiry = now + timedelta(days=30)
+    reasoning_policy = build_reasoning_policy(config)
     models: list[VerifiedTierAModelQualification] = []
     for model_id in model_ids:
         configured_lineage = lineage_by_model.get(model_id.lower())
@@ -202,6 +206,26 @@ def synthetic_production_qualification(
             "fresh_benchmark_evidence_sha256",
             hashlib.sha256(f"fresh-evidence:{model_id}".encode()).hexdigest(),
         )
+        endpoint_reasoning_capability_sha256 = hashlib.sha256(
+            f"reasoning-capability:{model_id}".encode()
+        ).hexdigest()
+        reasoning_bindings = tuple(
+            seal_qualified_reasoning_role_binding(
+                exact_model_id=model_id,
+                approved_provider_endpoint=provider_endpoint,
+                approved_provider_name=provider_name or provider_endpoint,
+                qualified_role=qualified_role,
+                configured_policy_role=configured_policy_role,
+                control_profile=reasoning_policy.role_policy(configured_policy_role).control,
+                endpoint_reasoning_capability_sha256=endpoint_reasoning_capability_sha256,
+                qualification_report_sha256=model.benchmark_report_sha256,
+                qualification_result_sha256=model.qualification_result_sha256,
+                qualification_verification_sha256="9" * 64,
+            )
+            for qualified_role in approved_roles
+            for configured_policy_role in reasoning_policy_roles_for_qualified_role(qualified_role)
+        )
+        object.__setattr__(model, "reasoning_bindings", reasoning_bindings)
         object.__setattr__(model, "evaluated_at", now)
         object.__setattr__(model, "expires_at", expiry)
         object.__setattr__(model, "benchmark_case_count", 1)

@@ -17,7 +17,11 @@ from mmaudit.config import AuditConfig, ModelQualityTier, model_lineage_index
 from mmaudit.constants import ALL_MODEL_ROLES, OPENROUTER_DEFAULT_BASE_URL
 from mmaudit.models.identifiers import require_exact_openrouter_model_id
 from mmaudit.models.output_modes import StructuredOutputMode
-from mmaudit.models.qualification import QualificationBindings, VerifiedProductionQualification
+from mmaudit.models.qualification import (
+    QualificationBindings,
+    QualifiedReasoningRoleBinding,
+    VerifiedProductionQualification,
+)
 from mmaudit.models.schemas import AuditProfile, StrictModel
 
 _QUALITY_TIER_RANK: dict[str, int] = {
@@ -59,6 +63,10 @@ class ProductionModelQualificationBinding(StrictModel):
     benchmark_report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     benchmark_verification_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     fresh_benchmark_evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reasoning_bindings: tuple[QualifiedReasoningRoleBinding, ...] = Field(
+        min_length=1,
+        max_length=256,
+    )
     benchmark_case_count: int = Field(ge=1)
     evaluated_at: datetime
     expires_at: datetime
@@ -93,6 +101,21 @@ class ProductionModelQualificationBinding(StrictModel):
     def qualification_window_is_valid(self) -> Self:
         if self.expires_at <= self.evaluated_at:
             raise ValueError("production model qualification must expire after evaluation")
+        routes = tuple(
+            (binding.qualified_role, binding.configured_policy_role)
+            for binding in self.reasoning_bindings
+        )
+        if routes != tuple(sorted(set(routes))):
+            raise ValueError("production reasoning qualification routes must be unique and sorted")
+        if any(
+            binding.exact_model_id != self.exact_model_id
+            or binding.approved_provider_endpoint != self.approved_provider_endpoint
+            or binding.approved_provider_name != self.approved_provider_name
+            or binding.qualification_report_sha256 != self.benchmark_report_sha256
+            or binding.qualification_result_sha256 != self.qualification_result_sha256
+            for binding in self.reasoning_bindings
+        ):
+            raise ValueError("production reasoning qualification differs from its model binding")
         return self
 
 
@@ -481,6 +504,7 @@ class ModelRegistry:
                             benchmark_report_sha256=model.benchmark_report_sha256,
                             benchmark_verification_sha256=(model.benchmark_verification_sha256),
                             fresh_benchmark_evidence_sha256=(model.fresh_benchmark_evidence_sha256),
+                            reasoning_bindings=model.reasoning_bindings,
                             benchmark_case_count=model.benchmark_case_count,
                             evaluated_at=model.evaluated_at,
                             expires_at=model.expires_at,

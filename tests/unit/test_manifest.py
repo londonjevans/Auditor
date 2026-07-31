@@ -19,7 +19,12 @@ from mmaudit.config import (
     LoadedAuditConfig,
 )
 from mmaudit.constants import ExitCode
+from mmaudit.models.reasoning import (
+    ReasoningExecutionEvidence,
+    ReasoningRequestPlanEvidence,
+)
 from mmaudit.models.registry import ModelRegistry
+from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.schemas import (
     AuditReport,
     RepositoryDifferentialRunStatus,
@@ -29,6 +34,7 @@ from mmaudit.models.schemas import (
     RepositorySuiteDifferentialRun,
     ScannerRun,
     ScannerStatus,
+    UsageRecord,
 )
 from mmaudit.orchestration.manifest import (
     ManifestBindingSet,
@@ -36,6 +42,7 @@ from mmaudit.orchestration.manifest import (
     ManifestHashBinding,
     RunConfigurationBinding,
     RunEvidenceManifest,
+    _model_bindings,
     _seed_bindings,
     build_run_evidence_manifest,
     canonical_sha256,
@@ -52,6 +59,7 @@ from mmaudit.orchestration.verification import (
     RunVerificationStatus,
     verify_run_evidence,
 )
+from tests.identity_fixtures import synthetic_token_plan_routing
 from tests.unit.test_model_registry import _verified_production_config_and_capability
 
 runner = CliRunner()
@@ -331,6 +339,142 @@ def test_manifest_seed_bindings_include_repository_suite_fuzz_seed() -> None:
         and binding.details.get("field", "").endswith("/fuzz_seed")
         for binding in bindings
     )
+
+
+def test_manifest_reconstructs_per_role_reasoning_policy_bindings(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory(
+        models={
+            "reasoning": {
+                "effort": "low",
+                "reserved_tokens": 512,
+            },
+            "source_audit": {
+                "primary": "alpha/atlas-secure",
+                "reasoning": {
+                    "effort": "high",
+                    "reserved_tokens": 2_048,
+                },
+            },
+        }
+    )
+    run_dir = tmp_path / "reasoning-run"
+    report = _report(config)
+    _write_required_artifacts(run_dir, report)
+
+    manifest = build_run_evidence_manifest(
+        run_dir=run_dir,
+        report=report,
+        config=config,
+    )
+    model_bindings = {binding.identifier: binding for binding in manifest.bindings.models}
+
+    assert model_bindings["reasoning/policy"].details["roles"]
+    assert model_bindings["reasoning/configured/source_audit"].details == {
+        "mode": "effort",
+        "effort": "high",
+        "max_tokens": "0",
+        "reserved_reasoning_tokens": "2048",
+        "profile_sha256": model_bindings["reasoning/configured/source_audit"].details[
+            "profile_sha256"
+        ],
+    }
+    assert model_bindings["reasoning/configured/judge"].details["effort"] == "low"
+
+
+def test_manifest_binds_reasoning_execution_and_rejects_effective_policy_drift(
+    config_factory,
+) -> None:
+    config = config_factory(
+        models={
+            "reasoning": {"effort": "low", "reserved_tokens": 512},
+            "source_audit": {
+                "primary": "alpha/atlas-secure",
+                "reasoning": {"effort": "high", "reserved_tokens": 2_048},
+            },
+        }
+    )
+    policy = build_reasoning_policy(config)
+    reasoning_plan = ReasoningRequestPlanEvidence.build(
+        request_role="source_audit",
+        policy=policy,
+        endpoint_capability_sha256="a" * 64,
+        qualification_binding_sha256="b" * 64,
+    )
+    provisional = UsageRecord(
+        request_id="request-reasoning-manifest",
+        role="source_audit",
+        requested_model="alpha/atlas-secure",
+        returned_model="alpha/atlas-secure",
+        actual_model="alpha/atlas-secure",
+        provider="Synthetic Provider",
+        model_family="alpha/atlas-secure",
+        timestamp=datetime(2026, 1, 2, tzinfo=UTC),
+        prompt_tokens=10,
+        completion_tokens=10,
+        total_tokens=20,
+        accounted_cost_usd=0,
+        routing={},
+        prompt_sha256="c" * 64,
+        request_body_sha256="d" * 64,
+        configured_provider_endpoints=["synthetic-provider"],
+        actual_provider_endpoint="synthetic-provider",
+        status="success",
+        attempts=1,
+    )
+    routing = synthetic_token_plan_routing(
+        provisional,
+        provisional.routing,
+        reasoning_plan=reasoning_plan,
+    )
+    token_plan_sha256 = routing["request_token_plan_sha256"]
+    assert isinstance(token_plan_sha256, str)
+    execution = ReasoningExecutionEvidence.build(
+        request_plan=reasoning_plan,
+        observed_reasoning_tokens=2,
+        provider_completion_tokens=10,
+        request_token_plan_sha256=token_plan_sha256,
+        request_body_sha256="d" * 64,
+    )
+    usage = UsageRecord.model_validate(
+        {
+            **provisional.model_dump(mode="json"),
+            "routing": routing,
+            "reasoning_tokens": 2,
+            "reasoning_evidence": execution.model_dump(mode="json"),
+        }
+    )
+    report = _report(config).model_copy(update={"usage": [usage]})
+
+    bindings = {
+        binding.identifier: binding
+        for binding in _model_bindings(config, report, qualification_runtime=None)
+    }
+
+    assert bindings["reasoning/execution/request-reasoning-manifest"].sha256 == (
+        execution.evidence_sha256
+    )
+    assert bindings["reasoning/capability/request-reasoning-manifest"].sha256 == "a" * 64
+    assert bindings["reasoning/qualification/request-reasoning-manifest"].sha256 == "b" * 64
+
+    changed_config = config_factory(
+        models={
+            "reasoning": {"effort": "low", "reserved_tokens": 512},
+            "source_audit": {
+                "primary": "alpha/atlas-secure",
+                "reasoning": {"effort": "medium", "reserved_tokens": 1_024},
+            },
+        }
+    )
+    changed_report = _report(changed_config).model_copy(update={"usage": [usage]})
+    with pytest.raises(ValueError, match="differs from the effective configuration"):
+        _model_bindings(
+            changed_config,
+            changed_report,
+            qualification_runtime=None,
+        )
 
 
 def test_manifest_rejects_scanner_results_that_differ_from_report(
@@ -645,7 +789,10 @@ def test_manifest_semantically_binds_runtime_model_qualification(
         json.dumps(tampered, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    with pytest.raises(ValidationError, match="self-hash"):
+    with pytest.raises(
+        ValidationError,
+        match=r"self-hash|reasoning qualification",
+    ):
         build_run_evidence_manifest(
             run_dir=run_dir,
             report=report,
@@ -658,7 +805,10 @@ def test_manifest_semantically_binds_runtime_model_qualification(
         json.dumps(tampered, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    with pytest.raises(ValidationError, match="self-hash"):
+    with pytest.raises(
+        ValidationError,
+        match=r"self-hash|reasoning qualification",
+    ):
         build_run_evidence_manifest(
             run_dir=run_dir,
             report=report,

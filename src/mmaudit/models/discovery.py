@@ -15,6 +15,7 @@ import shutil
 import stat
 import tempfile
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
@@ -30,7 +31,11 @@ from pydantic import (
     model_validator,
 )
 
-from mmaudit.models.endpoint_snapshots import OpenRouterEndpointSnapshotEvidence
+from mmaudit.models.endpoint_snapshots import (
+    OpenRouterEndpointSnapshotEvidence,
+    OpenRouterReasoningCapabilityEvidence,
+    ReasoningParameterSupport,
+)
 from mmaudit.models.identifiers import (
     EXACT_MODEL_ID_PATTERN,
     is_exact_openrouter_model_id,
@@ -73,6 +78,17 @@ _REQUIRED_CATALOG_PARAMETERS = frozenset(
     }
 )
 _TRUSTED_OPENROUTER_DISCOVERY_ISSUER = object()
+
+
+@dataclass(frozen=True)
+class _NormalizedCatalogReasoning:
+    """Allowlisted reasoning metadata with every unknown preserved."""
+
+    metadata_available: bool
+    mandatory: bool | None
+    default_enabled: bool | None
+    supports_max_tokens: bool | None
+    max_reasoning_tokens: int | None
 
 
 class ModelDiscoveryValidationError(ValueError):
@@ -268,6 +284,7 @@ class OpenRouterModelDiscoveryPayload(BaseModel):
     endpoint_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
     pricing_snapshot_sha256: str = Field(pattern=_SHA256_PATTERN)
     endpoint_snapshot: OpenRouterEndpointSnapshotEvidence
+    reasoning_capability: OpenRouterReasoningCapabilityEvidence
 
     @field_validator("data_collection_deny_evidence_expires_at")
     @classmethod
@@ -430,6 +447,32 @@ class OpenRouterModelDiscoveryPayload(BaseModel):
         expected_metadata_hash = _canonical_sha256(_model_metadata_projection(self))
         if self.model_metadata_snapshot_sha256 != expected_metadata_hash:
             raise ValueError("model metadata projection hash is inconsistent")
+        expected_reasoning_support: ReasoningParameterSupport = (
+            "supported" if self.reasoning_supported else "unsupported"
+        )
+        capability = self.reasoning_capability
+        if (
+            capability.exact_model_id,
+            capability.provider_endpoint,
+            capability.endpoint_tag,
+            capability.endpoint_slug,
+            capability.provider_name,
+            capability.endpoint_metadata_snapshot_sha256,
+            capability.model_metadata_snapshot_sha256,
+            capability.reasoning_parameter_support,
+            capability.max_output_tokens,
+        ) != (
+            self.exact_model_id,
+            self.approved_provider_endpoint,
+            endpoint.endpoint_tag,
+            endpoint.endpoint_slug,
+            endpoint.provider_name,
+            endpoint.endpoint_snapshot_sha256,
+            self.model_metadata_snapshot_sha256,
+            expected_reasoning_support,
+            endpoint.max_completion_tokens,
+        ):
+            raise ValueError("reasoning capability is not bound to the exact model endpoint")
         if self.output_capability_sha256 != _discovery_output_capability_sha256(self):
             raise ValueError("discovery output-capability hash is inconsistent")
         return self
@@ -604,6 +647,10 @@ def validate_openrouter_model_discovery(
         label="catalog output limit",
     )
     model_supported_parameters = _supported_parameters(selected.get("supported_parameters"))
+    catalog_reasoning = _normalize_catalog_reasoning(
+        selected,
+        label="model catalog reasoning metadata",
+    )
     _validate_single_model_metadata(
         exact_model_id=exact_model_id,
         canonical_slug=canonical_slug,
@@ -613,6 +660,7 @@ def validate_openrouter_model_discovery(
         catalog_output_limit=catalog_output_limit,
         catalog_output_limit_source=output_limit_source,
         model_supported_parameters=model_supported_parameters,
+        catalog_reasoning=catalog_reasoning,
         single_model_payload=single_model_payload,
     )
 
@@ -629,6 +677,7 @@ def validate_openrouter_model_discovery(
     structured_output_parameters = derive_structured_output_parameters(common_parameters)
     output_modes = mutually_supported_output_modes(capability_inventories)
     reasoning_parameters = reasoning_capability_parameters(common_parameters)
+    reasoning_supported = supports_reasoning_request(reasoning_parameters)
     deny_eligible: bool
     deny_request_policy_enforced: bool
     deny_evidence_source: DataCollectionDenyEvidenceSource
@@ -663,12 +712,39 @@ def validate_openrouter_model_discovery(
         deny_evidence_sha256 = None
         deny_evidence_expires_at = None
 
+    model_metadata_snapshot_sha256 = _canonical_sha256(
+        _model_metadata_projection_values(
+            canonical_slug=canonical_slug,
+            context_size=catalog_context_size,
+            exact_model_id=exact_model_id,
+            supported_parameters=model_supported_parameters,
+            provider_context_size=catalog_provider_context_size,
+            provider_context_size_source=provider_context_source,
+            output_limit=catalog_output_limit,
+            output_limit_source=output_limit_source,
+            reasoning=catalog_reasoning,
+        )
+    )
+    parameter_support: ReasoningParameterSupport = (
+        "supported" if reasoning_supported else "unsupported"
+    )
+    reasoning_capability = OpenRouterReasoningCapabilityEvidence.from_endpoint(
+        endpoint=endpoint,
+        model_metadata_snapshot_sha256=model_metadata_snapshot_sha256,
+        reasoning_parameter_support=parameter_support,
+        reasoning_metadata_available=catalog_reasoning.metadata_available,
+        reasoning_mandatory=catalog_reasoning.mandatory,
+        reasoning_default_enabled=catalog_reasoning.default_enabled,
+        reasoning_supports_max_tokens=catalog_reasoning.supports_max_tokens,
+        max_reasoning_tokens=catalog_reasoning.max_reasoning_tokens,
+    )
+
     metadata_values: dict[str, Any] = {
         "schema_version": _SCHEMA_VERSION,
         "exact_model_id": exact_model_id,
         "canonical_slug": canonical_slug,
         "catalog_identity_binding_sha256": catalog_identity_binding_sha256,
-        "model_metadata_snapshot_sha256": "0" * 64,
+        "model_metadata_snapshot_sha256": model_metadata_snapshot_sha256,
         "catalog_context_size": catalog_context_size,
         "catalog_provider_context_size": catalog_provider_context_size,
         "catalog_provider_context_size_source": provider_context_source,
@@ -682,7 +758,7 @@ def validate_openrouter_model_discovery(
         "structured_output_supported": (
             output_modes[0] is not StructuredOutputMode.VALIDATED_TEXT_JSON
         ),
-        "reasoning_supported": supports_reasoning_request(reasoning_parameters),
+        "reasoning_supported": reasoning_supported,
         "approved_provider_endpoint": endpoint.provider_endpoint,
         "provider_name": endpoint.provider_name,
         "endpoint_tag": endpoint.endpoint_tag,
@@ -702,11 +778,8 @@ def validate_openrouter_model_discovery(
         "endpoint_snapshot_sha256": endpoint_snapshot.snapshot_sha256,
         "pricing_snapshot_sha256": endpoint.pricing_sha256,
         "endpoint_snapshot": endpoint_snapshot,
+        "reasoning_capability": reasoning_capability,
     }
-    provisional = OpenRouterModelDiscoveryPayload.model_construct(**metadata_values)
-    metadata_values["model_metadata_snapshot_sha256"] = _canonical_sha256(
-        _model_metadata_projection(provisional)
-    )
     metadata_values["output_capability_sha256"] = _canonical_sha256(
         _discovery_output_capability_projection(metadata_values)
     )
@@ -1158,18 +1231,62 @@ def _read_bounded_unshared_file(path: Path) -> bytes:
 def _model_metadata_projection(
     evidence: OpenRouterModelDiscoveryPayload,
 ) -> dict[str, Any]:
+    return _model_metadata_projection_values(
+        canonical_slug=evidence.canonical_slug,
+        context_size=evidence.catalog_context_size,
+        exact_model_id=evidence.exact_model_id,
+        supported_parameters=evidence.model_supported_parameters,
+        provider_context_size=evidence.catalog_provider_context_size,
+        provider_context_size_source=evidence.catalog_provider_context_size_source,
+        output_limit=evidence.catalog_output_limit,
+        output_limit_source=evidence.catalog_output_limit_source,
+        reasoning=_reasoning_from_capability(evidence.reasoning_capability),
+    )
+
+
+def _model_metadata_projection_values(
+    *,
+    canonical_slug: str,
+    context_size: int,
+    exact_model_id: str,
+    supported_parameters: tuple[str, ...],
+    provider_context_size: int,
+    provider_context_size_source: str,
+    output_limit: int,
+    output_limit_source: str,
+    reasoning: _NormalizedCatalogReasoning,
+) -> dict[str, Any]:
     return {
-        "canonical_slug": evidence.canonical_slug,
-        "context_length": evidence.catalog_context_size,
-        "id": evidence.exact_model_id,
-        "supported_parameters": list(evidence.model_supported_parameters),
+        "canonical_slug": canonical_slug,
+        "context_length": context_size,
+        "id": exact_model_id,
+        "reasoning": {
+            "metadata_available": reasoning.metadata_available,
+            "mandatory": reasoning.mandatory,
+            "default_enabled": reasoning.default_enabled,
+            "supports_max_tokens": reasoning.supports_max_tokens,
+            "max_tokens": reasoning.max_reasoning_tokens,
+        },
+        "supported_parameters": list(supported_parameters),
         "top_provider": {
-            "context_length": evidence.catalog_provider_context_size,
-            "context_length_source": evidence.catalog_provider_context_size_source,
-            "max_completion_tokens": evidence.catalog_output_limit,
-            "max_completion_tokens_source": evidence.catalog_output_limit_source,
+            "context_length": provider_context_size,
+            "context_length_source": provider_context_size_source,
+            "max_completion_tokens": output_limit,
+            "max_completion_tokens_source": output_limit_source,
         },
     }
+
+
+def _reasoning_from_capability(
+    capability: OpenRouterReasoningCapabilityEvidence,
+) -> _NormalizedCatalogReasoning:
+    return _NormalizedCatalogReasoning(
+        metadata_available=capability.reasoning_metadata_available,
+        mandatory=capability.reasoning_mandatory,
+        default_enabled=capability.reasoning_default_enabled,
+        supports_max_tokens=capability.reasoning_supports_max_tokens,
+        max_reasoning_tokens=capability.max_reasoning_tokens,
+    )
 
 
 def _discovery_output_capability_projection(
@@ -1179,6 +1296,7 @@ def _discovery_output_capability_projection(
     if isinstance(evidence, OpenRouterModelDiscoveryPayload):
         values = evidence.model_dump(mode="python")
         endpoint_snapshot = evidence.endpoint_snapshot
+        reasoning_capability = evidence.reasoning_capability
     else:
         values = evidence
         raw_snapshot = values["endpoint_snapshot"]
@@ -1187,6 +1305,12 @@ def _discovery_output_capability_projection(
                 "output capability requires validated endpoint snapshot evidence"
             )
         endpoint_snapshot = raw_snapshot
+        raw_reasoning_capability = values["reasoning_capability"]
+        if not isinstance(raw_reasoning_capability, OpenRouterReasoningCapabilityEvidence):
+            raise ModelDiscoveryValidationError(
+                "output capability requires validated reasoning capability evidence"
+            )
+        reasoning_capability = raw_reasoning_capability
     endpoint = endpoint_snapshot.endpoint(str(values["approved_provider_endpoint"]))
     return {
         "exact_model_id": values["exact_model_id"],
@@ -1198,6 +1322,7 @@ def _discovery_output_capability_projection(
         "structured_output_parameters": values["structured_output_parameters"],
         "supported_output_modes": values["supported_output_modes"],
         "structured_output_mode": values["structured_output_mode"],
+        "reasoning_capability_sha256": reasoning_capability.capability_sha256,
     }
 
 
@@ -1247,6 +1372,68 @@ def _validate_catalog_identity(*, exact_model_id: str, canonical_slug: str) -> N
         )
 
 
+def _normalize_catalog_reasoning(
+    selected: Mapping[str, Any],
+    *,
+    label: str,
+) -> _NormalizedCatalogReasoning:
+    if "reasoning" not in selected or selected.get("reasoning") is None:
+        return _NormalizedCatalogReasoning(
+            metadata_available=False,
+            mandatory=None,
+            default_enabled=None,
+            supports_max_tokens=None,
+            max_reasoning_tokens=None,
+        )
+    raw = selected.get("reasoning")
+    if not isinstance(raw, dict):
+        raise ModelDiscoveryValidationError(f"{label} must be an object or null")
+    mandatory = _optional_reasoning_boolean(raw, "mandatory", label)
+    default_enabled = _optional_reasoning_boolean(raw, "default_enabled", label)
+    supports_max_tokens = _optional_reasoning_boolean(
+        raw,
+        "supports_max_tokens",
+        label,
+    )
+    max_reasoning_tokens = _optional_reasoning_token_ceiling(raw, label)
+    if max_reasoning_tokens is not None and supports_max_tokens is not True:
+        raise ModelDiscoveryValidationError(f"{label} publishes max_tokens without exact support")
+    return _NormalizedCatalogReasoning(
+        metadata_available=True,
+        mandatory=mandatory,
+        default_enabled=default_enabled,
+        supports_max_tokens=supports_max_tokens,
+        max_reasoning_tokens=max_reasoning_tokens,
+    )
+
+
+def _optional_reasoning_boolean(
+    reasoning: Mapping[str, Any],
+    field: str,
+    label: str,
+) -> bool | None:
+    value = reasoning.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise ModelDiscoveryValidationError(f"{label} field {field} must be boolean or null")
+    return value
+
+
+def _optional_reasoning_token_ceiling(
+    reasoning: Mapping[str, Any],
+    label: str,
+) -> int | None:
+    value = reasoning.get("max_tokens")
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 65_536:
+        raise ModelDiscoveryValidationError(
+            f"{label} field max_tokens must be a bounded positive integer or null"
+        )
+    return int(value)
+
+
 def _validate_single_model_metadata(
     *,
     exact_model_id: str,
@@ -1265,6 +1452,7 @@ def _validate_single_model_metadata(
         "provider_context",
     ],
     model_supported_parameters: tuple[str, ...],
+    catalog_reasoning: _NormalizedCatalogReasoning,
     single_model_payload: Any,
 ) -> None:
     envelope = _required_mapping(single_model_payload, "single-model metadata response")
@@ -1302,6 +1490,10 @@ def _validate_single_model_metadata(
         label="single-model metadata output limit",
     )
     observed_supported_parameters = _supported_parameters(selected.get("supported_parameters"))
+    observed_reasoning = _normalize_catalog_reasoning(
+        selected,
+        label="single-model reasoning metadata",
+    )
     if (
         observed_context_size,
         observed_provider_context_size,
@@ -1309,6 +1501,7 @@ def _validate_single_model_metadata(
         observed_output_limit,
         observed_output_limit_source,
         observed_supported_parameters,
+        observed_reasoning,
     ) != (
         catalog_context_size,
         catalog_provider_context_size,
@@ -1316,6 +1509,7 @@ def _validate_single_model_metadata(
         catalog_output_limit,
         catalog_output_limit_source,
         model_supported_parameters,
+        catalog_reasoning,
     ):
         raise ModelDiscoveryValidationError(
             "single-model metadata differs from the frozen catalog projection"

@@ -47,8 +47,9 @@ order = []
 allow_fallbacks = false
 
 [models.reasoning]
-# Candidate callers must suppress reasoning when frozen metadata says it is unsupported.
+# The max-token control is also the exact atomic reasoning reserve.
 max_tokens = 4096
+reserved_tokens = 4096
 exclude = false
 
 [models.threat_model]

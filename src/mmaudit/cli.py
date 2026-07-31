@@ -1081,7 +1081,7 @@ def models_check(
                 budget=budget,
                 usage=usage,
                 provider_policy=controls.provider_policy,
-                reasoning=controls.reasoning,
+                reasoning_policy=controls.reasoning_policy,
             )
             try:
                 registry = ModelRegistry(_cache_path(config_path))
@@ -1122,7 +1122,7 @@ def models_check(
                                     endpoint_payload=endpoint_payload,
                                     require_zdr=config.privacy.require_zdr,
                                     zdr_payload=zdr_payload,
-                                    reasoning_requested=controls.reasoning is not None,
+                                    reasoning_requested=False,
                                     structured_output_required=False,
                                 )
                             )
@@ -1300,7 +1300,7 @@ def models_benchmark(
                 budget=budget,
                 usage=usage,
                 provider_policy=controls.provider_policy,
-                reasoning=controls.reasoning,
+                reasoning_policy=controls.reasoning_policy,
             )
             try:
                 await client.validate_authentication()
@@ -3780,7 +3780,7 @@ async def _refetch_qualification_generations(
             budget=budget,
             usage=usage,
             provider_policy=controls.provider_policy,
-            reasoning=controls.reasoning,
+            reasoning_policy=controls.reasoning_policy,
         )
         try:
             return await refetch_trusted_benchmark_generations(
@@ -4073,7 +4073,7 @@ async def _model_metadata(
         budget=budget,
         usage=usage,
         provider_policy=controls.provider_policy,
-        reasoning=controls.reasoning,
+        reasoning_policy=controls.reasoning_policy,
     )
     try:
         metadata = await client.list_models()
@@ -4097,7 +4097,7 @@ def _openrouter_authentication_valid(config: AuditConfig, api_key: str) -> bool:
             budget=budget,
             usage=usage,
             provider_policy=controls.provider_policy,
-            reasoning=controls.reasoning,
+            reasoning_policy=controls.reasoning_policy,
         )
         try:
             await client.validate_authentication()

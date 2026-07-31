@@ -1287,6 +1287,9 @@ def _model_bindings(
     *,
     qualification_runtime: dict[str, Any] | None,
 ) -> list[ManifestHashBinding]:
+    # Local import avoids introducing runtime construction into schema imports.
+    from mmaudit.models.runtime import build_reasoning_policy
+
     roles = [*ALL_MODEL_ROLES, *sorted(config.models.specialists)]
     registry = {
         model_id.lower(): entry
@@ -1294,6 +1297,31 @@ def _model_bindings(
         for model_id in entry.model_ids()
     }
     bindings = []
+    reasoning_policy = build_reasoning_policy(config)
+    bindings.append(
+        ManifestHashBinding(
+            identifier="reasoning/policy",
+            sha256=reasoning_policy.artifact_sha256,
+            details={
+                "schema_version": reasoning_policy.schema_version,
+                "roles": str(len(reasoning_policy.policies)),
+            },
+        )
+    )
+    bindings.extend(
+        ManifestHashBinding(
+            identifier=f"reasoning/configured/{policy.role}",
+            sha256=policy.binding_sha256,
+            details={
+                "mode": policy.control.mode,
+                "effort": policy.control.effort or "not_set",
+                "max_tokens": str(policy.control.max_tokens or 0),
+                "reserved_reasoning_tokens": str(policy.control.reserved_reasoning_tokens),
+                "profile_sha256": policy.control.profile_sha256,
+            },
+        )
+        for policy in reasoning_policy.policies
+    )
     for role in roles:
         role_config = config.models.role(role)
         lineage = registry.get(role_config.primary.lower())
@@ -1313,10 +1341,14 @@ def _model_bindings(
             )
         )
     for index, usage in enumerate(report.usage):
+        execution_payload = usage.model_dump(mode="json")
+        if usage.reasoning_evidence is None:
+            # Preserve the pre-reasoning execution binding for legacy reports.
+            execution_payload.pop("reasoning_evidence")
         bindings.append(
             _binding(
                 f"execution/{index:05d}",
-                usage.model_dump(mode="json"),
+                execution_payload,
                 {
                     "role": _detail(usage.role),
                     "requested": _detail(usage.requested_model),
@@ -1325,6 +1357,59 @@ def _model_bindings(
                 },
             )
         )
+        reasoning = usage.reasoning_evidence
+        if reasoning is not None:
+            configured_role_policy = reasoning_policy.role_policy_for_request(usage.role)
+            if (
+                reasoning.request_plan.policy_artifact_sha256 != reasoning_policy.artifact_sha256
+                or reasoning.request_plan.policy_role_binding_sha256
+                != configured_role_policy.binding_sha256
+                or reasoning.request_plan.control_profile != configured_role_policy.control
+            ):
+                raise ValueError(
+                    "reasoning execution evidence differs from the effective configuration"
+                )
+            bindings.append(
+                ManifestHashBinding(
+                    identifier=f"reasoning/execution/{usage.request_id}",
+                    sha256=reasoning.evidence_sha256,
+                    details={
+                        "role": _detail(usage.role),
+                        "state": reasoning.state,
+                        "profile_sha256": (reasoning.request_plan.control_profile.profile_sha256),
+                        "reserved_reasoning_tokens": str(reasoning.reserved_reasoning_tokens),
+                        "observed_reasoning_tokens": (
+                            str(reasoning.observed_reasoning_tokens)
+                            if reasoning.observation_available
+                            else "unavailable"
+                        ),
+                    },
+                )
+            )
+            capability_sha256 = reasoning.request_plan.endpoint_capability_sha256
+            if capability_sha256 is not None:
+                bindings.append(
+                    ManifestHashBinding(
+                        identifier=(f"reasoning/capability/{usage.request_id}"),
+                        sha256=capability_sha256,
+                        details={
+                            "model": _detail(usage.requested_model),
+                            "role": _detail(usage.role),
+                        },
+                    )
+                )
+            qualification_sha256 = reasoning.request_plan.qualification_binding_sha256
+            if qualification_sha256 is not None:
+                bindings.append(
+                    ManifestHashBinding(
+                        identifier=(f"reasoning/qualification/{usage.request_id}"),
+                        sha256=qualification_sha256,
+                        details={
+                            "model": _detail(usage.requested_model),
+                            "role": _detail(usage.role),
+                        },
+                    )
+                )
     bindings.extend(_qualification_bindings(qualification_runtime))
     return sorted(bindings, key=lambda item: item.identifier)
 

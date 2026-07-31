@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_BY_OPERATOR
-CURRENT_MILESTONE: Paused mid-ticket after the atomic reasoning-token reservation slice
+AUTORUN_STATUS: CHECKPOINT_READY
+CURRENT_MILESTONE: Per-role reasoning effort binding
 CURRENT_TICKET: V3-EFFORT-001 (PARTIAL)
 LAST_COMPLETED_TICKET: V3-EXECORIGIN-001
-NEXT_ACTION: On operator resume, continue V3-EFFORT-001 with expected-red per-role policy and qualification-binding assays; do not repeat the completed atomic token-reservation slice.
-LAST_COMMAND: `git commit -m "Bind reasoning token reservations"`
-LAST_RESULT: PASS — partial V3-EFFORT-001 implementation checkpoint `00c2f6dc44bbfc640ca60b09e52b76114cf25bd1` was created after 319 affected tests passed.
+NEXT_ACTION: Create the isolated checkpoint, record its commit hash, push `main` over SSH, and pause. On resume, continue V3-EFFORT-001 with the recorded certification-authority and downstream evidence joins.
+LAST_COMMAND: `.venv/bin/ruff format .`; `.venv/bin/ruff check .`; `.venv/bin/mypy`; `.venv/bin/python scripts/generate_release_schemas.py`; `git diff --check`.
+LAST_RESULT: PASS — 384 files unchanged by formatting, Ruff clean, strict mypy clean across 156 source files, generated schemas synchronized, and the diff has no whitespace errors. Full pytest coverage passed as one isolated lifecycle test plus the remaining suite: 3729 passed and 11 environment-dependent skips.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -45,6 +45,25 @@ LAST_CHECKPOINT_COMMIT: 00c2f6dc44bbfc640ca60b09e52b76114cf25bd1
     usage above the matching reserved slice.
   - Synthetic fixtures were updated to prove reasoning usage when a reasoning-enabled request is
     expected to succeed.
+  - A frozen, self-hashed per-role policy now covers every exact base and specialist role. Dynamic
+    request-role forms resolve through one closed grammar into distinct semantic, configured-policy,
+    and qualification roles; unknown and noncanonical forms fail before transport.
+  - Model and endpoint discovery preserve explicit reasoning parameter support, mandatory/default
+    state, max-token support, and published ceilings without inferring unknown capabilities.
+    Paid requests require an exact frozen capability compatible with the selected role profile.
+  - Request token-plan schema `2.0` binds the exact reasoning plan while retaining validation of
+    legacy `1.0` hashes. Usage records require the routed plan and execution evidence to agree on
+    role, request, profile, token-plan hash, request-body hash, and observed provider accounting.
+  - Context evidence preserves observed zero versus unavailable reasoning. The run manifest binds
+    configured policy, effective execution, endpoint capability, and qualification evidence and
+    rejects effective-config drift. Markdown reports expose effective control, reserve, observed
+    tokens, profile, capability, and qualification hashes.
+  - Qualification now requires real benchmark usage with typed capability-bound reasoning evidence,
+    seals cycle-free role/policy-pair bindings only after verification, preserves them through the
+    production registry and OpenRouter routing projection, and rejects exact profile, capability,
+    model, provider, report, result, or verification drift.
+  - Candidate benchmarking uses the same frozen policy and endpoint capability evidence. Unsupported
+    or incompatible reasoning is an explicit failed denominator, never silent suppression.
 - **Validation:**
   - `.venv/bin/ruff format src/mmaudit/models/openrouter.py src/mmaudit/models/usage.py
     src/mmaudit/orchestration/budgets.py tests/identity_fixtures.py
@@ -68,11 +87,65 @@ LAST_CHECKPOINT_COMMIT: 00c2f6dc44bbfc640ca60b09e52b76114cf25bd1
     tests/unit/test_openrouter_qualification_config.py` — PASS; 319 tests passed.
 - **External effects:** None. No secret was read, no provider or network was contacted, and the
   cumulative OpenRouter ledger remains unchanged.
-- **Remaining limitation:** The product still has one global reasoning control. Per-role policy
-  resolution, exact endpoint-capability authority, qualification at the effective effort,
-  and manifest/report projection remain open.
-- **Pause boundary:** Parallel agents were stopped before the checkpoint. Resume from the
-  per-role expected-red assays; do not redo this token-accounting slice.
+- **Continuation validation before full-suite gate:**
+  - Focused reasoning and candidate policy matrix: `97 passed`.
+  - Qualification, registry, OpenRouter, usage, manifest, context, discovery, runtime, and candidate
+    matrix: `699 passed in 25.72s`.
+  - Maximum-assurance synthetic pipeline regression: `1 passed in 13.39s`.
+  - `.venv/bin/ruff format --check . && .venv/bin/ruff check .` — PASS; `384` files formatted and
+    all checks clean.
+  - `.venv/bin/mypy` — PASS; no issues in `156` source files.
+  - `.venv/bin/python scripts/generate_release_schemas.py --write` followed by verification — PASS;
+    the context-manifest schema is synchronized.
+  - `git diff --check` — PASS.
+  - First final `.venv/bin/pytest -q` attempt — INCOMPLETE: one clean-Anvil lifecycle
+    integration exceeded its 12-second deadline under load; the run was then stopped after
+    `113 passed, 5 skipped, 1 failed in 220.22s` to avoid waiting through the corpus with a known
+    failure. The exact failed test subsequently passed alone in `1.55s`; the isolated pass does
+    not replace the required complete-suite gate.
+  - First remainder-suite run excluding that already-passed lifecycle test — FAIL:
+    `47 failed, 3681 passed, 11 skipped in 572.07s`. All failures were in the generation-evidence
+    fixture, whose synthetic usage declared two reasoning tokens without a typed reasoning plan or
+    execution record. The fixture now uses the recognized `specialist:accounting_invariant` role,
+    an exact two-token capability-bound plan, and matching execution evidence.
+  - `.venv/bin/pytest -q tests/unit/test_generation_evidence.py` — PASS; `99 passed in 0.91s`.
+  - `.venv/bin/pytest -q --ignore=tests/integration/test_clean_chain_integration.py` —
+    PASS; `3728 passed, 11 skipped in 562.72s`. Together with the isolated
+    `test_real_trusted_clean_anvil_lifecycle_is_pid_and_state_bound` pass, this covers the complete
+    suite as `3729 passed, 11 skipped`.
+  - `.venv/bin/ruff format .` — PASS; `384 files left unchanged`.
+  - `.venv/bin/ruff check .` — PASS.
+  - `.venv/bin/mypy` — PASS; no issues in `156` source files.
+  - `.venv/bin/python scripts/generate_release_schemas.py` — PASS; generated schemas synchronized.
+  - `git diff --check` — PASS.
+- **Remaining limitation:** Qualification currently executes one exact `model_benchmark` reasoning
+  profile. The production resolver therefore fails closed when any selected role uses a different
+  profile; it does not falsely duplicate one benchmark result across different effort levels. A
+  bounded multi-profile qualification campaign is still required before this ticket can be
+  `COMPLETE`. A final adversarial read-only review also found the following unresolved acceptance
+  gaps, which are recorded rather than repaired during the operator-requested pause:
+  - certification can still use an absent or legacy global reasoning policy instead of requiring a
+    sealed per-role, capability-bound, qualification-bound plan before transport;
+  - endpoint evidence proves generic reasoning support but does not freeze the exact supported
+    effort inventory;
+  - public, self-hashed routing projections can still be consumed without proving issuance from the
+    opaque verified-production qualification capability;
+  - ensemble and maximum-assurance usage credit do not yet join the exact role pair, policy,
+    profile, endpoint capability, and qualification binding to that opaque authority;
+  - serialized registry and manifest projections do not independently prove complete role-route
+    coverage and every nested-to-parent verification join;
+  - active non-disabled qualification can treat an observed zero as substantive reasoning, and
+    persisted usage credit can accept an unavailable active observation;
+  - downstream atomic-reservation checks do not yet compare the visible-output and reasoning split
+    independently, and the per-role request shape is not consistently included in strict model
+    identity evidence;
+  - legacy token-plan `1.0` normalization needs a compatibility repair while remaining ineligible
+    for the new maximum-assurance reasoning gate.
+  These gaps keep `V3-EFFORT-001` `PARTIAL` and the release `INCOMPLETE`; no maximum-assurance
+  completeness claim is supported by this checkpoint.
+- **Pause boundary:** Finish the full-suite gate and SSH checkpoint. On resume, extend qualification
+  authority and runtime-credit joins first, then execute every distinct selected role profile
+  before returning to `V3-CALIBRATE-001`.
 
 ## 2026-07-30 — V3-LINEAGE-001
 

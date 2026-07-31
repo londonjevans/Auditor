@@ -6,9 +6,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from mmaudit.config import AuditConfig, ConfigError
+from mmaudit.config import AuditConfig, ConfigError, ModelReasoningConfig
 from mmaudit.constants import ALL_MODEL_ROLES
-from mmaudit.models.openrouter import OpenRouterProviderPolicy, OpenRouterReasoning
+from mmaudit.models.openrouter import OpenRouterProviderPolicy
+from mmaudit.models.reasoning import (
+    CANONICAL_REASONING_POLICY_ROLES,
+    ReasoningControlProfile,
+    ReasoningPolicyArtifact,
+)
 from mmaudit.models.schemas import AuditProfile
 from mmaudit.privacy import (
     EffectivePrivacyPolicyEvidence,
@@ -22,7 +27,7 @@ class OpenRouterRuntimeControls:
     """Provider controls applied consistently at every production construction site."""
 
     provider_policy: OpenRouterProviderPolicy
-    reasoning: OpenRouterReasoning | None
+    reasoning_policy: ReasoningPolicyArtifact
 
 
 def maximum_assurance_model_certification_required(config: AuditConfig) -> bool:
@@ -96,20 +101,9 @@ def build_openrouter_runtime_controls(
                     "configured model fallbacks remain for: " + ", ".join(fallback_roles)
                 )
 
-    reasoning_config = config.models.reasoning
-    reasoning = (
-        None
-        if (
-            reasoning_config.effort is None
-            and reasoning_config.max_tokens is None
-            and not reasoning_config.exclude
-        )
-        else OpenRouterReasoning(
-            effort=reasoning_config.effort,
-            max_tokens=reasoning_config.max_tokens,
-            exclude=reasoning_config.exclude,
-        )
-    )
+    reasoning_policy = build_reasoning_policy(config)
+    if certification:
+        _require_consistent_reasoning_parameter_presence(config, reasoning_policy)
     return OpenRouterRuntimeControls(
         provider_policy=OpenRouterProviderPolicy(
             certification=certification,
@@ -117,5 +111,89 @@ def build_openrouter_runtime_controls(
             order=policy.order,
             allow_fallbacks=policy.allow_fallbacks,
         ),
-        reasoning=reasoning,
+        reasoning_policy=reasoning_policy,
     )
+
+
+def build_reasoning_policy(config: AuditConfig) -> ReasoningPolicyArtifact:
+    """Build the provider-independent exact per-role reasoning policy."""
+
+    reasoning_controls = {
+        role: _reasoning_control_for_configured_role(config, role)
+        for role in CANONICAL_REASONING_POLICY_ROLES
+    }
+    return ReasoningPolicyArtifact.build(controls_by_role=reasoning_controls)
+
+
+def _reasoning_control_for_configured_role(
+    config: AuditConfig,
+    role: str,
+) -> ReasoningControlProfile:
+    role_config = (
+        config.models.role(role)
+        if role in ALL_MODEL_ROLES or role in config.models.specialists
+        else None
+    )
+    configured = (
+        role_config.reasoning
+        if role_config is not None and role_config.reasoning is not None
+        else config.models.reasoning
+    )
+    return _reasoning_control_from_config(configured)
+
+
+def _reasoning_control_from_config(
+    configured: ModelReasoningConfig,
+) -> ReasoningControlProfile:
+    if configured.max_tokens is not None:
+        return ReasoningControlProfile.build(
+            mode="max_tokens",
+            max_tokens=configured.max_tokens,
+            exclude=configured.exclude,
+            reserved_reasoning_tokens=configured.max_tokens,
+        )
+    if configured.effort is not None:
+        return ReasoningControlProfile.build(
+            mode="effort",
+            effort=configured.effort,
+            exclude=configured.exclude,
+            reserved_reasoning_tokens=configured.reserved_tokens or 0,
+        )
+    if configured.exclude or configured.reserved_tokens is not None:
+        assert configured.reserved_tokens is not None
+        return ReasoningControlProfile.build(
+            mode="default",
+            exclude=configured.exclude,
+            reserved_reasoning_tokens=configured.reserved_tokens,
+        )
+    return ReasoningControlProfile.build(
+        mode="disabled",
+        reserved_reasoning_tokens=0,
+    )
+
+
+def _require_consistent_reasoning_parameter_presence(
+    config: AuditConfig,
+    policy: ReasoningPolicyArtifact,
+) -> None:
+    """Keep each exact model on one frozen request-parameter shape."""
+
+    request_shape_by_model: dict[str, bool] = {}
+    conflicting: set[str] = set()
+    for role in (*ALL_MODEL_ROLES, *sorted(config.models.specialists)):
+        role_config = config.models.role(role)
+        emits_reasoning = (
+            policy.control_for_request(
+                role if role in ALL_MODEL_ROLES else f"specialist:{role}"
+            ).mode
+            != "disabled"
+        )
+        for model in (role_config.primary, *role_config.fallbacks):
+            previous = request_shape_by_model.setdefault(model, emits_reasoning)
+            if previous is not emits_reasoning:
+                conflicting.add(model)
+    if conflicting:
+        raise ConfigError(
+            "one exact model cannot mix reasoning-enabled and reasoning-disabled "
+            "certification request shapes: " + ", ".join(sorted(conflicting))
+        )

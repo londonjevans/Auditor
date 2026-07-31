@@ -654,6 +654,26 @@ def test_request_planning_rejects_unproven_completion_capacity() -> None:
         )
 
 
+def test_request_plan_v2_preserves_legacy_v1_hash_validation() -> None:
+    current = _plan(required_output_tokens=4_096, reserved_reasoning_tokens=0)
+    assert current.schema_version == "2.0"
+
+    legacy_payload = current.model_dump(mode="json", exclude={"plan_sha256"})
+    legacy_payload["schema_version"] = "1.0"
+    legacy_payload.pop("reasoning_plan")
+    restored = RequestTokenPlan.model_validate_json(
+        json.dumps(
+            {
+                **legacy_payload,
+                "plan_sha256": canonical_sha256(legacy_payload),
+            }
+        )
+    )
+
+    assert restored.schema_version == "1.0"
+    assert restored.reasoning_plan is None
+
+
 def test_persisted_request_plan_rejects_unproven_completion_capacity() -> None:
     valid_route = _route(
         context_tokens=300_000,
