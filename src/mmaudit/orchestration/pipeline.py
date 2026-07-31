@@ -1758,6 +1758,7 @@ class AuditPipeline:
                     qualification_routing=_openrouter_qualification_routing(
                         self.production_qualification
                     ),
+                    production_qualification=self.production_qualification,
                     token_budgets=self.config.token_budgets,
                     effective_privacy_policy=self.effective_privacy_policy,
                     privacy_authorization=self.privacy_authorization,
@@ -4684,6 +4685,10 @@ def _openrouter_qualification_routing(
                     configured_policy_role=binding.configured_policy_role,
                     control_profile=binding.control_profile,
                     control_profile_sha256=binding.control_profile_sha256,
+                    reasoning_policy_artifact_sha256=(binding.reasoning_policy_artifact_sha256),
+                    reasoning_policy_role_binding_sha256=(
+                        binding.reasoning_policy_role_binding_sha256
+                    ),
                     endpoint_reasoning_capability_sha256=(
                         binding.endpoint_reasoning_capability_sha256
                     ),

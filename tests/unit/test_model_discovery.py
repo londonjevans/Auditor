@@ -56,8 +56,16 @@ def _endpoint(
     context_length: int = 200_000,
     max_prompt_tokens: int | None = None,
     max_completion_tokens: int | None = None,
+    supported_reasoning_efforts: tuple[str, ...] | None = (
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+    ),
 ) -> dict[str, Any]:
-    return {
+    endpoint: dict[str, Any] = {
         "model_id": model,
         "slug": endpoint_id,
         "provider_name": "Approved Provider",
@@ -77,6 +85,11 @@ def _endpoint(
             "prompt": "0.000001",
         },
     }
+    if supported_reasoning_efforts is not None:
+        endpoint["reasoning"] = {
+            "supported_efforts": list(supported_reasoning_efforts),
+        }
+    return endpoint
 
 
 def _endpoint_snapshot(
@@ -85,12 +98,21 @@ def _endpoint_snapshot(
     endpoint_id: str = "approved-provider/fp8",
     context_length: int = 200_000,
     max_completion_tokens: int | None = None,
+    supported_reasoning_efforts: tuple[str, ...] | None = (
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+    ),
 ) -> OpenRouterEndpointSnapshotEvidence:
     exact_endpoint = _endpoint(
         model=model,
         endpoint_id=endpoint_id,
         context_length=context_length,
         max_completion_tokens=max_completion_tokens,
+        supported_reasoning_efforts=supported_reasoning_efforts,
     )
     return validate_openrouter_endpoint_snapshot(
         exact_model_id=model,
@@ -137,6 +159,7 @@ def _model(
         "reasoning": {
             "mandatory": False,
             "default_enabled": True,
+            "supported_efforts": ["none", "minimal", "low", "medium", "high", "xhigh"],
         },
         "description": "provider-controlled prose excluded from evidence",
         "benchmarks": {"untrusted": [1, 2, 3]},
@@ -322,6 +345,7 @@ def test_non_zdr_non_native_endpoint_remains_a_capability_candidate() -> None:
     model["supported_parameters"] = ["max_tokens", "temperature"]
     endpoint = _endpoint()
     endpoint["supported_parameters"] = ["max_tokens", "temperature"]
+    endpoint.pop("reasoning")
     snapshot = validate_openrouter_endpoint_snapshot(
         exact_model_id="alpha/atlas-secure",
         configured_provider_endpoints=("approved-provider/fp8",),
@@ -371,6 +395,7 @@ def test_reasoning_aliases_do_not_authorize_the_emitted_reasoning_request() -> N
         "response_format",
         "temperature",
     ]
+    endpoint.pop("reasoning")
     snapshot = validate_openrouter_endpoint_snapshot(
         exact_model_id="alpha/atlas-secure",
         configured_provider_endpoints=("approved-provider/fp8",),
@@ -404,7 +429,10 @@ def test_missing_reasoning_object_preserves_unknown_states_without_inference() -
     model = _model()
     model.pop("reasoning")
 
-    payload = _discover(models=[model])
+    payload = _discover(
+        models=[model],
+        endpoint_snapshot=_endpoint_snapshot(supported_reasoning_efforts=None),
+    )
     capability = payload.reasoning_capability
 
     assert capability.reasoning_parameter_support == "supported"
@@ -412,10 +440,12 @@ def test_missing_reasoning_object_preserves_unknown_states_without_inference() -
     assert capability.reasoning_mandatory is None
     assert capability.reasoning_default_enabled is None
     assert capability.reasoning_supports_max_tokens is None
+    assert capability.supported_reasoning_efforts is None
     assert capability.max_reasoning_tokens is None
     serialized = payload.model_dump(mode="json")
     assert serialized["reasoning_capability"]["reasoning_mandatory"] is None
     assert serialized["reasoning_capability"]["reasoning_supports_max_tokens"] is None
+    assert serialized["reasoning_capability"]["supported_reasoning_efforts"] is None
 
 
 def test_explicit_reasoning_max_token_ceiling_is_frozen_when_published() -> None:
@@ -424,14 +454,57 @@ def test_explicit_reasoning_max_token_ceiling_is_frozen_when_published() -> None
         "mandatory": False,
         "default_enabled": True,
         "supports_max_tokens": True,
+        "supported_efforts": ["none", "high"],
         "max_tokens": 4_096,
     }
 
-    payload = _discover(models=[model])
+    payload = _discover(
+        models=[model],
+        endpoint_snapshot=_endpoint_snapshot(
+            supported_reasoning_efforts=("none", "high"),
+        ),
+    )
 
     assert payload.reasoning_capability.reasoning_supports_max_tokens is True
     assert payload.reasoning_capability.max_reasoning_tokens == 4_096
     assert len(payload.reasoning_capability.capability_sha256) == 64
+
+
+def test_discovery_freezes_only_exact_endpoint_reasoning_effort_inventory() -> None:
+    model = _model()
+
+    payload = _discover(
+        models=[model],
+        endpoint_snapshot=_endpoint_snapshot(
+            supported_reasoning_efforts=("xhigh", "none", "medium"),
+        ),
+    )
+
+    assert payload.reasoning_capability.supported_reasoning_efforts == (
+        "none",
+        "medium",
+        "xhigh",
+    )
+
+    unknown_payload = _discover(
+        models=[model],
+        endpoint_snapshot=_endpoint_snapshot(supported_reasoning_efforts=None),
+    )
+    assert unknown_payload.reasoning_supported is True
+    assert unknown_payload.reasoning_capability.supported_reasoning_efforts is None
+
+
+def test_endpoint_reasoning_effort_inventory_cannot_exceed_model_metadata() -> None:
+    model = _model()
+    model["reasoning"]["supported_efforts"] = ["none", "high"]
+
+    with pytest.raises(ModelDiscoveryValidationError, match="exceeds model metadata"):
+        _discover(
+            models=[model],
+            endpoint_snapshot=_endpoint_snapshot(
+                supported_reasoning_efforts=("none", "xhigh"),
+            ),
+        )
 
 
 @pytest.mark.parametrize(
@@ -451,6 +524,7 @@ def test_catalog_and_single_model_reasoning_metadata_must_agree(
         "mandatory": False,
         "default_enabled": True,
         "supports_max_tokens": True,
+        "supported_efforts": ["none", "high"],
         "max_tokens": 4_096,
     }
     single = copy.deepcopy(catalog)
@@ -468,6 +542,7 @@ def test_catalog_and_single_model_reasoning_metadata_must_agree(
 def test_catalog_and_single_model_max_token_support_state_must_agree() -> None:
     catalog = _model()
     catalog["reasoning"]["supports_max_tokens"] = True
+    catalog["reasoning"]["supported_efforts"] = ["none", "high"]
     catalog["reasoning"]["max_tokens"] = 4_096
     single = copy.deepcopy(catalog)
     single["reasoning"]["supports_max_tokens"] = False
@@ -493,6 +568,10 @@ def test_catalog_and_single_model_max_token_support_state_must_agree() -> None:
         {"supports_max_tokens": True, "max_tokens": 65_537},
         {"supports_max_tokens": False, "max_tokens": 1_024},
         {"max_tokens": 1_024},
+        {"supported_efforts": "high"},
+        {"supported_efforts": ["high", "high"]},
+        {"supported_efforts": ["very_high"]},
+        {"supported_efforts": [True]},
     ],
 )
 def test_malformed_reasoning_metadata_fails_closed(reasoning: object) -> None:
@@ -506,10 +585,13 @@ def test_malformed_reasoning_metadata_fails_closed(reasoning: object) -> None:
 def test_reasoning_metadata_is_bound_into_model_and_discovery_capability_hashes() -> None:
     baseline = _model()
     changed = copy.deepcopy(baseline)
-    changed["reasoning"]["default_enabled"] = False
+    changed["reasoning"]["supported_efforts"].remove("xhigh")
 
-    first = _discover(models=[baseline])
-    second = _discover(models=[changed])
+    endpoint_snapshot = _endpoint_snapshot(
+        supported_reasoning_efforts=("none", "high"),
+    )
+    first = _discover(models=[baseline], endpoint_snapshot=endpoint_snapshot)
+    second = _discover(models=[changed], endpoint_snapshot=endpoint_snapshot)
 
     assert first.model_metadata_snapshot_sha256 != second.model_metadata_snapshot_sha256
     assert (
@@ -517,6 +599,20 @@ def test_reasoning_metadata_is_bound_into_model_and_discovery_capability_hashes(
         != second.reasoning_capability.capability_sha256
     )
     assert first.output_capability_sha256 != second.output_capability_sha256
+
+
+def test_catalog_and_single_model_reasoning_effort_inventories_must_agree() -> None:
+    catalog = _model()
+    single = copy.deepcopy(catalog)
+    single["reasoning"]["supported_efforts"].remove("xhigh")
+
+    with pytest.raises(ModelDiscoveryValidationError, match="frozen catalog projection"):
+        validate_openrouter_model_discovery(
+            exact_model_id="alpha/atlas-secure",
+            models_payload={"data": [catalog]},
+            single_model_payload={"data": single},
+            endpoint_snapshot=_endpoint_snapshot(),
+        )
 
 
 def test_discovery_rejects_a_runtime_specific_reasoning_request_profile() -> None:
@@ -560,6 +656,7 @@ def test_equivalent_native_schema_markers_negotiate_native_mode() -> None:
         "structured_outputs",
         "temperature",
     ]
+    endpoint.pop("reasoning")
     snapshot = validate_openrouter_endpoint_snapshot(
         exact_model_id="alpha/atlas-secure",
         configured_provider_endpoints=("approved-provider/fp8",),
@@ -593,6 +690,7 @@ def test_marker_without_response_format_falls_back_to_validated_text(marker: str
     model["supported_parameters"] = ["max_tokens", marker, "temperature"]
     endpoint = _endpoint()
     endpoint["supported_parameters"] = ["max_tokens", marker, "temperature"]
+    endpoint.pop("reasoning")
     snapshot = validate_openrouter_endpoint_snapshot(
         exact_model_id="alpha/atlas-secure",
         configured_provider_endpoints=("approved-provider/fp8",),

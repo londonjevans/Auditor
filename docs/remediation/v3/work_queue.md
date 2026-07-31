@@ -520,7 +520,7 @@ are invisible to source review by construction.
   `src/mmaudit/config.py`, `src/mmaudit/orchestration/pipeline.py`, scanner and finding
   schemas, `mmaudit.example.toml`, unit and local integration regressions.
 - **Dependencies:** `V3-TOKENS-001`.
-- **Status:** `PARTIAL`
+- **Status:** `IN_PROGRESS`
 - **Validated result:** The Foundry path is complete for the bounded pinned-fork
   scope: compiler-backed inherited-test inventory, exact selection, hardened
   loopback-only execution, per-test evidence, typed findings, cumulative output
@@ -852,20 +852,24 @@ are invisible to source review by construction.
   token/cost reservation, usage evidence, qualification evidence, and emitted run artifacts.
   It will not make paid calls, infer endpoint support, or promote an unqualified model.
 - **Pause boundary:** Atomic reservations now preserve and self-hash separate visible-output and
-  reasoning-token ceilings; reconciliation, provider validation, and usage credit fail closed when
-  either observed slice exceeds its reserve or active reasoning lacks observable accounting. The
-  continuation adds exact per-role policy resolution, frozen endpoint-capability validation,
-  typed usage/context/manifest/report evidence, and post-verification reasoning qualification
-  bindings. Production selection rejects any role/profile/capability tuple not measured by its
-  qualification evidence. The current slice remains non-release-authoritative: certification still
-  needs to reject absent/legacy reasoning policies before transport, runtime credit must consume
-  the exact opaque qualification binding rather than a public projection, frozen endpoint evidence
-  must enumerate the exact supported effort levels, and serialized qualification/manifest evidence
-  must enforce complete role-route and parent-authority joins. Active reasoning also still needs a
-  positive observation or explicit provider attestation, and split token reservations need exact
-  downstream joins. The remaining campaign gap is multi-profile qualification: the current
-  candidate benchmark measures one `model_benchmark` profile, so deliberately different production
-  role profiles fail closed instead of inheriting that measurement.
+  reasoning-token ceilings; downstream context/usage validation exact-joins both slices, rejects
+  unavailable or zero active-reasoning observations for credit, and preserves legacy token-plan
+  `1.0` only as non-creditable compatibility evidence. Frozen endpoint evidence now records the
+  exact configured endpoint's canonical supported-effort inventory separately from model-catalog
+  metadata; generic reasoning support no longer authorizes a named effort. Qualification and
+  serialized registry projections require the exact complete
+  approved-role/configured-policy route inventory and bind each route to the whole reasoning-policy
+  artifact, its role binding, endpoint capability, report, result, and verification. Real
+  post-qualification certification rejects a public routing projection unless it exactly projects
+  the current resolver-issued opaque production qualification capability. The expanded combined
+  focused matrix passed `639` tests.
+  The current slice remains non-release-authoritative: certification still must reject an absent or
+  legacy global reasoning policy before transport; ensemble, maximum-assurance, and manifest credit
+  still need to consume the exact opaque role/profile/capability binding; strict model identity
+  evidence still needs the per-role request shape; non-disabled qualification observations need an
+  independently enforced positive observation or provider attestation; and the candidate benchmark
+  still measures only one `model_benchmark` profile. Deliberately different production profiles
+  fail closed rather than inheriting that measurement.
 
 ## V3-RETRIEVAL-001 — Bounded read-only retrieval loop
 
@@ -1200,6 +1204,145 @@ are invisible to source review by construction.
 - **Dependencies:** `V3-OMISSION-001`.
 - **Status:** `QUEUED`
 
+## V3-TOOLDIAG-001 — Diagnose scrubbed-environment tool failures and bound version capture
+
+- **Priority:** Blocking on macOS. Defect 1 means **no deterministic scanner can execute on a
+  macOS host at all**, so no real audit is currently possible on the operator's own platform.
+  All three defects were reproduced on the operator host on 2026-07-30 and 2026-07-31.
+- **Objective:** Allow tools installed by the project's own supported installation path to
+  execute under the macOS isolation boundary, correctly diagnose tools that cannot, and stop
+  unvalidated tool stderr reaching client-facing artifacts.
+- **Observed defect 1 — the macOS sandbox profile forbids the supported install location.**
+  `MacOSSandboxBackend._wrap` grants `file-read*` on `/System`, `/usr`, `/Library`, `/dev`,
+  and `/private/var/select` only. Homebrew installs to `/opt/homebrew`, and
+  `scripts/install_scanners.sh` prescribes Homebrew as *the* supported macOS installation
+  path. The result is that the project's own documented installation produces tools its own
+  isolation backend refuses to execute. After installing `semgrep 1.172.0`,
+  `gitleaks 8.30.1`, `trivy 0.72.0`, `osv-scanner 2.4.0`, and `slither-analyzer 0.11.6`, every
+  scanner failed, with `slither` and `semgrep` reporting
+  `sandbox-exec: execvp() of '/opt/homebrew/Cellar/.../bin/<tool>' failed: Operation not
+  permitted`. Adding the binary path as a read literal is not sufficient for a venv-backed or
+  wrapper-backed tool, because the interpreter and its whole standard library must also be
+  readable.
+  - **Confirmed minimal remedy**, verified directly against `sandbox-exec` on the host: adding
+    `(allow file-read-metadata (literal "/opt"))` and `(allow file-read* (subpath
+    "/opt/homebrew"))` lets `slither` execute to completion under an otherwise identical
+    deny-by-default profile. The parent-traversal metadata grant is required as well as the
+    subpath grant, matching the `metadata_paths` pattern the backend already builds for its
+    own paths; the subpath grant alone fails at `realpath`.
+  - The fix must be derived from the resolved tool paths actually in use, not hard-coded to
+    `/opt/homebrew`, so that MacPorts, `pipx`, and other prefixes work equally. Read access
+    must stay scoped to the resolved toolchain prefixes; write access, network, and
+    deny-by-default elsewhere are unchanged.
+- **Observed defect 2 — misdiagnosis of interpreter failures.** Before the Homebrew install,
+  `slither 0.11.5` resolved to an Anaconda shebang script
+  (`#!/Users/<operator>/anaconda3/bin/python3.11`) whose interpreter cannot initialise once
+  mmaudit scrubs the environment, emitting `Could not find platform independent libraries
+  <prefix>`, `PYTHONHOME = (not set)`, and `Fatal Python error: init_fs_encoding`. The audit
+  reported only `slither: scanner exited with code 1`. Environment scrubbing is correct and
+  must not be relaxed; the diagnosis is what is wrong. Note also that a shadowing installation
+  on `PATH` — Anaconda ahead of Homebrew — silently selects the broken copy, so the resolved
+  path must be reported, not just the tool name.
+- **Observed defect 3 — unbounded version capture reaching the client report.** The Markdown
+  report's `Version` column has twice contained tool stderr instead of a version: roughly 700
+  characters of raw Python traceback including `sys.path`, `sys.base_prefix`, and the
+  operator's home directory in the first run, and
+  `sandbox-exec: execvp() of '/opt/homebrew/Cellar/...' failed: Operation not permitted` in
+  the second. Tool stderr is being placed in a table cell. In a delivered client report this
+  both looks broken and discloses host filesystem layout.
+- **Acceptance criteria:**
+  - An interpreter or loader failure under the scrubbed environment is detected and reported
+    as its own typed status distinct from a generic non-zero exit, naming the probable cause
+    and the remediation — install the tool with a self-contained interpreter, for example via
+    `pipx` or Homebrew, rather than a shared Anaconda or system prefix.
+  - Version strings are validated and bounded before entering any artifact: a maximum length,
+    a single line, no control characters, and no absolute host paths. A value failing
+    validation is recorded as `unavailable` with the raw text retained only in the private
+    run directory, never in Markdown, JSON, or SARIF.
+  - No host path, home directory, environment variable value, or interpreter prefix from tool
+    output reaches a client-facing artifact. A regression asserts this against the exact
+    Anaconda failure text captured above.
+  - Preflight distinguishes three states for every configured tool — absent from `PATH`,
+    present but not executable under isolation, and present and executable — and `doctor`
+    reports which, together with the resolved absolute path, so both the failure and any
+    shadowing installation are visible before an audit rather than inside one.
+  - An end-to-end regression on macOS executes at least one real Homebrew-installed scanner
+    under the real backend and asserts a successful non-empty result, so this class of defect
+    cannot recur undetected. The current suite passes with every scanner unavailable, which is
+    why a total macOS execution failure went unnoticed.
+  - Environment scrubbing, isolation requirements, and fail-closed behaviour are unchanged. A
+    tool that cannot run under isolation remains unavailable and is never executed unscrubbed
+    as a fallback.
+- **Files expected to change:** `src/mmaudit/scanners/base.py`,
+  `src/mmaudit/scanners/runner.py`, `src/mmaudit/scanners/slither.py`,
+  `src/mmaudit/reporting/markdown.py`, `src/mmaudit/reporting/json_report.py`,
+  `src/mmaudit/cli.py`, scanner-result schema, regressions.
+- **Dependencies:** None; independent of the model and sharding tracks.
+- **Status:** `QUEUED`
+- **Priority note:** Operator approved taking this ahead of remaining Track 1 work on
+  2026-07-31. Finish the ticket in progress, then take this one. `src/mmaudit/solidity/
+  reproduction.py` and `src/mmaudit/scanners/` were clean at that time.
+- **Verified remedy, do not re-derive:** Against an otherwise identical deny-by-default
+  profile on the operator host, `sandbox-exec` produced
+  `execvp() ... Operation not permitted` with no grant; `python: realpath: ... Operation not
+  permitted` with `(allow file-read* (subpath "/opt/homebrew"))` alone; and a successful
+  `slither` execution once `(allow file-read-metadata (literal "/opt"))` was added as well.
+  Both grants are required. Derive them from resolved tool prefixes rather than hard-coding
+  `/opt/homebrew`.
+
+## V3-BOOTSTRAP-001 — Separate declared model identity from measured model quality
+
+- **Priority:** Blocking the entire model track. This is the shared root cause of three
+  `PARTIAL` tickets whose next actions point at each other in a cycle. No amount of work on
+  `V3-CALIBRATE-001`, `V3-LINEAGE-001`, or `V3-MODELREFRESH-001` can resolve it, because the
+  obstruction is a schema dependency, not missing implementation in any of them.
+- **Objective:** Make it possible to benchmark a model that has not yet been benchmarked,
+  without weakening any production-selection guarantee.
+- **The bootstrap paradox, traced.** To run a benchmark, `benchmark/models.py` resolves each
+  target through `model_lineage_index(config)`, which is built solely from
+  `config.models.registry`:
+  - `benchmark/models.py:864` — `lineage = lineage_by_id.get(model_id.lower())`, and
+    `if lineage is None: raise ValueError("model benchmark target lacks immutable lineage")`.
+  - `benchmark/models.py:893` — `if lineage.root_lineage not in approved: raise ValueError`.
+  - `config.py:1107` — `ModelLineageConfig` requires `measured_quality_score`,
+    `measured_quality_tier`, and `quality_measurement` as mandatory fields.
+
+  So a registry entry is required to benchmark a model, the registry entry requires a measured
+  quality score, and the measured quality score is produced only by benchmarking. **A model
+  must be benchmarked before it can be benchmarked.** The candidate registry in
+  `config/models.candidates.toml` does not break the cycle, because benchmark validation
+  resolves through `config.models.registry`, not through candidates.
+- **Consequence.** `approved_model_lineages` cannot be populated, calibration cannot run,
+  qualification cannot run, and therefore no real audit can run. The recorded operator lineage
+  authorisation of 2026-07-31 cannot take effect. This is why the model track has not moved
+  despite active work on it.
+- **Acceptance criteria:**
+  - Declared identity is separated from measured quality. A registry entry can express
+    `root_lineage`, `canonical_model_id`, `aliases`, and `retention_policy` **without** any
+    quality measurement; the measured fields become a distinct, optional record attached after
+    a benchmark completes.
+  - Benchmark and calibration require only declared identity, an approved root lineage, and
+    the existing privacy and retention constraints. They must not require a prior quality
+    measurement of the model they are about to measure.
+  - Production role selection continues to require a complete, current, independently verified
+    quality record. An identity-only entry is selectable for measurement and **never** for a
+    production audit role, and a regression proves the negative case explicitly.
+  - No placeholder, default, zero, or sentinel quality score is ever written to stand in for an
+    unmeasured model. The absence of a measurement is represented as absence, not as a
+    measured value. This is the failure mode the separation exists to prevent: a fabricated
+    `measured_quality_score` would satisfy the schema while destroying the guarantee.
+  - The candidate registry and the production registry have one documented relationship, and
+    promotion from candidate to production is a single explicit, evidenced transition.
+  - After this lands, the recorded operator authorisation in
+    `docs/remediation/v3/model_lineage_review.md` can populate `approved_model_lineages` for
+    calibration purposes without any qualification output existing yet.
+- **Files expected to change:** `src/mmaudit/config.py`, `src/mmaudit/benchmark/models.py`,
+  `src/mmaudit/models/registry.py`, `src/mmaudit/models/qualification_workflow.py`,
+  configuration schema and template, regressions.
+- **Dependencies:** None. It unblocks `V3-CALIBRATE-001`, `V3-LINEAGE-001`, and
+  `V3-MODELREFRESH-001`, and transitively `V3-QUALIFY-001` and every real-audit ticket.
+- **Status:** `QUEUED`
+
 ## V3-MODELREFRESH-001 — Daily catalogue refresh and candidate drift detection
 
 - **Priority:** High. The frozen candidate set is already obsolete and will silently decay
@@ -1372,23 +1515,37 @@ still applies within a track.
 
 **Track 1 — engine and execution evidence**
 
+**Next action: `V3-TOOLDIAG-001`, ahead of any remaining Track 1 work.** Operator-approved
+reprioritisation, 2026-07-31. Every deterministic scanner currently fails to execute on
+macOS, so the engine cannot perform a real audit on the operator's own platform, and the
+deterministic-only product cannot be demonstrated at all. The remedy is two profile rules and
+has already been verified directly against `sandbox-exec` on the host; see the ticket. This
+blocks demonstrable usability, not just breadth, and is cheap. Finish the ticket in progress
+first, then take it.
+
 1. `V3-TOKENS-001` — `COMPLETE`.
 2. `V3-FLOOR-001` — `COMPLETE`. Verified independently: the previously false-clean
    scanner-only run now exits `6`, reports `RUN STATUS: INCOMPLETE`, and names the failed
    `minimum_analysis_floor` gate.
-3. `V3-FORKSUITE-001` — in progress; finish it, do not interrupt.
-4. `V3-OMISSION-001` with `V3-FIXTURE-001` — **take these next.** Until they land, no
-   Solidity repository above roughly 5,000 lines can complete context construction for any
-   specialist role, so every downstream ticket in this track is being validated only against
-   toy-sized inputs. `V3-FIXTURE-001` is what makes the defect visible to the suite at all.
-5. `V3-FORKDIFF-001` — `COMPLETE`. Then `V3-EXECORIGIN-001`, `V3-TESTQUALITY-001`,
-   and `V3-HARDHAT-001` to unblock the Hardhat share of the market.
+3. `V3-FORKSUITE-001` — `PARTIAL`; Hardhat execution blocked pending `V3-HARDHAT-001`.
+4. `V3-OMISSION-001` — `COMPLETE`, with `V3-FIXTURE-001` `PARTIAL`. Verified independently:
+   a 15,551-line Solidity target now delivers 100 per cent of its source to a specialist
+   package, and the omission ledger fell from 143,479 bytes across 536 records to a single
+   970-byte aggregate.
+5. `V3-FORKDIFF-001` and `V3-EXECORIGIN-001` — `COMPLETE`. Then `V3-TOOLDIAG-001`, then
+   `V3-HARDHAT-001` to unblock the Hardhat share of the market.
 6. `V3-CI-001`.
 7. `V3-SHARD-001`, `V3-SCHEDULER-001`, `V3-TRUNCATION-001`, `V3-COVERAGE-001`,
    `V3-TAXONOMY-001`, `V3-CONSENSUS-001`, `V3-REPORT-001`, `V3-SCOPE-001`.
 8. `V3-RETRIEVAL-001`.
 
 **Track 2 — model selection and quality**
+
+**Blocked at the root by `V3-BOOTSTRAP-001`.** Three tickets in this track are `PARTIAL` with
+next actions that reference each other in a cycle. The cause is a schema dependency: a model
+must already have a measured quality score to be benchmarked, and only benchmarking produces
+one. Take `V3-BOOTSTRAP-001` before any further work here; the other tickets cannot progress
+regardless of effort spent on them.
 
 1. `V3-MODELREFRESH-001` (discovery/diff portion) then `V3-LINEAGE-001`. Re-run discovery
    first: the frozen candidate set predates the removal of the frontier-excluding catalogue

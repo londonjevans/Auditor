@@ -217,6 +217,10 @@ def synthetic_production_qualification(
                 qualified_role=qualified_role,
                 configured_policy_role=configured_policy_role,
                 control_profile=reasoning_policy.role_policy(configured_policy_role).control,
+                reasoning_policy_artifact_sha256=reasoning_policy.artifact_sha256,
+                reasoning_policy_role_binding_sha256=(
+                    reasoning_policy.role_policy(configured_policy_role).binding_sha256
+                ),
                 endpoint_reasoning_capability_sha256=endpoint_reasoning_capability_sha256,
                 qualification_report_sha256=model.benchmark_report_sha256,
                 qualification_result_sha256=model.qualification_result_sha256,

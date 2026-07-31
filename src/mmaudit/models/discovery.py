@@ -32,6 +32,7 @@ from pydantic import (
 )
 
 from mmaudit.models.endpoint_snapshots import (
+    REASONING_EFFORT_ORDER,
     OpenRouterEndpointSnapshotEvidence,
     OpenRouterReasoningCapabilityEvidence,
     ReasoningParameterSupport,
@@ -51,6 +52,7 @@ from mmaudit.models.output_modes import (
 from mmaudit.models.output_modes import (
     structured_output_parameters as derive_structured_output_parameters,
 )
+from mmaudit.models.reasoning import ReasoningEffort
 from mmaudit.models.schemas import ExecutionEvidenceKind
 from mmaudit.privacy import (
     EffectivePrivacyPolicyEvidence,
@@ -88,6 +90,7 @@ class _NormalizedCatalogReasoning:
     mandatory: bool | None
     default_enabled: bool | None
     supports_max_tokens: bool | None
+    supported_efforts: tuple[ReasoningEffort, ...] | None
     max_reasoning_tokens: int | None
 
 
@@ -253,6 +256,10 @@ class OpenRouterModelDiscoveryPayload(BaseModel):
     catalog_output_limit: int = Field(gt=0, le=2**31 - 1)
     catalog_output_limit_source: Literal["metadata", "provider_context"]
     model_supported_parameters: tuple[str, ...] = Field(max_length=_MAX_PARAMETERS)
+    model_supported_reasoning_efforts: tuple[ReasoningEffort, ...] | None = Field(
+        default=None,
+        max_length=len(REASONING_EFFORT_ORDER),
+    )
     structured_output_parameters: tuple[str, ...] = Field(max_length=3)
     supported_output_modes: tuple[StructuredOutputMode, ...] = Field(
         min_length=1,
@@ -314,6 +321,12 @@ class OpenRouterModelDiscoveryPayload(BaseModel):
             raise ValueError("catalog supported parameters must be sorted and unique")
         if not _REQUIRED_CATALOG_PARAMETERS.issubset(self.model_supported_parameters):
             raise ValueError("catalog metadata omits the required request parameters")
+        if self.model_supported_reasoning_efforts is not None:
+            selected_efforts = frozenset(self.model_supported_reasoning_efforts)
+            if self.model_supported_reasoning_efforts != tuple(
+                effort for effort in REASONING_EFFORT_ORDER if effort in selected_efforts
+            ):
+                raise ValueError("catalog reasoning efforts are not canonical")
         if (
             self.catalog_provider_context_size_source == "catalog_context"
             and self.catalog_provider_context_size != self.catalog_context_size
@@ -443,6 +456,14 @@ class OpenRouterModelDiscoveryPayload(BaseModel):
             raise ValueError("catalog metadata omits a parameter required by the exact endpoint")
         if REASONING_REQUEST_PARAMETER in endpoint.required_request_parameters:
             raise ValueError("discovery endpoint request profile must remain capability-oriented")
+        if (
+            endpoint.supported_reasoning_efforts is not None
+            and self.model_supported_reasoning_efforts is not None
+            and not set(endpoint.supported_reasoning_efforts).issubset(
+                self.model_supported_reasoning_efforts
+            )
+        ):
+            raise ValueError("endpoint reasoning efforts exceed model metadata")
 
         expected_metadata_hash = _canonical_sha256(_model_metadata_projection(self))
         if self.model_metadata_snapshot_sha256 != expected_metadata_hash:
@@ -728,6 +749,16 @@ def validate_openrouter_model_discovery(
     parameter_support: ReasoningParameterSupport = (
         "supported" if reasoning_supported else "unsupported"
     )
+    if (
+        endpoint.supported_reasoning_efforts is not None
+        and catalog_reasoning.supported_efforts is not None
+        and not set(endpoint.supported_reasoning_efforts).issubset(
+            catalog_reasoning.supported_efforts
+        )
+    ):
+        raise ModelDiscoveryValidationError(
+            "exact endpoint reasoning effort inventory exceeds model metadata"
+        )
     reasoning_capability = OpenRouterReasoningCapabilityEvidence.from_endpoint(
         endpoint=endpoint,
         model_metadata_snapshot_sha256=model_metadata_snapshot_sha256,
@@ -751,6 +782,7 @@ def validate_openrouter_model_discovery(
         "catalog_output_limit": catalog_output_limit,
         "catalog_output_limit_source": output_limit_source,
         "model_supported_parameters": model_supported_parameters,
+        "model_supported_reasoning_efforts": catalog_reasoning.supported_efforts,
         "structured_output_parameters": structured_output_parameters,
         "supported_output_modes": output_modes,
         "structured_output_mode": output_modes[0],
@@ -1240,7 +1272,10 @@ def _model_metadata_projection(
         provider_context_size_source=evidence.catalog_provider_context_size_source,
         output_limit=evidence.catalog_output_limit,
         output_limit_source=evidence.catalog_output_limit_source,
-        reasoning=_reasoning_from_capability(evidence.reasoning_capability),
+        reasoning=_reasoning_from_capability(
+            evidence.reasoning_capability,
+            supported_efforts=evidence.model_supported_reasoning_efforts,
+        ),
     )
 
 
@@ -1265,6 +1300,7 @@ def _model_metadata_projection_values(
             "mandatory": reasoning.mandatory,
             "default_enabled": reasoning.default_enabled,
             "supports_max_tokens": reasoning.supports_max_tokens,
+            "supported_efforts": reasoning.supported_efforts,
             "max_tokens": reasoning.max_reasoning_tokens,
         },
         "supported_parameters": list(supported_parameters),
@@ -1279,12 +1315,15 @@ def _model_metadata_projection_values(
 
 def _reasoning_from_capability(
     capability: OpenRouterReasoningCapabilityEvidence,
+    *,
+    supported_efforts: tuple[ReasoningEffort, ...] | None,
 ) -> _NormalizedCatalogReasoning:
     return _NormalizedCatalogReasoning(
         metadata_available=capability.reasoning_metadata_available,
         mandatory=capability.reasoning_mandatory,
         default_enabled=capability.reasoning_default_enabled,
         supports_max_tokens=capability.reasoning_supports_max_tokens,
+        supported_efforts=supported_efforts,
         max_reasoning_tokens=capability.max_reasoning_tokens,
     )
 
@@ -1383,6 +1422,7 @@ def _normalize_catalog_reasoning(
             mandatory=None,
             default_enabled=None,
             supports_max_tokens=None,
+            supported_efforts=None,
             max_reasoning_tokens=None,
         )
     raw = selected.get("reasoning")
@@ -1395,6 +1435,7 @@ def _normalize_catalog_reasoning(
         "supports_max_tokens",
         label,
     )
+    supported_efforts = _optional_reasoning_efforts(raw, label)
     max_reasoning_tokens = _optional_reasoning_token_ceiling(raw, label)
     if max_reasoning_tokens is not None and supports_max_tokens is not True:
         raise ModelDiscoveryValidationError(f"{label} publishes max_tokens without exact support")
@@ -1403,6 +1444,7 @@ def _normalize_catalog_reasoning(
         mandatory=mandatory,
         default_enabled=default_enabled,
         supports_max_tokens=supports_max_tokens,
+        supported_efforts=supported_efforts,
         max_reasoning_tokens=max_reasoning_tokens,
     )
 
@@ -1432,6 +1474,26 @@ def _optional_reasoning_token_ceiling(
             f"{label} field max_tokens must be a bounded positive integer or null"
         )
     return int(value)
+
+
+def _optional_reasoning_efforts(
+    reasoning: Mapping[str, Any],
+    label: str,
+) -> tuple[ReasoningEffort, ...] | None:
+    value = reasoning.get("supported_efforts")
+    if value is None:
+        return None
+    if (
+        not isinstance(value, list)
+        or len(value) > len(REASONING_EFFORT_ORDER)
+        or any(not isinstance(item, str) or item not in REASONING_EFFORT_ORDER for item in value)
+        or len(value) != len(set(value))
+    ):
+        raise ModelDiscoveryValidationError(
+            f"{label} field supported_efforts must be a unique bounded effort inventory or null"
+        )
+    selected = frozenset(value)
+    return tuple(effort for effort in REASONING_EFFORT_ORDER if effort in selected)
 
 
 def _validate_single_model_metadata(

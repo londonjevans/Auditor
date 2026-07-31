@@ -22,6 +22,10 @@ from mmaudit.models.qualification import (
     QualifiedReasoningRoleBinding,
     VerifiedProductionQualification,
 )
+from mmaudit.models.reasoning import (
+    ReasoningPolicyError,
+    reasoning_policy_roles_for_qualified_role,
+)
 from mmaudit.models.schemas import AuditProfile, StrictModel
 
 _QUALITY_TIER_RANK: dict[str, int] = {
@@ -40,6 +44,25 @@ _MAX_CACHE_BYTES = 20_000_000
 
 class ModelRegistryError(RuntimeError):
     """Raised when configured models cannot meet audit requirements."""
+
+
+def _expected_production_reasoning_routes(
+    approved_roles: tuple[str, ...],
+) -> tuple[tuple[str, str], ...]:
+    """Derive the sole complete reasoning-route inventory for approved roles."""
+
+    try:
+        return tuple(
+            sorted(
+                (qualified_role, configured_policy_role)
+                for qualified_role in approved_roles
+                for configured_policy_role in reasoning_policy_roles_for_qualified_role(
+                    qualified_role
+                )
+            )
+        )
+    except ReasoningPolicyError as exc:
+        raise ValueError("production approved role has no exact reasoning policy route") from exc
 
 
 class ProductionModelQualificationBinding(StrictModel):
@@ -101,12 +124,15 @@ class ProductionModelQualificationBinding(StrictModel):
     def qualification_window_is_valid(self) -> Self:
         if self.expires_at <= self.evaluated_at:
             raise ValueError("production model qualification must expire after evaluation")
-        routes = tuple(
+        observed_routes = tuple(
             (binding.qualified_role, binding.configured_policy_role)
             for binding in self.reasoning_bindings
         )
-        if routes != tuple(sorted(set(routes))):
-            raise ValueError("production reasoning qualification routes must be unique and sorted")
+        expected_routes = _expected_production_reasoning_routes(self.approved_roles)
+        if observed_routes != expected_routes:
+            raise ValueError(
+                "production reasoning qualification routes differ from approved role inventory"
+            )
         if any(
             binding.exact_model_id != self.exact_model_id
             or binding.approved_provider_endpoint != self.approved_provider_endpoint
@@ -218,6 +244,16 @@ class ProductionQualificationValidation(StrictModel):
         binding_ids = tuple(binding.exact_model_id for binding in self.model_bindings)
         if binding_ids != self.qualified_model_ids:
             raise ValueError("qualification model bindings differ from qualified model IDs")
+        for binding in self.model_bindings:
+            observed_routes = tuple(
+                (route.qualified_role, route.configured_policy_role)
+                for route in binding.reasoning_bindings
+            )
+            expected_routes = _expected_production_reasoning_routes(binding.approved_roles)
+            if observed_routes != expected_routes:
+                raise ValueError(
+                    "serialized production reasoning routes differ from approved role inventory"
+                )
         if any(
             binding.evaluated_at > self.observed_at or binding.expires_at <= self.observed_at
             for binding in self.model_bindings
@@ -244,6 +280,12 @@ class ProductionQualificationValidation(StrictModel):
             raise ValueError("qualified models require every qualification binding")
         if not self.qualified_model_ids and any(value is not None for value in binding_hashes):
             raise ValueError("empty qualification evidence cannot claim binding hashes")
+        if self.qualification_verification_sha256 is not None and any(
+            route.qualification_verification_sha256 != self.qualification_verification_sha256
+            for binding in self.model_bindings
+            for route in binding.reasoning_bindings
+        ):
+            raise ValueError("production reasoning qualification verification differs from parent")
         if self.qualified_model_ids and self.qualification_bindings is None:
             raise ValueError("qualified models require normalized qualification bindings")
         if not self.qualified_model_ids and self.qualification_bindings is not None:

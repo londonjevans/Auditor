@@ -17,6 +17,14 @@ from mmaudit.models.endpoint_snapshots import (
 from mmaudit.models.reasoning import ReasoningControlProfile, ReasoningEffort
 
 _MODEL_METADATA_HASH = "a" * 64
+_ALL_REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+)
 
 
 def _canonical_sha256(value: Any) -> str:
@@ -31,11 +39,16 @@ def _canonical_sha256(value: Any) -> str:
     ).hexdigest()
 
 
-def _endpoint(*, reasoning: bool = True, max_output_tokens: int = 20_000) -> dict[str, Any]:
+def _endpoint(
+    *,
+    reasoning: bool = True,
+    supported_efforts: tuple[ReasoningEffort, ...] | None = _ALL_REASONING_EFFORTS,
+    max_output_tokens: int = 20_000,
+) -> dict[str, Any]:
     supported_parameters = ["max_tokens", "response_format", "temperature"]
     if reasoning:
         supported_parameters.append("reasoning")
-    return {
+    endpoint: dict[str, Any] = {
         "tag": "approved-provider",
         "provider_name": "Approved Provider",
         "status": 0,
@@ -48,14 +61,22 @@ def _endpoint(*, reasoning: bool = True, max_output_tokens: int = 20_000) -> dic
             "completion": "0.000015",
         },
     }
+    if reasoning and supported_efforts is not None:
+        endpoint["reasoning"] = {"supported_efforts": list(supported_efforts)}
+    return endpoint
 
 
 def _endpoint_evidence(
     *,
     reasoning: bool = True,
+    supported_efforts: tuple[ReasoningEffort, ...] | None = _ALL_REASONING_EFFORTS,
     max_output_tokens: int = 20_000,
 ) -> OpenRouterEndpointEvidence:
-    endpoint = _endpoint(reasoning=reasoning, max_output_tokens=max_output_tokens)
+    endpoint = _endpoint(
+        reasoning=reasoning,
+        supported_efforts=supported_efforts,
+        max_output_tokens=max_output_tokens,
+    )
     return validate_openrouter_endpoint_snapshot(
         exact_model_id="alpha/atlas-secure",
         configured_provider_endpoints=("approved-provider",),
@@ -78,10 +99,11 @@ def _capability(
     mandatory: bool | None = False,
     default_enabled: bool | None = False,
     supports_max_tokens: bool | None = True,
+    supported_efforts: tuple[ReasoningEffort, ...] | None = _ALL_REASONING_EFFORTS,
     max_reasoning_tokens: int | None = None,
 ) -> OpenRouterReasoningCapabilityEvidence:
     return OpenRouterReasoningCapabilityEvidence.from_endpoint(
-        endpoint=endpoint or _endpoint_evidence(),
+        endpoint=endpoint or _endpoint_evidence(supported_efforts=supported_efforts),
         model_metadata_snapshot_sha256=_MODEL_METADATA_HASH,
         reasoning_parameter_support=parameter_support,
         reasoning_metadata_available=metadata_available,
@@ -121,6 +143,7 @@ def test_capability_binds_exact_endpoint_model_snapshots_and_normalized_states()
     assert evidence.model_metadata_snapshot_sha256 == _MODEL_METADATA_HASH
     assert evidence.reasoning_parameter_support == "supported"
     assert evidence.reasoning_metadata_available is True
+    assert evidence.supported_reasoning_efforts == _ALL_REASONING_EFFORTS
     assert evidence.max_output_tokens == 20_000
     assert evidence.max_reasoning_tokens is None
     assert len(evidence.capability_sha256) == 64
@@ -142,6 +165,7 @@ def test_unknown_capability_is_preserved_and_never_promoted() -> None:
         "reasoning_mandatory": None,
         "reasoning_default_enabled": None,
         "reasoning_supports_max_tokens": None,
+        "supported_reasoning_efforts": None,
         "max_output_tokens": endpoint.max_completion_tokens,
         "max_reasoning_tokens": None,
     }
@@ -168,6 +192,7 @@ def test_factory_rejects_parameter_support_that_contradicts_exact_endpoint() -> 
             mandatory=None,
             default_enabled=None,
             supports_max_tokens=None,
+            supported_efforts=None,
         )
 
 
@@ -179,6 +204,7 @@ def test_disabled_profile_requires_proof_that_omitting_reasoning_is_safe() -> No
         mandatory=None,
         default_enabled=None,
         supports_max_tokens=None,
+        supported_efforts=None,
     )
     unsupported.require_compatible_profile(_profile("disabled"))
     with pytest.raises(EndpointSnapshotValidationError, match="default-enabled"):
@@ -202,6 +228,7 @@ def test_disabled_profile_requires_proof_that_omitting_reasoning_is_safe() -> No
         mandatory=None,
         default_enabled=None,
         supports_max_tokens=None,
+        supported_efforts=None,
     )
     with pytest.raises(EndpointSnapshotValidationError, match="frozen metadata"):
         incomplete.require_compatible_profile(_profile("disabled"))
@@ -218,12 +245,39 @@ def test_default_and_effort_profiles_require_complete_exact_capabilities() -> No
         mandatory=None,
         default_enabled=None,
         supports_max_tokens=None,
+        supported_efforts=None,
     )
     with pytest.raises(EndpointSnapshotValidationError, match="frozen metadata"):
         incomplete.require_compatible_profile(_profile("default", reserve=1_024))
     evidence.require_compatible_profile(_profile("effort", effort="medium", reserve=1_024))
     with pytest.raises(EndpointSnapshotValidationError, match="mandatory"):
         _capability(mandatory=True).require_compatible_profile(_profile("effort", effort="none"))
+
+
+def test_effort_profile_requires_exact_inventory_membership() -> None:
+    generic_parameter_only = _capability(supported_efforts=None)
+    with pytest.raises(EndpointSnapshotValidationError, match="supported-effort inventory"):
+        generic_parameter_only.require_compatible_profile(
+            _profile("effort", effort="high", reserve=1_024)
+        )
+
+    bounded_inventory = _capability(supported_efforts=("none", "high"))
+    bounded_inventory.require_compatible_profile(_profile("effort", effort="high", reserve=1_024))
+    bounded_inventory.require_compatible_profile(_profile("effort", effort="none"))
+    with pytest.raises(EndpointSnapshotValidationError, match="absent from"):
+        bounded_inventory.require_compatible_profile(
+            _profile("effort", effort="xhigh", reserve=1_024)
+        )
+    _capability(supported_efforts=("xhigh",)).require_compatible_profile(
+        _profile("effort", effort="xhigh", reserve=1_024)
+    )
+
+
+def test_effort_inventory_does_not_change_default_max_token_or_disabled_controls() -> None:
+    no_inventory = _capability(supported_efforts=None)
+    no_inventory.require_compatible_profile(_profile("disabled"))
+    no_inventory.require_compatible_profile(_profile("default", reserve=1_024))
+    no_inventory.require_compatible_profile(_profile("max_tokens", max_tokens=1_024, reserve=1_024))
 
 
 def test_available_metadata_preserves_individually_unknown_states() -> None:
@@ -277,12 +331,23 @@ def test_metadata_inconsistency_and_self_hash_tampering_fail_closed() -> None:
             mandatory=False,
             default_enabled=None,
             supports_max_tokens=None,
+            supported_efforts=None,
         )
     with pytest.raises(EndpointSnapshotValidationError, match="invalid"):
         _capability(supports_max_tokens=None, max_reasoning_tokens=1_024)
+    with pytest.raises(EndpointSnapshotValidationError, match="invalid"):
+        _capability(
+            metadata_available=False,
+            mandatory=None,
+            default_enabled=None,
+            supports_max_tokens=None,
+            supported_efforts=("high",),
+        )
+    with pytest.raises(EndpointSnapshotValidationError, match="invalid"):
+        _capability(supported_efforts=("high", "high"))
 
     evidence = _capability()
     payload = evidence.model_dump(mode="python")
-    payload["reasoning_default_enabled"] = True
+    payload["supported_reasoning_efforts"] = ("none", "high")
     with pytest.raises(ValidationError, match="capability hash"):
         OpenRouterReasoningCapabilityEvidence.model_validate(payload)

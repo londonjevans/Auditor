@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_SAFE_CHECKPOINT
+AUTORUN_STATUS: PAUSED
 CURRENT_MILESTONE: Per-role reasoning effort binding
 CURRENT_TICKET: V3-EFFORT-001 (PARTIAL)
 LAST_COMPLETED_TICKET: V3-EXECORIGIN-001
-NEXT_ACTION: On operator resume, continue V3-EFFORT-001 with the recorded certification-authority and downstream evidence joins before multi-profile qualification; do not begin V3-CALIBRATE-001 yet.
-LAST_COMMAND: `git commit -m "Bind per-role reasoning evidence"`.
-LAST_RESULT: PASS — created isolated implementation checkpoint `8cc1e12d6192f4b180bb1a4118ce92489d597c2f` after the complete validation evidence recorded below.
+NEXT_ACTION: Resume V3-EFFORT-001 by rejecting absent/legacy reasoning controls for post-qualification certification, then bind runtime/manifest credit and strict identity to the exact opaque role-policy capability before implementing distinct-profile qualification campaigns.
+LAST_COMMAND: `.venv/bin/pytest -q tests/unit/test_openrouter.py tests/unit/test_endpoint_snapshots.py tests/unit/test_model_runtime.py tests/unit/test_openrouter_qualification_config.py tests/unit/test_model_qualification.py tests/unit/test_model_registry.py tests/unit/test_usage.py tests/unit/test_context_manifest.py tests/unit/test_reasoning_qualification_binding.py tests/unit/test_reasoning_capability_evidence.py tests/unit/test_model_discovery.py tests/unit/test_candidate_benchmark.py`.
+LAST_RESULT: PASS — final expanded matrix `639 passed in 24.80s`; all `384` files formatted; Ruff clean; strict mypy clean over `156` source files; schemas synchronized; diff integrity clean. No provider, network, or secret access occurred.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 8cc1e12d6192f4b180bb1a4118ce92489d597c2f
+LAST_CHECKPOINT_COMMIT: 5f89186cc99c154e4c54f0cc251476c9979c60c7
 
 ## 2026-07-31 — V3-EFFORT-001
 
@@ -64,6 +64,28 @@ LAST_CHECKPOINT_COMMIT: 8cc1e12d6192f4b180bb1a4118ce92489d597c2f
     model, provider, report, result, or verification drift.
   - Candidate benchmarking uses the same frozen policy and endpoint capability evidence. Unsupported
     or incompatible reasoning is an explicit failed denominator, never silent suppression.
+- **Safe pause continuation:**
+  - Endpoint discovery now allowlists, canonicalizes, cross-checks, and hashes the exact
+    `reasoning.supported_efforts` inventory. A named effort, including `none` or `xhigh`, requires
+    exact inventory membership; generic reasoning support is insufficient.
+    An independent review caught an intermediate model-catalog-derived implementation before
+    checkpointing. The corrected evidence is sourced from the exact configured endpoint record,
+    while the model-catalog inventory is retained separately and may only upper-bound that exact
+    endpoint inventory. Missing exact endpoint inventory remains `None` and fails closed.
+  - Qualification bindings now include the whole policy artifact hash and exact role-binding hash.
+    The opaque capability and serialized registry projection both require the complete sorted
+    approved-role/configured-policy route inventory and reject missing, extra, duplicate, unknown,
+    or nested-to-parent mismatched routes.
+  - Real post-qualification OpenRouter certification now requires the current opaque
+    `VerifiedProductionQualification` capability and exact-compares every public routing and
+    reasoning field before transport. Public self-hashes alone remain non-authoritative.
+  - Context/usage credit exact-joins visible-output and reasoning reservations, requires token-plan
+    schema `2.0`, and requires positive observed active reasoning. Strict legacy `1.0` omission
+    normalizes only for preservation and remains non-creditable.
+  - A transient import cycle introduced while joining the opaque authority was reproduced during
+    collection and removed by keeping the OpenRouter-to-qualification dependency runtime-local.
+    The OpenRouter synthetic routing fixture was upgraded to complete policy-bound role routes;
+    no production gate was weakened.
 - **Validation:**
   - `.venv/bin/ruff format src/mmaudit/models/openrouter.py src/mmaudit/models/usage.py
     src/mmaudit/orchestration/budgets.py tests/identity_fixtures.py
@@ -118,6 +140,35 @@ LAST_CHECKPOINT_COMMIT: 8cc1e12d6192f4b180bb1a4118ce92489d597c2f
   - `.venv/bin/mypy` — PASS; no issues in `156` source files.
   - `.venv/bin/python scripts/generate_release_schemas.py` — PASS; generated schemas synchronized.
   - `git diff --check` — PASS.
+  - Continuation component validations reported by the isolated implementation slices:
+    endpoint/discovery capability `134 passed`; serialized registry routing `41 passed`;
+    usage/context/token integrity `200 passed` and `170 passed`; affected Ruff and strict mypy
+    passed in each slice.
+  - Initial combined continuation run failed `49` OpenRouter tests because the stricter serialized
+    route model correctly rejected legacy synthetic fixtures with an empty reasoning-route
+    inventory. The shared fixture was repaired to emit complete policy-bound routes.
+  - `.venv/bin/pytest -q tests/unit/test_openrouter.py` — PASS; `192 passed`.
+  - `.venv/bin/pytest -q tests/unit/test_openrouter.py tests/unit/test_model_qualification.py
+    tests/unit/test_model_registry.py tests/unit/test_usage.py tests/unit/test_context_manifest.py
+    tests/unit/test_reasoning_qualification_binding.py
+    tests/unit/test_reasoning_capability_evidence.py tests/unit/test_model_discovery.py
+    tests/unit/test_candidate_benchmark.py` — PASS; `579 passed in 24.25s`.
+  - Opaque-authority projection and no-authority-before-transport negative assays — PASS;
+    `2 passed in 0.64s`.
+  - Affected Ruff formatting changed three files; affected Ruff check passed, strict mypy passed
+    over eight source files, release-schema verification passed, and `git diff --check` passed.
+  - Final pause gate ran the full affected matrix after formatting and documentation updates:
+    `581 passed in 24.50s`. In parallel, `.venv/bin/ruff format --check .` reported all `384`
+    files formatted, `.venv/bin/ruff check .` passed, `.venv/bin/mypy` found no issues in `156`
+    source files, release schemas verified, and `git diff --check` passed.
+  - Independent review then identified that the first effort inventory came from model-level
+    metadata rather than the exact endpoint. The first provenance-corrected component run exposed
+    seven synthetic-fixture/projection inconsistencies; exact endpoint fixtures and the separately
+    serialized model inventory were corrected without weakening the gate. The component matrix
+    passed `94` tests, followed by the expanded affected matrix passing `639 tests in 24.27s`.
+  - Final post-review pause gate — PASS: expanded matrix `639 passed in 24.80s`; all `384` files
+    formatted; Ruff clean; strict mypy clean over `156` source files; release schemas synchronized;
+    `git diff --check` clean.
 - **Remaining limitation:** Qualification currently executes one exact `model_benchmark` reasoning
   profile. The production resolver therefore fails closed when any selected role uses a different
   profile; it does not falsely duplicate one benchmark result across different effort levels. A
@@ -126,26 +177,22 @@ LAST_CHECKPOINT_COMMIT: 8cc1e12d6192f4b180bb1a4118ce92489d597c2f
   gaps, which are recorded rather than repaired during the operator-requested pause:
   - certification can still use an absent or legacy global reasoning policy instead of requiring a
     sealed per-role, capability-bound, qualification-bound plan before transport;
-  - endpoint evidence proves generic reasoning support but does not freeze the exact supported
-    effort inventory;
-  - public, self-hashed routing projections can still be consumed without proving issuance from the
-    opaque verified-production qualification capability;
   - ensemble and maximum-assurance usage credit do not yet join the exact role pair, policy,
     profile, endpoint capability, and qualification binding to that opaque authority;
-  - serialized registry and manifest projections do not independently prove complete role-route
-    coverage and every nested-to-parent verification join;
-  - active non-disabled qualification can treat an observed zero as substantive reasoning, and
-    persisted usage credit can accept an unavailable active observation;
-  - downstream atomic-reservation checks do not yet compare the visible-output and reasoning split
-    independently, and the per-role request shape is not consistently included in strict model
-    identity evidence;
-  - legacy token-plan `1.0` normalization needs a compatibility repair while remaining ineligible
-    for the new maximum-assurance reasoning gate.
+  - public routing projections remain constructible for mock/preflight evidence; any path that
+    promotes their self-hash to production reasoning credit still needs an exact opaque-authority
+    join;
+  - manifest projections do not yet independently prove every nested-to-parent opaque-authority
+    join;
+  - active non-disabled qualification can still treat an observed zero as substantive benchmark
+    reasoning even though persisted production usage credit now rejects it;
+  - the per-role request shape is not consistently included in strict model identity evidence.
   These gaps keep `V3-EFFORT-001` `PARTIAL` and the release `INCOMPLETE`; no maximum-assurance
   completeness claim is supported by this checkpoint.
-- **Pause boundary:** Finish the full-suite gate and SSH checkpoint. On resume, extend qualification
-  authority and runtime-credit joins first, then execute every distinct selected role profile
-  before returning to `V3-CALIBRATE-001`.
+- **Pause boundary:** Finish the affected pause-checkpoint gate and isolated local commit. On
+  resume, reject absent/legacy certification reasoning controls, extend opaque authority through
+  runtime/manifest/identity credit, then execute every distinct selected role profile before
+  returning to `V3-CALIBRATE-001`.
 
 ## 2026-07-30 — V3-LINEAGE-001
 

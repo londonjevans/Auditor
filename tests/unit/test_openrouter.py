@@ -60,6 +60,7 @@ from mmaudit.models.openrouter import (
     OpenRouterTruncatedResponseError,
     OpenRouterUnboundIdentityError,
     StructuredCompletion,
+    _require_exact_qualification_routing_authority,
     is_retryable_status,
     safe_headers,
     strict_json_schema,
@@ -122,6 +123,7 @@ from mmaudit.privacy import (
     resolve_effective_privacy_policy,
     resolve_trusted_privacy_authorization,
 )
+from tests.qualification_support import synthetic_production_qualification
 
 
 class Answer(BaseModel):
@@ -188,16 +190,86 @@ def _qualification_routing(
     structured_output_mode: StructuredOutputMode = StructuredOutputMode.JSON_OBJECT,
     model_metadata_snapshot_sha256: str = "7" * 64,
     pricing_snapshot_sha256: str = "8" * 64,
-    reasoning_bindings: tuple[OpenRouterQualifiedReasoningRoutingBinding, ...] = (),
+    reasoning_policy: ReasoningPolicyArtifact | None = None,
+    reasoning_bindings: tuple[OpenRouterQualifiedReasoningRoutingBinding, ...] | None = None,
 ) -> OpenRouterQualificationRoutingEvidence:
     now = datetime.now(UTC)
     verification_time = verified_at or now
+    effective_provider_name = provider_name or provider
+    policy = reasoning_policy or ReasoningPolicyArtifact.build(
+        controls_by_role={
+            role: ReasoningControlProfile.build(
+                mode="disabled",
+                reserved_reasoning_tokens=0,
+            )
+            for role in CANONICAL_REASONING_POLICY_ROLES
+        }
+    )
+    if reasoning_bindings is None:
+        projected_bindings: list[OpenRouterQualifiedReasoningRoutingBinding] = []
+        for qualified_role in roles:
+            configured_roles = (
+                ("threat_model",)
+                if qualified_role == "whole_protocol_review"
+                else (
+                    ("falsifier", "verifier")
+                    if qualified_role == "falsifier"
+                    else (qualified_role,)
+                )
+            )
+            for configured_role in configured_roles:
+                role_policy = policy.role_policy(configured_role)
+                payload: dict[str, Any] = {
+                    "schema_version": "1.0",
+                    "binding_status": "exact_evidence_bound",
+                    "selection_authority": False,
+                    "exact_model_id": model,
+                    "approved_provider_endpoint": provider,
+                    "approved_provider_name": effective_provider_name,
+                    "qualified_role": qualified_role,
+                    "configured_policy_role": configured_role,
+                    "control_profile": role_policy.control.model_dump(mode="json"),
+                    "control_profile_sha256": role_policy.control.profile_sha256,
+                    "reasoning_policy_artifact_sha256": policy.artifact_sha256,
+                    "reasoning_policy_role_binding_sha256": role_policy.binding_sha256,
+                    "endpoint_reasoning_capability_sha256": "a" * 64,
+                    "qualification_report_sha256": "b" * 64,
+                    "qualification_result_sha256": "5" * 64,
+                    "qualification_verification_sha256": "2" * 64,
+                }
+                projected_bindings.append(
+                    OpenRouterQualifiedReasoningRoutingBinding(
+                        exact_model_id=model,
+                        approved_provider_endpoint=provider,
+                        approved_provider_name=effective_provider_name,
+                        qualified_role=qualified_role,
+                        configured_policy_role=configured_role,
+                        control_profile=role_policy.control,
+                        control_profile_sha256=role_policy.control.profile_sha256,
+                        reasoning_policy_artifact_sha256=policy.artifact_sha256,
+                        reasoning_policy_role_binding_sha256=role_policy.binding_sha256,
+                        endpoint_reasoning_capability_sha256="a" * 64,
+                        qualification_report_sha256="b" * 64,
+                        qualification_result_sha256="5" * 64,
+                        qualification_verification_sha256="2" * 64,
+                        binding_sha256=canonical_sha256(payload),
+                    )
+                )
+        reasoning_bindings = tuple(
+            sorted(
+                projected_bindings,
+                key=lambda binding: (
+                    binding.qualified_role,
+                    binding.configured_policy_role,
+                ),
+            )
+        )
     return OpenRouterQualificationRoutingEvidence(
         exact_model_id=model,
         canonical_model_slug=canonical_model or model,
         root_lineage=f"sha256:{'a' * 64}",
         approved_provider_endpoint=provider,
-        approved_provider_name=provider_name or provider,
+        approved_provider_name=effective_provider_name,
         endpoint_snapshot_sha256=endpoint_snapshot_sha256,
         output_capability_sha256=output_capability_sha256,
         structured_output_mode=structured_output_mode,
@@ -2985,11 +3057,12 @@ async def test_real_completion_dispatches_through_generation_binding_before_retu
     client.execution_evidence = ExecutionEvidenceKind.REAL
     client._owns_client = True
     client._authentication_validated = True
+    client._qualification_routing = {}
     monkeypatch.setattr(client, "_complete_one", completed_without_transport)
     monkeypatch.setattr(client, "_bind_real_completion_identity", bind_before_return)
     try:
         result = await client.complete_with_evidence(
-            role="source_audit",
+            role="model_benchmark",
             models=["alpha/atlas-secure"],
             system_prompt="system",
             user_prompt="synthetic local input",
@@ -3206,7 +3279,7 @@ async def test_actual_real_identity_binding_retains_metadata_fetch_failure(
             certification=True,
             only=("approved-provider",),
         ),
-        qualification_routing=(qualification,),
+        qualification_routing=(),
     )
     client.register_certification_model_discovery(evidence=evidence, manifest=manifest)
     client._authentication_validated = True
@@ -3227,7 +3300,7 @@ async def test_actual_real_identity_binding_retains_metadata_fetch_failure(
     await client._client.aclose()
     try:
         result = await client.complete_with_evidence(
-            role="source_audit",
+            role="model_benchmark",
             models=["alpha/atlas-secure"],
             system_prompt="system",
             user_prompt="synthetic local input",
@@ -6226,7 +6299,9 @@ def _per_role_reasoning_policy() -> ReasoningPolicyArtifact:
 
 def _qualified_reasoning_routing(
     profile: ReasoningControlProfile,
+    policy: ReasoningPolicyArtifact,
 ) -> OpenRouterQualifiedReasoningRoutingBinding:
+    role_policy = policy.role_policy("source_audit")
     payload: dict[str, Any] = {
         "schema_version": "1.0",
         "binding_status": "exact_evidence_bound",
@@ -6238,6 +6313,8 @@ def _qualified_reasoning_routing(
         "configured_policy_role": "source_audit",
         "control_profile": profile.model_dump(mode="json"),
         "control_profile_sha256": profile.profile_sha256,
+        "reasoning_policy_artifact_sha256": policy.artifact_sha256,
+        "reasoning_policy_role_binding_sha256": role_policy.binding_sha256,
         "endpoint_reasoning_capability_sha256": "a" * 64,
         "qualification_report_sha256": "b" * 64,
         "qualification_result_sha256": "5" * 64,
@@ -6251,6 +6328,8 @@ def _qualified_reasoning_routing(
         configured_policy_role=payload["configured_policy_role"],
         control_profile=profile,
         control_profile_sha256=profile.profile_sha256,
+        reasoning_policy_artifact_sha256=policy.artifact_sha256,
+        reasoning_policy_role_binding_sha256=role_policy.binding_sha256,
         endpoint_reasoning_capability_sha256="a" * 64,
         qualification_report_sha256="b" * 64,
         qualification_result_sha256="5" * 64,
@@ -6260,14 +6339,19 @@ def _qualified_reasoning_routing(
 
 
 def test_reasoning_qualification_routing_requires_exact_role_profile_and_capability() -> None:
-    profile = _per_role_reasoning_policy().control_for_request("source_audit")
-    binding = _qualified_reasoning_routing(profile)
-    qualification = _qualification_routing(reasoning_bindings=(binding,))
+    policy = _per_role_reasoning_policy()
+    profile = policy.control_for_request("source_audit")
+    binding = _qualified_reasoning_routing(profile, policy)
+    qualification = _qualification_routing(
+        reasoning_policy=policy,
+        reasoning_bindings=(binding,),
+    )
 
     assert (
         qualification.reasoning_binding_sha256_for(
             role="source_audit",
             control_profile=profile,
+            reasoning_policy=policy,
             endpoint_capability_sha256="a" * 64,
         )
         == binding.binding_sha256
@@ -6276,14 +6360,99 @@ def test_reasoning_qualification_routing_requires_exact_role_profile_and_capabil
         qualification.reasoning_binding_sha256_for(
             role="source_audit",
             control_profile=profile,
+            reasoning_policy=policy,
             endpoint_capability_sha256="c" * 64,
         )
     with pytest.raises(OpenRouterQualificationError, match="qualified reasoning profile"):
         qualification.reasoning_binding_sha256_for(
             role="judge",
             control_profile=profile,
+            reasoning_policy=policy,
             endpoint_capability_sha256="a" * 64,
         )
+
+
+def test_public_qualification_routing_requires_exact_opaque_authority(config_factory) -> None:
+    from mmaudit.orchestration.pipeline import _openrouter_qualification_routing
+
+    config = config_factory(
+        models={
+            "specialists": {
+                "access_control": {
+                    "primary": "golf/glacier-secure",
+                    "fallbacks": [],
+                },
+                "accounting_invariant": {
+                    "primary": "hotel/harbor-secure",
+                    "fallbacks": [],
+                },
+            }
+        }
+    )
+    now = datetime.now(UTC).replace(microsecond=0)
+    authority = synthetic_production_qualification(config, now)
+    routing = _openrouter_qualification_routing(authority)
+
+    assert (
+        _require_exact_qualification_routing_authority(
+            routing=routing,
+            qualification=authority,
+            now=now,
+        )
+        is authority
+    )
+    tampered = (
+        replace(routing[0], endpoint_snapshot_sha256="f" * 64),
+        *routing[1:],
+    )
+    with pytest.raises(OpenRouterQualificationError, match="opaque production authority"):
+        _require_exact_qualification_routing_authority(
+            routing=tampered,
+            qualification=authority,
+            now=now,
+        )
+
+
+@pytest.mark.asyncio
+async def test_real_postqualification_rejects_public_projection_without_opaque_authority(
+    config_factory,
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _completion_response('{"answer":"must not be sent"}')
+
+    manifest, evidence = _model_discovery_run(tmp_path)
+    client, http_client, _usage = _client(
+        config_factory(execution={"max_json_repair_attempts": 0}),
+        handler,
+        provider_policy=OpenRouterProviderPolicy(
+            certification=True,
+            only=("approved-provider",),
+        ),
+        qualification_routing=(_qualification_routing_for_discovery(evidence),),
+    )
+    client.register_certification_model_discovery(evidence=evidence, manifest=manifest)
+    client.execution_evidence = ExecutionEvidenceKind.REAL
+    client._owns_client = True
+    client._authentication_validated = True
+    try:
+        with pytest.raises(OpenRouterQualificationError, match="opaque qualification authority"):
+            await client.complete_with_evidence(
+                role="source_audit",
+                models=["alpha/atlas-secure"],
+                system_prompt="system",
+                user_prompt="synthetic local input",
+                response_model=Answer,
+                schema_name="answer",
+            )
+    finally:
+        await http_client.aclose()
+
+    assert calls == 0
 
 
 @pytest.mark.asyncio

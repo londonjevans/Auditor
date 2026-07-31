@@ -254,7 +254,7 @@ def _endpoint(spec: _CandidateSpec) -> dict[str, Any]:
     parameters = ["max_tokens", "response_format", "temperature"]
     if spec.reasoning_supported:
         parameters.append("reasoning")
-    return {
+    endpoint: dict[str, Any] = {
         "model_id": spec.model_id,
         "tag": spec.provider_endpoint,
         "provider_name": spec.provider_name,
@@ -269,6 +269,18 @@ def _endpoint(spec: _CandidateSpec) -> dict[str, Any]:
             "request": "0",
         },
     }
+    if spec.reasoning_supported:
+        endpoint["reasoning"] = {
+            "supported_efforts": [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+            ],
+        }
+    return endpoint
 
 
 def _catalog_model(spec: _CandidateSpec) -> dict[str, Any]:
@@ -290,6 +302,7 @@ def _catalog_model(spec: _CandidateSpec) -> dict[str, Any]:
             "mandatory": False,
             "default_enabled": False,
             "supports_max_tokens": True,
+            "supported_efforts": ["none", "minimal", "low", "medium", "high", "xhigh"],
             "max_reasoning_tokens": 8_192,
         }
     return payload

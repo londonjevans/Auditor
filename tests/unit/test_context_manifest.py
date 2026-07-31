@@ -691,6 +691,38 @@ def test_context_manifest_rejects_missing_or_tampered_atomic_reservation() -> No
         )
 
 
+def test_context_request_rejects_self_hashed_atomic_reservation_split_reallocation() -> None:
+    request = ContextRequestEvidence.build(_usage())
+    plan = request.request_plan
+    shifted = AtomicTokenReservationEvidence.build(
+        request_id=request.request_id,
+        exact_model_id=request.requested_model,
+        role=request.role,
+        request_token_plan_sha256=plan.plan_sha256,
+        planned_prompt_tokens=plan.prompt_byte_upper_bound_tokens,
+        planned_visible_output_tokens=plan.reserved_output_tokens - 1,
+        planned_reasoning_tokens=plan.reserved_reasoning_tokens + 1,
+        planned_completion_tokens=plan.requested_completion_tokens,
+        global_input_token_limit=plan.global_budget.global_input_token_budget,
+        global_output_token_limit=plan.global_budget.global_output_token_budget,
+        spent_input_tokens_before=0,
+        reserved_input_tokens_before=0,
+        spent_output_tokens_before=0,
+        reserved_output_tokens_before=0,
+    )
+    payload = request.model_dump(mode="json")
+    payload["atomic_token_reservations"] = [shifted.model_dump(mode="json")]
+    payload["atomic_token_reservation_sha256s"] = [shifted.evidence_sha256]
+    payload["atomic_token_reservation"] = shifted.model_dump(mode="json")
+    payload["atomic_token_reservation_sha256"] = shifted.evidence_sha256
+    payload["evidence_sha256"] = context_manifest_module._canonical_sha256(
+        {key: value for key, value in payload.items() if key != "evidence_sha256"}
+    )
+
+    with pytest.raises(ValidationError, match="endpoint-bound token plan"):
+        ContextRequestEvidence.model_validate_json(json.dumps(payload), strict=True)
+
+
 def test_context_manifest_rejects_duplicate_request_ids() -> None:
     with pytest.raises(ContextManifestError, match="unique provider request IDs"):
         build_context_manifest(run_id="run-1", usage_records=[_usage(), _usage()])

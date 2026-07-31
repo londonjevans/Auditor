@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -15,6 +16,7 @@ from mmaudit.config import (
 )
 from mmaudit.models.qualification import (
     VerifiedProductionQualification,
+    seal_qualified_reasoning_role_binding,
 )
 from mmaudit.models.registry import ModelRegistry, ProductionQualificationValidation
 from mmaudit.models.schemas import AuditProfile
@@ -85,6 +87,19 @@ def _verified_production_config_and_capability() -> tuple[
         production_effective_config_sha256=config.stable_hash(),
     )
     return config, qualification, observed_at
+
+
+def _reseal_production_validation_payload(payload: dict[str, Any]) -> None:
+    unsigned = {key: value for key, value in payload.items() if key != "validation_sha256"}
+    payload["validation_sha256"] = hashlib.sha256(
+        json.dumps(
+            unsigned,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def test_lineage_record_is_immutable(config_factory) -> None:
@@ -574,6 +589,100 @@ def test_serialized_production_qualification_validation_rejects_tampering() -> N
             r"self-hash is inconsistent|"
             "production reasoning qualification differs from its model binding"
         ),
+    ):
+        ProductionQualificationValidation.from_dict(payload)
+
+
+def test_serialized_production_qualification_rejects_truncated_reasoning_routes() -> None:
+    config, qualification, observed_at = _verified_production_config_and_capability()
+    evidence = ModelRegistry.validate_production_qualification(
+        config,
+        qualification,
+        now=observed_at,
+    )
+    payload = evidence.as_dict()
+    payload["model_bindings"][0]["reasoning_bindings"].pop()
+    _reseal_production_validation_payload(payload)
+
+    with pytest.raises(
+        ValidationError,
+        match="reasoning qualification routes differ from approved role inventory",
+    ):
+        ProductionQualificationValidation.from_dict(payload)
+
+
+def test_serialized_production_qualification_rejects_extra_reasoning_route() -> None:
+    config, qualification, observed_at = _verified_production_config_and_capability()
+    evidence = ModelRegistry.validate_production_qualification(
+        config,
+        qualification,
+        now=observed_at,
+    )
+    model = evidence.model_bindings[0]
+    source_route = next(
+        route for route in model.reasoning_bindings if route.qualified_role == "source_audit"
+    )
+    extra_route = seal_qualified_reasoning_role_binding(
+        exact_model_id=source_route.exact_model_id,
+        approved_provider_endpoint=source_route.approved_provider_endpoint,
+        approved_provider_name=source_route.approved_provider_name,
+        qualified_role="model_benchmark",
+        configured_policy_role="source_audit",
+        control_profile=source_route.control_profile,
+        reasoning_policy_artifact_sha256=(source_route.reasoning_policy_artifact_sha256),
+        reasoning_policy_role_binding_sha256=(source_route.reasoning_policy_role_binding_sha256),
+        endpoint_reasoning_capability_sha256=(source_route.endpoint_reasoning_capability_sha256),
+        qualification_report_sha256=source_route.qualification_report_sha256,
+        qualification_result_sha256=source_route.qualification_result_sha256,
+        qualification_verification_sha256=(source_route.qualification_verification_sha256),
+    )
+    payload = evidence.as_dict()
+    routes = payload["model_bindings"][0]["reasoning_bindings"]
+    routes.append(extra_route.model_dump(mode="json"))
+    routes.sort(
+        key=lambda route: (
+            route["qualified_role"],
+            route["configured_policy_role"],
+        )
+    )
+    _reseal_production_validation_payload(payload)
+
+    with pytest.raises(
+        ValidationError,
+        match="reasoning qualification routes differ from approved role inventory",
+    ):
+        ProductionQualificationValidation.from_dict(payload)
+
+
+def test_serialized_production_qualification_rejects_reasoning_parent_mismatch() -> None:
+    config, qualification, observed_at = _verified_production_config_and_capability()
+    evidence = ModelRegistry.validate_production_qualification(
+        config,
+        qualification,
+        now=observed_at,
+    )
+    source_route = evidence.model_bindings[0].reasoning_bindings[0]
+    mismatched_route = seal_qualified_reasoning_role_binding(
+        exact_model_id=source_route.exact_model_id,
+        approved_provider_endpoint=source_route.approved_provider_endpoint,
+        approved_provider_name=source_route.approved_provider_name,
+        qualified_role=source_route.qualified_role,
+        configured_policy_role=source_route.configured_policy_role,
+        control_profile=source_route.control_profile,
+        reasoning_policy_artifact_sha256=(source_route.reasoning_policy_artifact_sha256),
+        reasoning_policy_role_binding_sha256=(source_route.reasoning_policy_role_binding_sha256),
+        endpoint_reasoning_capability_sha256=(source_route.endpoint_reasoning_capability_sha256),
+        qualification_report_sha256=source_route.qualification_report_sha256,
+        qualification_result_sha256=source_route.qualification_result_sha256,
+        qualification_verification_sha256="0" * 64,
+    )
+    payload = evidence.as_dict()
+    payload["model_bindings"][0]["reasoning_bindings"][0] = mismatched_route.model_dump(mode="json")
+    _reseal_production_validation_payload(payload)
+
+    with pytest.raises(
+        ValidationError,
+        match="reasoning qualification verification differs from parent",
     ):
         ProductionQualificationValidation.from_dict(payload)
 

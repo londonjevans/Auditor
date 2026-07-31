@@ -10,6 +10,13 @@ import pytest
 
 from mmaudit.models.identity import OpenRouterIdentityBindingResult
 from mmaudit.models.output_modes import StructuredOutputMode, supported_output_modes
+from mmaudit.models.reasoning import (
+    CANONICAL_REASONING_POLICY_ROLES,
+    ReasoningControlProfile,
+    ReasoningExecutionEvidence,
+    ReasoningPolicyArtifact,
+    ReasoningRequestPlanEvidence,
+)
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     ModelRequestValidationStatus,
@@ -27,6 +34,7 @@ from mmaudit.models.token_planning import (
 from mmaudit.models.usage import is_creditable_usage_record, request_token_plan_from_usage
 from mmaudit.orchestration.budgets import AtomicTokenReservationEvidence
 from mmaudit.orchestration.context_manifest import ContextManifestError, build_context_manifest
+from mmaudit.orchestration.manifest import canonical_sha256
 from mmaudit.privacy import EndpointPolicyClass, PrivacyProfile, PrivacySourceClassification
 from tests.identity_fixtures import bind_synthetic_usage_identity
 from tests.output_evidence_fixtures import (
@@ -167,6 +175,7 @@ def _token_plan_for_record(
     role: str | None = None,
     exact_model_id: str | None = None,
     reserved_reasoning_tokens: int = 50,
+    reasoning_plan: ReasoningRequestPlanEvidence | None = None,
 ) -> tuple[RequestTokenPlan, AtomicTokenReservationEvidence]:
     planned_request_id = request_id or record.request_id
     planned_role = role or record.role
@@ -199,6 +208,7 @@ def _token_plan_for_record(
         allocations=allocations,
         required_output_tokens=512,
         reserved_reasoning_tokens=reserved_reasoning_tokens,
+        reasoning_plan=reasoning_plan,
         global_input_token_budget=100_000,
         global_output_token_budget=10_000,
         context_utilization=Decimal("0.70"),
@@ -223,6 +233,56 @@ def _token_plan_for_record(
         reserved_output_tokens_before=0,
     )
     return plan, atomic
+
+
+def _active_reasoning_plan(*, reserved_reasoning_tokens: int = 50) -> ReasoningRequestPlanEvidence:
+    disabled = ReasoningControlProfile.build(
+        mode="disabled",
+        reserved_reasoning_tokens=0,
+    )
+    controls = {role: disabled for role in CANONICAL_REASONING_POLICY_ROLES}
+    controls["source_audit"] = ReasoningControlProfile.build(
+        mode="effort",
+        effort="high",
+        reserved_reasoning_tokens=reserved_reasoning_tokens,
+    )
+    return ReasoningRequestPlanEvidence.build(
+        request_role="source_audit",
+        policy=ReasoningPolicyArtifact.build(controls_by_role=controls),
+    )
+
+
+def _reasoning_token_bound_creditable_record(
+    observed_reasoning_tokens: int | None,
+) -> UsageRecord:
+    record = _creditable_record()
+    reasoning_plan = _active_reasoning_plan()
+    plan, atomic = _token_plan_for_record(
+        record,
+        reasoning_plan=reasoning_plan,
+    )
+    reasoning_evidence = ReasoningExecutionEvidence.build(
+        request_plan=reasoning_plan,
+        observed_reasoning_tokens=observed_reasoning_tokens,
+        provider_completion_tokens=record.completion_tokens,
+        request_token_plan_sha256=plan.plan_sha256,
+        request_body_sha256=record.request_body_sha256 or "",
+    )
+    return record.model_copy(
+        update={
+            "reasoning_tokens": observed_reasoning_tokens or 0,
+            "reasoning_evidence": reasoning_evidence,
+            "routing": {
+                **record.routing,
+                "request_token_plan": plan.model_dump(mode="json"),
+                "request_token_plan_sha256": plan.plan_sha256,
+                "atomic_token_reservations": [atomic.model_dump(mode="json")],
+                "atomic_token_reservation_sha256s": [atomic.evidence_sha256],
+                "atomic_token_reservation": atomic.model_dump(mode="json"),
+                "atomic_token_reservation_sha256": atomic.evidence_sha256,
+            },
+        }
+    )
 
 
 def _token_bound_creditable_record() -> UsageRecord:
@@ -309,6 +369,131 @@ def test_creditable_usage_accepts_matching_plan_and_atomic_reservation() -> None
     assert plan.role == record.role
     assert plan.route_intersection.exact_model_ids == (record.requested_model,)
     assert is_creditable_usage_record(record)
+
+
+@pytest.mark.parametrize(
+    ("observed_reasoning_tokens", "creditable"),
+    [
+        pytest.param(1, True, id="positive-observation"),
+        pytest.param(0, False, id="observed-zero"),
+        pytest.param(None, False, id="observation-unavailable"),
+    ],
+)
+def test_active_reasoning_credit_requires_a_positive_observation(
+    observed_reasoning_tokens: int | None,
+    creditable: bool,
+) -> None:
+    record = _reasoning_token_bound_creditable_record(observed_reasoning_tokens)
+
+    assert is_creditable_usage_record(record) is creditable
+
+
+def test_legacy_token_plan_raw_shape_is_parseable_but_not_creditable() -> None:
+    record = _token_bound_creditable_record()
+    current = request_token_plan_from_usage(record)
+    assert current is not None
+    legacy_payload = current.model_dump(mode="json", exclude={"plan_sha256"})
+    legacy_payload["schema_version"] = "1.0"
+    legacy_payload.pop("reasoning_plan")
+    legacy_raw = {
+        **legacy_payload,
+        "plan_sha256": canonical_sha256(legacy_payload),
+    }
+    legacy_plan = RequestTokenPlan.model_validate_json(json.dumps(legacy_raw))
+    atomic = AtomicTokenReservationEvidence.build(
+        request_id=record.request_id,
+        exact_model_id=record.requested_model,
+        role=record.role,
+        request_token_plan_sha256=legacy_plan.plan_sha256,
+        planned_prompt_tokens=legacy_plan.prompt_byte_upper_bound_tokens,
+        planned_visible_output_tokens=legacy_plan.reserved_output_tokens,
+        planned_reasoning_tokens=legacy_plan.reserved_reasoning_tokens,
+        planned_completion_tokens=legacy_plan.requested_completion_tokens,
+        global_input_token_limit=legacy_plan.global_budget.global_input_token_budget,
+        global_output_token_limit=legacy_plan.global_budget.global_output_token_budget,
+        spent_input_tokens_before=0,
+        reserved_input_tokens_before=0,
+        spent_output_tokens_before=0,
+        reserved_output_tokens_before=0,
+    )
+    legacy_record = record.model_copy(
+        update={
+            "routing": {
+                **record.routing,
+                "request_token_plan": legacy_raw,
+                "request_token_plan_sha256": legacy_plan.plan_sha256,
+                "atomic_token_reservations": [atomic.model_dump(mode="json")],
+                "atomic_token_reservation_sha256s": [atomic.evidence_sha256],
+                "atomic_token_reservation": atomic.model_dump(mode="json"),
+                "atomic_token_reservation_sha256": atomic.evidence_sha256,
+            }
+        }
+    )
+
+    restored = request_token_plan_from_usage(legacy_record)
+    assert restored is not None
+    assert restored.schema_version == "1.0"
+    assert restored.reasoning_plan is None
+    assert not is_creditable_usage_record(legacy_record)
+    assert build_context_manifest(
+        run_id="legacy-token-plan",
+        usage_records=[legacy_record],
+    ).requests
+
+    noncanonical_raw = dict(legacy_raw)
+    noncanonical_raw["reasoning_plan"] = None
+    noncanonical_record = legacy_record.model_copy(
+        update={
+            "routing": {
+                **legacy_record.routing,
+                "request_token_plan": noncanonical_raw,
+            }
+        }
+    )
+    with pytest.raises(ValueError, match="differs from its request"):
+        request_token_plan_from_usage(noncanonical_record)
+
+
+def test_usage_and_context_reject_atomic_reservation_split_reallocation() -> None:
+    record = _token_bound_creditable_record()
+    plan = request_token_plan_from_usage(record)
+    assert plan is not None
+    shifted = AtomicTokenReservationEvidence.build(
+        request_id=record.request_id,
+        exact_model_id=record.requested_model,
+        role=record.role,
+        request_token_plan_sha256=plan.plan_sha256,
+        planned_prompt_tokens=plan.prompt_byte_upper_bound_tokens,
+        planned_visible_output_tokens=plan.reserved_output_tokens - 1,
+        planned_reasoning_tokens=plan.reserved_reasoning_tokens + 1,
+        planned_completion_tokens=plan.requested_completion_tokens,
+        global_input_token_limit=plan.global_budget.global_input_token_budget,
+        global_output_token_limit=plan.global_budget.global_output_token_budget,
+        spent_input_tokens_before=0,
+        reserved_input_tokens_before=0,
+        spent_output_tokens_before=0,
+        reserved_output_tokens_before=0,
+    )
+    shifted_record = record.model_copy(
+        update={
+            "routing": {
+                **record.routing,
+                "atomic_token_reservations": [shifted.model_dump(mode="json")],
+                "atomic_token_reservation_sha256s": [shifted.evidence_sha256],
+                "atomic_token_reservation": shifted.model_dump(mode="json"),
+                "atomic_token_reservation_sha256": shifted.evidence_sha256,
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="differs from its token plan"):
+        request_token_plan_from_usage(shifted_record)
+    assert not is_creditable_usage_record(shifted_record)
+    with pytest.raises(ContextManifestError, match="token-reservation"):
+        build_context_manifest(
+            run_id="shifted-token-reservation",
+            usage_records=[shifted_record],
+        )
 
 
 def test_creditable_usage_rejects_reasoning_above_its_reserved_slice() -> None:

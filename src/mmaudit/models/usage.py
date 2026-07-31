@@ -298,7 +298,7 @@ def request_token_plan_from_usage(record: UsageRecord) -> RequestTokenPlan | Non
         raise ValueError("usage routing token-plan evidence is malformed")
     plan = _strict_json_evidence(RequestTokenPlan, raw_plan, label="request token plan")
     if (
-        plan.model_dump(mode="json") != raw_plan
+        _canonical_request_token_plan_projection(plan) != raw_plan
         or raw_hash != plan.plan_sha256
         or plan.request_id != record.request_id
         or plan.role != record.role
@@ -391,6 +391,8 @@ def atomic_token_reservations_from_usage(
             or evidence.role != record.role
             or evidence.request_token_plan_sha256 != resolved_plan.plan_sha256
             or evidence.planned_prompt_tokens != resolved_plan.prompt_byte_upper_bound_tokens
+            or evidence.planned_visible_output_tokens != resolved_plan.reserved_output_tokens
+            or evidence.planned_reasoning_tokens != resolved_plan.reserved_reasoning_tokens
             or evidence.planned_completion_tokens != resolved_plan.requested_completion_tokens
             or evidence.global_input_token_limit
             != resolved_plan.global_budget.global_input_token_budget
@@ -414,6 +416,15 @@ def _atomic_token_reservation_from_usage(
     plan: RequestTokenPlan,
 ) -> AtomicTokenReservationEvidence:
     return atomic_token_reservations_from_usage(record, plan)[-1]
+
+
+def _canonical_request_token_plan_projection(plan: RequestTokenPlan) -> dict[str, Any]:
+    """Return the exact serialized shape used by the plan's schema version."""
+
+    projection = plan.model_dump(mode="json")
+    if plan.schema_version == "1.0":
+        projection.pop("reasoning_plan")
+    return projection
 
 
 def _strict_json_evidence[EvidenceT: BaseModel](
@@ -444,6 +455,8 @@ def _has_valid_token_plan_routing(record: UsageRecord) -> bool:
         return False
     if plan is None:
         return False
+    if plan.schema_version != "2.0":
+        return False
     reasoning_plan = plan.reasoning_plan
     reasoning = record.reasoning_evidence
     if (reasoning_plan is None) != (reasoning is None):
@@ -458,6 +471,18 @@ def _has_valid_token_plan_routing(record: UsageRecord) -> bool:
             and reasoning.observed_reasoning_tokens != record.reasoning_tokens
         )
         or (not reasoning.observation_available and record.reasoning_tokens != 0)
+    ):
+        return False
+    if (
+        reasoning_plan is not None
+        and reasoning_plan.control_profile.mode != "disabled"
+        and reasoning_plan.control_profile.reserved_reasoning_tokens > 0
+        and (
+            reasoning is None
+            or reasoning.state != "active_observed"
+            or reasoning.observed_reasoning_tokens is None
+            or reasoning.observed_reasoning_tokens <= 0
+        )
     ):
         return False
     limits = plan.route_intersection

@@ -744,6 +744,10 @@ class ContextRequestEvidence(FrozenContextEvidence):
             != self.request_plan.plan_sha256
             or self.atomic_token_reservation.planned_prompt_tokens
             != self.request_plan.prompt_byte_upper_bound_tokens
+            or self.atomic_token_reservation.planned_visible_output_tokens
+            != self.request_plan.reserved_output_tokens
+            or self.atomic_token_reservation.planned_reasoning_tokens
+            != self.request_plan.reserved_reasoning_tokens
             or self.atomic_token_reservation.planned_completion_tokens
             != self.request_plan.requested_completion_tokens
             or self.atomic_token_reservation.global_input_token_limit
@@ -760,6 +764,10 @@ class ContextRequestEvidence(FrozenContextEvidence):
                 or reservation.request_token_plan_sha256 != self.request_plan.plan_sha256
                 or reservation.planned_prompt_tokens
                 != self.request_plan.prompt_byte_upper_bound_tokens
+                or reservation.planned_visible_output_tokens
+                != self.request_plan.reserved_output_tokens
+                or reservation.planned_reasoning_tokens
+                != self.request_plan.reserved_reasoning_tokens
                 or reservation.planned_completion_tokens
                 != self.request_plan.requested_completion_tokens
                 or reservation.global_input_token_limit

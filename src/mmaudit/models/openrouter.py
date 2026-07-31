@@ -17,7 +17,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 from urllib.parse import quote
 
 import httpx
@@ -94,8 +94,12 @@ from mmaudit.models.reasoning import (
     ReasoningPolicyArtifact,
     ReasoningPolicyError,
     ReasoningRequestPlanEvidence,
+    reasoning_policy_roles_for_qualified_role,
     resolve_reasoning_request_role,
 )
+
+if TYPE_CHECKING:
+    from mmaudit.models.qualification import VerifiedProductionQualification
 from mmaudit.models.schemas import (
     ContextPackage,
     ContextRequestEvidence,
@@ -332,6 +336,8 @@ class OpenRouterQualifiedReasoningRoutingBinding:
     configured_policy_role: str
     control_profile: ReasoningControlProfile
     control_profile_sha256: str
+    reasoning_policy_artifact_sha256: str
+    reasoning_policy_role_binding_sha256: str
     endpoint_reasoning_capability_sha256: str
     qualification_report_sha256: str
     qualification_result_sha256: str
@@ -360,6 +366,8 @@ class OpenRouterQualifiedReasoningRoutingBinding:
             raise ValueError("reasoning qualification control profile binding is inconsistent")
         for value in (
             self.control_profile_sha256,
+            self.reasoning_policy_artifact_sha256,
+            self.reasoning_policy_role_binding_sha256,
             self.endpoint_reasoning_capability_sha256,
             self.qualification_report_sha256,
             self.qualification_result_sha256,
@@ -383,6 +391,8 @@ class OpenRouterQualifiedReasoningRoutingBinding:
             "configured_policy_role": self.configured_policy_role,
             "control_profile": self.control_profile.model_dump(mode="json"),
             "control_profile_sha256": self.control_profile_sha256,
+            "reasoning_policy_artifact_sha256": self.reasoning_policy_artifact_sha256,
+            "reasoning_policy_role_binding_sha256": (self.reasoning_policy_role_binding_sha256),
             "endpoint_reasoning_capability_sha256": (self.endpoint_reasoning_capability_sha256),
             "qualification_report_sha256": self.qualification_report_sha256,
             "qualification_result_sha256": self.qualification_result_sha256,
@@ -398,6 +408,8 @@ class OpenRouterQualifiedReasoningRoutingBinding:
         qualified_role: str,
         configured_policy_role: str,
         control_profile: ReasoningControlProfile,
+        reasoning_policy_artifact_sha256: str,
+        reasoning_policy_role_binding_sha256: str,
         endpoint_reasoning_capability_sha256: str,
         qualification_report_sha256: str,
         qualification_result_sha256: str,
@@ -412,6 +424,8 @@ class OpenRouterQualifiedReasoningRoutingBinding:
             "qualified_role": qualified_role,
             "configured_policy_role": configured_policy_role,
             "control_profile_sha256": control_profile.profile_sha256,
+            "reasoning_policy_artifact_sha256": reasoning_policy_artifact_sha256,
+            "reasoning_policy_role_binding_sha256": reasoning_policy_role_binding_sha256,
             "endpoint_reasoning_capability_sha256": endpoint_reasoning_capability_sha256,
             "qualification_report_sha256": qualification_report_sha256,
             "qualification_result_sha256": qualification_result_sha256,
@@ -424,6 +438,8 @@ class OpenRouterQualifiedReasoningRoutingBinding:
             "qualified_role": self.qualified_role,
             "configured_policy_role": self.configured_policy_role,
             "control_profile_sha256": self.control_profile_sha256,
+            "reasoning_policy_artifact_sha256": self.reasoning_policy_artifact_sha256,
+            "reasoning_policy_role_binding_sha256": (self.reasoning_policy_role_binding_sha256),
             "endpoint_reasoning_capability_sha256": (self.endpoint_reasoning_capability_sha256),
             "qualification_report_sha256": self.qualification_report_sha256,
             "qualification_result_sha256": self.qualification_result_sha256,
@@ -510,9 +526,24 @@ class OpenRouterQualificationRoutingEvidence:
             (binding.qualified_role, binding.configured_policy_role)
             for binding in self.reasoning_bindings
         )
-        if reasoning_routes != tuple(sorted(set(reasoning_routes))):
+        try:
+            expected_reasoning_routes = tuple(
+                sorted(
+                    (
+                        qualified_role,
+                        configured_policy_role,
+                    )
+                    for qualified_role in self.approved_roles
+                    for configured_policy_role in reasoning_policy_roles_for_qualified_role(
+                        qualified_role
+                    )
+                )
+            )
+        except ReasoningPolicyError as exc:
+            raise ValueError("qualification routing contains an unsupported approved role") from exc
+        if reasoning_routes != expected_reasoning_routes:
             raise ValueError(
-                "qualification routing reasoning bindings must be unique and route-sorted"
+                "qualification routing reasoning bindings must cover every approved role route"
             )
         if any(
             binding.exact_model_id != self.exact_model_id
@@ -599,6 +630,7 @@ class OpenRouterQualificationRoutingEvidence:
         *,
         role: str,
         control_profile: ReasoningControlProfile,
+        reasoning_policy: ReasoningPolicyArtifact,
         endpoint_capability_sha256: str,
     ) -> str:
         """Require exact role/profile/capability qualification before production use."""
@@ -626,6 +658,10 @@ class OpenRouterQualificationRoutingEvidence:
             qualified_role=resolution.qualification_role,
             configured_policy_role=resolution.configured_policy_role,
             control_profile=control_profile,
+            reasoning_policy_artifact_sha256=reasoning_policy.artifact_sha256,
+            reasoning_policy_role_binding_sha256=(
+                reasoning_policy.role_policy(resolution.configured_policy_role).binding_sha256
+            ),
             endpoint_reasoning_capability_sha256=endpoint_capability_sha256,
             qualification_report_sha256=self.benchmark_report_sha256,
             qualification_result_sha256=self.qualification_result_sha256,
@@ -676,6 +712,110 @@ class OpenRouterQualificationRoutingEvidence:
                 binding.binding_sha256 for binding in self.reasoning_bindings
             ],
         }
+
+
+def _require_exact_qualification_routing_authority(
+    *,
+    routing: tuple[OpenRouterQualificationRoutingEvidence, ...],
+    qualification: VerifiedProductionQualification,
+    now: datetime,
+) -> VerifiedProductionQualification:
+    """Join the public routing projection to resolver-issued opaque authority."""
+
+    # Local import avoids openrouter -> qualification -> benchmark -> openrouter at import time.
+    from mmaudit.models.qualification import VerifiedProductionQualification
+
+    if type(qualification) is not VerifiedProductionQualification:
+        raise OpenRouterQualificationError(
+            "production qualification authority has an invalid opaque type"
+        )
+    try:
+        verified = qualification.require_current(now=now)
+    except ValueError as exc:
+        raise OpenRouterQualificationError(
+            "production qualification authority is invalid or stale"
+        ) from exc
+    expected_model_ids = tuple(model.exact_model_id for model in verified.models)
+    observed_model_ids = tuple(binding.exact_model_id for binding in routing)
+    if observed_model_ids != expected_model_ids:
+        raise OpenRouterQualificationError(
+            "qualification routing does not exactly project the opaque model set"
+        )
+    for projected, model in zip(routing, verified.models, strict=True):
+        expected = {
+            "exact_model_id": model.exact_model_id,
+            "canonical_model_slug": model.canonical_model_slug,
+            "root_lineage": model.root_lineage,
+            "approved_provider_endpoint": model.approved_provider_endpoint,
+            "approved_provider_name": model.approved_provider_name,
+            "endpoint_snapshot_sha256": model.endpoint_snapshot_sha256,
+            "output_capability_sha256": model.output_capability_sha256,
+            "structured_output_mode": model.structured_output_mode,
+            "model_metadata_snapshot_sha256": model.model_metadata_snapshot_sha256,
+            "pricing_snapshot_sha256": model.pricing_snapshot_sha256,
+            "approved_roles": model.approved_roles,
+            "verified_at": verified.verified_at,
+            "expires_at": model.expires_at,
+            "qualification_artifact_sha256": verified.artifact_sha256,
+            "qualification_verification_sha256": (verified.qualification_verification_sha256),
+            "production_selection_sha256": verified.production_selection_sha256,
+            "selection_verification_sha256": verified.selection_verification_sha256,
+            "qualification_result_sha256": model.qualification_result_sha256,
+            "benchmark_report_sha256": model.benchmark_report_sha256,
+        }
+        if any(getattr(projected, field) != value for field, value in expected.items()):
+            raise OpenRouterQualificationError(
+                "qualification routing differs from opaque production authority"
+            )
+        projected_routes = tuple(
+            (binding.qualified_role, binding.configured_policy_role)
+            for binding in projected.reasoning_bindings
+        )
+        authority_routes = tuple(
+            (binding.qualified_role, binding.configured_policy_role)
+            for binding in model.reasoning_bindings
+        )
+        if projected_routes != authority_routes:
+            raise OpenRouterQualificationError(
+                "reasoning routing differs from opaque production authority"
+            )
+        for projected_reasoning, authority_reasoning in zip(
+            projected.reasoning_bindings,
+            model.reasoning_bindings,
+            strict=True,
+        ):
+            reasoning_expected = {
+                "exact_model_id": authority_reasoning.exact_model_id,
+                "approved_provider_endpoint": (authority_reasoning.approved_provider_endpoint),
+                "approved_provider_name": authority_reasoning.approved_provider_name,
+                "qualified_role": authority_reasoning.qualified_role,
+                "configured_policy_role": authority_reasoning.configured_policy_role,
+                "control_profile": authority_reasoning.control_profile,
+                "control_profile_sha256": authority_reasoning.control_profile_sha256,
+                "reasoning_policy_artifact_sha256": (
+                    authority_reasoning.reasoning_policy_artifact_sha256
+                ),
+                "reasoning_policy_role_binding_sha256": (
+                    authority_reasoning.reasoning_policy_role_binding_sha256
+                ),
+                "endpoint_reasoning_capability_sha256": (
+                    authority_reasoning.endpoint_reasoning_capability_sha256
+                ),
+                "qualification_report_sha256": (authority_reasoning.qualification_report_sha256),
+                "qualification_result_sha256": (authority_reasoning.qualification_result_sha256),
+                "qualification_verification_sha256": (
+                    authority_reasoning.qualification_verification_sha256
+                ),
+                "binding_sha256": authority_reasoning.binding_sha256,
+            }
+            if any(
+                getattr(projected_reasoning, field) != value
+                for field, value in reasoning_expected.items()
+            ):
+                raise OpenRouterQualificationError(
+                    "reasoning routing differs from opaque production authority"
+                )
+    return verified
 
 
 @dataclass(frozen=True)
@@ -1481,6 +1621,7 @@ class OpenRouterClient:
         reasoning_policy: ReasoningPolicyArtifact | None = None,
         token_budgets: TokenBudgetConfig | None = None,
         qualification_routing: tuple[OpenRouterQualificationRoutingEvidence, ...] = (),
+        production_qualification: VerifiedProductionQualification | None = None,
         effective_privacy_policy: EffectivePrivacyPolicyEvidence | None = None,
         privacy_authorization: TrustedPrivacyAuthorization | None = None,
         context_preflight_ledger: ContextPreflightLedger | None = None,
@@ -1561,6 +1702,15 @@ class OpenRouterClient:
         self._qualification_routing = {
             binding.exact_model_id: binding for binding in qualification_routing
         }
+        self._production_qualification = (
+            _require_exact_qualification_routing_authority(
+                routing=qualification_routing,
+                qualification=production_qualification,
+                now=datetime.now(UTC).replace(microsecond=0),
+            )
+            if production_qualification is not None
+            else None
+        )
         self._metadata_observations: dict[str, str] = {}
         self._unbound_completions: dict[str, StructuredCompletion[Any]] = {}
         self._authentication_validated = False
@@ -3040,6 +3190,7 @@ class OpenRouterClient:
                 qualification_binding.reasoning_binding_sha256_for(
                     role=role,
                     control_profile=control,
+                    reasoning_policy=self.reasoning_policy,
                     endpoint_capability_sha256=capability.capability_sha256,
                 )
                 if qualification_binding is not None and capability is not None
@@ -3868,6 +4019,20 @@ class OpenRouterClient:
             )
         qualification_bindings: dict[str, OpenRouterQualificationRoutingEvidence | None] = {}
         checked_at = datetime.now(UTC)
+        if (
+            self.provider_policy.certification
+            and role not in _PREQUALIFICATION_PROVIDER_ROLES
+            and self.execution_evidence is ExecutionEvidenceKind.REAL
+        ):
+            if self._production_qualification is None:
+                raise OpenRouterQualificationError(
+                    "real post-qualification certification requires opaque qualification authority"
+                )
+            _require_exact_qualification_routing_authority(
+                routing=tuple(self._qualification_routing.values()),
+                qualification=self._production_qualification,
+                now=checked_at.replace(microsecond=0),
+            )
         for model in models:
             binding = self._qualification_routing.get(model)
             if (

@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from mmaudit.models.identifiers import is_exact_openrouter_model_id
 from mmaudit.models.output_modes import (
@@ -25,7 +25,7 @@ from mmaudit.models.output_modes import (
     structured_output_parameters,
     supported_output_modes,
 )
-from mmaudit.models.reasoning import ReasoningControlProfile
+from mmaudit.models.reasoning import ReasoningControlProfile, ReasoningEffort
 
 _MODEL_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
 _ENDPOINT_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
@@ -54,6 +54,14 @@ _SNAPSHOT_SCHEMA_VERSION = "1.0"
 _NON_BILLABLE_PRICING_METADATA = frozenset({"discount"})
 
 ReasoningParameterSupport = Literal["supported", "unsupported", "unknown"]
+REASONING_EFFORT_ORDER: tuple[ReasoningEffort, ...] = (
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+)
 
 
 class EndpointSnapshotValidationError(ValueError):
@@ -74,6 +82,10 @@ class OpenRouterEndpointEvidence(BaseModel):
     operational_status: str = Field(min_length=1, max_length=32)
     zdr_eligible: bool | None
     supported_parameters: tuple[str, ...] = Field(max_length=_MAX_PARAMETERS)
+    supported_reasoning_efforts: tuple[ReasoningEffort, ...] | None = Field(
+        default=None,
+        max_length=len(REASONING_EFFORT_ORDER),
+    )
     required_request_parameters: tuple[str, ...] = Field(min_length=2, max_length=32)
     structured_output_parameters: tuple[str, ...] = Field(max_length=3)
     supported_output_modes: tuple[StructuredOutputMode, ...] = Field(
@@ -108,6 +120,19 @@ class OpenRouterEndpointEvidence(BaseModel):
             raise ValueError("endpoint evidence cannot credit a non-operational endpoint")
         if self.supported_parameters != tuple(sorted(set(self.supported_parameters))):
             raise ValueError("supported endpoint parameters must be sorted and unique")
+        if self.supported_reasoning_efforts is not None:
+            selected_efforts = frozenset(self.supported_reasoning_efforts)
+            canonical_efforts = tuple(
+                effort for effort in REASONING_EFFORT_ORDER if effort in selected_efforts
+            )
+            if (
+                len(selected_efforts) != len(self.supported_reasoning_efforts)
+                or self.supported_reasoning_efforts != canonical_efforts
+                or "reasoning" not in self.supported_parameters
+            ):
+                raise ValueError(
+                    "endpoint reasoning efforts must be canonical and parameter-supported"
+                )
         if self.required_request_parameters != tuple(sorted(set(self.required_request_parameters))):
             raise ValueError("required request parameters must be sorted and unique")
         if not _BASE_REQUEST_PARAMETERS.issubset(self.required_request_parameters):
@@ -188,9 +213,23 @@ class OpenRouterReasoningCapabilityEvidence(BaseModel):
     reasoning_mandatory: bool | None
     reasoning_default_enabled: bool | None
     reasoning_supports_max_tokens: bool | None
+    supported_reasoning_efforts: tuple[ReasoningEffort, ...] | None = Field(
+        default=None,
+        max_length=len(REASONING_EFFORT_ORDER),
+    )
     max_output_tokens: int = Field(gt=0, le=2**31 - 1)
     max_reasoning_tokens: int | None = Field(default=None, gt=0, le=65_536)
     capability_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("supported_reasoning_efforts", mode="before")
+    @classmethod
+    def json_effort_inventory_is_tuple(
+        cls,
+        value: Any,
+    ) -> Any:
+        """Accept the JSON array representation without relaxing strict members."""
+
+        return tuple(value) if isinstance(value, list) else value
 
     @classmethod
     def from_endpoint(
@@ -238,6 +277,7 @@ class OpenRouterReasoningCapabilityEvidence(BaseModel):
             "reasoning_mandatory": reasoning_mandatory,
             "reasoning_default_enabled": reasoning_default_enabled,
             "reasoning_supports_max_tokens": reasoning_supports_max_tokens,
+            "supported_reasoning_efforts": endpoint.supported_reasoning_efforts,
             "max_output_tokens": endpoint.max_completion_tokens,
             "max_reasoning_tokens": max_reasoning_tokens,
         }
@@ -270,6 +310,22 @@ class OpenRouterReasoningCapabilityEvidence(BaseModel):
             state is not None for state in semantic_states
         ):
             raise ValueError("unavailable reasoning metadata cannot contain inferred states")
+        if not self.reasoning_metadata_available and self.supported_reasoning_efforts is not None:
+            raise ValueError(
+                "unavailable reasoning metadata cannot claim a supported-effort inventory"
+            )
+        if self.supported_reasoning_efforts is not None:
+            selected_efforts = frozenset(self.supported_reasoning_efforts)
+            canonical_efforts = tuple(
+                effort for effort in REASONING_EFFORT_ORDER if effort in selected_efforts
+            )
+            if (
+                len(selected_efforts) != len(self.supported_reasoning_efforts)
+                or self.supported_reasoning_efforts != canonical_efforts
+            ):
+                raise ValueError(
+                    "supported reasoning efforts must be unique and canonically ordered"
+                )
 
         if self.reasoning_supports_max_tokens is not True and self.max_reasoning_tokens is not None:
             raise ValueError("reasoning token ceiling requires explicit max-token support")
@@ -330,6 +386,14 @@ class OpenRouterReasoningCapabilityEvidence(BaseModel):
             return
         if sealed_profile.mode == "effort":
             assert sealed_profile.effort is not None
+            if self.supported_reasoning_efforts is None:
+                raise EndpointSnapshotValidationError(
+                    "active reasoning effort lacks an exact frozen supported-effort inventory"
+                )
+            if sealed_profile.effort not in self.supported_reasoning_efforts:
+                raise EndpointSnapshotValidationError(
+                    "requested reasoning effort is absent from the exact frozen inventory"
+                )
             if sealed_profile.effort == "none" and self.reasoning_mandatory is not False:
                 raise EndpointSnapshotValidationError(
                     "effort=none is incompatible with mandatory reasoning"
@@ -817,6 +881,7 @@ def _normalize_endpoint(
     provider_name = _provider_display_name(raw_endpoint.get("provider_name"))
     status = _operational_status(raw_endpoint.get("status"))
     supported = _supported_parameters(raw_endpoint.get("supported_parameters"))
+    supported_reasoning_efforts = _optional_endpoint_reasoning_efforts(raw_endpoint)
     structured = structured_output_parameters(supported)
     output_modes = supported_output_modes(supported)
     if not set(required_request_parameters).issubset(supported):
@@ -841,6 +906,7 @@ def _normalize_endpoint(
         "operational": True,
         "operational_status": status,
         "supported_parameters": supported,
+        "supported_reasoning_efforts": supported_reasoning_efforts,
         "required_request_parameters": required_request_parameters,
         "structured_output_parameters": structured,
         "supported_output_modes": output_modes,
@@ -887,6 +953,28 @@ def _supported_parameters(value: Any) -> tuple[str, ...]:
     if len(value) != len(set(value)):
         raise EndpointSnapshotValidationError("endpoint supported parameters are duplicated")
     return tuple(sorted(value))
+
+
+def _optional_endpoint_reasoning_efforts(
+    raw_endpoint: Mapping[str, Any],
+) -> tuple[ReasoningEffort, ...] | None:
+    raw_reasoning = raw_endpoint.get("reasoning")
+    if raw_reasoning is None:
+        return None
+    if not isinstance(raw_reasoning, dict) or len(raw_reasoning) > 16:
+        raise EndpointSnapshotValidationError("endpoint reasoning metadata is invalid")
+    value = raw_reasoning.get("supported_efforts")
+    if value is None:
+        return None
+    if (
+        not isinstance(value, list)
+        or len(value) > len(REASONING_EFFORT_ORDER)
+        or any(not isinstance(item, str) or item not in REASONING_EFFORT_ORDER for item in value)
+        or len(value) != len(set(value))
+    ):
+        raise EndpointSnapshotValidationError("endpoint supported reasoning efforts are invalid")
+    selected = frozenset(value)
+    return tuple(effort for effort in REASONING_EFFORT_ORDER if effort in selected)
 
 
 def canonicalize_openrouter_supported_parameters(value: Any) -> tuple[str, ...]:
@@ -1023,6 +1111,7 @@ def _validate_zdr_counterpart(
         "operational",
         "operational_status",
         "supported_parameters",
+        "supported_reasoning_efforts",
         "structured_output_parameters",
         "supported_output_modes",
         "structured_output_mode",
@@ -1053,6 +1142,7 @@ def _endpoint_output_capability_projection(
         "exact_model_id": values["exact_model_id"],
         "provider_endpoint": values["provider_endpoint"],
         "supported_parameters": values["supported_parameters"],
+        "supported_reasoning_efforts": values["supported_reasoning_efforts"],
         "required_request_parameters": values["required_request_parameters"],
         "structured_output_parameters": values["structured_output_parameters"],
         "supported_output_modes": values["supported_output_modes"],
