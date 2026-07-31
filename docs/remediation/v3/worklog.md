@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 82884f37b45b84c9ba43a002fe2128b871e26f04
+LAST_CHECKPOINT_COMMIT: 36eff43d3b79637ce193d6a3dff7c8d65fafddac
 
 ## 2026-07-31 — V3-EFFORT-001
 
@@ -194,7 +194,8 @@ LAST_CHECKPOINT_COMMIT: 82884f37b45b84c9ba43a002fe2128b871e26f04
 - **Pause boundary:** At `2026-07-31T03:37:51Z`, all workers were stopped at an atomic
   provider-free boundary. No provider, network, or secret access occurred and the cumulative
   OpenRouter ledger remains unchanged. Resume with the supplemental-profile campaign integration,
-  not with already-validated authority joins.
+  not with already-validated authority joins. The isolated implementation checkpoint is
+  `36eff43d3b79637ce193d6a3dff7c8d65fafddac`.
 
 ## 2026-07-30 — V3-LINEAGE-001
 
