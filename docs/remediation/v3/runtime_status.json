@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-07-31T02:25:09Z",
-  "candidate_commit": "94936a880e04246f745fa91fc245c2820a58f40c",
-  "autorun_status": "CHECKPOINT_READY",
+  "updated_at": "2026-07-31T02:26:09Z",
+  "candidate_commit": "8cc1e12d6192f4b180bb1a4118ce92489d597c2f",
+  "autorun_status": "PAUSED_SAFE_CHECKPOINT",
   "current_milestone": "per_role_reasoning_effort_binding",
   "current_ticket": "V3-EFFORT-001 (PARTIAL)",
-  "last_checkpoint_commit": "94936a880e04246f745fa91fc245c2820a58f40c",
+  "last_checkpoint_commit": "8cc1e12d6192f4b180bb1a4118ce92489d597c2f",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,

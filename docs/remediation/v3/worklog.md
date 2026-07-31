@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: CHECKPOINT_READY
+AUTORUN_STATUS: PAUSED_SAFE_CHECKPOINT
 CURRENT_MILESTONE: Per-role reasoning effort binding
 CURRENT_TICKET: V3-EFFORT-001 (PARTIAL)
 LAST_COMPLETED_TICKET: V3-EXECORIGIN-001
-NEXT_ACTION: Create the isolated checkpoint, record its commit hash, push `main` over SSH, and pause. On resume, continue V3-EFFORT-001 with the recorded certification-authority and downstream evidence joins.
-LAST_COMMAND: `.venv/bin/ruff format .`; `.venv/bin/ruff check .`; `.venv/bin/mypy`; `.venv/bin/python scripts/generate_release_schemas.py`; `git diff --check`.
-LAST_RESULT: PASS — 384 files unchanged by formatting, Ruff clean, strict mypy clean across 156 source files, generated schemas synchronized, and the diff has no whitespace errors. Full pytest coverage passed as one isolated lifecycle test plus the remaining suite: 3729 passed and 11 environment-dependent skips.
+NEXT_ACTION: On operator resume, continue V3-EFFORT-001 with the recorded certification-authority and downstream evidence joins before multi-profile qualification; do not begin V3-CALIBRATE-001 yet.
+LAST_COMMAND: `git commit -m "Bind per-role reasoning evidence"`.
+LAST_RESULT: PASS — created isolated implementation checkpoint `8cc1e12d6192f4b180bb1a4118ce92489d597c2f` after the complete validation evidence recorded below.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 00c2f6dc44bbfc640ca60b09e52b76114cf25bd1
+LAST_CHECKPOINT_COMMIT: 8cc1e12d6192f4b180bb1a4118ce92489d597c2f
 
 ## 2026-07-31 — V3-EFFORT-001
 
