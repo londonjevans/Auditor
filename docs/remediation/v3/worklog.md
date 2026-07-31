@@ -9,8 +9,8 @@ CURRENT_MILESTONE: Per-role reasoning effort binding
 CURRENT_TICKET: V3-EFFORT-001 (PARTIAL)
 LAST_COMPLETED_TICKET: V3-EXECORIGIN-001
 NEXT_ACTION: Resume V3-EFFORT-001 by rejecting absent/legacy reasoning controls for post-qualification certification, then bind runtime/manifest credit and strict identity to the exact opaque role-policy capability before implementing distinct-profile qualification campaigns.
-LAST_COMMAND: `.venv/bin/pytest -q tests/unit/test_openrouter.py tests/unit/test_endpoint_snapshots.py tests/unit/test_model_runtime.py tests/unit/test_openrouter_qualification_config.py tests/unit/test_model_qualification.py tests/unit/test_model_registry.py tests/unit/test_usage.py tests/unit/test_context_manifest.py tests/unit/test_reasoning_qualification_binding.py tests/unit/test_reasoning_capability_evidence.py tests/unit/test_model_discovery.py tests/unit/test_candidate_benchmark.py`.
-LAST_RESULT: PASS — final expanded matrix `639 passed in 24.80s`; all `384` files formatted; Ruff clean; strict mypy clean over `156` source files; schemas synchronized; diff integrity clean. No provider, network, or secret access occurred.
+LAST_COMMAND: `git commit -m "Harden per-role reasoning evidence"`.
+LAST_RESULT: PASS — isolated partial-ticket checkpoint `82884f37b45b84c9ba43a002fe2128b871e26f04` created after the final green validation gate. No provider, network, or secret access occurred.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 5f89186cc99c154e4c54f0cc251476c9979c60c7
+LAST_CHECKPOINT_COMMIT: 82884f37b45b84c9ba43a002fe2128b871e26f04
 
 ## 2026-07-31 — V3-EFFORT-001
 
@@ -169,6 +169,8 @@ LAST_CHECKPOINT_COMMIT: 5f89186cc99c154e4c54f0cc251476c9979c60c7
   - Final post-review pause gate — PASS: expanded matrix `639 passed in 24.80s`; all `384` files
     formatted; Ruff clean; strict mypy clean over `156` source files; release schemas synchronized;
     `git diff --check` clean.
+  - **Validated partial-ticket checkpoint:**
+    `82884f37b45b84c9ba43a002fe2128b871e26f04`.
 - **Remaining limitation:** Qualification currently executes one exact `model_benchmark` reasoning
   profile. The production resolver therefore fails closed when any selected role uses a different
   profile; it does not falsely duplicate one benchmark result across different effort levels. A
