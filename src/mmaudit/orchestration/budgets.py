@@ -73,12 +73,14 @@ class TokenBudgetStateEvidence(_FrozenBudgetEvidence):
 class AtomicTokenReservationEvidence(_FrozenBudgetEvidence):
     """Self-hashed before/after proof for one lock-protected token reservation."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["2.0"] = "2.0"
     request_id: str
     exact_model_id: str
     role: str
     request_token_plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     planned_prompt_tokens: int = Field(ge=0, le=_MAX_METERED_UNITS)
+    planned_visible_output_tokens: int = Field(ge=0, le=_MAX_METERED_UNITS)
+    planned_reasoning_tokens: int = Field(ge=0, le=_MAX_METERED_UNITS)
     planned_completion_tokens: int = Field(ge=0, le=_MAX_METERED_UNITS)
     global_input_token_limit: int | None = Field(
         default=None,
@@ -103,6 +105,8 @@ class AtomicTokenReservationEvidence(_FrozenBudgetEvidence):
         role: str,
         request_token_plan_sha256: str,
         planned_prompt_tokens: int,
+        planned_visible_output_tokens: int,
+        planned_reasoning_tokens: int,
         planned_completion_tokens: int,
         global_input_token_limit: int | None,
         global_output_token_limit: int | None,
@@ -130,12 +134,14 @@ class AtomicTokenReservationEvidence(_FrozenBudgetEvidence):
             reserved_output_tokens=reserved_output_tokens_before + planned_completion_tokens,
         )
         payload: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": "2.0",
             "request_id": request_id,
             "exact_model_id": exact_model_id,
             "role": role,
             "request_token_plan_sha256": request_token_plan_sha256,
             "planned_prompt_tokens": planned_prompt_tokens,
+            "planned_visible_output_tokens": planned_visible_output_tokens,
+            "planned_reasoning_tokens": planned_reasoning_tokens,
             "planned_completion_tokens": planned_completion_tokens,
             "global_input_token_limit": global_input_token_limit,
             "global_output_token_limit": global_output_token_limit,
@@ -176,6 +182,13 @@ class AtomicTokenReservationEvidence(_FrozenBudgetEvidence):
             or self.before.spent_output_tokens != self.after.spent_output_tokens
         ):
             raise ValueError("token reservation may not change spent token counters")
+        if (
+            self.planned_visible_output_tokens + self.planned_reasoning_tokens
+            != self.planned_completion_tokens
+        ):
+            raise ValueError(
+                "visible-output and reasoning reservations do not conserve completion tokens"
+            )
         if (
             self.before.reserved_input_tokens + self.planned_prompt_tokens
             != self.after.reserved_input_tokens
@@ -338,12 +351,29 @@ class Reservation:
     exact_model_id: str | None = None
     role: str | None = None
     planned_prompt_tokens: int | None = None
+    planned_visible_output_tokens: int | None = None
+    planned_reasoning_tokens: int | None = None
     planned_completion_tokens: int | None = None
     request_token_plan_sha256: str | None = None
     token_reservation_evidence: AtomicTokenReservationEvidence | None = None
 
     def __post_init__(self) -> None:
         evidence = self.token_reservation_evidence
+        split = (self.planned_visible_output_tokens, self.planned_reasoning_tokens)
+        if (split[0] is None) != (split[1] is None):
+            raise ValueError(
+                "visible-output and reasoning token reservations must be supplied together"
+            )
+        if split[0] is not None:
+            assert split[1] is not None
+            if self.planned_completion_tokens is None:
+                raise ValueError(
+                    "split output token reservations require a combined completion reservation"
+                )
+            if split[0] + split[1] != self.planned_completion_tokens:
+                raise ValueError(
+                    "visible-output and reasoning reservations do not conserve completion tokens"
+                )
         if self.request_token_plan_sha256 is None:
             if evidence is not None:
                 raise ValueError("legacy reservation cannot carry plan-bound token evidence")
@@ -354,6 +384,8 @@ class Reservation:
             self.exact_model_id is None
             or self.role is None
             or self.planned_prompt_tokens is None
+            or self.planned_visible_output_tokens is None
+            or self.planned_reasoning_tokens is None
             or self.planned_completion_tokens is None
         ):
             raise ValueError("plan-bound reservation requires complete model and token fields")
@@ -365,6 +397,8 @@ class Reservation:
             or evidence.role != self.role
             or evidence.request_token_plan_sha256 != self.request_token_plan_sha256
             or evidence.planned_prompt_tokens != self.planned_prompt_tokens
+            or evidence.planned_visible_output_tokens != self.planned_visible_output_tokens
+            or evidence.planned_reasoning_tokens != self.planned_reasoning_tokens
             or evidence.planned_completion_tokens != self.planned_completion_tokens
         ):
             raise ValueError("reservation fields differ from its atomic token evidence")
@@ -375,9 +409,11 @@ class _Reconciliation:
     actual_cost_usd: Decimal | None
     actual_prompt_tokens: int | None
     actual_completion_tokens: int | None
+    actual_reasoning_tokens: int | None
     accounted_cost_usd: float
     accounted_prompt_tokens: int | None
     accounted_completion_tokens: int | None
+    accounted_reasoning_tokens: int | None
     cost_overrun: bool
     token_overrun: bool
 
@@ -540,6 +576,8 @@ class BudgetManager:
         endpoint_cost_bound: EndpointRequestCostBound | None = None,
         exact_model_id: str | None = None,
         planned_prompt_tokens: int | None = None,
+        planned_visible_output_tokens: int | None = None,
+        planned_reasoning_tokens: int | None = None,
         planned_completion_tokens: int | None = None,
         request_token_plan_sha256: str | None = None,
     ) -> Reservation:
@@ -550,12 +588,16 @@ class BudgetManager:
         (
             resolved_model_id,
             resolved_prompt_tokens,
+            resolved_visible_output_tokens,
+            resolved_reasoning_tokens,
             resolved_completion_tokens,
             resolved_plan_sha256,
         ) = self._validate_request_scope(
             role=role,
             exact_model_id=exact_model_id,
             planned_prompt_tokens=planned_prompt_tokens,
+            planned_visible_output_tokens=planned_visible_output_tokens,
+            planned_reasoning_tokens=planned_reasoning_tokens,
             planned_completion_tokens=planned_completion_tokens,
             request_token_plan_sha256=request_token_plan_sha256,
             endpoint_cost_bound=endpoint_cost_bound,
@@ -587,6 +629,8 @@ class BudgetManager:
                     role=role,
                     request_token_plan_sha256=resolved_plan_sha256,
                     planned_prompt_tokens=resolved_prompt_tokens,
+                    planned_visible_output_tokens=resolved_visible_output_tokens,
+                    planned_reasoning_tokens=resolved_reasoning_tokens,
                     planned_completion_tokens=resolved_completion_tokens,
                     global_input_token_limit=self.global_input_token_budget,
                     global_output_token_limit=self.global_output_token_budget,
@@ -599,6 +643,8 @@ class BudgetManager:
                     resolved_plan_sha256 is not None
                     and resolved_model_id is not None
                     and resolved_prompt_tokens is not None
+                    and resolved_visible_output_tokens is not None
+                    and resolved_reasoning_tokens is not None
                     and resolved_completion_tokens is not None
                 )
                 else None
@@ -610,6 +656,8 @@ class BudgetManager:
                 exact_model_id=resolved_model_id,
                 role=role,
                 planned_prompt_tokens=resolved_prompt_tokens,
+                planned_visible_output_tokens=resolved_visible_output_tokens,
+                planned_reasoning_tokens=resolved_reasoning_tokens,
                 planned_completion_tokens=resolved_completion_tokens,
                 request_token_plan_sha256=resolved_plan_sha256,
                 token_reservation_evidence=token_evidence,
@@ -637,10 +685,19 @@ class BudgetManager:
         role: str,
         exact_model_id: str | None,
         planned_prompt_tokens: int | None,
+        planned_visible_output_tokens: int | None,
+        planned_reasoning_tokens: int | None,
         planned_completion_tokens: int | None,
         request_token_plan_sha256: str | None,
         endpoint_cost_bound: EndpointRequestCostBound | None,
-    ) -> tuple[str | None, int | None, int | None, str | None]:
+    ) -> tuple[
+        str | None,
+        int | None,
+        int | None,
+        int | None,
+        int | None,
+        str | None,
+    ]:
         _validate_scope_key(role, _ROLE_ID_PATTERN, scope="role")
         resolved_model_id = exact_model_id
         if resolved_model_id is not None:
@@ -663,10 +720,32 @@ class BudgetManager:
             planned_completion_tokens,
             field="planned completion tokens",
         )
+        visible_output_tokens = _validate_optional_token_count(
+            planned_visible_output_tokens,
+            field="planned visible-output tokens",
+        )
+        reasoning_tokens = _validate_optional_token_count(
+            planned_reasoning_tokens,
+            field="planned reasoning tokens",
+        )
         if (prompt_tokens is None) != (completion_tokens is None):
             raise BudgetReservationStateError(
                 "planned prompt and completion token ceilings must be supplied together"
             )
+        if (visible_output_tokens is None) != (reasoning_tokens is None):
+            raise BudgetReservationStateError(
+                "planned visible-output and reasoning token ceilings must be supplied together"
+            )
+        if visible_output_tokens is not None:
+            if completion_tokens is None:
+                raise BudgetReservationStateError(
+                    "split output token ceilings require a planned completion ceiling"
+                )
+            assert reasoning_tokens is not None
+            if visible_output_tokens + reasoning_tokens != completion_tokens:
+                raise BudgetReservationStateError(
+                    "planned visible-output and reasoning tokens do not conserve completion tokens"
+                )
         plan_sha256 = request_token_plan_sha256
         if plan_sha256 is not None and (
             not isinstance(plan_sha256, str) or _SHA256_PATTERN.fullmatch(plan_sha256) is None
@@ -677,6 +756,10 @@ class BudgetManager:
         ):
             raise BudgetReservationStateError(
                 "request token plan hash requires an exact model and complete token ceilings"
+            )
+        if plan_sha256 is not None and (visible_output_tokens is None or reasoning_tokens is None):
+            raise BudgetReservationStateError(
+                "request token plan hash requires visible-output and reasoning token ceilings"
             )
         if prompt_tokens is not None and resolved_model_id is None:
             raise BudgetReservationStateError("planned token ceilings require an exact model ID")
@@ -703,7 +786,14 @@ class BudgetManager:
                 raise BudgetReservationStateError(
                     "planned completion tokens exceed the endpoint cost bound"
                 )
-        return resolved_model_id, prompt_tokens, completion_tokens, plan_sha256
+        return (
+            resolved_model_id,
+            prompt_tokens,
+            visible_output_tokens,
+            reasoning_tokens,
+            completion_tokens,
+            plan_sha256,
+        )
 
     def _require_scoped_capacity(
         self,
@@ -822,6 +912,7 @@ class BudgetManager:
         *,
         actual_prompt_tokens: int | None = None,
         actual_completion_tokens: int | None = None,
+        actual_reasoning_tokens: int | None = None,
     ) -> float:
         """Replace a reservation with reported cost, or its conservative estimate."""
 
@@ -834,6 +925,14 @@ class BudgetManager:
             actual_completion_tokens,
             field="provider actual completion tokens",
         )
+        normalized_reasoning_tokens = _validate_optional_token_count(
+            actual_reasoning_tokens,
+            field="provider actual reasoning tokens",
+        )
+        if normalized_reasoning_tokens is not None and normalized_completion_tokens is None:
+            raise BudgetReservationStateError(
+                "provider reasoning-token usage requires completion-token usage"
+            )
         async with self._lock:
             if self._issued.get(reservation.identifier) != reservation:
                 raise BudgetReservationStateError(
@@ -848,6 +947,7 @@ class BudgetManager:
                 if (
                     prior.actual_prompt_tokens != normalized_prompt_tokens
                     or prior.actual_completion_tokens != normalized_completion_tokens
+                    or prior.actual_reasoning_tokens != normalized_reasoning_tokens
                 ):
                     raise BudgetReservationStateError(
                         "request reservation was reconciled with different token usage"
@@ -858,7 +958,7 @@ class BudgetManager:
                     )
                 if prior.token_overrun:
                     raise TokenReservationOverrunError(
-                        "actual token usage exceeded its planned reservation"
+                        "actual token usage exceeded or did not prove its planned reservation"
                     )
                 return prior.accounted_cost_usd
             if reservation.identifier in self._released:
@@ -866,7 +966,11 @@ class BudgetManager:
                     "released request reservation cannot be reconciled"
                 )
             if reservation.planned_prompt_tokens is None:
-                if normalized_prompt_tokens is not None or normalized_completion_tokens is not None:
+                if (
+                    normalized_prompt_tokens is not None
+                    or normalized_completion_tokens is not None
+                    or normalized_reasoning_tokens is not None
+                ):
                     raise BudgetReservationStateError(
                         "provider token usage cannot be reconciled without a token plan"
                     )
@@ -875,6 +979,13 @@ class BudgetManager:
             ):
                 raise BudgetReservationStateError(
                     "request reservation has an incomplete token plan"
+                )
+            if (
+                normalized_reasoning_tokens is not None
+                and reservation.planned_reasoning_tokens is None
+            ):
+                raise BudgetReservationStateError(
+                    "provider reasoning-token usage cannot be reconciled without a split token plan"
                 )
             try:
                 estimated = self._reserved[reservation.identifier]
@@ -894,8 +1005,35 @@ class BudgetManager:
                 if normalized_completion_tokens is None
                 else normalized_completion_tokens
             )
+            reasoning_observation_missing = bool(
+                reservation.planned_reasoning_tokens is not None
+                and reservation.planned_reasoning_tokens > 0
+                and normalized_completion_tokens is not None
+                and normalized_reasoning_tokens is None
+            )
+            accounted_reasoning_tokens = (
+                reservation.planned_reasoning_tokens
+                if normalized_completion_tokens is None or reasoning_observation_missing
+                else (
+                    0
+                    if normalized_reasoning_tokens is None
+                    and reservation.planned_reasoning_tokens == 0
+                    else normalized_reasoning_tokens
+                )
+            )
+            accounted_visible_output_tokens = (
+                None
+                if accounted_completion_tokens is None or accounted_reasoning_tokens is None
+                else accounted_completion_tokens - accounted_reasoning_tokens
+            )
             token_overrun = bool(
-                (
+                reasoning_observation_missing
+                or (
+                    accounted_reasoning_tokens is not None
+                    and accounted_completion_tokens is not None
+                    and accounted_reasoning_tokens > accounted_completion_tokens
+                )
+                or (
                     accounted_prompt_tokens is not None
                     and reservation.planned_prompt_tokens is not None
                     and accounted_prompt_tokens > reservation.planned_prompt_tokens
@@ -904,6 +1042,16 @@ class BudgetManager:
                     accounted_completion_tokens is not None
                     and reservation.planned_completion_tokens is not None
                     and accounted_completion_tokens > reservation.planned_completion_tokens
+                )
+                or (
+                    accounted_reasoning_tokens is not None
+                    and reservation.planned_reasoning_tokens is not None
+                    and accounted_reasoning_tokens > reservation.planned_reasoning_tokens
+                )
+                or (
+                    accounted_visible_output_tokens is not None
+                    and reservation.planned_visible_output_tokens is not None
+                    and accounted_visible_output_tokens > reservation.planned_visible_output_tokens
                 )
             )
             cost_overrun = normalized_actual is not None and normalized_actual > estimated
@@ -930,9 +1078,11 @@ class BudgetManager:
                 actual_cost_usd=normalized_actual,
                 actual_prompt_tokens=normalized_prompt_tokens,
                 actual_completion_tokens=normalized_completion_tokens,
+                actual_reasoning_tokens=normalized_reasoning_tokens,
                 accounted_cost_usd=accounted,
                 accounted_prompt_tokens=accounted_prompt_tokens,
                 accounted_completion_tokens=accounted_completion_tokens,
+                accounted_reasoning_tokens=accounted_reasoning_tokens,
                 cost_overrun=cost_overrun,
                 token_overrun=token_overrun,
             )
@@ -942,7 +1092,7 @@ class BudgetManager:
                 raise CostReservationOverrunError("actual cost exceeded its maximum reservation")
             if token_overrun:
                 raise TokenReservationOverrunError(
-                    "actual token usage exceeded its planned reservation"
+                    "actual token usage exceeded or did not prove its planned reservation"
                 )
             return accounted
 

@@ -1,10 +1,10 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-07-30T23:47:48Z",
+  "updated_at": "2026-07-31T00:11:52Z",
   "candidate_commit": "fa79b33936a4459a1f6cbe17106532d1552f504c",
   "autorun_status": "PAUSED_BY_OPERATOR",
-  "current_milestone": "paused_between_ticket_boundaries",
-  "current_ticket": "NONE",
+  "current_milestone": "paused_mid_ticket_after_atomic_reasoning_token_slice",
+  "current_ticket": "V3-EFFORT-001 (PARTIAL)",
   "last_checkpoint_commit": "fa79b33936a4459a1f6cbe17106532d1552f504c",
   "real_model_calls": {
     "attempted": 10,

@@ -452,6 +452,8 @@ def _has_valid_token_plan_routing(record: UsageRecord) -> bool:
         and record.completion_tokens <= limits.max_completion_tokens
         and record.prompt_tokens + record.completion_tokens <= limits.context_tokens
         and record.reasoning_tokens <= record.completion_tokens
+        and record.reasoning_tokens <= plan.reserved_reasoning_tokens
+        and record.completion_tokens - record.reasoning_tokens <= plan.reserved_output_tokens
         and (
             not record.configured_provider_endpoints
             or limits.provider_endpoints == ("mmaudit-local-mock",)

@@ -1194,6 +1194,8 @@ def _validate_provider_token_usage(
         or completion_tokens > limits.max_completion_tokens
         or prompt_tokens + completion_tokens > limits.context_tokens
         or reasoning_tokens > completion_tokens
+        or reasoning_tokens > request_token_plan.reserved_reasoning_tokens
+        or completion_tokens - reasoning_tokens > request_token_plan.reserved_output_tokens
     ):
         raise OpenRouterSchemaError(
             "provider-reported token usage exceeds the endpoint-bound request plan"
@@ -3976,6 +3978,7 @@ class OpenRouterClient:
         active_actual_cost: Decimal | None = None
         active_actual_prompt_tokens: int | None = None
         active_actual_completion_tokens: int | None = None
+        active_actual_reasoning_tokens: int | None = None
         started_at = datetime.now(UTC)
         started_clock = time.perf_counter()
         initial_usage: dict[str, Any] = {}
@@ -3999,6 +4002,7 @@ class OpenRouterClient:
                     actual_cost,
                     actual_prompt_tokens=active_actual_prompt_tokens,
                     actual_completion_tokens=active_actual_completion_tokens,
+                    actual_reasoning_tokens=active_actual_reasoning_tokens,
                 )
             except Exception:
                 accounted_cost_usd += (
@@ -4030,6 +4034,8 @@ class OpenRouterClient:
                         endpoint_cost_bound=endpoint_cost_bound,
                         exact_model_id=model,
                         planned_prompt_tokens=(request_token_plan.prompt_byte_upper_bound_tokens),
+                        planned_visible_output_tokens=(request_token_plan.reserved_output_tokens),
+                        planned_reasoning_tokens=(request_token_plan.reserved_reasoning_tokens),
                         planned_completion_tokens=(request_token_plan.requested_completion_tokens),
                         request_token_plan_sha256=request_token_plan.plan_sha256,
                     )
@@ -4054,6 +4060,7 @@ class OpenRouterClient:
                 active_actual_cost = None
                 active_actual_prompt_tokens = None
                 active_actual_completion_tokens = None
+                active_actual_reasoning_tokens = None
                 self.logger.info(
                     "Sending bounded structured model request",
                     extra={
@@ -4171,6 +4178,7 @@ class OpenRouterClient:
             active_actual_completion_tokens = _nonnegative_int(
                 initial_usage.get("completion_tokens")
             )
+            active_actual_reasoning_tokens = _observed_reasoning_tokens(initial_usage)
             envelope = _validate_completion_envelope(
                 payload,
                 response.headers,
@@ -4184,6 +4192,7 @@ class OpenRouterClient:
             active_actual_completion_tokens = _nonnegative_int(
                 initial_usage.get("completion_tokens")
             )
+            active_actual_reasoning_tokens = _observed_reasoning_tokens(initial_usage)
             _validate_provider_token_usage(
                 request_token_plan=request_token_plan,
                 prompt_tokens=active_actual_prompt_tokens,
@@ -6131,6 +6140,10 @@ def _nonnegative_int(value: Any) -> int:
 
 
 def _reasoning_tokens(usage: Mapping[str, Any]) -> int:
+    return _observed_reasoning_tokens(usage) or 0
+
+
+def _observed_reasoning_tokens(usage: Mapping[str, Any]) -> int | None:
     direct = usage.get("reasoning_tokens")
     if isinstance(direct, int) and not isinstance(direct, bool) and direct >= 0:
         return direct
@@ -6139,7 +6152,7 @@ def _reasoning_tokens(usage: Mapping[str, Any]) -> int:
         nested = details.get("reasoning_tokens")
         if isinstance(nested, int) and not isinstance(nested, bool) and nested >= 0:
             return nested
-    return 0
+    return None
 
 
 def _cached_tokens(usage: Mapping[str, Any]) -> int:

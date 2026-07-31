@@ -846,7 +846,16 @@ are invisible to source review by construction.
   `src/mmaudit/orchestration/budgets.py`, `src/mmaudit/models/qualification.py`, usage and
   run-evidence schemas, `mmaudit.example.toml`, regressions.
 - **Dependencies:** `V3-TOKENS-001`.
-- **Status:** `QUEUED`
+- **Status:** `PARTIAL`
+- **Starting boundary:** The current single global reasoning control is applied to every role.
+  This provider-free slice will first bind exact per-role controls to endpoint capability,
+  token/cost reservation, usage evidence, qualification evidence, and emitted run artifacts.
+  It will not make paid calls, infer endpoint support, or promote an unqualified model.
+- **Pause boundary:** Atomic reservations now preserve and self-hash separate visible-output and
+  reasoning-token ceilings; reconciliation, provider validation, and usage credit fail closed when
+  either observed slice exceeds its reserve or active reasoning lacks observable accounting.
+  Per-role policy resolution, capability binding, qualification binding, and report/run evidence
+  remain unimplemented. The operator requested a pause before those changes.
 
 ## V3-RETRIEVAL-001 — Bounded read-only retrieval loop
 

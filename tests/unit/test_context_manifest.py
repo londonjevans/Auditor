@@ -189,6 +189,8 @@ def _usage(
         role="source_audit",
         request_token_plan_sha256=token_plan.plan_sha256,
         planned_prompt_tokens=token_plan.prompt_byte_upper_bound_tokens,
+        planned_visible_output_tokens=token_plan.reserved_output_tokens,
+        planned_reasoning_tokens=token_plan.reserved_reasoning_tokens,
         planned_completion_tokens=token_plan.requested_completion_tokens,
         global_input_token_limit=1_000_000,
         global_output_token_limit=100_000,

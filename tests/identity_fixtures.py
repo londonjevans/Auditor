@@ -186,6 +186,8 @@ def synthetic_token_plan_routing(
         role=record.role,
         request_token_plan_sha256=plan.plan_sha256,
         planned_prompt_tokens=plan.prompt_byte_upper_bound_tokens,
+        planned_visible_output_tokens=plan.reserved_output_tokens,
+        planned_reasoning_tokens=plan.reserved_reasoning_tokens,
         planned_completion_tokens=plan.requested_completion_tokens,
         global_input_token_limit=plan.global_budget.global_input_token_budget,
         global_output_token_limit=plan.global_budget.global_output_token_budget,

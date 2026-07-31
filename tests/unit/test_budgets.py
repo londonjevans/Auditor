@@ -787,6 +787,8 @@ async def test_plan_bound_reservation_carries_self_hashed_atomic_token_evidence(
         canary_prompt,
         exact_model_id="alpha/atlas-secure",
         planned_prompt_tokens=7,
+        planned_visible_output_tokens=2,
+        planned_reasoning_tokens=1,
         planned_completion_tokens=3,
         request_token_plan_sha256="a" * 64,
     )
@@ -797,6 +799,10 @@ async def test_plan_bound_reservation_carries_self_hashed_atomic_token_evidence(
     assert evidence.exact_model_id == "alpha/atlas-secure"
     assert evidence.role == "review"
     assert evidence.request_token_plan_sha256 == "a" * 64
+    assert evidence.schema_version == "2.0"
+    assert evidence.planned_visible_output_tokens == 2
+    assert evidence.planned_reasoning_tokens == 1
+    assert evidence.planned_completion_tokens == 3
     assert evidence.global_input_token_limit == 20
     assert evidence.global_output_token_limit == 10
     assert evidence.before.spent_input_tokens == 2
@@ -849,6 +855,42 @@ async def test_plan_hash_requires_complete_exact_token_reservation_fields() -> N
             planned_completion_tokens=1,
             request_token_plan_sha256="not-a-hash",
         )
+    with pytest.raises(
+        BudgetReservationStateError,
+        match="requires visible-output and reasoning",
+    ):
+        await manager.reserve(
+            "request-no-split",
+            "review",
+            "x",
+            exact_model_id="alpha/atlas-secure",
+            planned_prompt_tokens=1,
+            planned_completion_tokens=1,
+            request_token_plan_sha256="a" * 64,
+        )
+    with pytest.raises(BudgetReservationStateError, match="supplied together"):
+        await manager.reserve(
+            "request-partial-split",
+            "review",
+            "x",
+            exact_model_id="alpha/atlas-secure",
+            planned_prompt_tokens=1,
+            planned_visible_output_tokens=1,
+            planned_completion_tokens=1,
+            request_token_plan_sha256="a" * 64,
+        )
+    with pytest.raises(BudgetReservationStateError, match="do not conserve"):
+        await manager.reserve(
+            "request-invalid-split",
+            "review",
+            "x",
+            exact_model_id="alpha/atlas-secure",
+            planned_prompt_tokens=1,
+            planned_visible_output_tokens=1,
+            planned_reasoning_tokens=1,
+            planned_completion_tokens=3,
+            request_token_plan_sha256="a" * 64,
+        )
 
     assert manager.reserved_usd == 0
     assert manager.reserved_input_tokens == 0
@@ -864,6 +906,8 @@ async def test_atomic_token_evidence_rejects_tampering_and_resealed_nonconservat
         "x",
         exact_model_id="alpha/atlas-secure",
         planned_prompt_tokens=7,
+        planned_visible_output_tokens=2,
+        planned_reasoning_tokens=1,
         planned_completion_tokens=3,
         request_token_plan_sha256="a" * 64,
     )
@@ -892,8 +936,25 @@ async def test_atomic_token_evidence_rejects_tampering_and_resealed_nonconservat
     with pytest.raises(ValidationError, match="does not conserve"):
         AtomicTokenReservationEvidence.model_validate(changed_conservation)
 
+    changed_split = json.loads(json.dumps(serialized))
+    changed_split["planned_reasoning_tokens"] = 2
+    split_hash_payload = dict(changed_split)
+    split_hash_payload.pop("evidence_sha256")
+    changed_split["evidence_sha256"] = hashlib.sha256(
+        json.dumps(
+            split_hash_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    with pytest.raises(ValidationError, match="reasoning reservations do not conserve"):
+        AtomicTokenReservationEvidence.model_validate(changed_split)
+
     with pytest.raises(ValueError, match="differ from its atomic token evidence"):
         replace(reservation, planned_prompt_tokens=8)
+    with pytest.raises(ValueError, match="do not conserve"):
+        replace(reservation, planned_reasoning_tokens=2)
 
 
 @pytest.mark.asyncio
@@ -907,6 +968,8 @@ async def test_concurrent_plan_bound_reservations_have_distinct_atomic_snapshots
             "x",
             exact_model_id="alpha/atlas-secure",
             planned_prompt_tokens=6,
+            planned_visible_output_tokens=3,
+            planned_reasoning_tokens=1,
             planned_completion_tokens=4,
             request_token_plan_sha256="a" * 64,
         ),
@@ -916,6 +979,8 @@ async def test_concurrent_plan_bound_reservations_have_distinct_atomic_snapshots
             "x",
             exact_model_id="alpha/atlas-secure",
             planned_prompt_tokens=6,
+            planned_visible_output_tokens=3,
+            planned_reasoning_tokens=1,
             planned_completion_tokens=4,
             request_token_plan_sha256="b" * 64,
         ),
@@ -942,3 +1007,83 @@ async def test_concurrent_plan_bound_reservations_have_distinct_atomic_snapshots
     assert manager.reserved_output_tokens == 8
     assert manager.remaining_input_tokens == 8
     assert manager.remaining_output_tokens == 12
+
+
+@pytest.mark.asyncio
+async def test_split_token_reconciliation_accepts_only_each_reserved_output_slice() -> None:
+    manager = _scoped_manager(input_tokens=20, output_tokens=10)
+    reservation = await manager.reserve(
+        "request-plan",
+        "review",
+        "x",
+        exact_model_id="alpha/atlas-secure",
+        planned_prompt_tokens=8,
+        planned_visible_output_tokens=3,
+        planned_reasoning_tokens=2,
+        planned_completion_tokens=5,
+        request_token_plan_sha256="a" * 64,
+    )
+
+    accounted = await manager.reconcile(
+        reservation,
+        Decimal("0.000005"),
+        actual_prompt_tokens=7,
+        actual_completion_tokens=4,
+        actual_reasoning_tokens=1,
+    )
+
+    assert accounted == 0.000005
+    assert manager.spent_input_tokens == 7
+    assert manager.spent_output_tokens == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("visible_reserve", "reasoning_reserve", "actual_completion", "actual_reasoning"),
+    (
+        (3, 1, 4, 2),
+        (2, 2, 4, 1),
+        (3, 1, 2, None),
+    ),
+)
+async def test_split_token_reconciliation_fails_closed_on_unproven_or_exceeded_slice(
+    visible_reserve: int,
+    reasoning_reserve: int,
+    actual_completion: int,
+    actual_reasoning: int | None,
+) -> None:
+    manager = _scoped_manager(input_tokens=20, output_tokens=10)
+    reservation = await manager.reserve(
+        "request-plan",
+        "review",
+        "x",
+        exact_model_id="alpha/atlas-secure",
+        planned_prompt_tokens=8,
+        planned_visible_output_tokens=visible_reserve,
+        planned_reasoning_tokens=reasoning_reserve,
+        planned_completion_tokens=visible_reserve + reasoning_reserve,
+        request_token_plan_sha256="a" * 64,
+    )
+
+    with pytest.raises(TokenReservationOverrunError, match="did not prove"):
+        await manager.reconcile(
+            reservation,
+            Decimal("0.000005"),
+            actual_prompt_tokens=7,
+            actual_completion_tokens=actual_completion,
+            actual_reasoning_tokens=actual_reasoning,
+        )
+    with pytest.raises(TokenReservationOverrunError, match="did not prove"):
+        await manager.reconcile(
+            reservation,
+            Decimal("0.000005"),
+            actual_prompt_tokens=7,
+            actual_completion_tokens=actual_completion,
+            actual_reasoning_tokens=actual_reasoning,
+        )
+
+    assert manager.spent_usd == 0.000005
+    assert manager.spent_input_tokens == 7
+    assert manager.spent_output_tokens == actual_completion
+    assert manager.reserved_input_tokens == 0
+    assert manager.reserved_output_tokens == 0

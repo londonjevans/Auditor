@@ -212,6 +212,8 @@ def _token_plan_for_record(
         role=planned_role,
         request_token_plan_sha256=plan.plan_sha256,
         planned_prompt_tokens=plan.prompt_byte_upper_bound_tokens,
+        planned_visible_output_tokens=plan.reserved_output_tokens,
+        planned_reasoning_tokens=plan.reserved_reasoning_tokens,
         planned_completion_tokens=plan.requested_completion_tokens,
         global_input_token_limit=plan.global_budget.global_input_token_budget,
         global_output_token_limit=plan.global_budget.global_output_token_budget,
@@ -250,6 +252,8 @@ def _retry_token_bound_creditable_record() -> UsageRecord:
         role=record.role,
         request_token_plan_sha256=plan.plan_sha256,
         planned_prompt_tokens=plan.prompt_byte_upper_bound_tokens,
+        planned_visible_output_tokens=plan.reserved_output_tokens,
+        planned_reasoning_tokens=plan.reserved_reasoning_tokens,
         planned_completion_tokens=plan.requested_completion_tokens,
         global_input_token_limit=plan.global_budget.global_input_token_budget,
         global_output_token_limit=plan.global_budget.global_output_token_budget,
@@ -305,6 +309,50 @@ def test_creditable_usage_accepts_matching_plan_and_atomic_reservation() -> None
     assert plan.role == record.role
     assert plan.route_intersection.exact_model_ids == (record.requested_model,)
     assert is_creditable_usage_record(record)
+
+
+def test_creditable_usage_rejects_reasoning_above_its_reserved_slice() -> None:
+    record = _creditable_record()
+    plan, atomic = _token_plan_for_record(record, reserved_reasoning_tokens=10)
+    overrun = record.model_copy(
+        update={
+            "reasoning_tokens": 11,
+            "routing": {
+                **record.routing,
+                "request_token_plan": plan.model_dump(mode="json"),
+                "request_token_plan_sha256": plan.plan_sha256,
+                "atomic_token_reservations": [atomic.model_dump(mode="json")],
+                "atomic_token_reservation_sha256s": [atomic.evidence_sha256],
+                "atomic_token_reservation": atomic.model_dump(mode="json"),
+                "atomic_token_reservation_sha256": atomic.evidence_sha256,
+            },
+        }
+    )
+
+    assert not is_creditable_usage_record(overrun)
+
+
+def test_creditable_usage_rejects_visible_output_above_its_reserved_slice() -> None:
+    record = _creditable_record()
+    plan, atomic = _token_plan_for_record(record, reserved_reasoning_tokens=10)
+    overrun = record.model_copy(
+        update={
+            "completion_tokens": 522,
+            "reasoning_tokens": 0,
+            "total_tokens": 622,
+            "routing": {
+                **record.routing,
+                "request_token_plan": plan.model_dump(mode="json"),
+                "request_token_plan_sha256": plan.plan_sha256,
+                "atomic_token_reservations": [atomic.model_dump(mode="json")],
+                "atomic_token_reservation_sha256s": [atomic.evidence_sha256],
+                "atomic_token_reservation": atomic.model_dump(mode="json"),
+                "atomic_token_reservation_sha256": atomic.evidence_sha256,
+            },
+        }
+    )
+
+    assert not is_creditable_usage_record(overrun)
 
 
 @pytest.mark.parametrize(
@@ -431,6 +479,8 @@ def test_retry_inventory_mutations_reject_usage_credit_and_context_manifest(
             role=record.role,
             request_token_plan_sha256=plan.plan_sha256,
             planned_prompt_tokens=plan.prompt_byte_upper_bound_tokens,
+            planned_visible_output_tokens=plan.reserved_output_tokens,
+            planned_reasoning_tokens=plan.reserved_reasoning_tokens,
             planned_completion_tokens=plan.requested_completion_tokens,
             global_input_token_limit=(
                 plan.global_budget.global_input_token_budget

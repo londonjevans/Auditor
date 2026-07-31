@@ -212,6 +212,7 @@ def _completion(
     model: str = "alpha/atlas-secure",
     selected_model: str | None = None,
     provider: str = "synthetic-provider",
+    reasoning_tokens: int | None = None,
 ) -> dict[str, Any]:
     routed_model = selected_model or model
     usage: dict[str, Any] = {
@@ -219,6 +220,8 @@ def _completion(
         "completion_tokens": 5,
         "total_tokens": 15,
     }
+    if reasoning_tokens is not None:
+        usage["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
     if cost is not None:
         usage["cost"] = cost
     return {
@@ -267,6 +270,7 @@ def _completion_response(
     model: str = "alpha/atlas-secure",
     selected_model: str | None = None,
     provider: str = "synthetic-provider",
+    reasoning_tokens: int | None = None,
 ) -> httpx.Response:
     return httpx.Response(
         200,
@@ -277,6 +281,7 @@ def _completion_response(
             model=model,
             selected_model=selected_model,
             provider=provider,
+            reasoning_tokens=reasoning_tokens,
         ),
     )
 
@@ -6136,6 +6141,7 @@ async def test_certification_request_pins_provider_reasoning_and_single_model(
         return _completion_response(
             '{"answer":"ok"}',
             provider="approved-provider",
+            reasoning_tokens=3,
         )
 
     config = config_factory(execution={"max_json_repair_attempts": 0})
@@ -7222,7 +7228,11 @@ async def test_reasoning_cached_cost_and_latency_evidence_are_recorded(
             json=payload,
         )
 
-    client, http_client, usage = _client(config_factory(), handler)
+    client, http_client, usage = _client(
+        config_factory(),
+        handler,
+        reasoning=OpenRouterReasoning(max_tokens=3),
+    )
     try:
         await client.complete(
             role="source_audit",
@@ -7405,7 +7415,10 @@ async def test_request_max_tokens_reserves_visible_output_and_reasoning(
 
     def handler(request: httpx.Request) -> httpx.Response:
         observed_bodies.append(json.loads(request.content))
-        return _completion_response('{"answer":"bounded reasoning"}')
+        return _completion_response(
+            '{"answer":"bounded reasoning"}',
+            reasoning_tokens=3,
+        )
 
     config = config_factory(
         execution={

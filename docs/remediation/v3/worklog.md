@@ -5,12 +5,12 @@ The objective source has SHA-256
 Do not record credentials, raw private prompts, or raw provider completions here.
 
 AUTORUN_STATUS: PAUSED_BY_OPERATOR
-CURRENT_MILESTONE: Paused at a clean ticket boundary
-CURRENT_TICKET: NONE (V3-LINEAGE-001 checkpointed; V3-EFFORT-001 remains QUEUED)
+CURRENT_MILESTONE: Paused mid-ticket after the atomic reasoning-token reservation slice
+CURRENT_TICKET: V3-EFFORT-001 (PARTIAL)
 LAST_COMPLETED_TICKET: V3-EXECORIGIN-001
-NEXT_ACTION: On operator resume, mark V3-EFFORT-001 IN_PROGRESS and begin its provider-free configuration and evidence slice; V3-TOKENS-001 is COMPLETE.
-LAST_COMMAND: `git commit -m "Bind model lineage reviews safely"`
-LAST_RESULT: PASS — isolated V3-LINEAGE-001 implementation checkpoint `fa79b33936a4459a1f6cbe17106532d1552f504c` was created after the full validation and independent review gates; the operator then requested a pause before the next ticket.
+NEXT_ACTION: On operator resume, continue V3-EFFORT-001 with expected-red per-role policy and qualification-binding assays; do not repeat the completed atomic token-reservation slice.
+LAST_COMMAND: `.venv/bin/pytest -q tests/unit/test_openrouter.py tests/unit/test_model_runtime.py tests/unit/test_usage.py tests/unit/test_budgets.py tests/unit/test_openrouter_qualification_config.py`
+LAST_RESULT: PASS — 319 tests passed; only existing pytest temporary-cleanup permission warnings were emitted.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -20,6 +20,59 @@ OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
 LAST_CHECKPOINT_COMMIT: fa79b33936a4459a1f6cbe17106532d1552f504c
+
+## 2026-07-31 — V3-EFFORT-001
+
+- **Status:** `PARTIAL`; paused by the operator after a coherent provider-free sub-slice.
+- **Defensive objective:** Resolve reasoning effort and reasoning-token reserves by exact base or
+  specialist role, and make the effective choice fail-closed, endpoint-bound, qualification-bound,
+  cost-reserved, and visible in durable evidence.
+- **Starting state:** `ModelsConfig.reasoning` is one global `ModelReasoningConfig`; runtime
+  controls construct one `OpenRouterReasoning`; every production client receives that same value.
+  Existing request token plans reserve a global reasoning allowance and endpoint cost bounds
+  separately price `internal_reasoning`, but neither proves which role-specific policy was
+  selected or that qualification covered it.
+- **Implemented slice:**
+  - Atomic reservation evidence schema `2.0` separately records visible-output and
+    reasoning-token ceilings and verifies their conservation against the combined completion
+    ceiling.
+  - `BudgetManager` requires the split for plan-bound reservations, preserves it in immutable
+    reservation evidence, and rejects unobserved active reasoning or either observed slice above
+    its reserve during reconciliation.
+  - OpenRouter request reservations now pass the exact token-plan split and reconciliation
+    preserves provider-observed reasoning usage.
+  - Provider token validation and usage-credit validation reject reasoning or visible-output
+    usage above the matching reserved slice.
+  - Synthetic fixtures were updated to prove reasoning usage when a reasoning-enabled request is
+    expected to succeed.
+- **Validation:**
+  - `.venv/bin/ruff format src/mmaudit/models/openrouter.py src/mmaudit/models/usage.py
+    src/mmaudit/orchestration/budgets.py tests/identity_fixtures.py
+    tests/unit/test_budgets.py tests/unit/test_context_manifest.py
+    tests/unit/test_token_planning_acceptance.py tests/unit/test_usage.py` — PASS; three files
+    reformatted.
+  - `.venv/bin/ruff check` over the same affected paths — PASS.
+  - `.venv/bin/pytest -q tests/unit/test_budgets.py tests/unit/test_usage.py
+    tests/unit/test_context_manifest.py tests/unit/test_token_planning_acceptance.py` — PASS;
+    201 tests passed.
+  - `.venv/bin/mypy src/mmaudit/models/openrouter.py src/mmaudit/models/usage.py
+    src/mmaudit/orchestration/budgets.py` — PASS; no issues in three source files.
+  - The first broader pytest command referenced nonexistent
+    `tests/unit/test_openrouter_provider.py` and exited 4 before collection; it was not retried
+    unchanged.
+  - The next broader run exposed three synthetic responses that requested/reported reasoning
+    without complete split evidence. The fixtures were corrected to report bounded reasoning
+    usage; production gates were not weakened.
+  - `.venv/bin/pytest -q tests/unit/test_openrouter.py tests/unit/test_model_runtime.py
+    tests/unit/test_usage.py tests/unit/test_budgets.py
+    tests/unit/test_openrouter_qualification_config.py` — PASS; 319 tests passed.
+- **External effects:** None. No secret was read, no provider or network was contacted, and the
+  cumulative OpenRouter ledger remains unchanged.
+- **Remaining limitation:** The product still has one global reasoning control. Per-role policy
+  resolution, exact endpoint-capability authority, qualification at the effective effort,
+  and manifest/report projection remain open.
+- **Pause boundary:** Parallel agents were stopped before the checkpoint. Resume from the
+  per-role expected-red assays; do not redo this token-accounting slice.
 
 ## 2026-07-30 — V3-LINEAGE-001
 
