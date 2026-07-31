@@ -9,8 +9,8 @@ CURRENT_MILESTONE: Paused mid-ticket after the atomic reasoning-token reservatio
 CURRENT_TICKET: V3-EFFORT-001 (PARTIAL)
 LAST_COMPLETED_TICKET: V3-EXECORIGIN-001
 NEXT_ACTION: On operator resume, continue V3-EFFORT-001 with expected-red per-role policy and qualification-binding assays; do not repeat the completed atomic token-reservation slice.
-LAST_COMMAND: `.venv/bin/pytest -q tests/unit/test_openrouter.py tests/unit/test_model_runtime.py tests/unit/test_usage.py tests/unit/test_budgets.py tests/unit/test_openrouter_qualification_config.py`
-LAST_RESULT: PASS — 319 tests passed; only existing pytest temporary-cleanup permission warnings were emitted.
+LAST_COMMAND: `git commit -m "Bind reasoning token reservations"`
+LAST_RESULT: PASS — partial V3-EFFORT-001 implementation checkpoint `00c2f6dc44bbfc640ca60b09e52b76114cf25bd1` was created after 319 affected tests passed.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: fa79b33936a4459a1f6cbe17106532d1552f504c
+LAST_CHECKPOINT_COMMIT: 00c2f6dc44bbfc640ca60b09e52b76114cf25bd1
 
 ## 2026-07-31 — V3-EFFORT-001
 
