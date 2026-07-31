@@ -339,6 +339,9 @@ class OpenRouterQualifiedReasoningRoutingBinding:
     reasoning_policy_artifact_sha256: str
     reasoning_policy_role_binding_sha256: str
     endpoint_reasoning_capability_sha256: str
+    reasoning_benchmark_report_sha256: str
+    reasoning_benchmark_verification_sha256: str
+    reasoning_benchmark_fresh_evidence_sha256: str
     qualification_report_sha256: str
     qualification_result_sha256: str
     qualification_verification_sha256: str
@@ -369,6 +372,9 @@ class OpenRouterQualifiedReasoningRoutingBinding:
             self.reasoning_policy_artifact_sha256,
             self.reasoning_policy_role_binding_sha256,
             self.endpoint_reasoning_capability_sha256,
+            self.reasoning_benchmark_report_sha256,
+            self.reasoning_benchmark_verification_sha256,
+            self.reasoning_benchmark_fresh_evidence_sha256,
             self.qualification_report_sha256,
             self.qualification_result_sha256,
             self.qualification_verification_sha256,
@@ -394,6 +400,13 @@ class OpenRouterQualifiedReasoningRoutingBinding:
             "reasoning_policy_artifact_sha256": self.reasoning_policy_artifact_sha256,
             "reasoning_policy_role_binding_sha256": (self.reasoning_policy_role_binding_sha256),
             "endpoint_reasoning_capability_sha256": (self.endpoint_reasoning_capability_sha256),
+            "reasoning_benchmark_report_sha256": self.reasoning_benchmark_report_sha256,
+            "reasoning_benchmark_verification_sha256": (
+                self.reasoning_benchmark_verification_sha256
+            ),
+            "reasoning_benchmark_fresh_evidence_sha256": (
+                self.reasoning_benchmark_fresh_evidence_sha256
+            ),
             "qualification_report_sha256": self.qualification_report_sha256,
             "qualification_result_sha256": self.qualification_result_sha256,
             "qualification_verification_sha256": self.qualification_verification_sha256,
@@ -411,6 +424,9 @@ class OpenRouterQualifiedReasoningRoutingBinding:
         reasoning_policy_artifact_sha256: str,
         reasoning_policy_role_binding_sha256: str,
         endpoint_reasoning_capability_sha256: str,
+        reasoning_benchmark_report_sha256: str,
+        reasoning_benchmark_verification_sha256: str,
+        reasoning_benchmark_fresh_evidence_sha256: str,
         qualification_report_sha256: str,
         qualification_result_sha256: str,
         qualification_verification_sha256: str,
@@ -427,6 +443,11 @@ class OpenRouterQualifiedReasoningRoutingBinding:
             "reasoning_policy_artifact_sha256": reasoning_policy_artifact_sha256,
             "reasoning_policy_role_binding_sha256": reasoning_policy_role_binding_sha256,
             "endpoint_reasoning_capability_sha256": endpoint_reasoning_capability_sha256,
+            "reasoning_benchmark_report_sha256": reasoning_benchmark_report_sha256,
+            "reasoning_benchmark_verification_sha256": (reasoning_benchmark_verification_sha256),
+            "reasoning_benchmark_fresh_evidence_sha256": (
+                reasoning_benchmark_fresh_evidence_sha256
+            ),
             "qualification_report_sha256": qualification_report_sha256,
             "qualification_result_sha256": qualification_result_sha256,
             "qualification_verification_sha256": qualification_verification_sha256,
@@ -441,6 +462,13 @@ class OpenRouterQualifiedReasoningRoutingBinding:
             "reasoning_policy_artifact_sha256": self.reasoning_policy_artifact_sha256,
             "reasoning_policy_role_binding_sha256": (self.reasoning_policy_role_binding_sha256),
             "endpoint_reasoning_capability_sha256": (self.endpoint_reasoning_capability_sha256),
+            "reasoning_benchmark_report_sha256": self.reasoning_benchmark_report_sha256,
+            "reasoning_benchmark_verification_sha256": (
+                self.reasoning_benchmark_verification_sha256
+            ),
+            "reasoning_benchmark_fresh_evidence_sha256": (
+                self.reasoning_benchmark_fresh_evidence_sha256
+            ),
             "qualification_report_sha256": self.qualification_report_sha256,
             "qualification_result_sha256": self.qualification_result_sha256,
             "qualification_verification_sha256": self.qualification_verification_sha256,
@@ -663,6 +691,13 @@ class OpenRouterQualificationRoutingEvidence:
                 reasoning_policy.role_policy(resolution.configured_policy_role).binding_sha256
             ),
             endpoint_reasoning_capability_sha256=endpoint_capability_sha256,
+            reasoning_benchmark_report_sha256=(matches[0].reasoning_benchmark_report_sha256),
+            reasoning_benchmark_verification_sha256=(
+                matches[0].reasoning_benchmark_verification_sha256
+            ),
+            reasoning_benchmark_fresh_evidence_sha256=(
+                matches[0].reasoning_benchmark_fresh_evidence_sha256
+            ),
             qualification_report_sha256=self.benchmark_report_sha256,
             qualification_result_sha256=self.qualification_result_sha256,
             qualification_verification_sha256=self.qualification_verification_sha256,
@@ -800,6 +835,15 @@ def _require_exact_qualification_routing_authority(
                 ),
                 "endpoint_reasoning_capability_sha256": (
                     authority_reasoning.endpoint_reasoning_capability_sha256
+                ),
+                "reasoning_benchmark_report_sha256": (
+                    authority_reasoning.reasoning_benchmark_report_sha256
+                ),
+                "reasoning_benchmark_verification_sha256": (
+                    authority_reasoning.reasoning_benchmark_verification_sha256
+                ),
+                "reasoning_benchmark_fresh_evidence_sha256": (
+                    authority_reasoning.reasoning_benchmark_fresh_evidence_sha256
                 ),
                 "qualification_report_sha256": (authority_reasoning.qualification_report_sha256),
                 "qualification_result_sha256": (authority_reasoning.qualification_result_sha256),
@@ -1541,20 +1585,37 @@ def _require_matching_request_parameter_profile(
     endpoint_policy: _RegisteredEndpointPolicy,
     plan: _StructuredOutputRequestPlan,
     *,
-    dynamic_reasoning: bool,
+    sealed_reasoning_plan: ReasoningRequestPlanEvidence | None,
 ) -> None:
     """Require frozen endpoint metadata to bind every emitted special parameter."""
 
     planned = set(plan.required_provider_parameters)
+    planned_reasoning = REASONING_REQUEST_PARAMETER in planned
+    if sealed_reasoning_plan is not None:
+        control = sealed_reasoning_plan.control_profile
+        expected_reasoning_payload = (
+            None
+            if control.mode == "disabled"
+            else OpenRouterReasoning(
+                effort=control.effort,
+                max_tokens=control.max_tokens,
+                exclude=control.exclude,
+            ).as_request_payload()
+        )
+        if plan.reasoning_payload != expected_reasoning_payload or planned_reasoning is not (
+            expected_reasoning_payload is not None
+        ):
+            raise OpenRouterProviderPolicyError(
+                "emitted reasoning request differs from its exact sealed role plan"
+            )
     for endpoint in endpoint_policy.endpoints:
         frozen = set(endpoint.required_request_parameters) - _BASE_ENDPOINT_REQUEST_PARAMETERS
         frozen_reasoning = REASONING_REQUEST_PARAMETER in frozen
-        planned_reasoning = REASONING_REQUEST_PARAMETER in planned
         output_frozen = frozen - {REASONING_REQUEST_PARAMETER}
         output_planned = planned - {REASONING_REQUEST_PARAMETER}
         if (
             output_frozen != output_planned
-            or (not dynamic_reasoning and frozen_reasoning != planned_reasoning)
+            or (sealed_reasoning_plan is None and frozen_reasoning != planned_reasoning)
             or not planned.issubset(endpoint.supported_parameters)
         ):
             raise OpenRouterProviderPolicyError(
@@ -3198,6 +3259,104 @@ class OpenRouterClient:
             ),
         )
 
+    def _is_real_postqualification_certification(self, role: str) -> bool:
+        """Return whether one request must consume sealed production reasoning authority."""
+
+        return (
+            self.execution_evidence is ExecutionEvidenceKind.REAL
+            and self.provider_policy.certification
+            and role not in _PREQUALIFICATION_PROVIDER_ROLES
+        )
+
+    def _require_real_postqualification_routing(
+        self,
+        *,
+        role: str,
+        model: str,
+        checked_at: datetime,
+        require_runtime_snapshots: bool,
+    ) -> OpenRouterQualificationRoutingEvidence:
+        """Revalidate opaque production authority and its exact request projection."""
+
+        if not self._is_real_postqualification_certification(role):
+            raise OpenRouterQualificationError(
+                "post-qualification routing authority was requested outside its real "
+                "certification boundary"
+            )
+        if self._production_qualification is None:
+            raise OpenRouterQualificationError(
+                "real post-qualification certification requires opaque qualification authority"
+            )
+        _require_exact_qualification_routing_authority(
+            routing=tuple(self._qualification_routing.values()),
+            qualification=self._production_qualification,
+            now=checked_at.replace(microsecond=0),
+        )
+        binding = self._qualification_routing.get(model)
+        if binding is None:
+            raise OpenRouterQualificationError(
+                "real post-qualification certification requires current qualification "
+                "routing evidence"
+            )
+        binding.require_current(
+            role=role,
+            model=model,
+            provider_endpoints=self.provider_policy.configured_endpoints,
+            now=checked_at,
+            endpoint_policy=(
+                self._endpoint_pricing.get(model) if require_runtime_snapshots else None
+            ),
+            model_identity=(
+                self._model_identities.get(model) if require_runtime_snapshots else None
+            ),
+            require_runtime_snapshots=require_runtime_snapshots,
+        )
+        return binding
+
+    def _require_real_postqualification_reasoning_plan(
+        self,
+        *,
+        role: str,
+        model: str,
+        qualification_binding: OpenRouterQualificationRoutingEvidence | None,
+    ) -> ReasoningRequestPlanEvidence:
+        """Require one exact policy-, capability-, and qualification-bound request plan."""
+
+        if not self._is_real_postqualification_certification(role):
+            raise OpenRouterQualificationError(
+                "post-qualification reasoning authority was requested outside its real "
+                "certification boundary"
+            )
+        if self.reasoning is not None:
+            raise OpenRouterQualificationError(
+                "real post-qualification certification rejects legacy global reasoning"
+            )
+        if self.reasoning_policy is None:
+            raise OpenRouterQualificationError(
+                "real post-qualification certification requires a sealed per-role reasoning policy"
+            )
+        if qualification_binding is None:
+            raise OpenRouterQualificationError(
+                "real post-qualification certification requires current qualification "
+                "routing evidence"
+            )
+        plan = self._reasoning_request_plan(
+            role=role,
+            model=model,
+            qualification_binding=qualification_binding,
+        )
+        if (
+            plan is None
+            or plan.binding_state != "qualification_bound"
+            or plan.endpoint_capability_sha256 is None
+            or plan.qualification_binding_sha256 is None
+        ):
+            raise OpenRouterQualificationError(
+                "real post-qualification certification requires an exact capability- and "
+                "qualification-bound reasoning plan"
+            )
+        return plan
+
     def _route_token_intersection(
         self,
         *,
@@ -3837,11 +3996,45 @@ class OpenRouterClient:
             schema_name=schema_name,
             reasoning=self._reasoning_for_role(effective_request_role),
         )
+        sealed_reasoning_plan = (
+            request_token_plan.reasoning_plan if request_token_plan is not None else None
+        )
+        if self.reasoning_policy is not None:
+            if effective_request_role is None or sealed_reasoning_plan is None:
+                raise OpenRouterRequestLimitError(
+                    "per-role reasoning requires its exact sealed request plan"
+                )
+            expected_resolution = resolve_reasoning_request_role(effective_request_role)
+            expected_role_policy = self.reasoning_policy.role_policy(
+                expected_resolution.configured_policy_role
+            )
+            if (
+                sealed_reasoning_plan.resolution != expected_resolution
+                or sealed_reasoning_plan.control_profile != expected_role_policy.control
+                or sealed_reasoning_plan.policy_artifact_sha256
+                != self.reasoning_policy.artifact_sha256
+                or sealed_reasoning_plan.policy_role_binding_sha256
+                != expected_role_policy.binding_sha256
+            ):
+                raise OpenRouterRequestLimitError(
+                    "request token plan differs from the exact per-role reasoning policy"
+                )
+        elif sealed_reasoning_plan is not None:
+            raise OpenRouterRequestLimitError(
+                "sealed per-role reasoning plan has no active client policy"
+            )
+        if self._is_real_postqualification_certification(effective_request_role or "") and (
+            sealed_reasoning_plan is None
+            or sealed_reasoning_plan.binding_state != "qualification_bound"
+        ):
+            raise OpenRouterQualificationError(
+                "real post-qualification request shape lacks qualification-bound reasoning"
+            )
         if endpoint_policy is not None:
             _require_matching_request_parameter_profile(
                 endpoint_policy,
                 request_plan,
-                dynamic_reasoning=self.reasoning_policy is not None,
+                sealed_reasoning_plan=sealed_reasoning_plan,
             )
         if request_token_plan is not None:
             if (
@@ -3968,6 +4161,41 @@ class OpenRouterClient:
 
         if not models:
             raise OpenRouterModelError(f"no model configured for role {role}")
+        for model in models:
+            _require_exact_model_id(model)
+        if self.provider_policy.certification and len(models) != 1:
+            raise OpenRouterModelError(
+                "certification requires exactly one explicitly qualified model"
+            )
+        checked_at = datetime.now(UTC)
+        qualification_bound_reasoning_plans: dict[
+            str,
+            ReasoningRequestPlanEvidence,
+        ] = {}
+        if self._is_real_postqualification_certification(role):
+            if self.reasoning is not None:
+                raise OpenRouterQualificationError(
+                    "real post-qualification certification rejects legacy global reasoning"
+                )
+            if self.reasoning_policy is None:
+                raise OpenRouterQualificationError(
+                    "real post-qualification certification requires a sealed per-role "
+                    "reasoning policy"
+                )
+            for model in models:
+                preflight_binding = self._require_real_postqualification_routing(
+                    role=role,
+                    model=model,
+                    checked_at=checked_at,
+                    require_runtime_snapshots=False,
+                )
+                qualification_bound_reasoning_plans[model] = (
+                    self._require_real_postqualification_reasoning_plan(
+                        role=role,
+                        model=model,
+                        qualification_binding=preflight_binding,
+                    )
+                )
         self._reasoning_for_role(role)
         if len(self._unbound_completions) >= _MAX_RETAINED_UNBOUND_COMPLETIONS:
             raise OpenRouterRequestLimitError(
@@ -3991,8 +4219,6 @@ class OpenRouterClient:
             raise OpenRouterProviderPolicyError(
                 "real provider completions require an explicit provider endpoint allowlist"
             )
-        for model in models:
-            _require_exact_model_id(model)
         if self._requires_paid_controls:
             unbound_models = [model for model in models if model not in self._endpoint_pricing]
             if unbound_models:
@@ -4013,26 +4239,7 @@ class OpenRouterClient:
                 raise OpenRouterModelError(
                     "real provider completion requires frozen model identity metadata"
                 )
-        if self.provider_policy.certification and len(models) != 1:
-            raise OpenRouterModelError(
-                "certification requires exactly one explicitly qualified model"
-            )
         qualification_bindings: dict[str, OpenRouterQualificationRoutingEvidence | None] = {}
-        checked_at = datetime.now(UTC)
-        if (
-            self.provider_policy.certification
-            and role not in _PREQUALIFICATION_PROVIDER_ROLES
-            and self.execution_evidence is ExecutionEvidenceKind.REAL
-        ):
-            if self._production_qualification is None:
-                raise OpenRouterQualificationError(
-                    "real post-qualification certification requires opaque qualification authority"
-                )
-            _require_exact_qualification_routing_authority(
-                routing=tuple(self._qualification_routing.values()),
-                qualification=self._production_qualification,
-                now=checked_at.replace(microsecond=0),
-            )
         for model in models:
             binding = self._qualification_routing.get(model)
             if (
@@ -4077,6 +4284,9 @@ class OpenRouterClient:
                     schema_name=schema_name,
                     fallback_used=index > 0,
                     qualification_binding=qualification_bindings[model],
+                    qualification_bound_reasoning_plan=(
+                        qualification_bound_reasoning_plans.get(model)
+                    ),
                 )
             except (
                 OpenRouterTransientError,
@@ -4293,6 +4503,7 @@ class OpenRouterClient:
         schema_name: str,
         fallback_used: bool,
         qualification_binding: OpenRouterQualificationRoutingEvidence | None,
+        qualification_bound_reasoning_plan: ReasoningRequestPlanEvidence | None = None,
     ) -> StructuredCompletion[ResponseT]:
         request_id = str(uuid.uuid4())
         required_output_tokens = self._required_output_tokens()
@@ -4304,11 +4515,37 @@ class OpenRouterClient:
         structured_output_plan: _StructuredOutputRequestPlan | None = None
         reasoning_plan: ReasoningRequestPlanEvidence | None = None
         try:
-            reasoning_plan = self._reasoning_request_plan(
-                role=role,
-                model=model,
-                qualification_binding=qualification_binding,
-            )
+            if self._is_real_postqualification_certification(role):
+                current_qualification_binding = self._require_real_postqualification_routing(
+                    role=role,
+                    model=model,
+                    checked_at=datetime.now(UTC),
+                    require_runtime_snapshots=True,
+                )
+                if qualification_binding != current_qualification_binding:
+                    raise OpenRouterQualificationError(
+                        "sealed post-qualification routing authority changed before transport"
+                    )
+                current_reasoning_plan = self._require_real_postqualification_reasoning_plan(
+                    role=role,
+                    model=model,
+                    qualification_binding=current_qualification_binding,
+                )
+                if qualification_bound_reasoning_plan != current_reasoning_plan:
+                    raise OpenRouterQualificationError(
+                        "sealed post-qualification reasoning authority changed before transport"
+                    )
+                reasoning_plan = current_reasoning_plan
+            else:
+                if qualification_bound_reasoning_plan is not None:
+                    raise OpenRouterQualificationError(
+                        "qualification-bound reasoning authority is invalid for this request"
+                    )
+                reasoning_plan = self._reasoning_request_plan(
+                    role=role,
+                    model=model,
+                    qualification_binding=qualification_binding,
+                )
             request_provider_policy = (
                 qualification_binding.request_provider_policy()
                 if qualification_binding is not None and self.provider_policy.certification

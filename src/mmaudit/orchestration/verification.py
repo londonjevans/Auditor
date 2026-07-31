@@ -25,10 +25,10 @@ from mmaudit.orchestration.manifest import (
     ManifestFileBinding,
     ManifestHashBinding,
     RunEvidenceManifest,
-    build_run_evidence_manifest,
     canonical_sha256,
     collect_run_artifacts,
     load_run_evidence_manifest,
+    rebuild_run_evidence_manifest_for_verification,
     resolve_run_evidence_config,
 )
 from mmaudit.reporting.json_report import stable_json
@@ -308,10 +308,11 @@ def verify_run_evidence(
                     "metadata": projection_metadata,
                 }
             )
-            observed_manifest = build_run_evidence_manifest(
+            observed_manifest = rebuild_run_evidence_manifest_for_verification(
                 run_dir=root,
                 report=projection_report,
                 config=resolved_config,
+                sealed_manifest=manifest,
                 **build_arguments,
             )
         except (OSError, ValueError):

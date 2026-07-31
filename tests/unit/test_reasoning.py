@@ -23,6 +23,7 @@ from mmaudit.models.reasoning import (
     ReasoningRequestPlanEvidence,
     ReasoningRequestRoleResolution,
     normalize_reasoning_request_role,
+    reasoning_qualification_benchmark_role,
     resolve_reasoning_request_role,
 )
 
@@ -364,6 +365,32 @@ def test_dynamic_and_fallback_roles_seal_semantic_and_configured_policy_mapping(
         assert artifact.control_for_request(request_role).mode == "default"
 
 
+def test_role_qualification_benchmark_resolves_only_exact_production_routes() -> None:
+    request_role = reasoning_qualification_benchmark_role(
+        qualified_role="falsifier",
+        configured_policy_role="verifier",
+    )
+    resolution = resolve_reasoning_request_role(request_role)
+
+    assert request_role == "model_benchmark:falsifier:verifier"
+    assert resolution.semantic_role == "verifier"
+    assert resolution.configured_policy_role == "verifier"
+    assert resolution.qualification_role == "falsifier"
+    assert resolution.mapping_kind == "prequalification_role_benchmark"
+    assert normalize_reasoning_request_role(request_role) == "verifier"
+
+    for qualified_role, configured_role in (
+        ("falsifier", "judge"),
+        ("whole_protocol_review", "source_audit"),
+        ("unknown", "source_audit"),
+    ):
+        with pytest.raises(ReasoningPolicyError):
+            reasoning_qualification_benchmark_role(
+                qualified_role=qualified_role,
+                configured_policy_role=configured_role,
+            )
+
+
 def test_request_role_resolution_is_immutable_self_hashed_and_rejects_semantic_forgery() -> None:
     resolution = resolve_reasoning_request_role("specialist:source_audit:exploit_test")
 
@@ -414,6 +441,10 @@ def test_request_role_resolution_is_immutable_self_hashed_and_rejects_semantic_f
         "whole_protocol_review:00",
         "whole_protocol_review:10000",
         "whole_protocol_review:not-an-index",
+        "model_benchmark:falsifier:judge",
+        "model_benchmark:whole_protocol_review:source_audit",
+        "model_benchmark:unknown:source_audit",
+        "model_benchmark:falsifier",
     ],
 )
 def test_unknown_or_noncanonical_request_roles_fail_closed(request_role: str) -> None:

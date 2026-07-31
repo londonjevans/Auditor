@@ -2056,6 +2056,11 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
         if path.is_file()
     }
 
+    production_qualification = synthetic_production_qualification(
+        config,
+        datetime.now(UTC).replace(microsecond=0),
+        provider_endpoint="synthetic-provider",
+    )
     result = await _run(
         config,
         repo,
@@ -2070,11 +2075,7 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
         invariant_runner=SyntheticInvariantRunner(),
         formal_runner=SyntheticFormalRunner(),
         allow_fork_probing=True,
-        production_qualification=synthetic_production_qualification(
-            config,
-            datetime.now(UTC).replace(microsecond=0),
-            provider_endpoint="synthetic-provider",
-        ),
+        production_qualification=production_qualification,
     )
 
     after = {
@@ -2237,6 +2238,17 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
     } <= sealed_hashes
     manifest = RunEvidenceManifest.model_validate_json(
         (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    model_bindings = {binding.identifier: binding for binding in manifest.bindings.models}
+    assert (
+        model_bindings["qualification/opaque-authority"].sha256
+        == production_qualification.capability_sha256
+    )
+    assert (
+        model_bindings["qualification/runtime-validation"].details["authority"] == "opaque_joined"
+    )
+    assert not any(
+        identifier.startswith("reasoning/qualification/") for identifier in model_bindings
     )
     sealed_file = next(
         artifact

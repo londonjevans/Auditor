@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED
 CURRENT_MILESTONE: Per-role reasoning effort binding
 CURRENT_TICKET: V3-EFFORT-001 (PARTIAL)
 LAST_COMPLETED_TICKET: V3-EXECORIGIN-001
-NEXT_ACTION: Resume V3-EFFORT-001 by rejecting absent/legacy reasoning controls for post-qualification certification, then bind runtime/manifest credit and strict identity to the exact opaque role-policy capability before implementing distinct-profile qualification campaigns.
-LAST_COMMAND: `git commit -m "Harden per-role reasoning evidence"`.
-LAST_RESULT: PASS — isolated partial-ticket checkpoint `82884f37b45b84c9ba43a002fe2128b871e26f04` created after the final green validation gate. No provider, network, or secret access occurred.
+NEXT_ACTION: Extend the qualification workflow and candidate campaign to execute and authenticate every distinct reasoning profile in one same-process live campaign, then run the affected and complete quality gates.
+LAST_COMMAND: `.venv/bin/python scripts/generate_release_schemas.py --write && .venv/bin/python scripts/generate_release_schemas.py`.
+LAST_RESULT: PASS — the joined focused matrix passed 398 tests, the maximum-assurance pipeline regression passed, the generated context-manifest schema is synchronized, and affected Ruff, strict mypy, diff, and secret-pattern checks are clean. No provider, network, secret, or cost activity occurred.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -171,30 +171,30 @@ LAST_CHECKPOINT_COMMIT: 82884f37b45b84c9ba43a002fe2128b871e26f04
     `git diff --check` clean.
   - **Validated partial-ticket checkpoint:**
     `82884f37b45b84c9ba43a002fe2128b871e26f04`.
-- **Remaining limitation:** Qualification currently executes one exact `model_benchmark` reasoning
-  profile. The production resolver therefore fails closed when any selected role uses a different
-  profile; it does not falsely duplicate one benchmark result across different effort levels. A
-  bounded multi-profile qualification campaign is still required before this ticket can be
-  `COMPLETE`. A final adversarial read-only review also found the following unresolved acceptance
-  gaps, which are recorded rather than repaired during the operator-requested pause:
-  - certification can still use an absent or legacy global reasoning policy instead of requiring a
-    sealed per-role, capability-bound, qualification-bound plan before transport;
-  - ensemble and maximum-assurance usage credit do not yet join the exact role pair, policy,
-    profile, endpoint capability, and qualification binding to that opaque authority;
-  - public routing projections remain constructible for mock/preflight evidence; any path that
-    promotes their self-hash to production reasoning credit still needs an exact opaque-authority
-    join;
-  - manifest projections do not yet independently prove every nested-to-parent opaque-authority
-    join;
-  - active non-disabled qualification can still treat an observed zero as substantive benchmark
-    reasoning even though persisted production usage credit now rejects it;
-  - the per-role request shape is not consistently included in strict model identity evidence.
-  These gaps keep `V3-EFFORT-001` `PARTIAL` and the release `INCOMPLETE`; no maximum-assurance
-  completeness claim is supported by this checkpoint.
-- **Pause boundary:** Finish the affected pause-checkpoint gate and isolated local commit. On
-  resume, reject absent/legacy certification reasoning controls, extend opaque authority through
-  runtime/manifest/identity credit, then execute every distinct selected role profile before
-  returning to `V3-CALIBRATE-001`.
+- **Travel-pause continuation:**
+  - REAL post-qualification transport now rejects absent and legacy reasoning controls and
+    exact-compares the sealed role-policy request shape before transport.
+  - Ensemble, maximum-assurance, pipeline-manifest, and verification-only replay paths now join or
+    structurally validate the opaque qualification authority without promoting a serialized
+    projection into fresh runtime credit.
+  - Active qualification requires positive observed reasoning for every non-disabled profile.
+    Distinct production profiles require fresh, non-reused, full-corpus supplemental benchmark
+    evidence bound to exact report, verification, and generation-evidence hashes.
+  - The combined reasoning, benchmark, qualification, OpenRouter, and manifest matrix passed
+    `398 tests in 66.25s`; the maximum-assurance pipeline regression passed in `15.71s`.
+    Affected Ruff, strict mypy, and `git diff --check` passed.
+  - Release-schema verification initially identified the expected stale context-manifest schema
+    after the new authority fields. `.venv/bin/python scripts/generate_release_schemas.py --write`
+    synchronized it, and immediate verification passed.
+- **Remaining limitation:** The qualification workflow generation-refetch helper and candidate
+  benchmark campaign still execute and authenticate only the primary report. They must be extended
+  to cover every required supplemental profile report in one live campaign. Until that integration
+  and the complete suite run, `V3-EFFORT-001` remains `PARTIAL` and the release remains
+  `INCOMPLETE`.
+- **Pause boundary:** At `2026-07-31T03:37:51Z`, all workers were stopped at an atomic
+  provider-free boundary. No provider, network, or secret access occurred and the cumulative
+  OpenRouter ledger remains unchanged. Resume with the supplemental-profile campaign integration,
+  not with already-validated authority joins.
 
 ## 2026-07-30 — V3-LINEAGE-001
 

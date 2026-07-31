@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-07-31T03:01:24Z",
+  "updated_at": "2026-07-31T03:37:51Z",
   "candidate_commit": "82884f37b45b84c9ba43a002fe2128b871e26f04",
   "autorun_status": "PAUSED",
   "current_milestone": "per_role_reasoning_effort_binding",

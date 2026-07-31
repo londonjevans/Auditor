@@ -1800,7 +1800,8 @@
             "candidate_cross_examination_context",
             "candidate_cross_examination",
             "whole_protocol_indexed",
-            "prequalification_benchmark"
+            "prequalification_benchmark",
+            "prequalification_role_benchmark"
           ],
           "title": "Mapping Kind",
           "type": "string"

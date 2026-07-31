@@ -33,6 +33,7 @@ ReasoningRequestRoleMappingKind = Literal[
     "candidate_cross_examination",
     "whole_protocol_indexed",
     "prequalification_benchmark",
+    "prequalification_role_benchmark",
 ]
 ReasoningPlanBindingState = Literal[
     "policy_only",
@@ -56,6 +57,9 @@ _SPECIALIST_REQUEST_ROLE = re.compile(r"^specialist:([a-z][a-z0-9_]{0,63})$")
 _EXPLOIT_TEST_REQUEST_ROLE = re.compile(r"^specialist:([a-z][a-z0-9_]{0,63}):exploit_test$")
 _CANDIDATE_FALSIFIER_REQUEST_ROLE = re.compile(r"^candidate_falsifier:[0-9a-f]{64}:reviewer_[12]$")
 _WHOLE_PROTOCOL_REQUEST_ROLE = re.compile(r"^whole_protocol_review:(?:0|[1-9][0-9]{0,3})$")
+_ROLE_QUALIFICATION_BENCHMARK_REQUEST = re.compile(
+    r"^model_benchmark:([a-z][a-z0-9_]{0,63}):([a-z][a-z0-9_]{0,63})$"
+)
 _DEDICATED_EXPLOIT_TEST_ROLES = frozenset(
     {
         "test_generation",
@@ -584,6 +588,20 @@ def reasoning_policy_roles_for_qualified_role(qualified_role: str) -> tuple[str,
     raise ReasoningPolicyError("qualified role has no exact reasoning policy route")
 
 
+def reasoning_qualification_benchmark_role(
+    *,
+    qualified_role: str,
+    configured_policy_role: str,
+) -> str:
+    """Build the closed prequalification role for one exact production route."""
+
+    if configured_policy_role not in reasoning_policy_roles_for_qualified_role(qualified_role):
+        raise ReasoningPolicyError(
+            "reasoning qualification benchmark role is not an approved production route"
+        )
+    return f"model_benchmark:{qualified_role}:{configured_policy_role}"
+
+
 def _resolve_reasoning_request_role_fields(
     request_role: str,
 ) -> tuple[str, str, str, ReasoningRequestRoleMappingKind]:
@@ -599,6 +617,19 @@ def _resolve_reasoning_request_role_fields(
             "source_audit",
             "model_benchmark",
             "prequalification_benchmark",
+        )
+    qualification_benchmark = _ROLE_QUALIFICATION_BENCHMARK_REQUEST.fullmatch(request_role)
+    if qualification_benchmark is not None:
+        qualified_role, configured_policy_role = qualification_benchmark.groups()
+        if configured_policy_role not in reasoning_policy_roles_for_qualified_role(qualified_role):
+            raise ReasoningPolicyError(
+                "reasoning qualification benchmark names an invalid production route"
+            )
+        return (
+            configured_policy_role,
+            configured_policy_role,
+            qualified_role,
+            "prequalification_role_benchmark",
         )
 
     specialist_match = _SPECIALIST_REQUEST_ROLE.fullmatch(request_role)
@@ -709,5 +740,6 @@ __all__ = [
     "ReasoningRolePolicy",
     "normalize_reasoning_request_role",
     "reasoning_policy_roles_for_qualified_role",
+    "reasoning_qualification_benchmark_role",
     "resolve_reasoning_request_role",
 ]

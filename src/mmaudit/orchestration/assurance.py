@@ -24,6 +24,11 @@ from mmaudit.constants import ALL_SPECIALIST_ROLES, SPECIALIST_INVESTIGATOR_ROLE
 from mmaudit.models.qualification import (
     VerifiedProductionQualification,
     VerifiedTierAModelQualification,
+    usage_matches_verified_reasoning_qualification,
+)
+from mmaudit.models.reasoning import (
+    ReasoningPolicyError,
+    resolve_reasoning_request_role,
 )
 from mmaudit.models.schemas import (
     AnalysisState,
@@ -2280,18 +2285,17 @@ def _is_real_model_usage(
 ) -> bool:
     if qualification is None or not _real_provider_session_is_qualifying(provider_session):
         return False
-    whole_protocol_context = source_backed_whole_protocol_context(record)
-    if record.role.startswith("whole_protocol_review") and whole_protocol_context is None:
+    try:
+        role_resolution = resolve_reasoning_request_role(record.role)
+    except ReasoningPolicyError:
         return False
-    whole_protocol_review = whole_protocol_context is not None
-    role = (
-        "whole_protocol_review"
-        if whole_protocol_review
-        else (
-            canonical_specialist_role(record.role)
-            or ("falsifier" if record.role.startswith("candidate_falsifier:") else record.role)
-        )
-    )
+    whole_protocol_context = source_backed_whole_protocol_context(record)
+    whole_protocol_review = role_resolution.mapping_kind == "whole_protocol_indexed"
+    if whole_protocol_review and whole_protocol_context is None:
+        return False
+    if not whole_protocol_review and whole_protocol_context is not None:
+        return False
+    role = role_resolution.qualification_role
     if whole_protocol_review:
         configured_models = {model.exact_model_id for model in qualification.models}
     else:
@@ -2366,6 +2370,11 @@ def _is_real_model_usage(
         == qualification.selection_verification_sha256
         and routing.get("qualification_result_sha256")
         == qualified_model.qualification_result_sha256
+        and usage_matches_verified_reasoning_qualification(
+            record=record,
+            production_qualification=qualification,
+            now=datetime.now(UTC).replace(microsecond=0),
+        )
     )
 
 

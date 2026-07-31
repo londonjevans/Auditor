@@ -6,10 +6,11 @@ import hashlib
 import json
 import os
 import stat
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from importlib.resources import files
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import Field, field_validator, model_validator
 
@@ -61,6 +62,15 @@ from mmaudit.orchestration.execution_candidates import (
 from mmaudit.reporting.json_report import write_json
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_name, is_sensitive_workspace_path
+
+if TYPE_CHECKING:
+    from mmaudit.models.qualification import (
+        QualifiedReasoningRoleBinding,
+        VerifiedProductionQualification,
+    )
+    from mmaudit.models.reasoning import ReasoningPolicyArtifact
+    from mmaudit.models.registry import ProductionQualificationValidation
+    from mmaudit.models.schemas import UsageRecord
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _MAX_MANIFEST_FILES = 100_000
@@ -335,8 +345,67 @@ def build_run_evidence_manifest(
     environment_overrides: AuditConfigOverrides | None = None,
     cli_overrides: AuditConfigOverrides | None = None,
     run_options: AuditRunOptions | None = None,
+    production_qualification: VerifiedProductionQualification | None = None,
 ) -> RunEvidenceManifest:
-    """Build all MAN-001 projections from typed runtime state and emitted artifacts."""
+    """Build runtime MAN-001 projections, requiring opaque qualification authority."""
+
+    return _build_run_evidence_manifest(
+        run_dir=run_dir,
+        report=report,
+        config=config,
+        file_config=file_config,
+        environment_overrides=environment_overrides,
+        cli_overrides=cli_overrides,
+        run_options=run_options,
+        production_qualification=production_qualification,
+        sealed_verification_manifest=None,
+    )
+
+
+def rebuild_run_evidence_manifest_for_verification(
+    *,
+    run_dir: Path,
+    report: AuditReport,
+    config: AuditConfig,
+    sealed_manifest: RunEvidenceManifest,
+    file_config: AuditConfig | None = None,
+    environment_overrides: AuditConfigOverrides | None = None,
+    cli_overrides: AuditConfigOverrides | None = None,
+    run_options: AuditRunOptions | None = None,
+) -> RunEvidenceManifest:
+    """Recalculate a sealed manifest without minting runtime qualification authority.
+
+    This read-only path checks the manifest's issuance-time serialized qualification
+    projection against bound artifacts and usage. It cannot emit a production
+    manifest or grant fresh reasoning credit.
+    """
+
+    return _build_run_evidence_manifest(
+        run_dir=run_dir,
+        report=report,
+        config=config,
+        file_config=file_config,
+        environment_overrides=environment_overrides,
+        cli_overrides=cli_overrides,
+        run_options=run_options,
+        production_qualification=None,
+        sealed_verification_manifest=sealed_manifest,
+    )
+
+
+def _build_run_evidence_manifest(
+    *,
+    run_dir: Path,
+    report: AuditReport,
+    config: AuditConfig,
+    file_config: AuditConfig | None,
+    environment_overrides: AuditConfigOverrides | None,
+    cli_overrides: AuditConfigOverrides | None,
+    run_options: AuditRunOptions | None,
+    production_qualification: VerifiedProductionQualification | None,
+    sealed_verification_manifest: RunEvidenceManifest | None,
+) -> RunEvidenceManifest:
+    """Build either runtime evidence or a read-only verification projection."""
 
     root = run_dir.resolve(strict=True)
     effective_config = config.effective()
@@ -409,6 +478,12 @@ def build_run_evidence_manifest(
             effective_config,
             report,
             qualification_runtime=qualification_runtime,
+            production_qualification=production_qualification,
+            sealed_verification_bindings=(
+                sealed_verification_manifest.bindings.models
+                if sealed_verification_manifest is not None
+                else None
+            ),
         ),
         tools=_tool_bindings(effective_config, report),
         compilers=_compiler_bindings(effective_config, compilation),
@@ -1286,6 +1361,8 @@ def _model_bindings(
     report: AuditReport,
     *,
     qualification_runtime: dict[str, Any] | None,
+    production_qualification: VerifiedProductionQualification | None = None,
+    sealed_verification_bindings: list[ManifestHashBinding] | None = None,
 ) -> list[ManifestHashBinding]:
     # Local import avoids introducing runtime construction into schema imports.
     from mmaudit.models.runtime import build_reasoning_policy
@@ -1298,6 +1375,22 @@ def _model_bindings(
     }
     bindings = []
     reasoning_policy = build_reasoning_policy(config)
+    qualification_validation = _qualification_validation(qualification_runtime)
+    if production_qualification is not None and sealed_verification_bindings is not None:
+        raise ValueError("runtime authority cannot be mixed with a verification projection")
+    opaque_qualification = _validated_opaque_qualification(
+        config=config,
+        validation=qualification_validation,
+        qualification=production_qualification,
+    )
+    issuance_authority_sha256 = (
+        _serialized_issuance_authority_sha256(
+            validation=qualification_validation,
+            sealed_bindings=sealed_verification_bindings,
+        )
+        if sealed_verification_bindings is not None
+        else (opaque_qualification.capability_sha256 if opaque_qualification is not None else None)
+    )
     bindings.append(
         ManifestHashBinding(
             identifier="reasoning/policy",
@@ -1400,6 +1493,20 @@ def _model_bindings(
                 )
             qualification_sha256 = reasoning.request_plan.qualification_binding_sha256
             if qualification_sha256 is not None:
+                qualified_reasoning = (
+                    _require_serialized_reasoning_qualification_for_verification(
+                        usage=usage,
+                        reasoning_policy=reasoning_policy,
+                        validation=qualification_validation,
+                    )
+                    if sealed_verification_bindings is not None
+                    else _require_opaque_reasoning_qualification(
+                        usage=usage,
+                        reasoning_policy=reasoning_policy,
+                        validation=qualification_validation,
+                        qualification=opaque_qualification,
+                    )
+                )
                 bindings.append(
                     ManifestHashBinding(
                         identifier=(f"reasoning/qualification/{usage.request_id}"),
@@ -1407,17 +1514,416 @@ def _model_bindings(
                         details={
                             "model": _detail(usage.requested_model),
                             "role": _detail(usage.role),
+                            "qualified_role": qualified_reasoning.qualified_role,
+                            "configured_policy_role": (qualified_reasoning.configured_policy_role),
+                            "authority": "opaque_production_qualification",
+                            "qualification_verification_sha256": (
+                                qualified_reasoning.qualification_verification_sha256
+                            ),
+                            "reasoning_benchmark_report_sha256": (
+                                qualified_reasoning.reasoning_benchmark_report_sha256
+                            ),
+                            "reasoning_benchmark_verification_sha256": (
+                                qualified_reasoning.reasoning_benchmark_verification_sha256
+                            ),
+                            "reasoning_benchmark_fresh_evidence_sha256": (
+                                qualified_reasoning.reasoning_benchmark_fresh_evidence_sha256
+                            ),
                         },
                     )
                 )
-    bindings.extend(_qualification_bindings(qualification_runtime))
+    bindings.extend(
+        _qualification_bindings(
+            qualification_validation,
+            opaque_authority_sha256=issuance_authority_sha256,
+        )
+    )
     return sorted(bindings, key=lambda item: item.identifier)
 
 
-def _qualification_bindings(
+def _qualification_validation(
     payload: dict[str, Any] | None,
-) -> list[ManifestHashBinding]:
+) -> ProductionQualificationValidation | None:
+    """Parse a serialized projection without converting it into runtime authority."""
+
     if payload is None:
+        return None
+    # Local import avoids the registry -> qualification -> manifest import cycle.
+    from mmaudit.models.registry import ProductionQualificationValidation
+
+    return ProductionQualificationValidation.from_dict(payload)
+
+
+def _serialized_issuance_authority_sha256(
+    *,
+    validation: ProductionQualificationValidation | None,
+    sealed_bindings: list[ManifestHashBinding],
+) -> str | None:
+    """Validate, but never recreate, a sealed issuance-time authority projection."""
+
+    by_identifier = {binding.identifier: binding for binding in sealed_bindings}
+    runtime_binding = by_identifier.get("qualification/runtime-validation")
+    opaque_binding = by_identifier.get("qualification/opaque-authority")
+    if validation is None:
+        if runtime_binding is not None or opaque_binding is not None:
+            raise ValueError("sealed qualification authority projection lacks its runtime artifact")
+        return None
+    if runtime_binding is None or runtime_binding.sha256 != validation.validation_sha256:
+        raise ValueError(
+            "sealed qualification authority projection differs from runtime validation"
+        )
+
+    claimed_authority = runtime_binding.details.get("authority")
+    route_bindings = [
+        binding
+        for identifier, binding in by_identifier.items()
+        if identifier.startswith("qualification/reasoning-route/")
+    ]
+    if opaque_binding is None:
+        if claimed_authority != "serialized_projection_only" or any(
+            binding.details.get("authority") != "serialized_projection_only"
+            for binding in route_bindings
+        ):
+            raise ValueError("sealed serialized qualification projection is inconsistent")
+        return None
+
+    capability_sha256 = validation.qualification_capability_sha256
+    if (
+        not validation.valid
+        or capability_sha256 is None
+        or opaque_binding.sha256 != capability_sha256
+        or opaque_binding.details
+        != {
+            "kind": "process_local_opaque_capability",
+            "serialized_projection_authority": "false",
+        }
+        or claimed_authority != "opaque_joined"
+        or any(binding.details.get("authority") != "opaque_joined" for binding in route_bindings)
+    ):
+        raise ValueError("sealed opaque qualification issuance projection is inconsistent")
+    return capability_sha256
+
+
+def _validated_opaque_qualification(
+    *,
+    config: AuditConfig,
+    validation: ProductionQualificationValidation | None,
+    qualification: VerifiedProductionQualification | None,
+) -> VerifiedProductionQualification | None:
+    """Join a serialized runtime projection to resolver-issued opaque authority."""
+
+    if qualification is None:
+        return None
+    if validation is None:
+        raise ValueError(
+            "opaque production qualification requires its serialized runtime projection"
+        )
+
+    # Local imports avoid manifest -> registry -> qualification -> manifest at module import.
+    from mmaudit.models.qualification import VerifiedProductionQualification
+    from mmaudit.models.registry import ModelRegistry
+
+    if type(qualification) is not VerifiedProductionQualification:
+        raise ValueError("production qualification authority has an invalid opaque type")
+    opaque = qualification
+    expected = ModelRegistry.validate_production_qualification(
+        config,
+        opaque,
+        required=validation.required,
+        now=validation.observed_at,
+    )
+    if not expected.valid:
+        raise ValueError("opaque production qualification is not valid for the effective config")
+    if expected != validation:
+        raise ValueError(
+            "serialized production qualification differs from opaque runtime authority"
+        )
+    return opaque.require_current(now=validation.observed_at)
+
+
+def _require_serialized_reasoning_qualification_for_verification(
+    *,
+    usage: UsageRecord,
+    reasoning_policy: ReasoningPolicyArtifact,
+    validation: ProductionQualificationValidation | None,
+) -> QualifiedReasoningRoleBinding:
+    """Check sealed request evidence without creating or granting runtime authority."""
+
+    if validation is None or not validation.valid:
+        raise ValueError(
+            "qualified reasoning verification requires valid serialized qualification evidence"
+        )
+
+    from mmaudit.models.reasoning import (
+        ReasoningExecutionEvidence,
+        ReasoningPolicyError,
+        resolve_reasoning_request_role,
+    )
+    from mmaudit.models.usage import is_structurally_creditable_usage_record
+
+    reasoning = usage.reasoning_evidence
+    try:
+        resolution = resolve_reasoning_request_role(usage.role)
+    except ReasoningPolicyError as exc:
+        raise ValueError("qualified reasoning request role cannot be resolved") from exc
+    if (
+        type(reasoning) is not ReasoningExecutionEvidence
+        or reasoning.request_plan.resolution != resolution
+        or reasoning.request_plan.binding_state != "qualification_bound"
+        or not is_structurally_creditable_usage_record(
+            usage,
+            require_real=True,
+            require_certification=True,
+        )
+    ):
+        raise ValueError("qualified reasoning request is not creditable sealed real evidence")
+    plan = reasoning.request_plan
+
+    serialized_models = tuple(
+        model
+        for model in validation.model_bindings
+        if model.exact_model_id == usage.requested_model
+    )
+    if len(serialized_models) != 1:
+        raise ValueError("qualified reasoning request lacks one serialized model binding")
+    model = serialized_models[0]
+    routes = tuple(
+        route
+        for route in model.reasoning_bindings
+        if route.qualified_role == resolution.qualification_role
+        and route.configured_policy_role == resolution.configured_policy_role
+    )
+    if len(routes) != 1:
+        raise ValueError("qualified reasoning request lacks one serialized role route")
+    route = routes[0]
+    policy_role = reasoning_policy.role_policy(resolution.configured_policy_role)
+    endpoint_capability_sha256 = plan.endpoint_capability_sha256
+    qualification_verification_sha256 = validation.qualification_verification_sha256
+    if endpoint_capability_sha256 is None or qualification_verification_sha256 is None:
+        raise ValueError("qualified reasoning request lacks serialized parent evidence")
+    route = route.require_exact(
+        exact_model_id=usage.requested_model,
+        approved_provider_endpoint=model.approved_provider_endpoint,
+        approved_provider_name=model.approved_provider_name,
+        qualified_role=resolution.qualification_role,
+        configured_policy_role=resolution.configured_policy_role,
+        control_profile=policy_role.control,
+        reasoning_policy_artifact_sha256=reasoning_policy.artifact_sha256,
+        reasoning_policy_role_binding_sha256=policy_role.binding_sha256,
+        endpoint_reasoning_capability_sha256=endpoint_capability_sha256,
+        reasoning_benchmark_report_sha256=route.reasoning_benchmark_report_sha256,
+        reasoning_benchmark_verification_sha256=(route.reasoning_benchmark_verification_sha256),
+        reasoning_benchmark_fresh_evidence_sha256=(route.reasoning_benchmark_fresh_evidence_sha256),
+        qualification_report_sha256=model.benchmark_report_sha256,
+        qualification_result_sha256=model.qualification_result_sha256,
+        qualification_verification_sha256=qualification_verification_sha256,
+    )
+    if plan.qualification_binding_sha256 != route.binding_sha256:
+        raise ValueError("qualified reasoning request differs from its serialized role route")
+
+    request_time = usage.started_at or usage.timestamp
+    if request_time.tzinfo is None or request_time.utcoffset() != timedelta(0):
+        raise ValueError("qualified reasoning request time must be UTC")
+    request_time = request_time.astimezone(UTC).replace(microsecond=0)
+    verified_at_raw = usage.routing.get("qualification_verified_at")
+    if not isinstance(verified_at_raw, str):
+        raise ValueError("qualified reasoning request lacks its sealed verification time")
+    try:
+        verified_at = datetime.fromisoformat(verified_at_raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("qualified reasoning verification time is invalid") from exc
+    if verified_at.tzinfo is None or verified_at.utcoffset() != timedelta(0):
+        raise ValueError("qualified reasoning verification time must be UTC")
+    verified_at = verified_at.astimezone(UTC).replace(microsecond=0)
+    if (
+        verified_at < model.evaluated_at
+        or verified_at > validation.observed_at
+        or request_time < verified_at
+        or request_time >= model.expires_at
+    ):
+        raise ValueError("qualified reasoning request is outside its serialized authority window")
+
+    if (
+        usage.returned_model not in {model.exact_model_id, model.canonical_model_slug}
+        or usage.actual_model not in {model.exact_model_id, model.canonical_model_slug}
+        or usage.actual_provider_endpoint != model.approved_provider_endpoint
+        or usage.routing.get("selected_provider_name") != model.approved_provider_name
+    ):
+        raise ValueError("qualified reasoning execution differs from its serialized provider")
+    expected_routing: dict[str, Any] = {
+        "qualified_exact_model_id": model.exact_model_id,
+        "qualified_canonical_model_slug": model.canonical_model_slug,
+        "qualified_root_lineage": model.root_lineage,
+        "qualified_provider_endpoint": model.approved_provider_endpoint,
+        "qualified_provider_name": model.approved_provider_name,
+        "qualified_endpoint_snapshot_sha256": model.endpoint_snapshot_sha256,
+        "qualified_output_capability_sha256": model.output_capability_sha256,
+        "qualified_structured_output_mode": model.structured_output_mode.value,
+        "qualified_model_metadata_snapshot_sha256": model.model_metadata_snapshot_sha256,
+        "qualified_pricing_snapshot_sha256": model.pricing_snapshot_sha256,
+        "qualified_roles": list(model.approved_roles),
+        "qualification_verified_at": verified_at.isoformat(),
+        "qualification_expires_at": model.expires_at.isoformat(),
+        "qualification_artifact_sha256": validation.qualification_artifact_sha256,
+        "qualification_verification_sha256": qualification_verification_sha256,
+        "production_selection_sha256": validation.production_selection_sha256,
+        "selection_verification_sha256": validation.selection_verification_sha256,
+        "qualification_result_sha256": model.qualification_result_sha256,
+        "benchmark_report_sha256": model.benchmark_report_sha256,
+        "qualified_reasoning_binding_sha256": [
+            binding.binding_sha256 for binding in model.reasoning_bindings
+        ],
+    }
+    if any(usage.routing.get(key) != value for key, value in expected_routing.items()):
+        raise ValueError(
+            "qualified reasoning execution differs from its sealed qualification projection"
+        )
+    return route
+
+
+def _require_opaque_reasoning_qualification(
+    *,
+    usage: UsageRecord,
+    reasoning_policy: ReasoningPolicyArtifact,
+    validation: ProductionQualificationValidation | None,
+    qualification: VerifiedProductionQualification | None,
+) -> QualifiedReasoningRoleBinding:
+    """Require one exact request-to-role-to-parent join before granting manifest credit."""
+
+    if validation is None or not validation.valid:
+        raise ValueError(
+            "qualified reasoning manifest credit requires valid production qualification evidence"
+        )
+    if qualification is None:
+        raise ValueError(
+            "qualified reasoning manifest credit requires opaque production qualification authority"
+        )
+
+    from mmaudit.models.qualification import usage_matches_verified_reasoning_qualification
+
+    plan = usage.reasoning_evidence.request_plan if usage.reasoning_evidence is not None else None
+    if plan is None or plan.binding_state != "qualification_bound":
+        raise ValueError("qualified reasoning manifest credit requires a qualification-bound plan")
+    resolution = plan.resolution
+    request_time = usage.started_at or usage.timestamp
+    if request_time.tzinfo is None or request_time.utcoffset() != timedelta(0):
+        raise ValueError("qualified reasoning request time must be UTC")
+    normalized_request_time = request_time.astimezone(UTC).replace(microsecond=0)
+    qualified_model = qualification.model_for(
+        usage.requested_model,
+        now=normalized_request_time,
+    )
+    if request_time < qualification.verified_at or request_time >= qualified_model.expires_at:
+        raise ValueError("qualified reasoning request occurred outside its authority window")
+    if not usage_matches_verified_reasoning_qualification(
+        record=usage,
+        production_qualification=qualification,
+        now=normalized_request_time,
+    ):
+        raise ValueError(
+            "qualified reasoning execution lacks creditable real opaque-authority evidence"
+        )
+    serialized_models = tuple(
+        model
+        for model in validation.model_bindings
+        if model.exact_model_id == usage.requested_model
+    )
+    if len(serialized_models) != 1:
+        raise ValueError("qualified reasoning request lacks one serialized model binding")
+    serialized_model = serialized_models[0]
+    authority_routes = tuple(
+        route
+        for route in qualified_model.reasoning_bindings
+        if route.qualified_role == resolution.qualification_role
+        and route.configured_policy_role == resolution.configured_policy_role
+    )
+    serialized_routes = tuple(
+        route
+        for route in serialized_model.reasoning_bindings
+        if route.qualified_role == resolution.qualification_role
+        and route.configured_policy_role == resolution.configured_policy_role
+    )
+    if len(authority_routes) != 1 or len(serialized_routes) != 1:
+        raise ValueError("qualified reasoning request lacks one exact role route")
+    authority_route = authority_routes[0]
+    serialized_route = serialized_routes[0]
+    if serialized_route != authority_route:
+        raise ValueError("serialized reasoning route differs from opaque production authority")
+
+    policy_role = reasoning_policy.role_policy(resolution.configured_policy_role)
+    endpoint_capability_sha256 = plan.endpoint_capability_sha256
+    if endpoint_capability_sha256 is None:
+        raise ValueError("qualified reasoning request lacks endpoint capability evidence")
+    authority_route = authority_route.require_exact(
+        exact_model_id=usage.requested_model,
+        approved_provider_endpoint=qualified_model.approved_provider_endpoint,
+        approved_provider_name=qualified_model.approved_provider_name,
+        qualified_role=resolution.qualification_role,
+        configured_policy_role=resolution.configured_policy_role,
+        control_profile=policy_role.control,
+        reasoning_policy_artifact_sha256=reasoning_policy.artifact_sha256,
+        reasoning_policy_role_binding_sha256=policy_role.binding_sha256,
+        endpoint_reasoning_capability_sha256=endpoint_capability_sha256,
+        reasoning_benchmark_report_sha256=(authority_route.reasoning_benchmark_report_sha256),
+        reasoning_benchmark_verification_sha256=(
+            authority_route.reasoning_benchmark_verification_sha256
+        ),
+        reasoning_benchmark_fresh_evidence_sha256=(
+            authority_route.reasoning_benchmark_fresh_evidence_sha256
+        ),
+        qualification_report_sha256=qualified_model.benchmark_report_sha256,
+        qualification_result_sha256=qualified_model.qualification_result_sha256,
+        qualification_verification_sha256=(qualification.qualification_verification_sha256),
+    )
+    if plan.qualification_binding_sha256 != authority_route.binding_sha256:
+        raise ValueError("reasoning request plan differs from its opaque qualification route")
+    if (
+        usage.actual_provider_endpoint != qualified_model.approved_provider_endpoint
+        or usage.routing.get("selected_provider_name") != qualified_model.approved_provider_name
+    ):
+        raise ValueError("qualified reasoning execution differs from its approved provider")
+
+    expected_routing: dict[str, Any] = {
+        "qualified_exact_model_id": qualified_model.exact_model_id,
+        "qualified_canonical_model_slug": qualified_model.canonical_model_slug,
+        "qualified_root_lineage": qualified_model.root_lineage,
+        "qualified_provider_endpoint": qualified_model.approved_provider_endpoint,
+        "qualified_provider_name": qualified_model.approved_provider_name,
+        "qualified_endpoint_snapshot_sha256": qualified_model.endpoint_snapshot_sha256,
+        "qualified_output_capability_sha256": qualified_model.output_capability_sha256,
+        "qualified_structured_output_mode": qualified_model.structured_output_mode.value,
+        "qualified_model_metadata_snapshot_sha256": (
+            qualified_model.model_metadata_snapshot_sha256
+        ),
+        "qualified_pricing_snapshot_sha256": qualified_model.pricing_snapshot_sha256,
+        "qualified_roles": list(qualified_model.approved_roles),
+        "qualification_verified_at": qualification.verified_at.isoformat(),
+        "qualification_expires_at": qualified_model.expires_at.isoformat(),
+        "qualification_artifact_sha256": qualification.artifact_sha256,
+        "qualification_verification_sha256": (qualification.qualification_verification_sha256),
+        "production_selection_sha256": qualification.production_selection_sha256,
+        "selection_verification_sha256": qualification.selection_verification_sha256,
+        "qualification_result_sha256": qualified_model.qualification_result_sha256,
+        "benchmark_report_sha256": qualified_model.benchmark_report_sha256,
+        "qualified_reasoning_binding_sha256": [
+            route.binding_sha256 for route in qualified_model.reasoning_bindings
+        ],
+    }
+    if any(usage.routing.get(key) != value for key, value in expected_routing.items()):
+        raise ValueError(
+            "qualified reasoning execution routing differs from opaque production authority"
+        )
+    return authority_route
+
+
+def _qualification_bindings(
+    validation: ProductionQualificationValidation | None,
+    *,
+    opaque_authority_sha256: str | None,
+) -> list[ManifestHashBinding]:
+    if validation is None:
+        if opaque_authority_sha256 is not None:
+            raise ValueError("opaque qualification authority lacks a serialized projection")
         return [
             _binding(
                 "qualification/runtime-absent",
@@ -1426,10 +1932,6 @@ def _qualification_bindings(
             )
         ]
 
-    # Local import avoids the registry -> qualification -> manifest import cycle.
-    from mmaudit.models.registry import ProductionQualificationValidation
-
-    validation = ProductionQualificationValidation.from_dict(payload)
     bindings = [
         ManifestHashBinding(
             identifier="qualification/runtime-validation",
@@ -1439,9 +1941,27 @@ def _qualification_bindings(
                 "required": str(validation.required).lower(),
                 "configured_models": str(len(validation.configured_model_ids)),
                 "qualified_models": str(len(validation.qualified_model_ids)),
+                "authority": (
+                    "opaque_joined"
+                    if opaque_authority_sha256 is not None
+                    else "serialized_projection_only"
+                ),
             },
         )
     ]
+    if opaque_authority_sha256 is not None:
+        if opaque_authority_sha256 != validation.qualification_capability_sha256:
+            raise ValueError("opaque qualification capability differs from runtime projection")
+        bindings.append(
+            ManifestHashBinding(
+                identifier="qualification/opaque-authority",
+                sha256=opaque_authority_sha256,
+                details={
+                    "kind": "process_local_opaque_capability",
+                    "serialized_projection_authority": "false",
+                },
+            )
+        )
     named_hashes = {
         "artifact": validation.qualification_artifact_sha256,
         "verification": validation.qualification_verification_sha256,
@@ -1490,6 +2010,42 @@ def _qualification_bindings(
                 details={**common_details, "kind": kind},
             )
             for kind, sha256 in sorted(model_hashes.items())
+        )
+        bindings.extend(
+            ManifestHashBinding(
+                identifier=(f"qualification/reasoning-route/{index:05d}/{route_index:05d}"),
+                sha256=route.binding_sha256,
+                details={
+                    **common_details,
+                    "kind": "reasoning_route",
+                    "qualified_role": route.qualified_role,
+                    "configured_policy_role": route.configured_policy_role,
+                    "control_profile_sha256": route.control_profile_sha256,
+                    "reasoning_policy_artifact_sha256": (route.reasoning_policy_artifact_sha256),
+                    "reasoning_policy_role_binding_sha256": (
+                        route.reasoning_policy_role_binding_sha256
+                    ),
+                    "endpoint_reasoning_capability_sha256": (
+                        route.endpoint_reasoning_capability_sha256
+                    ),
+                    "reasoning_benchmark_report_sha256": (route.reasoning_benchmark_report_sha256),
+                    "reasoning_benchmark_verification_sha256": (
+                        route.reasoning_benchmark_verification_sha256
+                    ),
+                    "reasoning_benchmark_fresh_evidence_sha256": (
+                        route.reasoning_benchmark_fresh_evidence_sha256
+                    ),
+                    "qualification_report_sha256": route.qualification_report_sha256,
+                    "qualification_result_sha256": route.qualification_result_sha256,
+                    "qualification_verification_sha256": (route.qualification_verification_sha256),
+                    "authority": (
+                        "opaque_joined"
+                        if opaque_authority_sha256 is not None
+                        else "serialized_projection_only"
+                    ),
+                },
+            )
+            for route_index, route in enumerate(model.reasoning_bindings)
         )
     qualification_inputs = validation.qualification_bindings
     if qualification_inputs is not None:

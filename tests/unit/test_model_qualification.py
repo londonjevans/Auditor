@@ -80,6 +80,8 @@ from mmaudit.models.reasoning import (
     ReasoningControlProfile,
     ReasoningPolicyArtifact,
     ReasoningRequestPlanEvidence,
+    reasoning_qualification_benchmark_role,
+    resolve_reasoning_request_role,
 )
 from mmaudit.models.schemas import (
     ContextRequestEvidence,
@@ -291,6 +293,8 @@ def _usage_record(
     execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.REAL,
     qualification_artifact_sha256: str | None = None,
     production_selection_sha256: str | None = None,
+    reasoning_policy: ReasoningPolicyArtifact | None = None,
+    observed_reasoning_tokens: int = 0,
 ) -> UsageRecord:
     ended_at = _NOW + timedelta(seconds=1)
     generation_id = f"generation-{request_id}"
@@ -384,13 +388,19 @@ def _usage_record(
     if context_evidence is not None:
         routing["context_request_evidence"] = context_evidence.model_dump(mode="json")
         routing["context_request_evidence_sha256"] = context_evidence.evidence_sha256
+    try:
+        role_resolution = resolve_reasoning_request_role(role)
+    except ValueError:
+        role_resolution = None
     request_reasoning_plan = (
         ReasoningRequestPlanEvidence.build(
             request_role=role,
-            policy=_reasoning_policy(),
+            policy=reasoning_policy or _reasoning_policy(),
             endpoint_capability_sha256=_sha(f"reasoning-capability-{candidate.exact_model_id}"),
         )
-        if role == "model_benchmark"
+        if role_resolution is not None
+        and role_resolution.mapping_kind
+        in {"prequalification_benchmark", "prequalification_role_benchmark"}
         else None
     )
     return bind_synthetic_usage_identity(
@@ -431,7 +441,9 @@ def _usage_record(
             attempts=1,
         ),
         reasoning_plan=request_reasoning_plan,
-        observed_reasoning_tokens=(0 if request_reasoning_plan is not None else None),
+        observed_reasoning_tokens=(
+            observed_reasoning_tokens if request_reasoning_plan is not None else None
+        ),
     )
 
 
@@ -552,7 +564,10 @@ def _bundle(
     validity_days: int = 6,
     structured_output_supported: bool = True,
     structured_output_mode: StructuredOutputMode = StructuredOutputMode.JSON_OBJECT,
+    reasoning_policy: ReasoningPolicyArtifact | None = None,
+    observed_reasoning_tokens: int = 0,
 ) -> _Bundle:
+    reasoning_policy = reasoning_policy or _reasoning_policy()
     model_ids = tuple(_model_id(index) for index in range(8))
     grouped_ids = {
         root_index: tuple(
@@ -677,6 +692,8 @@ def _bundle(
                     candidate=candidate,
                     role="model_benchmark",
                     request_id=f"benchmark-{index}",
+                    reasoning_policy=reasoning_policy,
+                    observed_reasoning_tokens=observed_reasoning_tokens,
                 ),
             ),
             dimensions=dimensions,
@@ -751,7 +768,7 @@ def _bundle(
             artifact=artifact,
             qualification_verification=verification,
             expected_production_effective_config_sha256=_PRODUCTION_CONFIG_SHA256,
-            now=_NOW + timedelta(hours=4),
+            now=_NOW + timedelta(hours=3),
         )
     return _Bundle(
         registry=registry,
@@ -769,6 +786,7 @@ def _resolve_for_test(
     bundle: _Bundle,
     *,
     fresh_evidence: tuple[TrustedBenchmarkVerificationEvidence, ...] | None = None,
+    fresh_reasoning_evidence: tuple[TrustedBenchmarkVerificationEvidence, ...] = (),
     **overrides: object,
 ) -> VerifiedProductionQualification:
     """Exercise resolver logic while the fresh-provider boundary is tested separately."""
@@ -796,6 +814,10 @@ def _resolve_for_test(
         patch(
             "mmaudit.models.qualification._freshly_reverify_production_benchmarks",
             return_value=(bundle.benchmark_evidence if fresh_evidence is None else fresh_evidence),
+        ),
+        patch(
+            "mmaudit.models.qualification._freshly_reverify_reasoning_benchmarks",
+            return_value=fresh_reasoning_evidence,
         ),
     ):
         return resolve_verified_production_qualification(**arguments)  # type: ignore[arg-type]
@@ -1008,9 +1030,165 @@ def test_production_reasoning_effort_must_match_measured_qualification_profile()
 
     with pytest.raises(
         ValueError,
-        match=r"differs from production policy|was not measured by the qualification benchmark",
+        match=r"differs from exact production policy",
     ):
         _resolve_for_test(bundle, reasoning_policy=production_policy)
+
+
+def _distinct_profile_policy() -> ReasoningPolicyArtifact:
+    base = _reasoning_policy()
+    controls = {role: base.role_policy(role).control for role in CANONICAL_REASONING_POLICY_ROLES}
+    controls["judge"] = ReasoningControlProfile.build(
+        mode="effort",
+        effort="high",
+        reserved_reasoning_tokens=4_096,
+    )
+    return ReasoningPolicyArtifact.build(controls_by_role=controls)
+
+
+def _supplemental_reasoning_evidence(
+    bundle: _Bundle,
+    *,
+    reasoning_policy: ReasoningPolicyArtifact,
+    configured_policy_role: str = "judge",
+) -> tuple[TrustedBenchmarkVerificationEvidence, ...]:
+    candidates = {candidate.exact_model_id: candidate for candidate in bundle.registry.candidates}
+    primary_by_model = {evidence.exact_model_id: evidence for evidence in bundle.benchmark_evidence}
+    request_role = reasoning_qualification_benchmark_role(
+        qualified_role="judge",
+        configured_policy_role=configured_policy_role,
+    )
+    supplemental: list[TrustedBenchmarkVerificationEvidence] = []
+    for index, model_id in enumerate(sorted(candidates)):
+        candidate = candidates[model_id]
+        primary = primary_by_model[model_id]
+        supplemental.append(
+            _test_trusted_benchmark_evidence(
+                candidate=candidate,
+                report_sha256=_sha(f"reasoning-report-{model_id}-{request_role}"),
+                corpus_sha256=primary.benchmark_corpus_sha256,
+                ground_truth_sha256=primary.benchmark_ground_truth_sha256,
+                prompt_sha256=primary.prompt_sha256,
+                response_schema_sha256=primary.response_schema_sha256,
+                parsed_responses_sha256=_sha(f"reasoning-parsed-{model_id}-{request_role}"),
+                case_ids=primary.case_ids,
+                usage_records=(
+                    _usage_record(
+                        candidate=candidate,
+                        role=request_role,
+                        request_id=f"reasoning-benchmark-{index}-{configured_policy_role}",
+                        reasoning_policy=reasoning_policy,
+                        observed_reasoning_tokens=5,
+                    ),
+                ),
+                dimensions=primary.dimensions,
+            )
+        )
+    return tuple(supplemental)
+
+
+def test_distinct_reasoning_profiles_require_real_distinct_benchmark_evidence() -> None:
+    reasoning_policy = _distinct_profile_policy()
+    bundle = _bundle(reasoning_policy=reasoning_policy)
+    supplemental = _supplemental_reasoning_evidence(
+        bundle,
+        reasoning_policy=reasoning_policy,
+    )
+
+    capability = _resolve_for_test(
+        bundle,
+        reasoning_policy=reasoning_policy,
+        fresh_reasoning_evidence=supplemental,
+    )
+
+    supplemental_by_model = {item.exact_model_id: item for item in supplemental}
+    for model in capability.models:
+        primary = next(
+            item
+            for item in bundle.benchmark_evidence
+            if item.exact_model_id == model.exact_model_id
+        )
+        judge_bindings = tuple(
+            binding
+            for binding in model.reasoning_bindings
+            if binding.configured_policy_role == "judge"
+        )
+        assert judge_bindings
+        assert all(
+            binding.reasoning_benchmark_report_sha256
+            == supplemental_by_model[model.exact_model_id].benchmark_report_sha256
+            and binding.reasoning_benchmark_verification_sha256
+            == supplemental_by_model[model.exact_model_id].stable_measurement_sha256
+            and binding.reasoning_benchmark_fresh_evidence_sha256
+            == supplemental_by_model[model.exact_model_id].fresh_evidence_sha256
+            for binding in judge_bindings
+        )
+        assert all(
+            binding.reasoning_benchmark_report_sha256 == primary.benchmark_report_sha256
+            for binding in model.reasoning_bindings
+            if binding.configured_policy_role != "judge"
+        )
+
+
+def test_distinct_reasoning_profiles_reject_missing_or_mismatched_evidence() -> None:
+    reasoning_policy = _distinct_profile_policy()
+    bundle = _bundle(reasoning_policy=reasoning_policy)
+    supplemental = _supplemental_reasoning_evidence(
+        bundle,
+        reasoning_policy=reasoning_policy,
+    )
+
+    with pytest.raises(ValueError, match="supplemental reasoning benchmark set differs"):
+        _resolve_for_test(bundle, reasoning_policy=reasoning_policy)
+    with pytest.raises(ValueError, match="supplemental reasoning benchmark set differs"):
+        _resolve_for_test(
+            bundle,
+            reasoning_policy=reasoning_policy,
+            fresh_reasoning_evidence=supplemental[:-1],
+        )
+
+    wrong_policy = ReasoningPolicyArtifact.build(
+        controls_by_role={
+            role: (
+                ReasoningControlProfile.build(
+                    mode="effort",
+                    effort="medium",
+                    reserved_reasoning_tokens=2_048,
+                )
+                if role == "judge"
+                else _reasoning_policy().role_policy(role).control
+            )
+            for role in CANONICAL_REASONING_POLICY_ROLES
+        }
+    )
+    mismatched = _supplemental_reasoning_evidence(
+        bundle,
+        reasoning_policy=wrong_policy,
+    )
+    with pytest.raises(ValueError, match="differs from exact production policy"):
+        _resolve_for_test(
+            bundle,
+            reasoning_policy=reasoning_policy,
+            fresh_reasoning_evidence=mismatched,
+        )
+
+
+def test_active_reasoning_qualification_requires_positive_observed_compute() -> None:
+    active_none = ReasoningControlProfile.build(
+        mode="effort",
+        effort="none",
+        reserved_reasoning_tokens=0,
+    )
+    active_policy = ReasoningPolicyArtifact.build(
+        controls_by_role={role: active_none for role in CANONICAL_REASONING_POLICY_ROLES}
+    )
+    bundle = _bundle(
+        reasoning_policy=active_policy,
+        observed_reasoning_tokens=0,
+    )
+
+    with pytest.raises(ValueError, match="positive observable active reasoning accounting"):
+        _resolve_for_test(bundle, reasoning_policy=active_policy)
 
 
 def test_verified_production_capability_records_fresh_full_benchmark_evidence() -> None:
@@ -1913,6 +2091,7 @@ def test_candidate_registry_rejects_mixed_discovery_run_provenance() -> None:
 
 def _production_evidence(bundle: _Bundle):
     assert bundle.selection is not None
+    production_qualification = _resolve_for_test(bundle)
     candidates = {candidate.exact_model_id: candidate for candidate in bundle.registry.candidates}
     records: list[UsageRecord] = []
     specialist_request_ids: list[str] = []
@@ -1972,16 +2151,47 @@ def _production_evidence(bundle: _Bundle):
         ),
     )
     return (
-        tuple(_bind_ensemble_usage(bundle, record) for record in records),
+        tuple(
+            _bind_ensemble_usage(
+                bundle,
+                record,
+                production_qualification=production_qualification,
+            )
+            for record in records
+        ),
         critical,
         ("candidate-high",),
         falsifier,
     )
 
 
-def _bind_ensemble_usage(bundle: _Bundle, record: UsageRecord) -> UsageRecord:
+def _bind_ensemble_usage(
+    bundle: _Bundle,
+    record: UsageRecord,
+    *,
+    production_qualification: VerifiedProductionQualification | None = None,
+) -> UsageRecord:
     assert bundle.selection is not None
     assert bundle.selection_verification is not None
+    if production_qualification is None:
+        production_qualification = _resolve_for_test(bundle)
+    qualified_model = production_qualification.model_for(
+        record.requested_model,
+        now=_NOW + timedelta(hours=3),
+    )
+    resolution = resolve_reasoning_request_role(record.role)
+    reasoning_binding = next(
+        binding
+        for binding in qualified_model.reasoning_bindings
+        if binding.qualified_role == resolution.qualification_role
+        and binding.configured_policy_role == resolution.configured_policy_role
+    )
+    reasoning_plan = ReasoningRequestPlanEvidence.build(
+        request_role=record.role,
+        policy=_reasoning_policy(),
+        endpoint_capability_sha256=(reasoning_binding.endpoint_reasoning_capability_sha256),
+        qualification_binding_sha256=reasoning_binding.binding_sha256,
+    )
     selected = next(
         model for model in bundle.selection.models if model.exact_model_id == record.requested_model
     )
@@ -1991,10 +2201,23 @@ def _bind_ensemble_usage(bundle: _Bundle, record: UsageRecord) -> UsageRecord:
         if result.exact_model_id == record.requested_model
     )
     assert result.expires_at is not None
+    routing = {
+        key: value
+        for key, value in record.routing.items()
+        if key
+        not in {
+            "request_token_plan",
+            "request_token_plan_sha256",
+            "atomic_token_reservations",
+            "atomic_token_reservation_sha256s",
+            "atomic_token_reservation",
+            "atomic_token_reservation_sha256",
+        }
+    }
     rebound = record.model_copy(
         update={
             "routing": {
-                **record.routing,
+                **routing,
                 "qualified_exact_model_id": selected.exact_model_id,
                 "qualified_canonical_model_slug": selected.canonical_model_slug,
                 "qualified_root_lineage": selected.root_lineage,
@@ -2019,7 +2242,11 @@ def _bind_ensemble_usage(bundle: _Bundle, record: UsageRecord) -> UsageRecord:
             }
         }
     )
-    return reattest_synthetic_real_usage(rebound)
+    return bind_synthetic_usage_identity(
+        rebound,
+        reasoning_plan=reasoning_plan,
+        observed_reasoning_tokens=0,
+    )
 
 
 def _evaluate(bundle: _Bundle, **updates):
@@ -2031,6 +2258,7 @@ def _evaluate(bundle: _Bundle, **updates):
         "qualification_verification": bundle.verification,
         "selection": bundle.selection,
         "selection_verification": bundle.selection_verification,
+        "production_qualification": _resolve_for_test(bundle),
         "usage_records": records,
         "critical_surface_evidence": critical,
         "required_high_critical_candidate_ids": candidates,
@@ -2052,6 +2280,76 @@ def test_certified_ensemble_enforces_all_six_runtime_minima() -> None:
     assert len(evaluation.specialist_responsibilities) == 24
     assert len(evaluation.critical_surface_lineages["surface-critical"]) == 3
     assert len(evaluation.falsifier_candidate_lineages["candidate-high"]) == 2
+
+
+def test_certified_ensemble_requires_exact_opaque_reasoning_authority() -> None:
+    bundle = _bundle()
+    records, _critical, _candidates, _falsifier = _production_evidence(bundle)
+    original = records[0]
+    qualified = _resolve_for_test(bundle)
+    model = qualified.model_for(
+        original.requested_model,
+        now=_NOW + timedelta(hours=3),
+    )
+    resolution = resolve_reasoning_request_role(original.role)
+    binding = next(
+        item
+        for item in model.reasoning_bindings
+        if item.qualified_role == resolution.qualification_role
+        and item.configured_policy_role == resolution.configured_policy_role
+    )
+    wrong_plan = ReasoningRequestPlanEvidence.build(
+        request_role=original.role,
+        policy=_reasoning_policy(),
+        endpoint_capability_sha256=binding.endpoint_reasoning_capability_sha256,
+        qualification_binding_sha256=_sha("wrong-reasoning-qualification-binding"),
+    )
+    routing = {
+        key: value
+        for key, value in original.routing.items()
+        if key
+        not in {
+            "request_token_plan",
+            "request_token_plan_sha256",
+            "atomic_token_reservations",
+            "atomic_token_reservation_sha256s",
+            "atomic_token_reservation",
+            "atomic_token_reservation_sha256",
+        }
+    }
+    unbound = bind_synthetic_usage_identity(
+        original.model_copy(
+            update={
+                "routing": routing,
+                "reasoning_evidence": None,
+                "reasoning_tokens": 0,
+            }
+        ),
+        reasoning_plan=wrong_plan,
+        observed_reasoning_tokens=0,
+    )
+    invalid_records = tuple(
+        unbound if record.request_id == original.request_id else record for record in records
+    )
+
+    evaluation = _evaluate(bundle, usage_records=invalid_records)
+
+    assert not evaluation.passed
+    assert "access_control" not in evaluation.specialist_responsibilities
+
+
+def test_certified_ensemble_rejects_different_opaque_release_chain() -> None:
+    bundle = _bundle()
+    different = _resolve_for_test(
+        bundle,
+        production_effective_config_sha256=_sha("different-production-config"),
+    )
+
+    evaluation = _evaluate(bundle, production_qualification=different)
+
+    assert not evaluation.passed
+    assert "verified production qualification binds a different release chain" in evaluation.errors
+    assert evaluation.exact_model_ids == ()
 
 
 @pytest.mark.parametrize(

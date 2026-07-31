@@ -870,6 +870,20 @@ are invisible to source review by construction.
   independently enforced positive observation or provider attestation; and the candidate benchmark
   still measures only one `model_benchmark` profile. Deliberately different production profiles
   fail closed rather than inheriting that measurement.
+- **2026-07-31 travel pause boundary:** The recorded transport, ensemble, maximum-assurance,
+  manifest, and verify-run gaps above are now closed provider-free. REAL post-qualification
+  transport requires one exact opaque, policy-, endpoint-, role-, profile-, and
+  qualification-bound reasoning plan; strict request-shape identity compares the exact sealed
+  payload. Ensemble, assurance, emitted manifests, and verification-only replay consume or
+  structurally validate the corresponding authority without promoting serialized hashes.
+  Qualification now requires a fresh, non-reused, full-corpus supplemental benchmark for every
+  distinct production reasoning profile not covered by the primary benchmark and binds each
+  route to its report, verification, and fresh-generation evidence hashes. The joined focused
+  matrix passed `398` tests and the maximum-assurance pipeline regression passed.
+  The remaining code integration is to extend the qualification workflow generation-refetch and
+  candidate-campaign path to execute and authenticate those supplemental profile reports in one
+  live campaign. Until that path and the complete suite are validated, this ticket remains
+  `PARTIAL`; no real model call or qualification claim was made in this slice.
 
 ## V3-RETRIEVAL-001 — Bounded read-only retrieval loop
 

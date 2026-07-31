@@ -24,6 +24,7 @@ from mmaudit.models.openrouter import (
     structured_output_prompt_sha256,
 )
 from mmaudit.models.output_modes import StructuredOutputMode
+from mmaudit.models.reasoning import ReasoningPolicyError, resolve_reasoning_request_role
 from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     StrictModel,
@@ -480,6 +481,20 @@ class ModelBenchmarkResponse(StrictModel):
 class ModelBenchmarkTarget(StrictModel):
     model_id: str = Field(pattern=_MODEL_PATTERN, max_length=300)
     root_lineage: str | None = Field(default=None, pattern=_LINEAGE_PATTERN)
+    request_role: str = Field(default="model_benchmark", min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def request_role_is_a_closed_prequalification_route(self) -> ModelBenchmarkTarget:
+        try:
+            resolution = resolve_reasoning_request_role(self.request_role)
+        except ReasoningPolicyError as exc:
+            raise ValueError("model benchmark request role is invalid") from exc
+        if resolution.mapping_kind not in {
+            "prequalification_benchmark",
+            "prequalification_role_benchmark",
+        }:
+            raise ValueError("model benchmark request role is not a prequalification route")
+        return self
 
 
 class ModelBenchmarkProviderResult(StrictModel):
@@ -523,7 +538,7 @@ class OpenRouterModelBenchmarkProvider:
         before = len(self.client.usage.records)
         try:
             response = await self.client.complete(
-                role="model_benchmark",
+                role=target.request_role,
                 models=[target.model_id],
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
@@ -722,7 +737,10 @@ class ModelBenchmarkModelResult(StrictModel):
             record = case.usage_record
             if record is None:
                 continue
-            if record.role != "model_benchmark" or record.requested_model != self.target.model_id:
+            if (
+                record.role != self.target.request_role
+                or record.requested_model != self.target.model_id
+            ):
                 raise ValueError("model benchmark usage is not bound to its target")
             if case.error_kind is None and not _is_structurally_creditable_usage_record(
                 record,
@@ -1376,7 +1394,7 @@ def _successful_usage_error(
     evidence = record.execution_evidence
     if evidence not in {ExecutionEvidenceKind.REAL, ExecutionEvidenceKind.MOCK}:
         return "UsageProvenanceError"
-    if record.role != "model_benchmark" or record.requested_model != target.model_id:
+    if record.role != target.request_role or record.requested_model != target.model_id:
         return "UsageTargetBindingError"
     if record.validated_response_sha256 != _validated_response_sha256(response):
         return "UsageResponseBindingError"

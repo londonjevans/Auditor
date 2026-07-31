@@ -13,20 +13,25 @@ from mmaudit.cli import app
 from mmaudit.config import (
     _AUDIT_OVERRIDE_PATHS,
     _AUDIT_OVERRIDE_VALUE_TYPES,
+    AuditConfig,
     AuditConfigOverride,
     AuditConfigOverrides,
     AuditRunOptions,
     LoadedAuditConfig,
 )
 from mmaudit.constants import ExitCode
+from mmaudit.models.qualification import VerifiedProductionQualification
 from mmaudit.models.reasoning import (
     ReasoningExecutionEvidence,
     ReasoningRequestPlanEvidence,
+    resolve_reasoning_request_role,
 )
 from mmaudit.models.registry import ModelRegistry
 from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.schemas import (
     AuditReport,
+    ExecutionEvidenceKind,
+    ModelRequestValidationStatus,
     RepositoryDifferentialRunStatus,
     RepositoryFile,
     RepositoryForkRpcPrivacyEvidence,
@@ -48,6 +53,7 @@ from mmaudit.orchestration.manifest import (
     canonical_sha256,
     collect_run_artifacts,
     load_run_evidence_manifest,
+    rebuild_run_evidence_manifest_for_verification,
     seal_run_evidence_manifest,
     validate_manifest_artifacts,
     write_run_evidence_manifest,
@@ -59,7 +65,8 @@ from mmaudit.orchestration.verification import (
     RunVerificationStatus,
     verify_run_evidence,
 )
-from tests.identity_fixtures import synthetic_token_plan_routing
+from tests.identity_fixtures import bind_synthetic_usage_identity, synthetic_token_plan_routing
+from tests.output_evidence_fixtures import synthetic_structured_output_routing
 from tests.unit.test_model_registry import _verified_production_config_and_capability
 
 runner = CliRunner()
@@ -116,6 +123,164 @@ def _report(config) -> AuditReport:
                 "run_options_sha256": run_options.stable_hash(),
             },
         },
+    )
+
+
+def _qualified_reasoning_usage(
+    config: AuditConfig,
+    qualification: VerifiedProductionQualification,
+    *,
+    observed_at: datetime,
+    role: str = "source_audit",
+) -> UsageRecord:
+    """Build one synthetic request with the complete opaque qualification projection."""
+
+    policy = build_reasoning_policy(config)
+    resolution = resolve_reasoning_request_role(role)
+    model_id = config.models.role(role).primary
+    model = qualification.model_for(model_id, now=observed_at)
+    matching_routes = tuple(
+        route
+        for route in model.reasoning_bindings
+        if route.qualified_role == resolution.qualification_role
+        and route.configured_policy_role == resolution.configured_policy_role
+    )
+    assert len(matching_routes) == 1
+    route = matching_routes[0]
+    reasoning_plan = ReasoningRequestPlanEvidence.build(
+        request_role=role,
+        policy=policy,
+        endpoint_capability_sha256=route.endpoint_reasoning_capability_sha256,
+        qualification_binding_sha256=route.binding_sha256,
+    )
+    request_id = "request-qualified-reasoning-manifest"
+    generation_id = "generation-qualified-reasoning-manifest"
+    started_at = observed_at
+    ended_at = observed_at.replace(second=min(59, observed_at.second + 1))
+    prompt_sha256 = "c" * 64
+    request_body_sha256 = "d" * 64
+    response_sha256 = "e" * 64
+    validated_response_sha256 = "f" * 64
+    schema_sha256 = "1" * 64
+    provider_policy_sha256 = "2" * 64
+    observed_reasoning_tokens = 0 if reasoning_plan.control_profile.mode == "disabled" else 1
+    routing: dict[str, object] = {
+        "generation_id": generation_id,
+        "selected_model": model.canonical_model_slug,
+        "canonical_model": model.canonical_model_slug,
+        "selected_provider_endpoint": model.approved_provider_endpoint,
+        "selected_provider_name": model.approved_provider_name,
+        "router_strategy": "direct",
+        "router_attempt": 1,
+        "router_attempt_count": 1,
+        "router_pipeline": [],
+        "finish_reason": "stop",
+        "schema_sha256": schema_sha256,
+        "router_metadata_sha256": "3" * 64,
+        "provider_policy_sha256": provider_policy_sha256,
+        "provider_fallbacks_allowed": False,
+        "certification_request": True,
+        "endpoint_snapshot_sha256": model.endpoint_snapshot_sha256,
+        "output_capability_sha256": model.output_capability_sha256,
+        "endpoint_pricing_sha256": model.pricing_snapshot_sha256,
+        "model_metadata_snapshot_sha256": model.model_metadata_snapshot_sha256,
+        "catalog_identity_binding_sha256": canonical_sha256(
+            {
+                "canonical_slug": model.canonical_model_slug,
+                "id": model.exact_model_id,
+            }
+        ),
+        "catalog_snapshot_sha256": "4" * 64,
+        "discovery_provenance_sha256": "5" * 64,
+        "discovery_evidence_sha256": "6" * 64,
+        "validation_status": "valid",
+        "zdr_requested": True,
+        "data_collection": "deny",
+        "repair_used": False,
+        "repair_request": False,
+        "request_started_at": started_at.isoformat(),
+        "request_ended_at": ended_at.isoformat(),
+        "latency_ms": 1_000,
+        "structured_output": synthetic_structured_output_routing(
+            configured_provider_endpoints=(model.approved_provider_endpoint,),
+            selected_provider_endpoint=model.approved_provider_endpoint,
+            endpoint_snapshot_sha256=model.endpoint_snapshot_sha256,
+            output_capability_sha256=model.output_capability_sha256,
+            prompt_sha256=prompt_sha256,
+            request_body_sha256=request_body_sha256,
+            provider_policy_sha256=provider_policy_sha256,
+            schema_sha256=schema_sha256,
+            original_response_sha256=response_sha256,
+            validated_response_sha256=validated_response_sha256,
+            mode=model.structured_output_mode,
+            reasoning_requested=reasoning_plan.control_profile.mode != "disabled",
+        ),
+        "qualified_exact_model_id": model.exact_model_id,
+        "qualified_canonical_model_slug": model.canonical_model_slug,
+        "qualified_root_lineage": model.root_lineage,
+        "qualified_provider_endpoint": model.approved_provider_endpoint,
+        "qualified_provider_name": model.approved_provider_name,
+        "qualified_endpoint_snapshot_sha256": model.endpoint_snapshot_sha256,
+        "qualified_output_capability_sha256": model.output_capability_sha256,
+        "qualified_structured_output_mode": model.structured_output_mode.value,
+        "qualified_model_metadata_snapshot_sha256": model.model_metadata_snapshot_sha256,
+        "qualified_pricing_snapshot_sha256": model.pricing_snapshot_sha256,
+        "qualified_roles": list(model.approved_roles),
+        "qualification_verified_at": qualification.verified_at.isoformat(),
+        "qualification_expires_at": model.expires_at.isoformat(),
+        "qualification_artifact_sha256": qualification.artifact_sha256,
+        "qualification_verification_sha256": (qualification.qualification_verification_sha256),
+        "production_selection_sha256": qualification.production_selection_sha256,
+        "selection_verification_sha256": qualification.selection_verification_sha256,
+        "qualification_result_sha256": model.qualification_result_sha256,
+        "benchmark_report_sha256": model.benchmark_report_sha256,
+        "qualified_reasoning_binding_sha256": [
+            binding.binding_sha256 for binding in model.reasoning_bindings
+        ],
+    }
+    provisional = UsageRecord(
+        request_id=request_id,
+        role=role,
+        execution_evidence=ExecutionEvidenceKind.REAL,
+        requested_model=model.exact_model_id,
+        returned_model=model.canonical_model_slug,
+        actual_model=model.canonical_model_slug,
+        provider=model.approved_provider_name,
+        model_family=model.exact_model_id,
+        timestamp=observed_at,
+        prompt_tokens=10,
+        completion_tokens=10,
+        total_tokens=20,
+        reported_cost_usd=0,
+        accounted_cost_usd=0,
+        routing=routing,
+        prompt_sha256=prompt_sha256,
+        response_sha256=response_sha256,
+        validated_response_sha256=validated_response_sha256,
+        request_body_sha256=request_body_sha256,
+        schema_sha256=schema_sha256,
+        openrouter_generation_id=generation_id,
+        configured_provider_endpoints=[model.approved_provider_endpoint],
+        actual_provider_endpoint=model.approved_provider_endpoint,
+        started_at=started_at,
+        ended_at=ended_at,
+        latency_ms=1_000,
+        finish_reason="stop",
+        retry_count=0,
+        validation_status=ModelRequestValidationStatus.VALID,
+        status="success",
+        attempts=1,
+    )
+    return bind_synthetic_usage_identity(
+        provisional,
+        reasoning_plan=reasoning_plan,
+        observed_reasoning_tokens=observed_reasoning_tokens,
+    )
+
+
+def _reseal_qualification_validation(payload: dict[str, object]) -> None:
+    payload["validation_sha256"] = canonical_sha256(
+        {key: value for key, value in payload.items() if key != "validation_sha256"}
     )
 
 
@@ -279,6 +444,69 @@ def _write_verifiable_run(
     return repository, run_dir, manifest, report
 
 
+def _write_qualified_verifiable_run(
+    root: Path,
+) -> tuple[
+    AuditConfig,
+    Path,
+    Path,
+    RunEvidenceManifest,
+    AuditReport,
+]:
+    config, qualification, observed_at = _verified_production_config_and_capability()
+    validation = ModelRegistry.validate_production_qualification(
+        config,
+        qualification,
+        required=True,
+        now=observed_at,
+    )
+    repository = root / "repository"
+    source = repository / "src" / "Vault.sol"
+    source.parent.mkdir(parents=True)
+    source_contents = "contract Vault { function safe() external {} }\n"
+    source.write_text(source_contents, encoding="utf-8")
+    base_report = _report(config)
+    report = base_report.model_copy(
+        update={
+            "repository": base_report.repository.model_copy(
+                update={
+                    "root_name": repository.name,
+                    "files": [
+                        RepositoryFile(
+                            path="src/Vault.sol",
+                            size=len(source_contents.encode("utf-8")),
+                            lines=1,
+                            sha256=hashlib.sha256(source_contents.encode("utf-8")).hexdigest(),
+                            language="Solidity",
+                        )
+                    ],
+                }
+            ),
+            "usage": [
+                _qualified_reasoning_usage(
+                    config,
+                    qualification,
+                    observed_at=observed_at,
+                )
+            ],
+        }
+    )
+    run_dir = root / "run"
+    _write_required_artifacts(run_dir, report)
+    (run_dir / "model-qualification-runtime.json").write_text(
+        json.dumps(validation.as_dict(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    manifest = build_run_evidence_manifest(
+        run_dir=run_dir,
+        report=report,
+        config=config,
+        production_qualification=qualification,
+    )
+    write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", manifest)
+    return config, repository, run_dir, manifest, report
+
+
 def test_manifest_serialization_and_all_required_bindings_are_stable(
     tmp_path: Path,
     config_factory,
@@ -401,7 +629,6 @@ def test_manifest_binds_reasoning_execution_and_rejects_effective_policy_drift(
         request_role="source_audit",
         policy=policy,
         endpoint_capability_sha256="a" * 64,
-        qualification_binding_sha256="b" * 64,
     )
     provisional = UsageRecord(
         request_id="request-reasoning-manifest",
@@ -457,7 +684,7 @@ def test_manifest_binds_reasoning_execution_and_rejects_effective_policy_drift(
         execution.evidence_sha256
     )
     assert bindings["reasoning/capability/request-reasoning-manifest"].sha256 == "a" * 64
-    assert bindings["reasoning/qualification/request-reasoning-manifest"].sha256 == "b" * 64
+    assert "reasoning/qualification/request-reasoning-manifest" not in bindings
 
     changed_config = config_factory(
         models={
@@ -738,9 +965,30 @@ def test_manifest_semantically_binds_runtime_model_qualification(
         run_dir=run_dir,
         report=report,
         config=config,
+        production_qualification=qualification,
     )
 
     model_bindings = {binding.identifier: binding for binding in manifest.bindings.models}
+    assert (
+        model_bindings["qualification/opaque-authority"].sha256 == qualification.capability_sha256
+    )
+    assert (
+        model_bindings["qualification/runtime-validation"].details["authority"] == "opaque_joined"
+    )
+    reasoning_route_bindings = [
+        binding
+        for identifier, binding in model_bindings.items()
+        if identifier.startswith("qualification/reasoning-route/")
+    ]
+    assert len(reasoning_route_bindings) == sum(
+        len(model.reasoning_bindings) for model in qualification.models
+    )
+    assert all(
+        binding.details["authority"] == "opaque_joined" for binding in reasoning_route_bindings
+    )
+    assert {binding.sha256 for binding in reasoning_route_bindings} == {
+        route.binding_sha256 for model in qualification.models for route in model.reasoning_bindings
+    }
     assert model_bindings["qualification/artifact"].sha256 == qualification.artifact_sha256
     assert (
         model_bindings["qualification/production-selection"].sha256
@@ -797,6 +1045,7 @@ def test_manifest_semantically_binds_runtime_model_qualification(
             run_dir=run_dir,
             report=report,
             config=config,
+            production_qualification=qualification,
         )
 
     tampered = validation.as_dict()
@@ -813,6 +1062,173 @@ def test_manifest_semantically_binds_runtime_model_qualification(
             run_dir=run_dir,
             report=report,
             config=config,
+            production_qualification=qualification,
+        )
+
+
+def test_manifest_requires_opaque_authority_before_granting_reasoning_credit() -> None:
+    config, qualification, observed_at = _verified_production_config_and_capability()
+    validation = ModelRegistry.validate_production_qualification(
+        config,
+        qualification,
+        required=True,
+        now=observed_at,
+    )
+    usage = _qualified_reasoning_usage(
+        config,
+        qualification,
+        observed_at=observed_at,
+    )
+    report = _report(config).model_copy(update={"usage": [usage]})
+
+    projection_only = {
+        binding.identifier: binding
+        for binding in _model_bindings(
+            config,
+            _report(config),
+            qualification_runtime=validation.as_dict(),
+        )
+    }
+    assert "qualification/opaque-authority" not in projection_only
+    assert (
+        projection_only["qualification/runtime-validation"].details["authority"]
+        == "serialized_projection_only"
+    )
+    assert all(
+        binding.details["authority"] == "serialized_projection_only"
+        for identifier, binding in projection_only.items()
+        if identifier.startswith("qualification/reasoning-route/")
+    )
+
+    with pytest.raises(ValueError, match="opaque production qualification authority"):
+        _model_bindings(
+            config,
+            report,
+            qualification_runtime=validation.as_dict(),
+        )
+
+    mock_usage = usage.model_copy(update={"execution_evidence": ExecutionEvidenceKind.MOCK})
+    with pytest.raises(ValueError, match="creditable real opaque-authority evidence"):
+        _model_bindings(
+            config,
+            _report(config).model_copy(update={"usage": [mock_usage]}),
+            qualification_runtime=validation.as_dict(),
+            production_qualification=qualification,
+        )
+
+    bindings = {
+        binding.identifier: binding
+        for binding in _model_bindings(
+            config,
+            report,
+            qualification_runtime=validation.as_dict(),
+            production_qualification=qualification,
+        )
+    }
+
+    request_binding = bindings["reasoning/qualification/request-qualified-reasoning-manifest"]
+    assert (
+        request_binding.sha256 == usage.reasoning_evidence.request_plan.qualification_binding_sha256
+    )
+    assert request_binding.details["authority"] == "opaque_production_qualification"
+    assert (
+        request_binding.details["qualification_verification_sha256"]
+        == qualification.qualification_verification_sha256
+    )
+    qualified_route = next(
+        route
+        for route in qualification.model_for(
+            usage.requested_model,
+            now=observed_at,
+        ).reasoning_bindings
+        if route.binding_sha256 == request_binding.sha256
+    )
+    assert request_binding.details["reasoning_benchmark_report_sha256"] == (
+        qualified_route.reasoning_benchmark_report_sha256
+    )
+    assert request_binding.details["reasoning_benchmark_verification_sha256"] == (
+        qualified_route.reasoning_benchmark_verification_sha256
+    )
+    assert request_binding.details["reasoning_benchmark_fresh_evidence_sha256"] == (
+        qualified_route.reasoning_benchmark_fresh_evidence_sha256
+    )
+    assert bindings["qualification/opaque-authority"].sha256 == qualification.capability_sha256
+
+
+def test_manifest_rejects_truncated_serialized_reasoning_route_inventory() -> None:
+    config, qualification, observed_at = _verified_production_config_and_capability()
+    validation = ModelRegistry.validate_production_qualification(
+        config,
+        qualification,
+        required=True,
+        now=observed_at,
+    )
+    usage = _qualified_reasoning_usage(
+        config,
+        qualification,
+        observed_at=observed_at,
+    )
+    report = _report(config).model_copy(update={"usage": [usage]})
+    payload = validation.as_dict()
+    model_bindings = payload["model_bindings"]
+    assert isinstance(model_bindings, list)
+    reasoning_bindings = model_bindings[0]["reasoning_bindings"]
+    assert isinstance(reasoning_bindings, list)
+    reasoning_bindings.pop()
+    _reseal_qualification_validation(payload)
+
+    with pytest.raises(ValueError, match=r"reasoning.*routes|opaque runtime authority"):
+        _model_bindings(
+            config,
+            report,
+            qualification_runtime=payload,
+            production_qualification=qualification,
+        )
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "reasoning_policy_artifact_sha256",
+        "reasoning_policy_role_binding_sha256",
+        "endpoint_reasoning_capability_sha256",
+    ],
+)
+def test_manifest_rejects_resealed_nested_reasoning_authority_tamper(
+    field: str,
+) -> None:
+    config, qualification, observed_at = _verified_production_config_and_capability()
+    validation = ModelRegistry.validate_production_qualification(
+        config,
+        qualification,
+        required=True,
+        now=observed_at,
+    )
+    usage = _qualified_reasoning_usage(
+        config,
+        qualification,
+        observed_at=observed_at,
+    )
+    report = _report(config).model_copy(update={"usage": [usage]})
+    payload = validation.as_dict()
+    model_bindings = payload["model_bindings"]
+    assert isinstance(model_bindings, list)
+    reasoning_bindings = model_bindings[0]["reasoning_bindings"]
+    assert isinstance(reasoning_bindings, list)
+    route = reasoning_bindings[0]
+    assert isinstance(route, dict)
+    route[field] = "f" * 64
+    route["binding_sha256"] = canonical_sha256(
+        {key: value for key, value in route.items() if key != "binding_sha256"}
+    )
+    _reseal_qualification_validation(payload)
+
+    with pytest.raises(ValueError, match="opaque runtime authority"):
+        _model_bindings(
+            config,
+            report,
+            qualification_runtime=payload,
+            production_qualification=qualification,
         )
 
 
@@ -987,6 +1403,144 @@ def test_verify_run_is_current_and_serializes_deterministically(
     tampered["status"] = RunVerificationStatus.STALE
     with pytest.raises(ValidationError, match="inconsistent"):
         RunVerification.model_validate(tampered)
+
+
+def test_verify_run_checks_sealed_qualified_evidence_without_recreating_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "mmaudit.orchestration.manifest.validate_report_privacy_consistency",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "mmaudit.orchestration.manifest._validated_context_manifest",
+        lambda *_args, **_kwargs: None,
+    )
+    config, repository, run_dir, manifest, report = _write_qualified_verifiable_run(tmp_path)
+    observed_manifest = rebuild_run_evidence_manifest_for_verification(
+        run_dir=run_dir,
+        report=report,
+        config=config,
+        sealed_manifest=manifest,
+    )
+    assert observed_manifest.bindings.models == manifest.bindings.models
+    rebuild_errors: list[Exception] = []
+
+    def capture_rebuild_error(**kwargs):
+        try:
+            return rebuild_run_evidence_manifest_for_verification(**kwargs)
+        except Exception as exc:
+            rebuild_errors.append(exc)
+            raise
+
+    monkeypatch.setattr(
+        "mmaudit.orchestration.verification.rebuild_run_evidence_manifest_for_verification",
+        capture_rebuild_error,
+    )
+
+    verification = verify_run_evidence(
+        manifest_path=run_dir / "run-evidence-manifest.json",
+        run_dir=run_dir,
+        repository_root=repository,
+        config=config,
+    )
+
+    assert not rebuild_errors, rebuild_errors
+    assert verification.status is RunVerificationStatus.CURRENT, [
+        (item.category.value, item.identifier, item.kind.value) for item in verification.mismatches
+    ]
+    assert not verification.mismatches
+    assert verification.manifest_sha256 == manifest.manifest_sha256
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    ["usage_projection", "qualification_route", "manifest_authority"],
+)
+def test_verify_run_rejects_resealed_qualified_evidence_tamper(
+    tmp_path: Path,
+    tamper: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "mmaudit.orchestration.manifest.validate_report_privacy_consistency",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "mmaudit.orchestration.manifest._validated_context_manifest",
+        lambda *_args, **_kwargs: None,
+    )
+    config, repository, run_dir, manifest, _ = _write_qualified_verifiable_run(tmp_path)
+    manifest_payload = manifest.model_dump(mode="json")
+
+    if tamper == "usage_projection":
+        report_path = run_dir / "final-findings.json"
+        report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+        report_payload["usage"][0]["routing"]["qualified_provider_name"] = "Changed Provider"
+        report_path.write_text(
+            json.dumps(report_payload, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        artifact_name = report_path.name
+    elif tamper == "qualification_route":
+        qualification_path = run_dir / "model-qualification-runtime.json"
+        qualification_payload = json.loads(qualification_path.read_text(encoding="utf-8"))
+        route = qualification_payload["model_bindings"][0]["reasoning_bindings"][0]
+        route["reasoning_benchmark_report_sha256"] = "9" * 64
+        route["binding_sha256"] = canonical_sha256(
+            {key: value for key, value in route.items() if key != "binding_sha256"}
+        )
+        qualification_payload["validation_sha256"] = canonical_sha256(
+            {
+                key: value
+                for key, value in qualification_payload.items()
+                if key != "validation_sha256"
+            }
+        )
+        qualification_path.write_text(
+            json.dumps(qualification_payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        artifact_name = qualification_path.name
+    else:
+        opaque = next(
+            binding
+            for binding in manifest_payload["bindings"]["models"]
+            if binding["identifier"] == "qualification/opaque-authority"
+        )
+        opaque["sha256"] = "8" * 64
+        artifact_name = None
+
+    if artifact_name is not None:
+        artifact_path = run_dir / artifact_name
+        artifact_bytes = artifact_path.read_bytes()
+        artifact = next(
+            binding for binding in manifest_payload["artifacts"] if binding["path"] == artifact_name
+        )
+        artifact["sha256"] = hashlib.sha256(artifact_bytes).hexdigest()
+        artifact["size"] = len(artifact_bytes)
+    manifest_payload["manifest_sha256"] = canonical_sha256(
+        {key: value for key, value in manifest_payload.items() if key != "manifest_sha256"}
+    )
+    write_run_evidence_manifest(
+        run_dir / "run-evidence-manifest.json",
+        RunEvidenceManifest.model_validate(manifest_payload),
+    )
+
+    verification = verify_run_evidence(
+        manifest_path=run_dir / "run-evidence-manifest.json",
+        run_dir=run_dir,
+        repository_root=repository,
+        config=config,
+    )
+
+    assert verification.status is RunVerificationStatus.STALE
+    assert any(
+        mismatch.identifier == "bindings/recalculation"
+        or mismatch.category is RunVerificationCategory.MODEL
+        for mismatch in verification.mismatches
+    )
 
 
 def test_verify_run_rejects_report_configuration_identity_resealed_into_manifest(

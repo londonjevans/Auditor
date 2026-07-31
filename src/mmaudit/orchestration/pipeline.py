@@ -4523,6 +4523,9 @@ class AuditPipeline:
             environment_overrides=self.environment_overrides,
             cli_overrides=self.cli_overrides,
             run_options=run_options,
+            production_qualification=(
+                self.production_qualification if not run_options.scanner_only else None
+            ),
         )
         write_run_evidence_manifest(
             run_dir / "run-evidence-manifest.json",
@@ -4691,6 +4694,13 @@ def _openrouter_qualification_routing(
                     ),
                     endpoint_reasoning_capability_sha256=(
                         binding.endpoint_reasoning_capability_sha256
+                    ),
+                    reasoning_benchmark_report_sha256=(binding.reasoning_benchmark_report_sha256),
+                    reasoning_benchmark_verification_sha256=(
+                        binding.reasoning_benchmark_verification_sha256
+                    ),
+                    reasoning_benchmark_fresh_evidence_sha256=(
+                        binding.reasoning_benchmark_fresh_evidence_sha256
                     ),
                     qualification_report_sha256=binding.qualification_report_sha256,
                     qualification_result_sha256=binding.qualification_result_sha256,

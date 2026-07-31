@@ -228,7 +228,7 @@ def _mock_usage_record(
     validated_response_sha256 = model_benchmark_module._validated_response_sha256(response)
     record = UsageRecord(
         request_id=f"request-{target_slug}-{case_id}",
-        role="model_benchmark",
+        role=target.request_role,
         execution_evidence=ExecutionEvidenceKind.MOCK,
         requested_model=target.model_id,
         returned_model=target.model_id,
@@ -454,6 +454,49 @@ async def test_fake_provider_scores_all_dimensions_deterministically() -> None:
         "expectation" not in request and "dimensions" not in request
         for request in first_provider.requests
     )
+
+
+@pytest.mark.asyncio
+async def test_benchmark_can_measure_one_exact_production_reasoning_route() -> None:
+    target = ModelBenchmarkTarget(
+        model_id=TARGET.model_id,
+        root_lineage=TARGET.root_lineage,
+        request_role="model_benchmark:falsifier:verifier",
+    )
+    provider = DeterministicModelBenchmarkProvider(targets=(target,))
+
+    report = await run_model_benchmark(
+        corpus=load_model_benchmark_corpus(CORPUS_PATH),
+        targets=[target],
+        provider=provider,
+    )
+
+    assert report.results[0].target.request_role == target.request_role
+    assert {
+        case.usage_record.role for case in report.results[0].cases if case.usage_record is not None
+    } == {target.request_role}
+    verify_model_benchmark_report(
+        report,
+        corpus=load_model_benchmark_corpus(CORPUS_PATH),
+        require_real=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "request_role",
+    [
+        "judge",
+        "model_benchmark:falsifier:judge",
+        "model_benchmark:unknown:source_audit",
+    ],
+)
+def test_benchmark_target_rejects_nonqualification_request_role(request_role: str) -> None:
+    with pytest.raises(ValidationError, match=r"prequalification|invalid"):
+        ModelBenchmarkTarget(
+            model_id=TARGET.model_id,
+            root_lineage=TARGET.root_lineage,
+            request_role=request_role,
+        )
 
 
 @pytest.mark.asyncio

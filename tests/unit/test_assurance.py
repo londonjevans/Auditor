@@ -26,7 +26,18 @@ from mmaudit.constants import (
     SPECIALIST_INVESTIGATOR_ROLES,
 )
 from mmaudit.models.output_modes import StructuredOutputMode
-from mmaudit.models.qualification import VerifiedProductionQualification
+from mmaudit.models.qualification import (
+    QualifiedReasoningRoleBinding,
+    VerifiedProductionQualification,
+    VerifiedTierAModelQualification,
+)
+from mmaudit.models.reasoning import (
+    ReasoningControlProfile,
+    ReasoningExecutionEvidence,
+    ReasoningPolicyArtifact,
+    ReasoningRequestPlanEvidence,
+    resolve_reasoning_request_role,
+)
 from mmaudit.models.schemas import (
     AnalysisState,
     AuditProfile,
@@ -124,6 +135,7 @@ from mmaudit.orchestration.assurance import (
     AssuranceRuntime,
     MaximumAssuranceContract,
     ProviderSessionProvenance,
+    _is_real_model_usage,
     _issue_provider_session_provenance,
     is_qualifying_real_foundry_portfolio,
     is_qualifying_real_scanner_run,
@@ -189,11 +201,107 @@ def _bind_usage_to_qualification(
             }
         }
     )
-    return _with_output_evidence(
+    output_bound = _with_output_evidence(
         rebound,
         endpoint_snapshot_sha256=model.endpoint_snapshot_sha256,
         output_capability_sha256=model.output_capability_sha256,
         mode=model.structured_output_mode,
+    )
+    binding = _reasoning_binding_for_usage(output_bound, model)
+    policy = _reasoning_policy_for_model(model)
+    assert policy.artifact_sha256 == binding.reasoning_policy_artifact_sha256
+    plan = ReasoningRequestPlanEvidence.build(
+        request_role=output_bound.role,
+        policy=policy,
+        endpoint_capability_sha256=binding.endpoint_reasoning_capability_sha256,
+        qualification_binding_sha256=binding.binding_sha256,
+    )
+    active = plan.control_profile.mode != "disabled" and not (
+        plan.control_profile.mode == "effort" and plan.control_profile.effort == "none"
+    )
+    return _with_reasoning_plan(
+        output_bound,
+        plan,
+        observed_reasoning_tokens=1 if active else 0,
+    )
+
+
+def _reasoning_policy_for_model(
+    model: VerifiedTierAModelQualification,
+) -> ReasoningPolicyArtifact:
+    controls_by_role: dict[str, ReasoningControlProfile] = {}
+    for candidate in model.reasoning_bindings:
+        prior = controls_by_role.setdefault(
+            candidate.configured_policy_role,
+            candidate.control_profile,
+        )
+        assert prior == candidate.control_profile
+    return ReasoningPolicyArtifact.build(controls_by_role=controls_by_role)
+
+
+def _reasoning_binding_for_usage(
+    record: UsageRecord,
+    model: VerifiedTierAModelQualification,
+) -> QualifiedReasoningRoleBinding:
+    resolution = resolve_reasoning_request_role(record.role)
+    bindings = tuple(
+        binding
+        for binding in model.reasoning_bindings
+        if binding.qualified_role == resolution.qualification_role
+        and binding.configured_policy_role == resolution.configured_policy_role
+    )
+    assert len(bindings) == 1
+    return bindings[0]
+
+
+def _with_reasoning_plan(
+    record: UsageRecord,
+    plan: ReasoningRequestPlanEvidence,
+    *,
+    observed_reasoning_tokens: int | None,
+) -> UsageRecord:
+    routing = dict(record.routing)
+    for field in (
+        "request_token_plan",
+        "request_token_plan_sha256",
+        "atomic_token_reservations",
+        "atomic_token_reservation_sha256s",
+        "atomic_token_reservation",
+        "atomic_token_reservation_sha256",
+    ):
+        routing.pop(field, None)
+    bound = bind_synthetic_usage_identity(
+        record.model_copy(
+            update={
+                "routing": routing,
+                "reasoning_evidence": None,
+                "reasoning_tokens": 0,
+            }
+        ),
+        reasoning_plan=plan,
+        observed_reasoning_tokens=(
+            observed_reasoning_tokens if observed_reasoning_tokens is not None else 0
+        ),
+    )
+    if observed_reasoning_tokens is not None:
+        return bound
+    assert bound.request_body_sha256 is not None
+    token_plan_sha256 = bound.routing["request_token_plan_sha256"]
+    assert isinstance(token_plan_sha256, str)
+    unavailable = ReasoningExecutionEvidence.build(
+        request_plan=plan,
+        observed_reasoning_tokens=None,
+        provider_completion_tokens=bound.completion_tokens,
+        request_token_plan_sha256=token_plan_sha256,
+        request_body_sha256=bound.request_body_sha256,
+    )
+    return reattest_synthetic_real_usage(
+        bound.model_copy(
+            update={
+                "reasoning_evidence": unavailable,
+                "reasoning_tokens": 0,
+            }
+        )
     )
 
 
@@ -228,8 +336,23 @@ def _with_output_evidence(
             mode=mode,
         ),
     }
+    updated = record.model_copy(update={"routing": routing})
+    reasoning = updated.reasoning_evidence
+    if reasoning is not None and reasoning.request_plan.resolution.request_role == updated.role:
+        return _with_reasoning_plan(
+            updated,
+            reasoning.request_plan,
+            observed_reasoning_tokens=reasoning.observed_reasoning_tokens,
+        )
     return bind_synthetic_usage_identity(
-        rebind_synthetic_token_plan(record.model_copy(update={"routing": routing}))
+        rebind_synthetic_token_plan(
+            updated.model_copy(
+                update={
+                    "reasoning_evidence": None,
+                    "reasoning_tokens": 0,
+                }
+            )
+        )
     )
 
 
@@ -245,11 +368,20 @@ def _specialists(*, families: int = 8) -> dict[str, dict[str, object]]:
     }
 
 
-def _maximum_config(config_factory, *, allow_downgrade: bool = False, families: int = 8):
+def _maximum_config(
+    config_factory,
+    *,
+    allow_downgrade: bool = False,
+    families: int = 8,
+    reasoning: dict[str, object] | None = None,
+):
+    models: dict[str, object] = {"specialists": _specialists(families=families)}
+    if reasoning is not None:
+        models["reasoning"] = reasoning
     return config_factory(
         profile=AuditProfile.MAXIMUM_ASSURANCE,
         maximum_assurance={"allow_downgrade": allow_downgrade},
-        models={"specialists": _specialists(families=families)},
+        models=models,
         smart_contracts={
             "solc_version": "0.8.30",
             "solc_sha256": "6" * 64,
@@ -1898,6 +2030,223 @@ def test_each_missing_usage_qualification_join_revokes_surface_credit(
         if requirement.engine == "critical_model_surface_review"
     )
     assert not critical_review.passed
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+def test_public_qualification_hashes_without_reasoning_evidence_receive_no_credit(
+    config_factory,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    original = next(record for record in runtime.model_usage if record.role == "source_audit")
+    unbound = bind_synthetic_usage_identity(
+        rebind_synthetic_token_plan(
+            original.model_copy(
+                update={
+                    "reasoning_evidence": None,
+                    "reasoning_tokens": 0,
+                }
+            )
+        )
+    )
+    assert is_creditable_usage_record(
+        unbound,
+        require_real=True,
+        require_certification=True,
+    )
+    assert not _is_real_model_usage(
+        unbound,
+        config,
+        qualification=runtime.production_qualification,
+        provider_session=runtime.provider_session,
+    )
+
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(
+            runtime,
+            model_usage=[
+                unbound if record.request_id == original.request_id else record
+                for record in runtime.model_usage
+            ],
+        )
+    )
+
+    critical_review = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "critical_model_surface_review"
+    )
+    assert not critical_review.passed
+    assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "policy_artifact",
+        "role_policy_and_control",
+        "endpoint_capability",
+        "qualification_binding",
+        "wrong_role_pair_binding",
+        "other_model_binding",
+    ],
+)
+def test_reasoning_authority_mismatch_revokes_runtime_credit(
+    config_factory,
+    fault: str,
+) -> None:
+    config = _maximum_config(config_factory)
+    runtime = _complete_runtime(config)
+    qualification = runtime.production_qualification
+    assert qualification is not None
+    original = next(record for record in runtime.model_usage if record.role == "source_audit")
+    model = qualification.model_for(
+        original.requested_model,
+        now=datetime.now(UTC).replace(microsecond=0),
+    )
+    binding = _reasoning_binding_for_usage(original, model)
+    policy = _reasoning_policy_for_model(model)
+    request_role = original.role
+    endpoint_capability_sha256 = binding.endpoint_reasoning_capability_sha256
+    qualification_binding_sha256 = binding.binding_sha256
+
+    if fault == "policy_artifact":
+        controls = {item.role: item.control for item in policy.policies}
+        unrelated_role = next(role for role in controls if role != binding.configured_policy_role)
+        controls[unrelated_role] = ReasoningControlProfile.build(
+            mode="effort",
+            effort="none",
+            reserved_reasoning_tokens=0,
+        )
+        policy = ReasoningPolicyArtifact.build(controls_by_role=controls)
+    elif fault == "role_policy_and_control":
+        controls = {item.role: item.control for item in policy.policies}
+        controls[binding.configured_policy_role] = ReasoningControlProfile.build(
+            mode="effort",
+            effort="none",
+            reserved_reasoning_tokens=0,
+        )
+        policy = ReasoningPolicyArtifact.build(controls_by_role=controls)
+    elif fault == "endpoint_capability":
+        endpoint_capability_sha256 = "f" * 64
+    elif fault == "qualification_binding":
+        qualification_binding_sha256 = "f" * 64
+    elif fault == "wrong_role_pair_binding":
+        original = next(record for record in runtime.model_usage if record.role == "falsifier")
+        model = qualification.model_for(
+            original.requested_model,
+            now=datetime.now(UTC).replace(microsecond=0),
+        )
+        policy = _reasoning_policy_for_model(model)
+        resolution = resolve_reasoning_request_role(original.role)
+        wrong_binding = next(
+            candidate
+            for candidate in model.reasoning_bindings
+            if candidate.qualified_role == resolution.qualification_role
+            and candidate.configured_policy_role != resolution.configured_policy_role
+        )
+        request_role = original.role
+        endpoint_capability_sha256 = wrong_binding.endpoint_reasoning_capability_sha256
+        qualification_binding_sha256 = wrong_binding.binding_sha256
+    else:
+        other_model = next(
+            candidate
+            for candidate in qualification.models
+            if candidate.exact_model_id != model.exact_model_id
+        )
+        other_binding = _reasoning_binding_for_usage(original, other_model)
+        endpoint_capability_sha256 = other_binding.endpoint_reasoning_capability_sha256
+        qualification_binding_sha256 = other_binding.binding_sha256
+
+    plan = ReasoningRequestPlanEvidence.build(
+        request_role=request_role,
+        policy=policy,
+        endpoint_capability_sha256=endpoint_capability_sha256,
+        qualification_binding_sha256=qualification_binding_sha256,
+    )
+    mismatched = _with_reasoning_plan(
+        original,
+        plan,
+        observed_reasoning_tokens=0,
+    )
+    assert is_creditable_usage_record(
+        mismatched,
+        require_real=True,
+        require_certification=True,
+    )
+    assert not _is_real_model_usage(
+        mismatched,
+        config,
+        qualification=qualification,
+        provider_session=runtime.provider_session,
+    )
+
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(
+            runtime,
+            model_usage=[
+                mismatched if record.request_id == original.request_id else record
+                for record in runtime.model_usage
+            ],
+        )
+    )
+
+    if fault != "wrong_role_pair_binding":
+        selection_execution = next(
+            requirement
+            for requirement in assessment.requirements
+            if requirement.engine == "qualified_model_selection_execution"
+        )
+        assert not selection_execution.passed
+        assert assessment.status is not MaximumAssuranceStatus.COMPLETE
+
+
+@pytest.mark.parametrize("observed_reasoning_tokens", [0, None])
+def test_active_reasoning_without_positive_observation_receives_no_runtime_credit(
+    config_factory,
+    observed_reasoning_tokens: int | None,
+) -> None:
+    config = _maximum_config(
+        config_factory,
+        reasoning={
+            "effort": "high",
+            "reserved_tokens": 8,
+        },
+    )
+    runtime = _complete_runtime(config)
+    assert (
+        MaximumAssuranceContract(config).evaluate(runtime).status is MaximumAssuranceStatus.COMPLETE
+    )
+    original = next(record for record in runtime.model_usage if record.role == "source_audit")
+    assert original.reasoning_evidence is not None
+    invalid = _with_reasoning_plan(
+        original,
+        original.reasoning_evidence.request_plan,
+        observed_reasoning_tokens=observed_reasoning_tokens,
+    )
+    assert not _is_real_model_usage(
+        invalid,
+        config,
+        qualification=runtime.production_qualification,
+        provider_session=runtime.provider_session,
+    )
+
+    assessment = MaximumAssuranceContract(config).evaluate(
+        replace(
+            runtime,
+            model_usage=[
+                invalid if record.request_id == original.request_id else record
+                for record in runtime.model_usage
+            ],
+        )
+    )
+
+    selection_execution = next(
+        requirement
+        for requirement in assessment.requirements
+        if requirement.engine == "qualified_model_selection_execution"
+    )
+    assert not selection_execution.passed
     assert assessment.status is not MaximumAssuranceStatus.COMPLETE
 
 
