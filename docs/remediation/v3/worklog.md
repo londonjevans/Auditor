@@ -5,12 +5,12 @@ The objective source has SHA-256
 Do not record credentials, raw private prompts, or raw provider completions here.
 
 AUTORUN_STATUS: RUNNING
-CURRENT_MILESTONE: Per-role reasoning effort binding complete
-CURRENT_TICKET: V3-EFFORT-001 (COMPLETE)
+CURRENT_MILESTONE: macOS isolated tool diagnostics
+CURRENT_TICKET: V3-TOOLDIAG-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-EFFORT-001
-NEXT_ACTION: Checkpoint this validated ticket, then mark V3-TOOLDIAG-001 IN_PROGRESS and diagnose resolved toolchain execution under the macOS isolation boundary.
-LAST_COMMAND: `.venv/bin/pytest -q` with approved numeric-loopback capability.
-LAST_RESULT: PASS — 3798 passed and 11 explicit external-engine, compiler, rootless-image, and paid-provider prerequisite skips in 776.53s. No provider, secret, or cost activity occurred.
+NEXT_ACTION: Inspect the current tool resolver, macOS sandbox profile, version capture, scanner result evidence, doctor output, and focused tests; reproduce the three recorded defects locally without weakening isolation.
+LAST_COMMAND: `git commit -m "Complete reasoning profile qualification campaign"`.
+LAST_RESULT: PASS — isolated implementation checkpoint `7dbf5ad916f2ce101888baa37c7f748686712c32` created from the validated V3-EFFORT file set.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 36eff43d3b79637ce193d6a3dff7c8d65fafddac
+LAST_CHECKPOINT_COMMIT: 7dbf5ad916f2ce101888baa37c7f748686712c32
 
 ## 2026-07-31 — V3-EFFORT-001
 
@@ -4808,3 +4808,15 @@ LAST_CHECKPOINT_COMMIT: 36eff43d3b79637ce193d6a3dff7c8d65fafddac
   authority, reasoning-profile qualification, and evidence path. It does not claim that a real
   production ensemble has been qualified; that runtime requirement remains `V3-QUALIFY-001`.
 - **Next ticket:** `V3-TOOLDIAG-001` per the queue's operator-approved macOS priority.
+
+## 2026-08-02 — V3-TOOLDIAG-001
+
+- **Status:** `IN_PROGRESS`.
+- **Defensive objective:** Make supported scanner installations executable under the real macOS
+  isolation backend, distinguish missing tools from isolated-execution/interpreter failures, and
+  prevent raw untrusted version stderr or host paths from entering public reports.
+- **Starting invariant:** Environment scrubbing, network denial, bounded subprocess execution, and
+  fail-closed unavailable results remain mandatory. Read access may be added only for validated
+  prefixes derived from the exact resolved toolchain in use; no unisolated fallback is permitted.
+- **Next safe action:** Map the resolver-to-backend-to-result-to-report flow and reproduce the
+  recorded failure classes with synthetic local executables before implementing the bounded fix.

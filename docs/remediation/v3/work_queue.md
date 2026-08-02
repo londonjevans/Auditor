@@ -1306,7 +1306,11 @@ are invisible to source review by construction.
   `src/mmaudit/reporting/markdown.py`, `src/mmaudit/reporting/json_report.py`,
   `src/mmaudit/cli.py`, scanner-result schema, regressions.
 - **Dependencies:** None; independent of the model and sharding tracks.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
+- **Starting boundary:** Inspect the current resolver, macOS sandbox profile, scanner result
+  schemas, version capture, doctor output, and existing tests before changing behaviour. Preserve
+  environment scrubbing, network denial, and fail-closed execution. Derive any read-only toolchain
+  grants from validated resolved paths; do not hard-code an operator-specific prefix.
 - **Priority note:** Operator approved taking this ahead of remaining Track 1 work on
   2026-07-31. Finish the ticket in progress, then take this one. `src/mmaudit/solidity/
   reproduction.py` and `src/mmaudit/scanners/` were clean at that time.

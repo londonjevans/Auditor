@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-02T05:44:41Z",
-  "candidate_commit": "36eff43d3b79637ce193d6a3dff7c8d65fafddac",
+  "updated_at": "2026-08-02T05:46:31Z",
+  "candidate_commit": "7dbf5ad916f2ce101888baa37c7f748686712c32",
   "autorun_status": "RUNNING",
-  "current_milestone": "per_role_reasoning_effort_binding_complete",
-  "current_ticket": "V3-EFFORT-001 (COMPLETE)",
-  "last_checkpoint_commit": "36eff43d3b79637ce193d6a3dff7c8d65fafddac",
+  "current_milestone": "macos_isolated_tool_diagnostics",
+  "current_ticket": "V3-TOOLDIAG-001 (IN_PROGRESS)",
+  "last_checkpoint_commit": "7dbf5ad916f2ce101888baa37c7f748686712c32",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,
