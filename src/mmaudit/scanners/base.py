@@ -175,6 +175,15 @@ class _ScannerWorkspaceInventory:
 
 
 @dataclass(frozen=True, slots=True)
+class ScannerWorkspaceFileRecord:
+    """Path-safe public projection of one file in the scanner source inventory."""
+
+    relative_path: str
+    sha256: str
+    size: int
+
+
+@dataclass(frozen=True, slots=True)
 class ScannerWorkspaceCopyObservation:
     """Path-free facts observed while retaining both source-root descriptors."""
 
@@ -1254,6 +1263,24 @@ def scanner_workspace_sha256(
     )
     _require_audited_paths_in_inventory(inventory, required_paths)
     return inventory.sha256()
+
+
+def scanner_workspace_file_records(
+    root: Path,
+    private_dir: Path | None = None,
+) -> tuple[ScannerWorkspaceFileRecord, ...]:
+    """Return the exact bounded, no-follow file inventory used by scanner custody."""
+
+    exclusion_root = private_dir if private_dir is not None else root / ".mmaudit"
+    inventory = _build_scanner_workspace_inventory(root, exclusion_root)
+    return tuple(
+        ScannerWorkspaceFileRecord(
+            relative_path=item.relative_path,
+            sha256=item.sha256,
+            size=item.identity.size,
+        )
+        for item in inventory.files
+    )
 
 
 def scanner_workspace_file_sha256(

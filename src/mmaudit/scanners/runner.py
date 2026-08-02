@@ -56,6 +56,10 @@ _PREFLIGHT_FAILURE_DIAGNOSTIC = (
 _REPOSITORY_JAVASCRIPT_ISOLATION_DIAGNOSTIC = (
     "tool requires off-host repository-JavaScript isolation, which is unavailable"
 )
+_HARDHAT_CONTAINER_IDENTITY_DIAGNOSTIC = (
+    "Hardhat repository-JavaScript requires an independently attested image-side "
+    "toolchain; host PATH is not container executable identity"
+)
 _SCANNER_PREFLIGHT_NAME = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 
 
@@ -92,6 +96,20 @@ def preflight_configured_scanner_tools(
         workspace.chmod(0o700)
         _require_private_directory(workspace)
         workspace.resolve(strict=True).relative_to(resolved_private)
+        if isinstance(adapter, HardhatForkScanner):
+            # A host `hardhat` path is not the executable that a digest-pinned image
+            # would run. Generic preflight translates an absolute command to its
+            # basename at the container boundary, so pairing that image response with
+            # the host path would create false identity evidence. Remain unavailable
+            # until a dedicated image-side probe produces process-bound attestation.
+            diagnostics[name] = ScannerExecutablePreflight(
+                state=ScannerExecutableState.PRESENT_ISOLATION_UNEXECUTABLE,
+                resolved_path=None,
+                version=None,
+                failure_kind=ExecutableVersionProbeStatus.ISOLATION_FAILURE,
+                diagnostic=_HARDHAT_CONTAINER_IDENTITY_DIAGNOSTIC,
+            )
+            continue
         candidate = shutil.which(adapter.executable)
         resolved = _resolved_executable(candidate)
         if candidate is not None and resolved is None:

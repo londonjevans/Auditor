@@ -1,0 +1,221 @@
+{
+  "$defs": {
+    "HardhatReporterTestResult": {
+      "additionalProperties": false,
+      "description": "One bounded terminal observation without independent execution credit.",
+      "properties": {
+        "descriptor_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Descriptor Sha256",
+          "type": "string"
+        },
+        "duration_seconds": {
+          "maximum": 1800,
+          "minimum": 0,
+          "title": "Duration Seconds",
+          "type": "number"
+        },
+        "path": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "result_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Result Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/RepositoryTestExecutionStatus"
+        },
+        "suite_name": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Suite Name",
+          "type": "string"
+        },
+        "terminal_detail": {
+          "anyOf": [
+            {
+              "maxLength": 8000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Terminal Detail"
+        },
+        "test_name": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Test Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "descriptor_sha256",
+        "path",
+        "suite_name",
+        "test_name",
+        "status",
+        "duration_seconds",
+        "result_sha256"
+      ],
+      "title": "HardhatReporterTestResult",
+      "type": "object"
+    },
+    "RepositoryTestExecutionStatus": {
+      "description": "Terminal observation for one selected repository-owned test.",
+      "enum": [
+        "passed",
+        "failed",
+        "reverted",
+        "assertion_failed",
+        "skipped",
+        "timed_out",
+        "unavailable",
+        "invalid_output"
+      ],
+      "title": "RepositoryTestExecutionStatus",
+      "type": "string"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/hardhat_reporter_test.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Complete untrusted same-process observation bound to one requested selection.",
+  "properties": {
+    "authorship_claim": {
+      "const": false,
+      "default": false,
+      "title": "Authorship Claim",
+      "type": "boolean"
+    },
+    "block_hash": {
+      "pattern": "^0x[0-9a-f]{64}$",
+      "title": "Block Hash",
+      "type": "string"
+    },
+    "block_number": {
+      "minimum": 0,
+      "title": "Block Number",
+      "type": "integer"
+    },
+    "chain_id": {
+      "minimum": 1,
+      "title": "Chain Id",
+      "type": "integer"
+    },
+    "completed": {
+      "const": true,
+      "default": true,
+      "title": "Completed",
+      "type": "boolean"
+    },
+    "execution_credit": {
+      "const": false,
+      "default": false,
+      "title": "Execution Credit",
+      "type": "boolean"
+    },
+    "fuzz_seed": {
+      "pattern": "^0x[0-9a-f]{64}$",
+      "title": "Fuzz Seed",
+      "type": "string"
+    },
+    "phase": {
+      "const": "test",
+      "default": "test",
+      "title": "Phase",
+      "type": "string"
+    },
+    "provenance": {
+      "const": "untrusted_target_process_observation",
+      "default": "untrusted_target_process_observation",
+      "title": "Provenance",
+      "type": "string"
+    },
+    "report_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Report Sha256",
+      "type": "string"
+    },
+    "reporter_name": {
+      "const": "mmaudit-hardhat-reporter",
+      "default": "mmaudit-hardhat-reporter",
+      "title": "Reporter Name",
+      "type": "string"
+    },
+    "reporter_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Reporter Sha256",
+      "type": "string"
+    },
+    "reporter_version": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Reporter Version",
+      "type": "string"
+    },
+    "repository_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Repository Sha256",
+      "type": "string"
+    },
+    "request_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Request Sha256",
+      "type": "string"
+    },
+    "results": {
+      "items": {
+        "$ref": "#/$defs/HardhatReporterTestResult"
+      },
+      "maxItems": 10000,
+      "minItems": 1,
+      "title": "Results",
+      "type": "array"
+    },
+    "safety_claim": {
+      "const": false,
+      "default": false,
+      "title": "Safety Claim",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "selection_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Selection Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "reporter_version",
+    "reporter_sha256",
+    "request_sha256",
+    "repository_sha256",
+    "selection_sha256",
+    "chain_id",
+    "block_number",
+    "block_hash",
+    "fuzz_seed",
+    "results",
+    "report_sha256"
+  ],
+  "title": "mmaudit Hardhat test observation",
+  "type": "object"
+}

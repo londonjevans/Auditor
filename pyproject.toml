@@ -28,6 +28,7 @@ dev = [
 
 [project.scripts]
 mmaudit = "mmaudit.cli:app"
+mmaudit-hardhat-loopback = "mmaudit.isolation.hardhat_loopback_relay:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mmaudit"]

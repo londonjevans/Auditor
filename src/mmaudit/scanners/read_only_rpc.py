@@ -1,9 +1,10 @@
 """Trusted bounded read-only JSON-RPC bridge for repository fork execution.
 
-The bridge exposes only a fixed Ethereum read vocabulary on an ephemeral loopback
-listener. It never forwards caller headers, unknown methods, signing requests, or
-state-changing RPC methods. Its immutable final snapshot contains counters and
-hashes only: no endpoint, request body, parameter, response body, or port.
+The bridge exposes only a fixed Ethereum read vocabulary on either an ephemeral
+numeric-loopback TCP listener or an owner-only Unix listener in a trusted control-plane
+directory. It never forwards caller headers, unknown methods, signing requests, or
+state-changing RPC methods. Its immutable final snapshot contains counters and hashes
+only: no endpoint, request body, parameter, response body, port, or socket path.
 """
 
 from __future__ import annotations
@@ -11,8 +12,11 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
+import secrets
 import socket
+import stat
 import threading
 import time
 from contextlib import suppress
@@ -20,7 +24,9 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from http.client import HTTPConnection, HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Literal, cast
+from pathlib import Path
+from socketserver import TCPServer
+from typing import Any, Final, Literal, SupportsIndex, cast
 from urllib.parse import urlparse
 
 from mmaudit.scanners.fork_rpc import ForkRpcBindingError, local_fork_rpc_port
@@ -52,6 +58,8 @@ _MAX_RPC_ID_TEXT_LENGTH = 128
 _MAX_RPC_PARAMS = 64
 _MAX_TIMEOUT_SECONDS = 60.0
 _MAX_IDENTITY_RESPONSE_BODY_BYTES = 65_536
+_MAX_UNIX_SOCKET_PATH_BYTES = 100
+_UNIX_LISTENER_POLICY_VERSION = "MMAUDIT_OWNER_ONLY_UNIX_RPC_LISTENER_V1"
 _PINNED_SYMBOLIC_TAGS = frozenset({"latest", "safe", "finalized"})
 _SENSITIVE_INBOUND_HEADERS = frozenset(
     {
@@ -88,7 +96,8 @@ _METHOD_ARITY: dict[str, tuple[int, int]] = {
     "eth_getUncleCountByBlockNumber": (1, 1),
     "net_version": (0, 0),
 }
-_ALLOWED_METHODS = frozenset(_METHOD_ARITY)
+READ_ONLY_RPC_METHODS: Final = frozenset(_METHOD_ARITY)
+_ALLOWED_METHODS = READ_ONLY_RPC_METHODS
 _SYNTHETIC_METHODS = frozenset(
     {
         "eth_blockNumber",
@@ -134,6 +143,273 @@ _BYTE_RESULT_METHODS = frozenset({"eth_call", "eth_getCode"})
 
 class ReadOnlyRpcBridgeError(RuntimeError):
     """The read-only bridge could not be configured or operated safely."""
+
+
+@dataclass(frozen=True)
+class _UnixFilesystemIdentity:
+    device: int
+    inode: int
+    owner_uid: int
+    owner_gid: int
+    mode: int
+    file_type: int
+
+
+@dataclass(frozen=True)
+class ReadOnlyRpcUnixListenerObservation:
+    """Non-authoritative live identities for one owner-only Unix listener.
+
+    This value is intentionally serializable observation material. It grants no
+    execution authority by itself; consumers that need a live capability must
+    additionally retain and revalidate the exact process-local bridge object.
+    """
+
+    socket_path: Path
+    origin_endpoint: str
+    policy_sha256: str
+    state_sha256: str
+    preflight_origin_observation_sha256: str
+    listener_capability_sha256: str
+    socket_identity_sha256: str
+    observation_sha256: str
+    execution_credit: Literal[False] = False
+
+    def __post_init__(self) -> None:
+        hashes = (
+            self.policy_sha256,
+            self.state_sha256,
+            self.preflight_origin_observation_sha256,
+            self.listener_capability_sha256,
+            self.socket_identity_sha256,
+            self.observation_sha256,
+        )
+        if (
+            not self.socket_path.is_absolute()
+            or self.execution_credit is not False
+            or any(_SHA256_PATTERN.fullmatch(value) is None for value in hashes)
+            or self.observation_sha256 != self.expected_observation_sha256()
+        ):
+            raise ValueError("read-only RPC Unix listener observation is invalid")
+
+    def expected_observation_sha256(self) -> str:
+        """Recompute the complete non-authoritative observation identity."""
+
+        return _canonical_sha256(
+            {
+                "version": "MMAUDIT_READ_ONLY_RPC_UNIX_OBSERVATION_V1",
+                "socket_path": str(self.socket_path),
+                "origin_endpoint": self.origin_endpoint,
+                "policy_sha256": self.policy_sha256,
+                "state_sha256": self.state_sha256,
+                "preflight_origin_observation_sha256": (self.preflight_origin_observation_sha256),
+                "listener_capability_sha256": self.listener_capability_sha256,
+                "socket_identity_sha256": self.socket_identity_sha256,
+                "execution_credit": False,
+            }
+        )
+
+
+@dataclass
+class _UnixListenerBinding:
+    path: Path
+    parent_path: Path
+    name: str
+    parent_fd: int
+    parent_identity: _UnixFilesystemIdentity
+    endpoint_identity: _UnixFilesystemIdentity
+    capability_sha256: str
+
+
+def _filesystem_identity(value: os.stat_result) -> _UnixFilesystemIdentity:
+    return _UnixFilesystemIdentity(
+        device=value.st_dev,
+        inode=value.st_ino,
+        owner_uid=value.st_uid,
+        owner_gid=value.st_gid,
+        mode=stat.S_IMODE(value.st_mode),
+        file_type=stat.S_IFMT(value.st_mode),
+    )
+
+
+def _effective_uid() -> int:
+    get_effective_uid = getattr(os, "geteuid", None)
+    if get_effective_uid is None:
+        raise ReadOnlyRpcBridgeError("owner-only Unix RPC listeners require effective UID support")
+    effective_uid = get_effective_uid()
+    if type(effective_uid) is not int or effective_uid < 0:
+        raise ReadOnlyRpcBridgeError("owner-only Unix RPC listener effective UID is invalid")
+    return effective_uid
+
+
+def _open_private_unix_listener_parent(
+    path: Path,
+) -> tuple[Path, str, int, _UnixFilesystemIdentity]:
+    if not isinstance(path, Path) or not path.is_absolute() or path.name in {"", ".", ".."}:
+        raise ReadOnlyRpcBridgeError(
+            "owner-only Unix RPC listener path must be an explicit absolute file path"
+        )
+    if "\x00" in str(path) or len(os.fsencode(path)) > _MAX_UNIX_SOCKET_PATH_BYTES:
+        raise ReadOnlyRpcBridgeError("owner-only Unix RPC listener path is invalid or too long")
+    parent_path = path.parent
+    try:
+        resolved_parent = parent_path.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ReadOnlyRpcBridgeError("owner-only Unix RPC listener parent is unavailable") from exc
+    if resolved_parent != parent_path:
+        raise ReadOnlyRpcBridgeError(
+            "owner-only Unix RPC listener parent must not traverse symlinks"
+        )
+
+    required_flags = ("O_DIRECTORY", "O_NOFOLLOW")
+    if any(getattr(os, name, None) is None for name in required_flags):
+        raise ReadOnlyRpcBridgeError(
+            "owner-only Unix RPC listener requires no-follow directory descriptors"
+        )
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    try:
+        parent_path_before = os.stat(parent_path, follow_symlinks=False)
+        parent_fd = os.open(parent_path, flags)
+    except OSError as exc:
+        raise ReadOnlyRpcBridgeError(
+            "owner-only Unix RPC listener parent could not be opened safely"
+        ) from exc
+    try:
+        parent_from_fd = os.fstat(parent_fd)
+        parent_path_after = os.stat(parent_path, follow_symlinks=False)
+        parent_identity = _filesystem_identity(parent_from_fd)
+        if (
+            _filesystem_identity(parent_path_before) != parent_identity
+            or _filesystem_identity(parent_path_after) != parent_identity
+            or parent_identity.file_type != stat.S_IFDIR
+            or parent_identity.owner_uid != _effective_uid()
+            or parent_identity.mode != 0o700
+        ):
+            raise ReadOnlyRpcBridgeError(
+                "owner-only Unix RPC listener parent identity or mode is invalid"
+            )
+        try:
+            os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise ReadOnlyRpcBridgeError("owner-only Unix RPC listener endpoint already exists")
+        return parent_path, path.name, parent_fd, parent_identity
+    except BaseException:
+        os.close(parent_fd)
+        raise
+
+
+def _validate_unix_parent_identity(binding: _UnixListenerBinding) -> None:
+    try:
+        parent_from_fd = _filesystem_identity(os.fstat(binding.parent_fd))
+        parent_from_path = _filesystem_identity(os.stat(binding.parent_path, follow_symlinks=False))
+    except OSError as exc:
+        raise ReadOnlyRpcBridgeError(
+            "owner-only Unix RPC listener parent identity is unavailable"
+        ) from exc
+    if parent_from_fd != binding.parent_identity or parent_from_path != binding.parent_identity:
+        raise ReadOnlyRpcBridgeError("owner-only Unix RPC listener parent identity changed")
+
+
+def _unix_endpoint_identity(parent_fd: int, name: str) -> _UnixFilesystemIdentity:
+    try:
+        endpoint = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError as exc:
+        raise ReadOnlyRpcBridgeError(
+            "owner-only Unix RPC listener endpoint identity is unavailable"
+        ) from exc
+    identity = _filesystem_identity(endpoint)
+    if (
+        identity.file_type != stat.S_IFSOCK
+        or identity.owner_uid != _effective_uid()
+        or identity.mode != 0o600
+        or endpoint.st_nlink != 1
+    ):
+        raise ReadOnlyRpcBridgeError(
+            "owner-only Unix RPC listener endpoint identity or mode is invalid"
+        )
+    return identity
+
+
+def _validate_unix_listener_binding(binding: _UnixListenerBinding) -> None:
+    _validate_unix_parent_identity(binding)
+    if _unix_endpoint_identity(binding.parent_fd, binding.name) != binding.endpoint_identity:
+        raise ReadOnlyRpcBridgeError("owner-only Unix RPC listener endpoint identity changed")
+
+
+def _cleanup_unix_listener_binding(binding: _UnixListenerBinding) -> None:
+    errors: list[BaseException] = []
+    try:
+        _validate_unix_parent_identity(binding)
+    except ReadOnlyRpcBridgeError as exc:
+        errors.append(exc)
+    endpoint_matches = False
+    try:
+        endpoint_matches = (
+            _unix_endpoint_identity(binding.parent_fd, binding.name) == binding.endpoint_identity
+        )
+        if not endpoint_matches:
+            errors.append(
+                ReadOnlyRpcBridgeError("owner-only Unix RPC listener endpoint identity changed")
+            )
+    except ReadOnlyRpcBridgeError as exc:
+        errors.append(exc)
+    if endpoint_matches:
+        try:
+            os.unlink(binding.name, dir_fd=binding.parent_fd)
+        except OSError as exc:
+            errors.append(exc)
+        else:
+            try:
+                os.stat(binding.name, dir_fd=binding.parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                errors.append(exc)
+            else:
+                errors.append(
+                    ReadOnlyRpcBridgeError(
+                        "owner-only Unix RPC listener endpoint cleanup did not complete"
+                    )
+                )
+    try:
+        os.close(binding.parent_fd)
+    except OSError as exc:
+        errors.append(exc)
+    if errors:
+        raise ReadOnlyRpcBridgeError(
+            "owner-only Unix RPC listener cleanup failed closed"
+        ) from errors[0]
+
+
+def _cleanup_partial_unix_listener_endpoint(
+    *,
+    parent_fd: int,
+    name: str,
+    created_identity: _UnixFilesystemIdentity | None,
+) -> None:
+    if created_identity is None:
+        return
+    try:
+        current = _filesystem_identity(os.stat(name, dir_fd=parent_fd, follow_symlinks=False))
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise ReadOnlyRpcBridgeError("partial owner-only Unix RPC listener cleanup failed") from exc
+    if (
+        current.device != created_identity.device
+        or current.inode != created_identity.inode
+        or current.file_type != stat.S_IFSOCK
+        or current.owner_uid != _effective_uid()
+    ):
+        raise ReadOnlyRpcBridgeError(
+            "partial owner-only Unix RPC listener endpoint identity changed"
+        )
+    try:
+        os.unlink(name, dir_fd=parent_fd)
+    except OSError as exc:
+        raise ReadOnlyRpcBridgeError("partial owner-only Unix RPC listener cleanup failed") from exc
 
 
 @dataclass(frozen=True)
@@ -511,7 +787,14 @@ class _BridgeHttpServer(ThreadingHTTPServer):
 
     bridge: ReadOnlyRpcBridge
 
-    def __init__(self, bridge: ReadOnlyRpcBridge, *, max_concurrent_handlers: int) -> None:
+    def __init__(
+        self,
+        bridge: ReadOnlyRpcBridge,
+        *,
+        max_concurrent_handlers: int,
+        server_address: tuple[str, int] | str = ("127.0.0.1", 0),
+        bind_and_activate: bool = True,
+    ) -> None:
         self.request_queue_size = min(max_concurrent_handlers, 64)
         self._handler_slots = threading.BoundedSemaphore(max_concurrent_handlers)
         self._active_connections_lock = threading.Lock()
@@ -524,7 +807,11 @@ class _BridgeHttpServer(ThreadingHTTPServer):
         self._accepted_metadata: dict[socket.socket, _AcceptedRequestMetadata] = {}
         self._checkpoint_lock = threading.Lock()
         self._checkpoints_by_source_port: dict[int, _AcceptBoundaryCheckpoint] = {}
-        super().__init__(("127.0.0.1", 0), _BridgeRequestHandler)
+        super().__init__(
+            cast(Any, server_address),
+            _BridgeRequestHandler,
+            bind_and_activate=bind_and_activate,
+        )
         self.bridge = bridge
 
     def get_request(self) -> tuple[socket.socket, object]:
@@ -691,6 +978,12 @@ class _BridgeHttpServer(ThreadingHTTPServer):
         thread.join(timeout=max(0.0, timeout_seconds))
         return not thread.is_alive()
 
+    def admission_is_open(self) -> bool:
+        """Return whether listener shutdown has never been requested."""
+
+        with self._admission_lock:
+            return self._admission_thread is None
+
     def wait_for_handlers(self, timeout_seconds: float) -> bool:
         """Return whether all tracked handlers drained inside the supplied bound."""
 
@@ -712,6 +1005,39 @@ class _BridgeHttpServer(ThreadingHTTPServer):
                 self._handlers_drained.set()
         self._handler_slots.release()
         self.bridge._finish_admitted_http_request()
+
+
+class _BridgeUnixHttpServer(_BridgeHttpServer):
+    address_family = socket.AF_UNIX
+
+    def __init__(
+        self,
+        bridge: ReadOnlyRpcBridge,
+        *,
+        socket_path: Path,
+        max_concurrent_handlers: int,
+    ) -> None:
+        super().__init__(
+            bridge,
+            max_concurrent_handlers=max_concurrent_handlers,
+            server_address=str(socket_path),
+            bind_and_activate=False,
+        )
+
+    def server_bind(self) -> None:
+        # HTTPServer assumes an INET (host, port) address after TCPServer binds.
+        # The request handler needs only stable local labels, so bypass that INET
+        # unpacking while retaining the standard exclusive socket bind.
+        TCPServer.server_bind(self)
+        self.server_name = "localhost"
+        self.server_port = 0
+
+    def accept_boundary_checkpoint(self, timeout_seconds: float) -> _AcceptBoundaryCheckpoint:
+        del timeout_seconds
+        raise ReadOnlyRpcBridgeError(
+            "selected-test accounting is unavailable for Unix RPC listeners until "
+            "a separately attested relay boundary exists"
+        )
 
 
 class _BridgeRequestHandler(BaseHTTPRequestHandler):
@@ -758,7 +1084,11 @@ class _BridgeRequestHandler(BaseHTTPRequestHandler):
 
 
 class ReadOnlyRpcBridge:
-    """Serve a bounded method-allowlisting proxy on an ephemeral loopback port."""
+    """Serve a bounded method allowlist on one exclusive, local-only listener.
+
+    ``unix_listener_path`` is a control-plane input. Its parent must be a resolved,
+    caller-owned ``0700`` directory and must never come from the audited repository.
+    """
 
     def __init__(
         self,
@@ -777,6 +1107,7 @@ class ReadOnlyRpcBridge:
         max_rpc_calls: int = _DEFAULT_MAX_RPC_CALLS,
         max_concurrent_handlers: int = _DEFAULT_MAX_CONCURRENT_HANDLERS,
         shutdown_timeout_seconds: float = _DEFAULT_SHUTDOWN_TIMEOUT_SECONDS,
+        unix_listener_path: Path | None = None,
     ) -> None:
         try:
             normalized_origin_endpoint = _numeric_loopback_endpoint(origin_endpoint)
@@ -825,6 +1156,11 @@ class ReadOnlyRpcBridge:
             raise ReadOnlyRpcBridgeError(
                 "read-only RPC shutdown timeout is outside the supported range"
             )
+        if unix_listener_path is not None:
+            _parent, _name, validation_fd, _identity = _open_private_unix_listener_parent(
+                unix_listener_path
+            )
+            os.close(validation_fd)
 
         self._origin_endpoint = normalized_origin_endpoint
         parsed_origin = urlparse(normalized_origin_endpoint)
@@ -846,28 +1182,8 @@ class ReadOnlyRpcBridge:
         self._max_rpc_calls = max_rpc_calls
         self._max_concurrent_handlers = max_concurrent_handlers
         self._shutdown_timeout_seconds = shutdown_timeout_seconds
-        self._policy_sha256 = _canonical_sha256(
-            {
-                "version": _POLICY_VERSION,
-                "allowed_methods": sorted(_ALLOWED_METHODS),
-                "synthetic_methods": sorted(_SYNTHETIC_METHODS),
-                "synthetic_gas_price_wei": DETERMINISTIC_FORK_GAS_PRICE_WEI,
-                "eip_1898_methods": sorted(_EIP_1898_PARAM_INDEX),
-                "number_to_hash_methods": dict(sorted(_NUMBER_TO_HASH_METHOD.items())),
-                "max_identity_response_body_bytes": _MAX_IDENTITY_RESPONSE_BODY_BYTES,
-                "max_request_body_bytes": max_request_body_bytes,
-                "max_response_body_bytes": max_response_body_bytes,
-                "max_batch_size": max_batch_size,
-                "max_json_depth": max_json_depth,
-                "max_json_nodes": max_json_nodes,
-                "max_http_requests": max_http_requests,
-                "max_rpc_calls": max_rpc_calls,
-                "max_concurrent_handlers": max_concurrent_handlers,
-                "timeout_milliseconds": round(timeout_seconds * 1_000),
-                "shutdown_timeout_milliseconds": round(shutdown_timeout_seconds * 1_000),
-                "pin_semantics": "canonical_block_hash_v2",
-            }
-        )
+        self._unix_listener_path = unix_listener_path
+        self._policy_sha256 = self._expected_policy_sha256()
         self._state_lock = threading.Lock()
         self._scope_drain_condition = threading.Condition(self._state_lock)
         self._lifecycle_lock = threading.Lock()
@@ -896,6 +1212,7 @@ class ReadOnlyRpcBridge:
         self._method_log: list[str] = []
         self._server: _BridgeHttpServer | None = None
         self._serve_thread: threading.Thread | None = None
+        self._unix_listener_binding: _UnixListenerBinding | None = None
         self._preflight_observation: _OriginObservation | None = None
         self._postflight_observation: _OriginObservation | None = None
         self._start_attempted = False
@@ -915,6 +1232,15 @@ class ReadOnlyRpcBridge:
     ) -> None:
         self.stop()
 
+    def __copy__(self) -> ReadOnlyRpcBridge:
+        raise TypeError("read-only RPC bridges cannot be copied")
+
+    def __deepcopy__(self, _memo: dict[int, object]) -> ReadOnlyRpcBridge:
+        raise TypeError("read-only RPC bridges cannot be copied")
+
+    def __reduce_ex__(self, _protocol: SupportsIndex) -> str | tuple[Any, ...]:
+        raise TypeError("read-only RPC bridges cannot be serialized")
+
     @property
     def endpoint(self) -> str:
         """Return the ephemeral bridge URL only while it is running."""
@@ -927,11 +1253,172 @@ class ReadOnlyRpcBridge:
                 or self._stopped_cleanly
             ):
                 raise ReadOnlyRpcBridgeError("read-only RPC bridge is not running")
+            if self._unix_listener_binding is not None:
+                raise ReadOnlyRpcBridgeError(
+                    "read-only RPC bridge uses an owner-only Unix listener, not a TCP endpoint"
+                )
             host = self._server.server_address[0]
             port = self._server.server_address[1]
             if host != "127.0.0.1" or not isinstance(port, int):
                 raise ReadOnlyRpcBridgeError("read-only RPC bridge listener identity is invalid")
             return f"http://127.0.0.1:{port}"
+
+    @property
+    def unix_endpoint_path(self) -> Path:
+        """Return the verified Unix endpoint path only during its live listener lifetime."""
+
+        binding = self._running_unix_listener_binding()
+        return binding.path
+
+    @property
+    def unix_listener_capability_sha256(self) -> str:
+        """Return a live endpoint capability hash that grants no execution credit by itself."""
+
+        binding = self._running_unix_listener_binding()
+        return binding.capability_sha256
+
+    def live_unix_listener_observation(self) -> ReadOnlyRpcUnixListenerObservation:
+        """Return freshly revalidated identities for the exact live Unix listener.
+
+        The result remains observation-only. In particular, copying or serializing
+        it cannot recreate the process-local bridge identity required by an
+        isolation backend.
+        """
+
+        with self._lifecycle_lock:
+            binding = self._running_unix_listener_binding_locked()
+            preflight = self._preflight_observation
+            if preflight is None:
+                raise ReadOnlyRpcBridgeError(
+                    "owner-only Unix RPC listener has no preflight state identity"
+                )
+            expected_policy_sha256 = self._expected_policy_sha256()
+            if self._policy_sha256 != expected_policy_sha256:
+                raise ReadOnlyRpcBridgeError("owner-only Unix RPC listener policy identity changed")
+            parsed_origin = urlparse(self._origin_endpoint)
+            if (
+                parsed_origin.hostname != self._origin_host
+                or parsed_origin.port != self._origin_port
+            ):
+                raise ReadOnlyRpcBridgeError(
+                    "owner-only Unix RPC listener forwarding identity changed"
+                )
+            state_sha256 = _canonical_sha256(
+                {
+                    "version": "MMAUDIT_READ_ONLY_RPC_LIVE_STATE_V1",
+                    "origin_endpoint": self._origin_endpoint,
+                    "expected_chain_id": self._expected_chain_id,
+                    "pinned_block_number": self._pinned_block_number,
+                    "pinned_block_hash": self._pinned_block_hash,
+                    "preflight_origin_observation_sha256": preflight.observation_sha256,
+                }
+            )
+            socket_identity_sha256 = _canonical_sha256(
+                {
+                    "version": "MMAUDIT_OWNER_ONLY_UNIX_SOCKET_IDENTITY_V1",
+                    "socket_path": str(binding.path),
+                    "parent_identity": {
+                        "device": binding.parent_identity.device,
+                        "inode": binding.parent_identity.inode,
+                        "owner_uid": binding.parent_identity.owner_uid,
+                        "owner_gid": binding.parent_identity.owner_gid,
+                        "mode": binding.parent_identity.mode,
+                        "file_type": binding.parent_identity.file_type,
+                    },
+                    "endpoint_identity": {
+                        "device": binding.endpoint_identity.device,
+                        "inode": binding.endpoint_identity.inode,
+                        "owner_uid": binding.endpoint_identity.owner_uid,
+                        "owner_gid": binding.endpoint_identity.owner_gid,
+                        "mode": binding.endpoint_identity.mode,
+                        "file_type": binding.endpoint_identity.file_type,
+                    },
+                }
+            )
+            material = {
+                "version": "MMAUDIT_READ_ONLY_RPC_UNIX_OBSERVATION_V1",
+                "socket_path": str(binding.path),
+                "origin_endpoint": self._origin_endpoint,
+                "policy_sha256": self._policy_sha256,
+                "state_sha256": state_sha256,
+                "preflight_origin_observation_sha256": preflight.observation_sha256,
+                "listener_capability_sha256": binding.capability_sha256,
+                "socket_identity_sha256": socket_identity_sha256,
+                "execution_credit": False,
+            }
+            return ReadOnlyRpcUnixListenerObservation(
+                socket_path=binding.path,
+                origin_endpoint=self._origin_endpoint,
+                policy_sha256=self._policy_sha256,
+                state_sha256=state_sha256,
+                preflight_origin_observation_sha256=preflight.observation_sha256,
+                listener_capability_sha256=binding.capability_sha256,
+                socket_identity_sha256=socket_identity_sha256,
+                observation_sha256=_canonical_sha256(material),
+            )
+
+    def _running_unix_listener_binding(self) -> _UnixListenerBinding:
+        with self._lifecycle_lock:
+            return self._running_unix_listener_binding_locked()
+
+    def _running_unix_listener_binding_locked(self) -> _UnixListenerBinding:
+        binding = self._unix_listener_binding
+        server = self._server
+        serve_thread = self._serve_thread
+        if (
+            binding is None
+            or server is None
+            or serve_thread is None
+            or not self._started
+            or self._stop_attempted
+            or self._stopped_cleanly
+            or self._admission_closed
+            or server.bridge is not self
+            or not serve_thread.is_alive()
+            or not server.admission_is_open()
+        ):
+            raise ReadOnlyRpcBridgeError("owner-only Unix RPC listener is not running")
+        _validate_unix_listener_binding(binding)
+        try:
+            listener_address = server.socket.getsockname()
+        except OSError as exc:
+            raise ReadOnlyRpcBridgeError(
+                "owner-only Unix RPC listener socket identity is unavailable"
+            ) from exc
+        if server.address_family != socket.AF_UNIX or listener_address != str(binding.path):
+            raise ReadOnlyRpcBridgeError(
+                "owner-only Unix RPC listener socket identity is inconsistent"
+            )
+        if _SHA256_PATTERN.fullmatch(binding.capability_sha256) is None:
+            raise ReadOnlyRpcBridgeError(
+                "owner-only Unix RPC listener capability identity is invalid"
+            )
+        return binding
+
+    def _expected_policy_sha256(self) -> str:
+        payload: dict[str, object] = {
+            "version": _POLICY_VERSION,
+            "allowed_methods": sorted(_ALLOWED_METHODS),
+            "synthetic_methods": sorted(_SYNTHETIC_METHODS),
+            "synthetic_gas_price_wei": DETERMINISTIC_FORK_GAS_PRICE_WEI,
+            "eip_1898_methods": sorted(_EIP_1898_PARAM_INDEX),
+            "number_to_hash_methods": dict(sorted(_NUMBER_TO_HASH_METHOD.items())),
+            "max_identity_response_body_bytes": _MAX_IDENTITY_RESPONSE_BODY_BYTES,
+            "max_request_body_bytes": self._max_request_body_bytes,
+            "max_response_body_bytes": self._max_response_body_bytes,
+            "max_batch_size": self._max_batch_size,
+            "max_json_depth": self._max_json_depth,
+            "max_json_nodes": self._max_json_nodes,
+            "max_http_requests": self._max_http_requests,
+            "max_rpc_calls": self._max_rpc_calls,
+            "max_concurrent_handlers": self._max_concurrent_handlers,
+            "timeout_milliseconds": round(self._timeout_seconds * 1_000),
+            "shutdown_timeout_milliseconds": round(self._shutdown_timeout_seconds * 1_000),
+            "pin_semantics": "canonical_block_hash_v2",
+        }
+        if self._unix_listener_path is not None:
+            payload["listener_transport"] = _UNIX_LISTENER_POLICY_VERSION
+        return _canonical_sha256(payload)
 
     def begin_selected_test_scope(
         self,
@@ -1091,27 +1578,106 @@ class ReadOnlyRpcBridge:
 
         with self._lifecycle_lock:
             server: _BridgeHttpServer | None = None
+            thread: threading.Thread | None = None
+            unix_parent_fd: int | None = None
+            unix_parent_path: Path | None = None
+            unix_name: str | None = None
+            unix_created_identity: _UnixFilesystemIdentity | None = None
+            unix_binding: _UnixListenerBinding | None = None
             try:
-                server = _BridgeHttpServer(
-                    self,
-                    max_concurrent_handlers=self._max_concurrent_handlers,
-                )
+                if self._unix_listener_path is None:
+                    server = _BridgeHttpServer(
+                        self,
+                        max_concurrent_handlers=self._max_concurrent_handlers,
+                    )
+                    thread_name = "mmaudit-read-only-rpc"
+                else:
+                    (
+                        unix_parent_path,
+                        unix_name,
+                        unix_parent_fd,
+                        unix_parent_identity,
+                    ) = _open_private_unix_listener_parent(self._unix_listener_path)
+                    server = _BridgeUnixHttpServer(
+                        self,
+                        socket_path=self._unix_listener_path,
+                        max_concurrent_handlers=self._max_concurrent_handlers,
+                    )
+                    server.server_bind()
+                    unix_created_identity = _filesystem_identity(
+                        os.stat(unix_name, dir_fd=unix_parent_fd, follow_symlinks=False)
+                    )
+                    os.chmod(
+                        unix_name,
+                        0o600,
+                        dir_fd=unix_parent_fd,
+                        follow_symlinks=False,
+                    )
+                    unix_endpoint_identity = _unix_endpoint_identity(
+                        unix_parent_fd,
+                        unix_name,
+                    )
+                    capability_sha256 = _canonical_sha256(
+                        {
+                            "version": _UNIX_LISTENER_POLICY_VERSION,
+                            "nonce": secrets.token_hex(32),
+                            "policy_sha256": self._policy_sha256,
+                            "parent_device": unix_parent_identity.device,
+                            "parent_inode": unix_parent_identity.inode,
+                            "endpoint_device": unix_endpoint_identity.device,
+                            "endpoint_inode": unix_endpoint_identity.inode,
+                        }
+                    )
+                    unix_binding = _UnixListenerBinding(
+                        path=self._unix_listener_path,
+                        parent_path=unix_parent_path,
+                        name=unix_name,
+                        parent_fd=unix_parent_fd,
+                        parent_identity=unix_parent_identity,
+                        endpoint_identity=unix_endpoint_identity,
+                        capability_sha256=capability_sha256,
+                    )
+                    _validate_unix_listener_binding(unix_binding)
+                    server.server_activate()
+                    thread_name = "mmaudit-read-only-rpc-unix"
                 thread = threading.Thread(
                     target=server.serve_forever,
                     kwargs={"poll_interval": 0.05},
-                    name="mmaudit-read-only-rpc",
+                    name=thread_name,
                     daemon=True,
                 )
                 thread.start()
-            except (OSError, RuntimeError) as exc:
+            except (OSError, ReadOnlyRpcBridgeError, RuntimeError) as exc:
                 if server is not None:
                     server.server_close()
+                cleanup_error: BaseException | None = None
+                if unix_binding is not None:
+                    try:
+                        _cleanup_unix_listener_binding(unix_binding)
+                    except ReadOnlyRpcBridgeError as cleanup_exc:
+                        cleanup_error = cleanup_exc
+                elif unix_parent_fd is not None and unix_name is not None:
+                    try:
+                        _cleanup_partial_unix_listener_endpoint(
+                            parent_fd=unix_parent_fd,
+                            name=unix_name,
+                            created_identity=unix_created_identity,
+                        )
+                    except ReadOnlyRpcBridgeError as cleanup_exc:
+                        cleanup_error = cleanup_exc
+                    finally:
+                        os.close(unix_parent_fd)
+                if cleanup_error is not None:
+                    raise ReadOnlyRpcBridgeError(
+                        "read-only RPC bridge listener setup cleanup failed closed"
+                    ) from cleanup_error
                 raise ReadOnlyRpcBridgeError(
-                    "read-only RPC bridge could not bind its loopback listener"
+                    "read-only RPC bridge could not bind its local listener"
                 ) from exc
             self._preflight_observation = preflight_observation
             self._server = server
             self._serve_thread = thread
+            self._unix_listener_binding = unix_binding
             self._started = True
 
     def stop(self) -> None:
@@ -1126,6 +1692,7 @@ class ReadOnlyRpcBridge:
                 raise ReadOnlyRpcBridgeError("read-only RPC bridge shutdown was already attempted")
             server = self._server
             thread = self._serve_thread
+            unix_binding = self._unix_listener_binding
             preflight_observation = self._preflight_observation
             if server is None or thread is None or preflight_observation is None:
                 raise ReadOnlyRpcBridgeError("read-only RPC bridge lifecycle is inconsistent")
@@ -1152,6 +1719,11 @@ class ReadOnlyRpcBridge:
                 server.server_close()
             except (OSError, RuntimeError) as exc:
                 cleanup_errors.append(exc)
+            if unix_binding is not None:
+                try:
+                    _cleanup_unix_listener_binding(unix_binding)
+                except ReadOnlyRpcBridgeError as exc:
+                    cleanup_errors.append(exc)
 
         cleanup_thread = threading.Thread(
             target=close_bridge_resources,
@@ -1211,6 +1783,7 @@ class ReadOnlyRpcBridge:
             )
         with self._lifecycle_lock:
             self._postflight_observation = postflight_observation
+            self._unix_listener_binding = None
             self._stopped_cleanly = True
 
     def snapshot(self) -> ReadOnlyRpcBridgeSnapshot:
@@ -1306,6 +1879,11 @@ class ReadOnlyRpcBridge:
                 or self._stopped_cleanly
             ):
                 raise ReadOnlyRpcBridgeError("read-only RPC bridge is not running")
+            if self._unix_listener_binding is not None:
+                raise ReadOnlyRpcBridgeError(
+                    "selected-test accounting is unavailable for Unix RPC listeners until "
+                    "a separately attested relay boundary exists"
+                )
             return self._server
 
     def _test_scope_boundary_drained(self, server: _BridgeHttpServer) -> bool:

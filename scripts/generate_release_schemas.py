@@ -20,6 +20,12 @@ from mmaudit.models.refresh import (
     ModelRefreshSourceEvidence,
 )
 from mmaudit.models.refresh_staging import ModelRefreshWorkflowStatus
+from mmaudit.models.schemas import (
+    HardhatInventoryPhaseRequest,
+    HardhatReporterExecution,
+    HardhatReporterInventory,
+    HardhatTestPhaseRequest,
+)
 from mmaudit.orchestration.context_manifest import ContextManifest
 from mmaudit.privacy import PrivacyRetentionConsent
 from mmaudit.release_candidate import ReleaseCandidateObservation
@@ -37,6 +43,10 @@ SCHEMA_BASE = "https://mmaudit.local/schemas"
 MODELS: dict[str, type[BaseModel]] = {
     "benchmark_report.schema.json": BenchmarkReport,
     "context_manifest.schema.json": ContextManifest,
+    "hardhat_reporter_inventory.schema.json": HardhatReporterInventory,
+    "hardhat_reporter_test.schema.json": HardhatReporterExecution,
+    "hardhat_request_inventory.schema.json": HardhatInventoryPhaseRequest,
+    "hardhat_request_test.schema.json": HardhatTestPhaseRequest,
     "model_calibration.schema.json": ModelCalibrationArtifact,
     "model_lineage_review.schema.json": ModelLineageReviewArtifact,
     "model_qualification.schema.json": ModelQualificationArtifact,
@@ -58,6 +68,10 @@ MODELS: dict[str, type[BaseModel]] = {
 }
 TITLE_OVERRIDES = {
     "benchmark_report.schema.json": "mmaudit benchmark report",
+    "hardhat_reporter_inventory.schema.json": "mmaudit Hardhat inventory observation",
+    "hardhat_reporter_test.schema.json": "mmaudit Hardhat test observation",
+    "hardhat_request_inventory.schema.json": "mmaudit Hardhat inventory phase request",
+    "hardhat_request_test.schema.json": "mmaudit Hardhat test phase request",
     "model_calibration.schema.json": "mmaudit model calibration artifact",
     "model_lineage_review.schema.json": "mmaudit model lineage review artifact",
     "model_qualification.schema.json": "mmaudit model qualification artifact",

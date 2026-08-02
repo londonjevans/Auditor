@@ -2,24 +2,50 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
+import stat
 import subprocess
 import tempfile
-from dataclasses import dataclass, field
+import threading
+import weakref
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol, runtime_checkable
+from types import MappingProxyType
+from typing import Any, Final, Literal, Protocol, SupportsIndex, runtime_checkable
+from urllib.parse import urlparse
 
 from mmaudit.models.schemas import ExecutionEvidenceKind
 from mmaudit.operator_secrets import RESERVED_OPERATOR_CONTROL_PLANE_NAMES
+from mmaudit.scanners.read_only_rpc import (
+    READ_ONLY_RPC_METHODS,
+    ReadOnlyRpcBridge,
+    ReadOnlyRpcBridgeError,
+    ReadOnlyRpcUnixListenerObservation,
+)
 
 _DIGEST_PINNED_IMAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}$")
 _CONTAINER_WORKSPACE = Path("/workspace")
 _CONTAINER_WRITABLE = Path("/mmaudit-output")
 _CONTAINER_HOME = Path("/home/mmaudit")
 _CONTAINER_TMP = Path("/tmp")
+_HARDHAT_BRIDGE_SOCKET = Path("/run/mmaudit/hardhat-rpc.sock")
+_HARDHAT_BRIDGE_SOCKET_NAME = "hardhat-rpc.sock"
+_HARDHAT_LOOPBACK_ENTRYPOINT = "/usr/local/bin/mmaudit-hardhat-loopback"
+_HARDHAT_LOOPBACK_POLICY_VERSION = "MMAUDIT_HARDHAT_SINGLE_LOOPBACK_V1"
+_HARDHAT_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+_HARDHAT_CONTAINER_EXECUTABLES: Final = MappingProxyType(
+    {
+        "hardhat": "/usr/local/bin/hardhat",
+        "node": "/usr/local/bin/node",
+    }
+)
+# Re-export the exact immutable policy used by the trusted bridge; never duplicate it.
+HARDHAT_READ_ONLY_RPC_METHODS: Final = READ_ONLY_RPC_METHODS
 _FORBIDDEN_SECCOMP_SYSCALLS = frozenset(
     {
         "accept",
@@ -142,6 +168,26 @@ _ALLOWED_SECCOMP_SYSCALLS = (
     "waitid",
     "write",
     "writev",
+)
+_HARDHAT_LOOPBACK_SOCKET_SYSCALLS = frozenset(
+    {
+        "accept",
+        "accept4",
+        "bind",
+        "connect",
+        "getpeername",
+        "getsockname",
+        "getsockopt",
+        "listen",
+        "recvfrom",
+        "recvmmsg",
+        "recvmsg",
+        "sendmmsg",
+        "sendmsg",
+        "sendto",
+        "setsockopt",
+        "shutdown",
+    }
 )
 
 
@@ -445,6 +491,636 @@ class RootlessContainerBackend:
         cidfile.unlink(missing_ok=True)
 
 
+@dataclass(frozen=True, kw_only=True)
+class SingleLoopbackHardhatBackend(RootlessContainerBackend):
+    """Unverified rootless Hardhat command contract for one trusted RPC bridge."""
+
+    approved_loopback_rpc_endpoint: str
+    allowed_rpc_methods: tuple[str, ...] = field(
+        default_factory=lambda: tuple(sorted(HARDHAT_READ_ONLY_RPC_METHODS)),
+        init=False,
+    )
+    name: str = field(default="single-loopback-hardhat", init=False)
+    execution_evidence: ExecutionEvidenceKind = field(
+        default=ExecutionEvidenceKind.UNVERIFIED,
+        init=False,
+    )
+    supports_local_fork_rpc: bool = field(default=True, init=False)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        canonical_endpoint = _canonical_hardhat_loopback_endpoint(
+            self.approved_loopback_rpc_endpoint
+        )
+        object.__setattr__(self, "approved_loopback_rpc_endpoint", canonical_endpoint)
+
+    @property
+    def approved_loopback_rpc_port(self) -> int:
+        """Return the one port bound into this capability."""
+
+        port = urlparse(self.approved_loopback_rpc_endpoint).port
+        if port is None:  # Defensive against illicit frozen-instance mutation.
+            raise ValueError("Hardhat loopback RPC capability has no approved port")
+        return port
+
+    @property
+    def hardhat_network_policy(self) -> Literal["single-loopback-rpc"]:
+        """Expose the exact policy vocabulary expected by the Hardhat adapter."""
+
+        return "single-loopback-rpc"
+
+    @property
+    def broad_network_enabled(self) -> Literal[False]:
+        """Broad network capability is structurally absent."""
+
+        return False
+
+    @property
+    def hardhat_loopback_capability_sha256(self) -> str:
+        """Hash effective settings; this configuration fingerprint grants no authority."""
+
+        return self.expected_hardhat_loopback_capability_sha256()
+
+    def expected_hardhat_loopback_capability_sha256(self) -> str:
+        """Recompute the exact immutable capability identity from effective settings."""
+
+        return _canonical_sha256(self.hardhat_loopback_effective_configuration())
+
+    def hardhat_loopback_effective_configuration(self) -> dict[str, object]:
+        """Return the secret-free primitive configuration sealed by the capability hash."""
+
+        rpc_method_policy_sha256 = _canonical_sha256(
+            {
+                "version": _HARDHAT_LOOPBACK_POLICY_VERSION,
+                "allowed_methods": list(self.allowed_rpc_methods),
+                "unknown_methods": "deny",
+            }
+        )
+        container_rpc_endpoint = f"http://127.0.0.1:{self.approved_loopback_rpc_port}"
+        return {
+            "version": _HARDHAT_LOOPBACK_POLICY_VERSION,
+            "runtime": self.runtime,
+            "host_runtime_executable": self.executable,
+            "image": self.image,
+            "rootless_verified": self.rootless_verified,
+            "host_uid": self.host_uid,
+            "host_gid": self.host_gid,
+            "limits": asdict(self.limits),
+            "network_mode": "none",
+            "broad_network_enabled": False,
+            "approved_loopback_rpc_endpoint": self.approved_loopback_rpc_endpoint,
+            "approved_loopback_rpc_endpoint_count": 1,
+            "container_rpc_endpoint": container_rpc_endpoint,
+            "rpc_bridge_transport": "private-unix-socket",
+            "host_bridge_socket_relative_path": _HARDHAT_BRIDGE_SOCKET_NAME,
+            "container_bridge_socket": str(_HARDHAT_BRIDGE_SOCKET),
+            "container_entrypoint": _HARDHAT_LOOPBACK_ENTRYPOINT,
+            "container_command_allowlist": sorted(_HARDHAT_CONTAINER_EXECUTABLES),
+            "container_command_mapping": dict(_HARDHAT_CONTAINER_EXECUTABLES),
+            "container_executable_identity": "requires-separate-image-side-attestation",
+            "execution_authority": "requires-process-local-unix-bridge-seal",
+            "allowed_rpc_methods": list(self.allowed_rpc_methods),
+            "rpc_method_policy_sha256": rpc_method_policy_sha256,
+            "seccomp_profile_sha256": hashlib.sha256(
+                _seccomp_profile_bytes(allow_loopback_rpc=True)
+            ).hexdigest(),
+            "source_mount": "read-only",
+            "root_filesystem": "read-only",
+            "host_credentials_mounted": False,
+            "container_socket_mounted": False,
+            "fixed_container_environment": [
+                f"MMAUDIT_FORK_RPC_METHOD_POLICY_SHA256={rpc_method_policy_sha256}",
+                f"MMAUDIT_FORK_RPC_UNIX_SOCKET={_HARDHAT_BRIDGE_SOCKET}",
+                f"MMAUDIT_FORK_RPC_URL={container_rpc_endpoint}",
+            ],
+        }
+
+    def bridge_socket_path(self, private_dir: Path) -> Path:
+        """Return the fixed host socket path without accepting caller-selected mounts."""
+
+        resolved_private = private_dir.resolve(strict=True)
+        _validate_runtime_path(resolved_private)
+        return resolved_private / _HARDHAT_BRIDGE_SOCKET_NAME
+
+    def wrap_hardhat_fork_suite(
+        self,
+        command: list[str],
+        *,
+        workspace: Path,
+        private_dir: Path,
+        rpc_port: int,
+    ) -> list[str]:
+        """Wrap only after a separate process-local bridge authority is verified."""
+
+        if type(rpc_port) is not int or rpc_port != self.approved_loopback_rpc_port:
+            raise ValueError("Hardhat RPC port does not match the approved loopback capability")
+        image_executable = _HARDHAT_CONTAINER_EXECUTABLES.get(command[0]) if command else None
+        if image_executable is None:
+            raise ValueError(
+                "Hardhat wrapper requires a fixed image-side command without host identity"
+            )
+        authority = _require_process_local_hardhat_bridge_authority(self, private_dir)
+        expected_bridge_socket = self.bridge_socket_path(private_dir)
+        try:
+            bridge_socket = authority.socket_path.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError("Hardhat bridge authority socket is unavailable") from exc
+        if bridge_socket != expected_bridge_socket:
+            raise ValueError("Hardhat bridge authority socket is outside its fixed private path")
+        _validate_runtime_path(bridge_socket)
+        bridge_mount = f"type=bind,src={bridge_socket},dst={_HARDHAT_BRIDGE_SOCKET},readonly"
+        container_rpc_endpoint = f"http://127.0.0.1:{rpc_port}"
+        rpc_method_policy_sha256 = str(
+            self.hardhat_loopback_effective_configuration()["rpc_method_policy_sha256"]
+        )
+        authority_sha256 = _canonical_sha256(
+            {
+                "version": "MMAUDIT_HARDHAT_BRIDGE_AUTHORITY_BINDING_V1",
+                "capability_sha256": self.hardhat_loopback_capability_sha256,
+                "bridge_policy_sha256": authority.bridge_policy_sha256,
+                "bridge_state_sha256": authority.bridge_state_sha256,
+                "bridge_preflight_snapshot_sha256": (authority.bridge_preflight_snapshot_sha256),
+                "bridge_listener_capability_sha256": (authority.bridge_listener_capability_sha256),
+                "bridge_socket_identity_sha256": authority.bridge_socket_identity_sha256,
+                "bridge_observation_sha256": authority.bridge_observation_sha256,
+            }
+        )
+        return self._wrap_hardhat_command(
+            image_executable=image_executable,
+            command_arguments=command[1:],
+            workspace=workspace,
+            private_dir=private_dir,
+            bridge_mount=bridge_mount,
+            container_rpc_endpoint=container_rpc_endpoint,
+            rpc_method_policy_sha256=rpc_method_policy_sha256,
+            authority_sha256=authority_sha256,
+            rpc_port=rpc_port,
+        )
+
+    def _wrap_hardhat_command(
+        self,
+        *,
+        image_executable: str,
+        command_arguments: list[str],
+        workspace: Path,
+        private_dir: Path,
+        bridge_mount: str,
+        container_rpc_endpoint: str,
+        rpc_method_policy_sha256: str,
+        authority_sha256: str,
+        rpc_port: int,
+    ) -> list[str]:
+        """Build fixed argv after the non-public authority boundary has succeeded."""
+
+        resolved_private = private_dir.resolve(strict=True)
+        resolved_workspace = workspace.resolve(strict=True)
+        resolved_workspace.relative_to(resolved_private)
+        _validate_runtime_path(resolved_private)
+        _validate_runtime_path(resolved_workspace)
+        runtime_dir = resolved_private / "container-runtime"
+        writable_dir = resolved_private / "container-output"
+        runtime_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        writable_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        seccomp_path = runtime_dir / "hardhat-seccomp.json"
+        cidfile = runtime_dir / "container.cid"
+        _write_seccomp_profile(seccomp_path, allow_loopback_rpc=True)
+        if image_executable not in _HARDHAT_CONTAINER_EXECUTABLES.values():
+            raise ValueError("Hardhat wrapper requires one fixed absolute image executable")
+        translated_arguments = _translate_command(
+            [Path(image_executable).name, *command_arguments],
+            workspace=resolved_workspace,
+            writable_dir=writable_dir,
+        )[1:]
+        source_mount = f"type=bind,src={resolved_workspace},dst={_CONTAINER_WORKSPACE},readonly"
+        writable_mount = f"type=bind,src={writable_dir},dst={_CONTAINER_WRITABLE},rw"
+        return [
+            self.executable,
+            "run",
+            "--rm",
+            "--pull",
+            "never",
+            "--cidfile",
+            str(cidfile),
+            "--network",
+            "none",
+            "--ipc",
+            "none",
+            "--pid",
+            "private",
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--security-opt",
+            f"seccomp={seccomp_path}",
+            "--pids-limit",
+            str(self.limits.pids),
+            "--memory",
+            str(self.limits.memory_bytes),
+            "--memory-swap",
+            str(self.limits.memory_bytes),
+            "--cpus",
+            str(self.limits.cpu_count),
+            "--ulimit",
+            f"nofile={self.limits.open_files}:{self.limits.open_files}",
+            "--user",
+            f"{self.host_uid}:{self.host_gid}",
+            "--env",
+            f"HOME={_CONTAINER_HOME}",
+            "--env",
+            f"TMPDIR={_CONTAINER_TMP}",
+            "--env",
+            "LANG=C.UTF-8",
+            "--env",
+            "LC_ALL=C.UTF-8",
+            "--env",
+            "NO_COLOR=1",
+            "--env",
+            "CI=true",
+            "--env",
+            "HARDHAT_DISABLE_TELEMETRY_PROMPT=true",
+            "--env",
+            "HARDHAT_NETWORK=hardhat",
+            "--env",
+            f"MMAUDIT_FORK_RPC_METHOD_POLICY_SHA256={rpc_method_policy_sha256}",
+            "--env",
+            f"MMAUDIT_FORK_RPC_UNIX_SOCKET={_HARDHAT_BRIDGE_SOCKET}",
+            "--env",
+            f"MMAUDIT_FORK_RPC_URL={container_rpc_endpoint}",
+            "--env",
+            f"MMAUDIT_HARDHAT_BRIDGE_AUTHORITY_SHA256={authority_sha256}",
+            "--mount",
+            source_mount,
+            "--mount",
+            writable_mount,
+            "--mount",
+            bridge_mount,
+            "--tmpfs",
+            f"{_CONTAINER_TMP}:rw,noexec,nosuid,nodev,size={self.limits.temporary_bytes}",
+            "--tmpfs",
+            f"{_CONTAINER_HOME}:rw,noexec,nosuid,nodev,size={self.limits.home_bytes}",
+            "--workdir",
+            str(_CONTAINER_WORKSPACE),
+            "--entrypoint",
+            _HARDHAT_LOOPBACK_ENTRYPOINT,
+            self.image,
+            "--unix-socket",
+            str(_HARDHAT_BRIDGE_SOCKET),
+            "--listen-host",
+            "127.0.0.1",
+            "--listen-port",
+            str(rpc_port),
+            "--method-policy-sha256",
+            rpc_method_policy_sha256,
+            "--authority-sha256",
+            authority_sha256,
+            "--",
+            image_executable,
+            *translated_arguments,
+        ]
+
+
+def _canonical_hardhat_loopback_endpoint(value: object) -> str:
+    if type(value) is not str or not value or value != value.strip():
+        raise ValueError("Hardhat RPC capability requires exactly one loopback endpoint")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValueError("Hardhat RPC capability requires exactly one loopback endpoint")
+    parsed = urlparse(value)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Hardhat RPC capability has an invalid loopback port") from exc
+    if (
+        parsed.scheme != "http"
+        or not parsed.netloc
+        or parsed.hostname not in _HARDHAT_LOOPBACK_HOSTS
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+        or port is None
+        or not 1 <= port <= 65_535
+    ):
+        raise ValueError(
+            "Hardhat RPC capability requires one credential-free plain HTTP loopback endpoint"
+        )
+    host = "::1" if parsed.hostname == "::1" else "127.0.0.1"
+    return f"http://[{host}]:{port}" if host == "::1" else f"http://{host}:{port}"
+
+
+@dataclass(frozen=True)
+class _PrivateDirectoryIdentity:
+    path: Path
+    device: int
+    inode: int
+    owner_uid: int
+    owner_gid: int
+    mode: int
+
+
+@dataclass(frozen=True)
+class _ProcessLocalHardhatBridgeAuthority:
+    """Fresh internal projection of one exact live process-local bridge seal."""
+
+    socket_path: Path
+    bridge_policy_sha256: str
+    bridge_state_sha256: str
+    bridge_preflight_snapshot_sha256: str
+    bridge_listener_capability_sha256: str
+    bridge_socket_identity_sha256: str
+    bridge_observation_sha256: str
+
+    def __post_init__(self) -> None:
+        hashes = (
+            self.bridge_policy_sha256,
+            self.bridge_state_sha256,
+            self.bridge_preflight_snapshot_sha256,
+            self.bridge_listener_capability_sha256,
+            self.bridge_socket_identity_sha256,
+            self.bridge_observation_sha256,
+        )
+        if not self.socket_path.is_absolute() or any(
+            re.fullmatch(r"[0-9a-f]{64}", value) is None for value in hashes
+        ):
+            raise ValueError("Hardhat bridge authority identity is invalid")
+
+
+@dataclass(frozen=True)
+class _HardhatBridgeSeal:
+    backend_reference: weakref.ReferenceType[SingleLoopbackHardhatBackend]
+    bridge_reference: weakref.ReferenceType[ReadOnlyRpcBridge]
+    binding_reference: weakref.ReferenceType[HardhatReadOnlyRpcBridgeBinding]
+    private_directory_identity: _PrivateDirectoryIdentity
+    backend_capability_sha256: str
+    observation: ReadOnlyRpcUnixListenerObservation
+    seal_nonce: str
+    process_id: int
+
+
+_HARDHAT_BRIDGE_BINDING_FACTORY = object()
+_HARDHAT_BRIDGE_SEALS: dict[int, _HardhatBridgeSeal] = {}
+_HARDHAT_BRIDGE_SEALS_LOCK = threading.RLock()
+
+
+class HardhatReadOnlyRpcBridgeBinding:
+    """Opaque lifetime handle for one exact process-local Hardhat bridge join.
+
+    The handle is deliberately neither copyable nor serializable. Keeping it live
+    only permits construction of an unverified container command; it never grants
+    REAL or VERIFIED execution evidence.
+    """
+
+    __slots__ = ("__weakref__", "_backend_identity", "_closed", "_seal_nonce")
+
+    def __init__(
+        self,
+        backend_identity: int,
+        seal_nonce: str,
+        *,
+        factory: object,
+    ) -> None:
+        if factory is not _HARDHAT_BRIDGE_BINDING_FACTORY:
+            raise TypeError("Hardhat bridge bindings must be created by the trusted binder")
+        self._backend_identity = backend_identity
+        self._seal_nonce = seal_nonce
+        self._closed = False
+
+    def __enter__(self) -> HardhatReadOnlyRpcBridgeBinding:
+        if self._closed:
+            raise ValueError("Hardhat bridge binding is closed")
+        return self
+
+    def __exit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        _exc: BaseException | None,
+        _traceback: object | None,
+    ) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Irreversibly remove this exact handle's process-local seal."""
+
+        with _HARDHAT_BRIDGE_SEALS_LOCK:
+            current = _HARDHAT_BRIDGE_SEALS.get(self._backend_identity)
+            if (
+                current is not None
+                and current.seal_nonce == self._seal_nonce
+                and current.binding_reference() is self
+            ):
+                _HARDHAT_BRIDGE_SEALS.pop(self._backend_identity, None)
+            self._closed = True
+
+    def __copy__(self) -> HardhatReadOnlyRpcBridgeBinding:
+        raise TypeError("Hardhat bridge bindings cannot be copied")
+
+    def __deepcopy__(self, _memo: dict[int, object]) -> HardhatReadOnlyRpcBridgeBinding:
+        raise TypeError("Hardhat bridge bindings cannot be copied")
+
+    def __reduce_ex__(self, _protocol: SupportsIndex) -> str | tuple[Any, ...]:
+        raise TypeError("Hardhat bridge bindings cannot be serialized")
+
+
+def bind_hardhat_read_only_rpc_bridge(
+    backend: SingleLoopbackHardhatBackend,
+    private_dir: Path,
+    bridge: ReadOnlyRpcBridge,
+) -> HardhatReadOnlyRpcBridgeBinding:
+    """Bind an exact live Unix bridge to one backend and private directory.
+
+    Serialized observation values never satisfy this API: the registry retains
+    weak references to the exact bridge, backend, and opaque lifetime handle, and
+    every use revalidates all live identities.
+    """
+
+    if type(backend) is not SingleLoopbackHardhatBackend:
+        raise TypeError("Hardhat bridge binding requires the exact supported backend type")
+    if type(bridge) is not ReadOnlyRpcBridge:
+        raise TypeError("Hardhat bridge binding requires the exact trusted bridge type")
+    private_identity = _hardhat_private_directory_identity(private_dir)
+    observation = _hardhat_live_bridge_observation(bridge)
+    expected_socket_path = backend.bridge_socket_path(private_identity.path)
+    if observation.socket_path != expected_socket_path:
+        raise ValueError("Hardhat bridge socket is outside the exact private directory")
+    if observation.origin_endpoint != backend.approved_loopback_rpc_endpoint:
+        raise ValueError("Hardhat bridge origin differs from the approved loopback endpoint")
+    backend_capability_sha256 = backend.expected_hardhat_loopback_capability_sha256()
+    if (
+        backend.hardhat_loopback_capability_sha256 != backend_capability_sha256
+        or backend.execution_evidence is not ExecutionEvidenceKind.UNVERIFIED
+    ):
+        raise ValueError("Hardhat backend capability identity is invalid")
+
+    backend_identity = id(backend)
+    seal_nonce = secrets.token_hex(32)
+    binding = HardhatReadOnlyRpcBridgeBinding(
+        backend_identity,
+        seal_nonce,
+        factory=_HARDHAT_BRIDGE_BINDING_FACTORY,
+    )
+
+    def discard(_reference: object) -> None:
+        with _HARDHAT_BRIDGE_SEALS_LOCK:
+            current = _HARDHAT_BRIDGE_SEALS.get(backend_identity)
+            if current is not None and current.seal_nonce == seal_nonce:
+                _HARDHAT_BRIDGE_SEALS.pop(backend_identity, None)
+
+    seal = _HardhatBridgeSeal(
+        backend_reference=weakref.ref(backend, discard),
+        bridge_reference=weakref.ref(bridge, discard),
+        binding_reference=weakref.ref(binding, discard),
+        private_directory_identity=private_identity,
+        backend_capability_sha256=backend_capability_sha256,
+        observation=observation,
+        seal_nonce=seal_nonce,
+        process_id=os.getpid(),
+    )
+    with _HARDHAT_BRIDGE_SEALS_LOCK:
+        existing = _HARDHAT_BRIDGE_SEALS.get(backend_identity)
+        if existing is not None:
+            try:
+                _authority_from_hardhat_bridge_seal(
+                    existing,
+                    backend=backend,
+                    private_identity=private_identity,
+                )
+            except ValueError:
+                _HARDHAT_BRIDGE_SEALS.pop(backend_identity, None)
+            else:
+                raise ValueError("Hardhat backend already has a live process-local bridge binding")
+        _HARDHAT_BRIDGE_SEALS[backend_identity] = seal
+    return binding
+
+
+def _require_process_local_hardhat_bridge_authority(
+    backend: SingleLoopbackHardhatBackend,
+    private_dir: Path,
+) -> _ProcessLocalHardhatBridgeAuthority:
+    """Return authority only while every exact process-local identity remains live."""
+
+    backend_identity = id(backend)
+    try:
+        private_identity = _hardhat_private_directory_identity(private_dir)
+    except ValueError as exc:
+        with _HARDHAT_BRIDGE_SEALS_LOCK:
+            _HARDHAT_BRIDGE_SEALS.pop(backend_identity, None)
+        raise ValueError(
+            "trusted process-local Hardhat Unix-bridge authority is unavailable"
+        ) from exc
+    with _HARDHAT_BRIDGE_SEALS_LOCK:
+        seal = _HARDHAT_BRIDGE_SEALS.get(backend_identity)
+        if seal is None:
+            raise ValueError("trusted process-local Hardhat Unix-bridge authority is unavailable")
+        try:
+            return _authority_from_hardhat_bridge_seal(
+                seal,
+                backend=backend,
+                private_identity=private_identity,
+            )
+        except ValueError as exc:
+            _HARDHAT_BRIDGE_SEALS.pop(backend_identity, None)
+            raise ValueError(
+                "trusted process-local Hardhat Unix-bridge authority is unavailable"
+            ) from exc
+
+
+def _authority_from_hardhat_bridge_seal(
+    seal: _HardhatBridgeSeal,
+    *,
+    backend: SingleLoopbackHardhatBackend,
+    private_identity: _PrivateDirectoryIdentity,
+) -> _ProcessLocalHardhatBridgeAuthority:
+    retained_backend = seal.backend_reference()
+    bridge = seal.bridge_reference()
+    binding = seal.binding_reference()
+    if (
+        retained_backend is not backend
+        or bridge is None
+        or binding is None
+        or binding._closed
+        or binding._seal_nonce != seal.seal_nonce
+        or os.getpid() != seal.process_id
+        or seal.private_directory_identity != private_identity
+        or type(backend) is not SingleLoopbackHardhatBackend
+        or type(bridge) is not ReadOnlyRpcBridge
+        or backend.execution_evidence is not ExecutionEvidenceKind.UNVERIFIED
+        or backend.expected_hardhat_loopback_capability_sha256() != seal.backend_capability_sha256
+        or backend.hardhat_loopback_capability_sha256 != seal.backend_capability_sha256
+    ):
+        raise ValueError("Hardhat process-local bridge seal identity changed")
+    observation = _hardhat_live_bridge_observation(bridge)
+    if (
+        observation != seal.observation
+        or observation.socket_path != backend.bridge_socket_path(private_identity.path)
+        or observation.origin_endpoint != backend.approved_loopback_rpc_endpoint
+    ):
+        raise ValueError("Hardhat process-local bridge observation changed")
+    return _ProcessLocalHardhatBridgeAuthority(
+        socket_path=observation.socket_path,
+        bridge_policy_sha256=observation.policy_sha256,
+        bridge_state_sha256=observation.state_sha256,
+        bridge_preflight_snapshot_sha256=(observation.preflight_origin_observation_sha256),
+        bridge_listener_capability_sha256=observation.listener_capability_sha256,
+        bridge_socket_identity_sha256=observation.socket_identity_sha256,
+        bridge_observation_sha256=observation.observation_sha256,
+    )
+
+
+def _hardhat_live_bridge_observation(
+    bridge: ReadOnlyRpcBridge,
+) -> ReadOnlyRpcUnixListenerObservation:
+    try:
+        return bridge.live_unix_listener_observation()
+    except (ReadOnlyRpcBridgeError, ValueError) as exc:
+        raise ValueError("Hardhat owner-only Unix bridge is not live and stable") from exc
+
+
+def _hardhat_private_directory_identity(path: Path) -> _PrivateDirectoryIdentity:
+    if not isinstance(path, Path) or not path.is_absolute():
+        raise ValueError("Hardhat private directory must be an exact absolute path")
+    try:
+        absolute = path.absolute()
+        resolved = path.resolve(strict=True)
+        metadata = path.lstat()
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("Hardhat private directory is unavailable") from exc
+    get_effective_uid = getattr(os, "geteuid", None)
+    if get_effective_uid is None:
+        raise ValueError("Hardhat private directory requires effective UID support")
+    if (
+        absolute != resolved
+        or stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != get_effective_uid()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        raise ValueError("Hardhat private directory identity or mode is invalid")
+    _validate_runtime_path(resolved)
+    return _PrivateDirectoryIdentity(
+        path=resolved,
+        device=metadata.st_dev,
+        inode=metadata.st_ino,
+        owner_uid=metadata.st_uid,
+        owner_gid=metadata.st_gid,
+        mode=stat.S_IMODE(metadata.st_mode),
+    )
+
+
+def _canonical_sha256(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def discover_rootless_container_backend(
     image: str | None,
     *,
@@ -586,21 +1262,75 @@ def _validate_runtime_path(path: Path) -> None:
         raise ValueError("container mount paths must not contain separators or control text")
 
 
-def _write_seccomp_profile(path: Path) -> None:
+def _seccomp_profile_payload(*, allow_loopback_rpc: bool) -> dict[str, object]:
     allowed = set(_ALLOWED_SECCOMP_SYSCALLS)
-    if allowed & _FORBIDDEN_SECCOMP_SYSCALLS:
+    purpose_specific = (
+        _HARDHAT_LOOPBACK_SOCKET_SYSCALLS | {"socket", "socketpair"}
+        if allow_loopback_rpc
+        else frozenset()
+    )
+    forbidden = _FORBIDDEN_SECCOMP_SYSCALLS - purpose_specific
+    if allowed & forbidden:
         raise RuntimeError("container syscall profile includes a forbidden operation")
-    payload = {
+    syscall_rules: list[dict[str, object]] = [
+        {
+            "names": sorted(
+                allowed | (_HARDHAT_LOOPBACK_SOCKET_SYSCALLS if allow_loopback_rpc else set())
+            ),
+            "action": "SCMP_ACT_ALLOW",
+        }
+    ]
+    if allow_loopback_rpc:
+        # AF_UNIX reaches the mounted read-only bridge. AF_INET/AF_INET6 are limited
+        # to the container's own loopback because the runtime network is exactly none.
+        for family in (1, 2, 10):
+            syscall_rules.append(
+                {
+                    "names": ["socket"],
+                    "action": "SCMP_ACT_ALLOW",
+                    "args": [
+                        {
+                            "index": 0,
+                            "value": family,
+                            "valueTwo": 0,
+                            "op": "SCMP_CMP_EQ",
+                        }
+                    ],
+                }
+            )
+        syscall_rules.append(
+            {
+                "names": ["socketpair"],
+                "action": "SCMP_ACT_ALLOW",
+                "args": [
+                    {
+                        "index": 0,
+                        "value": 1,
+                        "valueTwo": 0,
+                        "op": "SCMP_CMP_EQ",
+                    }
+                ],
+            }
+        )
+    return {
         "defaultAction": "SCMP_ACT_ERRNO",
         "defaultErrnoRet": 1,
-        "syscalls": [
-            {
-                "names": sorted(allowed),
-                "action": "SCMP_ACT_ALLOW",
-            }
-        ],
+        "syscalls": syscall_rules,
     }
-    path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+
+
+def _seccomp_profile_bytes(*, allow_loopback_rpc: bool) -> bytes:
+    return (
+        json.dumps(
+            _seccomp_profile_payload(allow_loopback_rpc=allow_loopback_rpc),
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _write_seccomp_profile(path: Path, *, allow_loopback_rpc: bool = False) -> None:
+    path.write_bytes(
+        _seccomp_profile_bytes(allow_loopback_rpc=allow_loopback_rpc),
     )

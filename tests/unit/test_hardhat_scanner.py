@@ -10,6 +10,7 @@ from typing import NoReturn
 import pytest
 from pydantic import ValidationError
 
+import mmaudit.scanners.hardhat as hardhat_module
 from mmaudit.config import (
     RepositoryForkSuiteConfig,
     ScannerConfig,
@@ -20,6 +21,7 @@ from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     HardhatReporterExecution,
     HardhatReporterInventory,
+    HardhatReporterObservedTest,
     HardhatReporterTestResult,
     RepositorySuiteFramework,
     RepositorySuiteSelection,
@@ -28,16 +30,21 @@ from mmaudit.models.schemas import (
     ScannerStatus,
 )
 from mmaudit.scanners.hardhat import (
+    HARDHAT_REPORTER_SHA256,
+    HARDHAT_REPORTER_SOURCE_PATH,
+    HARDHAT_REPORTER_VERSION,
     HardhatForkScanner,
     HardhatReporterError,
     parse_hardhat_execution_report,
     parse_hardhat_inventory_report,
     select_hardhat_repository_suite,
+    verified_hardhat_reporter_source,
 )
 
 _IMAGE = "registry.example/mmaudit-toolchain@sha256:" + "a" * 64
-_REPORTER_SHA256 = "d" * 64
+_REPORTER_SHA256 = HARDHAT_REPORTER_SHA256
 _REPOSITORY_SHA256 = "e" * 64
+_REQUEST_SHA256 = "9" * 64
 _BLOCK_HASH = "0x" + ("f" * 64)
 _SEED = "0x" + ("0" * 63) + "1"
 
@@ -71,6 +78,12 @@ class _MockHardhatLoopbackBackend:
     def host_environment(self, private_dir: Path) -> dict[str, str]:
         del private_dir
         return {}
+
+
+class _ForgedSameProcessReporterAuthority:
+    name = "synthetic-forged-authority"
+    source_custody_sha256 = "4" * 64
+    process_attestation_sha256 = "5" * 64
 
 
 def _scanner() -> HardhatForkScanner:
@@ -134,14 +147,55 @@ def _descriptor(
     )
 
 
+def _observation(
+    *,
+    path: str = "test/audit/Vault.ts",
+    suite_name: str = "Vault",
+    test_name: str = "preserves accounting",
+) -> HardhatReporterObservedTest:
+    return HardhatReporterObservedTest.sealed(
+        project_root=".",
+        path=path,
+        suite_name=suite_name,
+        test_name=test_name,
+    )
+
+
 def _inventory(
-    *descriptors: RepositorySuiteTestDescriptor,
+    *observations: HardhatReporterObservedTest,
+    reporter_version: str = HARDHAT_REPORTER_VERSION,
+    reporter_sha256: str = _REPORTER_SHA256,
+    request_sha256: str = _REQUEST_SHA256,
+    repository_sha256: str = _REPOSITORY_SHA256,
 ) -> HardhatReporterInventory:
     return HardhatReporterInventory.sealed(
-        reporter_version="1.0.0",
-        reporter_sha256=_REPORTER_SHA256,
+        reporter_version=reporter_version,
+        reporter_sha256=reporter_sha256,
+        request_sha256=request_sha256,
+        repository_sha256=repository_sha256,
+        tests=tuple(sorted(observations or (_observation(),), key=lambda item: item.canonical_key)),
+    )
+
+
+def _source_bound_selection(
+    *descriptors: RepositorySuiteTestDescriptor,
+) -> RepositorySuiteSelection:
+    selected = tuple(sorted(descriptors or (_descriptor(),), key=lambda item: item.canonical_key))
+    selected_files = {(descriptor.project_root, descriptor.path) for descriptor in selected}
+    return RepositorySuiteSelection.sealed(
+        profile="explicit",
         repository_sha256=_REPOSITORY_SHA256,
-        tests=tuple(sorted(descriptors or (_descriptor(),), key=lambda item: item.canonical_key)),
+        repository_exclusion_path=".mmaudit",
+        configuration_sha256=_scanner().smart_contracts.repository_suite.stable_hash(),
+        candidate_file_count=len(selected_files),
+        candidate_test_count=len(selected),
+        selected_file_count=len(selected_files),
+        selected_test_count=len(selected),
+        omitted_file_count=0,
+        omitted_test_count=0,
+        limit_reached=False,
+        tests=selected,
+        safety_claim=False,
     )
 
 
@@ -182,7 +236,7 @@ def _attest_backend(monkeypatch: pytest.MonkeyPatch, backend: object) -> None:
 
 def _selection_and_report(
     *descriptors: RepositorySuiteTestDescriptor,
-    reporter_version: str = "1.0.0",
+    reporter_version: str = HARDHAT_REPORTER_VERSION,
     reporter_sha256: str = _REPORTER_SHA256,
     repository_sha256: str = _REPOSITORY_SHA256,
     selection_sha256: str | None = None,
@@ -192,11 +246,7 @@ def _selection_and_report(
     fuzz_seed: str = _SEED,
     result_overrides: dict[str, object] | None = None,
 ) -> tuple[RepositorySuiteSelection, HardhatReporterExecution]:
-    selection = select_hardhat_repository_suite(
-        _inventory(*(descriptors or (_descriptor(),))),
-        _scanner().smart_contracts,
-        repository_exclusion_path=".mmaudit",
-    )
+    selection = _source_bound_selection(*(descriptors or (_descriptor(),)))
     results = []
     for descriptor in selection.tests:
         values: dict[str, object] = {
@@ -212,6 +262,7 @@ def _selection_and_report(
     report = HardhatReporterExecution.sealed(
         reporter_version=reporter_version,
         reporter_sha256=reporter_sha256,
+        request_sha256=_REQUEST_SHA256,
         repository_sha256=repository_sha256,
         selection_sha256=selection_sha256 or selection.selection_sha256,
         chain_id=chain_id,
@@ -384,7 +435,7 @@ def test_mock_dedicated_capability_remains_unavailable_without_real_execution(
     assert run.status is ScannerStatus.UNAVAILABLE
     assert run.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
     assert run.repository_code_execution.value == "blocked"
-    assert "no production single-loopback backend" in (run.error or "")
+    assert "no independent output/exit supervisor" in (run.error or "")
 
 
 @pytest.mark.parametrize(
@@ -623,31 +674,115 @@ def test_configuration_content_race_is_rejected_after_snapshot_read(
     assert "could not be validated safely" in (run.error or "")
 
 
-def test_inventory_parser_and_selector_bind_explicit_configured_suite() -> None:
-    omitted = _descriptor(
+def test_inventory_parser_is_observation_only_and_selection_requires_authority() -> None:
+    omitted = _observation(
         path="test/other/Other.ts",
         suite_name="Other",
         test_name="unselected behavior",
     )
-    inventory = _inventory(_descriptor(), omitted)
+    inventory = _inventory(_observation(), omitted)
 
     parsed = parse_hardhat_inventory_report(
         inventory.model_dump_json(),
-        expected_reporter_version="1.0.0",
-        expected_reporter_sha256=_REPORTER_SHA256,
+        expected_request_sha256=_REQUEST_SHA256,
         expected_repository_sha256=_REPOSITORY_SHA256,
         maximum_bytes=100_000,
     )
-    selection = select_hardhat_repository_suite(
-        parsed,
-        _scanner().smart_contracts,
-        repository_exclusion_path=".mmaudit",
+    assert parsed.authorship_claim is False
+    assert parsed.execution_credit is False
+    assert parsed.provenance == "untrusted_target_process_observation"
+    for authority in (None, _ForgedSameProcessReporterAuthority()):
+        with pytest.raises(HardhatReporterError, match="source-snapshot authority"):
+            select_hardhat_repository_suite(
+                parsed,
+                _scanner().smart_contracts,
+                repository_exclusion_path=".mmaudit",
+                authority=authority,
+            )
+
+
+def test_committed_reporter_source_has_exact_reviewed_identity() -> None:
+    encoded = verified_hardhat_reporter_source()
+
+    assert hashlib.sha256(encoded).hexdigest() == HARDHAT_REPORTER_SHA256
+    assert HARDHAT_REPORTER_SOURCE_PATH.name == "hardhat_reporter.cjs"
+    assert b"test.mmauditDescriptor" not in encoded
+    assert b"authorship_claim: false" in encoded
+    assert b"execution_credit: false" in encoded
+    assert b"node:http" not in encoded
+    assert b"node:https" not in encoded
+    assert b"child_process" not in encoded
+    assert b"process.env" not in encoded
+    assert b"readFile" not in encoded
+
+
+def test_published_reporter_schemas_are_separate_and_versioned() -> None:
+    schema_root = Path(__file__).resolve().parents[2] / "schemas"
+    inventory = json.loads(
+        (schema_root / "hardhat_reporter_inventory.schema.json").read_text(encoding="utf-8")
+    )
+    execution = json.loads(
+        (schema_root / "hardhat_reporter_test.schema.json").read_text(encoding="utf-8")
     )
 
-    assert selection.repository_sha256 == _REPOSITORY_SHA256
-    assert selection.selected_test_count == 1
-    assert selection.omitted_test_count == 1
-    assert selection.tests[0].descriptor_sha256 == _descriptor().descriptor_sha256
+    assert inventory["$id"].endswith("/hardhat_reporter_inventory.schema.json")
+    assert execution["$id"].endswith("/hardhat_reporter_test.schema.json")
+    assert inventory["properties"]["phase"]["const"] == "inventory"
+    assert execution["properties"]["phase"]["const"] == "test"
+    assert inventory["properties"]["authorship_claim"]["const"] is False
+    assert execution["properties"]["execution_credit"]["const"] is False
+
+
+def test_committed_reporter_source_rejects_symlink_and_hardlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module_path = tmp_path / "hardhat.py"
+    module_path.write_text("# synthetic module identity\n", encoding="utf-8")
+    source = tmp_path / "reporter.cjs"
+    source.write_bytes(HARDHAT_REPORTER_SOURCE_PATH.read_bytes())
+    linked = tmp_path / "linked.cjs"
+    os.link(source, linked)
+    monkeypatch.setattr(hardhat_module, "__file__", str(module_path))
+    monkeypatch.setattr(hardhat_module, "HARDHAT_REPORTER_SOURCE_PATH", source)
+    with pytest.raises(HardhatReporterError, match="unique regular file"):
+        verified_hardhat_reporter_source()
+
+    source.unlink()
+    source.symlink_to(HARDHAT_REPORTER_SOURCE_PATH)
+    with pytest.raises(HardhatReporterError, match="unique regular file"):
+        verified_hardhat_reporter_source()
+
+
+def test_committed_reporter_source_rejects_hash_mismatch_and_path_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module_path = tmp_path / "hardhat.py"
+    module_path.write_text("# synthetic module identity\n", encoding="utf-8")
+    source = tmp_path / "reporter.cjs"
+    source.write_text("// tampered reporter\n", encoding="utf-8")
+    monkeypatch.setattr(hardhat_module, "__file__", str(module_path))
+    monkeypatch.setattr(hardhat_module, "HARDHAT_REPORTER_SOURCE_PATH", source)
+    with pytest.raises(HardhatReporterError, match="source hash does not match"):
+        verified_hardhat_reporter_source()
+
+    source.write_bytes(HARDHAT_REPORTER_SOURCE_PATH.read_bytes())
+    replaced = False
+    real_read = os.read
+
+    def replace_named_source(descriptor: int, length: int) -> bytes:
+        nonlocal replaced
+        if not replaced:
+            source.rename(tmp_path / "opened-reporter.cjs")
+            source.write_bytes(HARDHAT_REPORTER_SOURCE_PATH.read_bytes())
+            replaced = True
+        return real_read(descriptor, length)
+
+    monkeypatch.setattr(hardhat_module.os, "read", replace_named_source)
+    with pytest.raises(HardhatReporterError, match="source identity changed"):
+        verified_hardhat_reporter_source()
+    assert replaced is True
 
 
 def test_inventory_parser_rejects_duplicates_extra_fields_and_wrong_pins() -> None:
@@ -657,8 +792,7 @@ def test_inventory_parser_rejects_duplicates_extra_fields_and_wrong_pins() -> No
     with pytest.raises(HardhatReporterError, match="strict validation"):
         parse_hardhat_inventory_report(
             json.dumps(payload),
-            expected_reporter_version="1.0.0",
-            expected_reporter_sha256=_REPORTER_SHA256,
+            expected_request_sha256=_REQUEST_SHA256,
             expected_repository_sha256=_REPOSITORY_SHA256,
             maximum_bytes=100_000,
         )
@@ -667,40 +801,89 @@ def test_inventory_parser_rejects_duplicates_extra_fields_and_wrong_pins() -> No
     with pytest.raises(HardhatReporterError, match="strict JSON"):
         parse_hardhat_inventory_report(
             duplicate,
-            expected_reporter_version="1.0.0",
-            expected_reporter_sha256=_REPORTER_SHA256,
+            expected_request_sha256=_REQUEST_SHA256,
             expected_repository_sha256=_REPOSITORY_SHA256,
             maximum_bytes=100_000,
         )
 
-    with pytest.raises(HardhatReporterError, match="trust pins"):
+    payload = inventory.model_dump(mode="json")
+    payload["reporter_version"] = "2.0.0"
+    payload = _reseal_payload(payload, "inventory_sha256")
+    with pytest.raises(HardhatReporterError, match="committed reporter"):
         parse_hardhat_inventory_report(
-            inventory.model_dump_json(),
-            expected_reporter_version="2.0.0",
-            expected_reporter_sha256=_REPORTER_SHA256,
+            json.dumps(payload),
+            expected_request_sha256=_REQUEST_SHA256,
+            expected_repository_sha256=_REPOSITORY_SHA256,
+            maximum_bytes=100_000,
+        )
+
+
+@pytest.mark.parametrize("mutation", ["duplicate", "unsorted", "empty", "wrong_phase"])
+def test_inventory_parser_rejects_semantically_inconsistent_observations(mutation: str) -> None:
+    first = _observation(test_name="first")
+    second = _observation(test_name="second")
+    payload = _inventory(first, second).model_dump(mode="json")
+    if mutation == "duplicate":
+        payload["tests"] = [payload["tests"][0], payload["tests"][0]]
+    elif mutation == "unsorted":
+        payload["tests"] = list(reversed(payload["tests"]))
+    elif mutation == "empty":
+        payload["tests"] = []
+    else:
+        payload["phase"] = "test"
+    payload = _reseal_payload(payload, "inventory_sha256")
+
+    with pytest.raises(HardhatReporterError, match="strict validation"):
+        parse_hardhat_inventory_report(
+            json.dumps(payload),
+            expected_request_sha256=_REQUEST_SHA256,
+            expected_repository_sha256=_REPOSITORY_SHA256,
+            maximum_bytes=100_000,
+        )
+
+
+@pytest.mark.parametrize("claim_field", ["safety_claim", "authorship_claim", "execution_credit"])
+def test_reporter_parser_rejects_any_attempt_to_upgrade_observation_credit(
+    claim_field: str,
+) -> None:
+    payload = _inventory().model_dump(mode="json")
+    payload[claim_field] = True
+    payload = _reseal_payload(payload, "inventory_sha256")
+
+    with pytest.raises(HardhatReporterError, match="strict validation"):
+        parse_hardhat_inventory_report(
+            json.dumps(payload),
+            expected_request_sha256=_REQUEST_SHA256,
             expected_repository_sha256=_REPOSITORY_SHA256,
             maximum_bytes=100_000,
         )
 
 
 @pytest.mark.parametrize(
-    ("expected_version", "expected_reporter_sha256", "expected_repository_sha256", "error"),
+    ("reporter_sha256", "request_sha256", "expected_repository_sha256", "error"),
     [
-        ("1.0.0", "a" * 64, _REPOSITORY_SHA256, "trust pins"),
-        ("1.0.0", _REPORTER_SHA256, "a" * 64, "frozen repository"),
+        ("a" * 64, _REQUEST_SHA256, _REPOSITORY_SHA256, "committed reporter"),
+        (_REPORTER_SHA256, "a" * 64, _REPOSITORY_SHA256, "phase request"),
+        (_REPORTER_SHA256, _REQUEST_SHA256, "a" * 64, "frozen repository"),
     ],
 )
-def test_inventory_parser_rejects_reporter_hash_or_repository_mismatch(
-    expected_version: str,
-    expected_reporter_sha256: str,
+def test_inventory_parser_rejects_reporter_request_or_repository_mismatch(
+    reporter_sha256: str,
+    request_sha256: str,
     expected_repository_sha256: str,
     error: str,
 ) -> None:
+    inventory = HardhatReporterInventory.sealed(
+        reporter_version=HARDHAT_REPORTER_VERSION,
+        reporter_sha256=reporter_sha256,
+        request_sha256=request_sha256,
+        repository_sha256=_REPOSITORY_SHA256,
+        tests=(_observation(),),
+    )
     with pytest.raises(HardhatReporterError, match=error):
         parse_hardhat_inventory_report(
-            _inventory().model_dump_json(),
-            expected_reporter_version=expected_version,
-            expected_reporter_sha256=expected_reporter_sha256,
+            inventory.model_dump_json(),
+            expected_request_sha256=_REQUEST_SHA256,
             expected_repository_sha256=expected_repository_sha256,
             maximum_bytes=100_000,
         )
@@ -709,33 +892,29 @@ def test_inventory_parser_rejects_reporter_hash_or_repository_mismatch(
 @pytest.mark.parametrize(
     ("content", "maximum_bytes", "error"),
     [
-        ("{", 100_000, "strict JSON"),
+        (b"{", 100_000, "strict JSON"),
+        (b'{"schema_version":"1.0"', 100_000, "strict JSON"),
+        (b"\xff\xfe", 100_000, "valid UTF-8"),
         (_inventory().model_dump_json() + (" " * 2_000), 1_024, "byte ceiling"),
         (_inventory().model_dump_json(), 1_023, "out of bounds"),
     ],
 )
 def test_inventory_parser_rejects_malformed_or_unbounded_output(
-    content: str,
+    content: bytes | str,
     maximum_bytes: int,
     error: str,
 ) -> None:
     with pytest.raises(HardhatReporterError, match=error):
         parse_hardhat_inventory_report(
             content,
-            expected_reporter_version="1.0.0",
-            expected_reporter_sha256=_REPORTER_SHA256,
+            expected_request_sha256=_REQUEST_SHA256,
             expected_repository_sha256=_REPOSITORY_SHA256,
             maximum_bytes=maximum_bytes,
         )
 
 
 def test_execution_report_requires_exact_selection_and_fork_binding() -> None:
-    inventory = _inventory()
-    selection = select_hardhat_repository_suite(
-        inventory,
-        _scanner().smart_contracts,
-        repository_exclusion_path=".mmaudit",
-    )
+    selection = _source_bound_selection()
     descriptor = selection.tests[0]
     result = HardhatReporterTestResult.sealed(
         descriptor_sha256=descriptor.descriptor_sha256,
@@ -746,8 +925,9 @@ def test_execution_report_requires_exact_selection_and_fork_binding() -> None:
         duration_seconds=0.25,
     )
     report = HardhatReporterExecution.sealed(
-        reporter_version="1.0.0",
+        reporter_version=HARDHAT_REPORTER_VERSION,
         reporter_sha256=_REPORTER_SHA256,
+        request_sha256=_REQUEST_SHA256,
         repository_sha256=_REPOSITORY_SHA256,
         selection_sha256=selection.selection_sha256,
         chain_id=31_337,
@@ -760,8 +940,7 @@ def test_execution_report_requires_exact_selection_and_fork_binding() -> None:
     parsed = parse_hardhat_execution_report(
         report.model_dump_json(),
         selection=selection,
-        expected_reporter_version="1.0.0",
-        expected_reporter_sha256=_REPORTER_SHA256,
+        expected_request_sha256=_REQUEST_SHA256,
         expected_chain_id=31_337,
         expected_block_number=0,
         expected_block_hash=_BLOCK_HASH,
@@ -770,24 +949,18 @@ def test_execution_report_requires_exact_selection_and_fork_binding() -> None:
         maximum_bytes=100_000,
     )
     assert parsed.report_sha256 == report.report_sha256
+    assert parsed.authorship_claim is False
+    assert parsed.execution_credit is False
 
-    incomplete = HardhatReporterExecution.sealed(
-        reporter_version="1.0.0",
-        reporter_sha256=_REPORTER_SHA256,
-        repository_sha256=_REPOSITORY_SHA256,
-        selection_sha256=selection.selection_sha256,
-        chain_id=31_337,
-        block_number=0,
-        block_hash=_BLOCK_HASH,
-        fuzz_seed=_SEED,
-        results=(),
+    incomplete = _reseal_payload(
+        {**report.model_dump(mode="json"), "results": []},
+        "report_sha256",
     )
-    with pytest.raises(HardhatReporterError, match="exact selected test set"):
+    with pytest.raises(HardhatReporterError, match="strict validation"):
         parse_hardhat_execution_report(
-            incomplete.model_dump_json(),
+            json.dumps(incomplete),
             selection=selection,
-            expected_reporter_version="1.0.0",
-            expected_reporter_sha256=_REPORTER_SHA256,
+            expected_request_sha256=_REQUEST_SHA256,
             expected_chain_id=31_337,
             expected_block_number=0,
             expected_block_hash=_BLOCK_HASH,
@@ -800,8 +973,9 @@ def test_execution_report_requires_exact_selection_and_fork_binding() -> None:
 @pytest.mark.parametrize(
     ("report_overrides", "expected_overrides", "error"),
     [
-        ({"reporter_version": "2.0.0"}, {}, "trust pins"),
-        ({"reporter_sha256": "a" * 64}, {}, "trust pins"),
+        ({"reporter_version": "2.0.0"}, {}, "committed reporter"),
+        ({"reporter_sha256": "a" * 64}, {}, "committed reporter"),
+        ({"request_sha256": "a" * 64}, {}, "phase request"),
         ({"repository_sha256": "a" * 64}, {}, "suite selection"),
         ({"selection_sha256": "a" * 64}, {}, "suite selection"),
         ({}, {"expected_chain_id": 1}, "pinned fork state"),
@@ -819,6 +993,7 @@ def test_execution_report_rejects_trust_selection_and_fork_mismatches(
     values: dict[str, object] = {
         "reporter_version": baseline.reporter_version,
         "reporter_sha256": baseline.reporter_sha256,
+        "request_sha256": baseline.request_sha256,
         "repository_sha256": baseline.repository_sha256,
         "selection_sha256": baseline.selection_sha256,
         "chain_id": baseline.chain_id,
@@ -830,8 +1005,7 @@ def test_execution_report_rejects_trust_selection_and_fork_mismatches(
     values.update(report_overrides)
     report = HardhatReporterExecution.sealed(**values)
     expected: dict[str, object] = {
-        "expected_reporter_version": "1.0.0",
-        "expected_reporter_sha256": _REPORTER_SHA256,
+        "expected_request_sha256": _REQUEST_SHA256,
         "expected_chain_id": 31_337,
         "expected_block_number": 0,
         "expected_block_hash": _BLOCK_HASH,
@@ -857,8 +1031,7 @@ def test_execution_report_rejects_result_identity_or_deadline_mismatch() -> None
         parse_hardhat_execution_report(
             identity_mismatch.model_dump_json(),
             selection=selection,
-            expected_reporter_version="1.0.0",
-            expected_reporter_sha256=_REPORTER_SHA256,
+            expected_request_sha256=_REQUEST_SHA256,
             expected_chain_id=31_337,
             expected_block_number=0,
             expected_block_hash=_BLOCK_HASH,
@@ -872,8 +1045,7 @@ def test_execution_report_rejects_result_identity_or_deadline_mismatch() -> None
         parse_hardhat_execution_report(
             too_slow.model_dump_json(),
             selection=selection,
-            expected_reporter_version="1.0.0",
-            expected_reporter_sha256=_REPORTER_SHA256,
+            expected_request_sha256=_REQUEST_SHA256,
             expected_chain_id=31_337,
             expected_block_number=0,
             expected_block_hash=_BLOCK_HASH,
@@ -898,8 +1070,7 @@ def test_execution_report_rejects_duplicate_unsorted_or_extra_results() -> None:
         parse_hardhat_execution_report(
             json.dumps(duplicate),
             selection=selection,
-            expected_reporter_version="1.0.0",
-            expected_reporter_sha256=_REPORTER_SHA256,
+            expected_request_sha256=_REQUEST_SHA256,
             expected_chain_id=31_337,
             expected_block_number=0,
             expected_block_hash=_BLOCK_HASH,
@@ -917,8 +1088,7 @@ def test_execution_report_rejects_duplicate_unsorted_or_extra_results() -> None:
         parse_hardhat_execution_report(
             json.dumps(unsorted),
             selection=selection,
-            expected_reporter_version="1.0.0",
-            expected_reporter_sha256=_REPORTER_SHA256,
+            expected_request_sha256=_REQUEST_SHA256,
             expected_chain_id=31_337,
             expected_block_number=0,
             expected_block_hash=_BLOCK_HASH,
@@ -932,8 +1102,7 @@ def test_execution_report_rejects_duplicate_unsorted_or_extra_results() -> None:
         parse_hardhat_execution_report(
             json.dumps(extra),
             selection=selection,
-            expected_reporter_version="1.0.0",
-            expected_reporter_sha256=_REPORTER_SHA256,
+            expected_request_sha256=_REQUEST_SHA256,
             expected_chain_id=31_337,
             expected_block_number=0,
             expected_block_hash=_BLOCK_HASH,
@@ -947,14 +1116,54 @@ def test_execution_report_rejects_duplicate_unsorted_or_extra_results() -> None:
         parse_hardhat_execution_report(
             duplicate_key,
             selection=selection,
-            expected_reporter_version="1.0.0",
-            expected_reporter_sha256=_REPORTER_SHA256,
+            expected_request_sha256=_REQUEST_SHA256,
             expected_chain_id=31_337,
             expected_block_number=0,
             expected_block_hash=_BLOCK_HASH,
             expected_fuzz_seed=_SEED,
             per_test_timeout_seconds=1,
             maximum_bytes=100_000,
+        )
+
+
+@pytest.mark.parametrize(
+    ("content_kind", "maximum_bytes", "error"),
+    [
+        ("truncated", 100_000, "strict JSON"),
+        ("non_utf8", 100_000, "valid UTF-8"),
+        ("oversized", 1_024, "byte ceiling"),
+        ("wrong_phase", 100_000, "strict validation"),
+    ],
+)
+def test_execution_parser_rejects_corrupt_or_phase_inconsistent_output(
+    content_kind: str,
+    maximum_bytes: int,
+    error: str,
+) -> None:
+    selection, report = _selection_and_report()
+    encoded = report.model_dump_json().encode("utf-8")
+    if content_kind == "truncated":
+        content = encoded[:-1]
+    elif content_kind == "non_utf8":
+        content = b"\xff\xfe"
+    elif content_kind == "oversized":
+        content = encoded + (b" " * 2_000)
+    else:
+        payload = report.model_dump(mode="json")
+        payload["phase"] = "inventory"
+        content = json.dumps(_reseal_payload(payload, "report_sha256")).encode("utf-8")
+
+    with pytest.raises(HardhatReporterError, match=error):
+        parse_hardhat_execution_report(
+            content,
+            selection=selection,
+            expected_request_sha256=_REQUEST_SHA256,
+            expected_chain_id=31_337,
+            expected_block_number=0,
+            expected_block_hash=_BLOCK_HASH,
+            expected_fuzz_seed=_SEED,
+            per_test_timeout_seconds=1,
+            maximum_bytes=maximum_bytes,
         )
 
 

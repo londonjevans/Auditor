@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -10,7 +10,7 @@ import stat
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Final, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 from mmaudit.config import ScannerConfig, SmartContractsConfig
@@ -26,12 +26,16 @@ from mmaudit.models.schemas import (
     RepositoryCodeExecutionState,
     RepositorySuiteFramework,
     RepositorySuiteSelection,
-    RepositorySuiteTestDescriptor,
     ScannerFinding,
     ScannerRun,
     ScannerStatus,
 )
 from mmaudit.scanners.base import ScannerAdapter, ScannerIsolationBackend
+from mmaudit.scanners.hardhat_source import (
+    HardhatSourceBindingError,
+    HardhatSourceInventoryAuthority,
+    hardhat_selection_from_source_authority,
+)
 
 _HARDHAT_CONFIG_NAMES = (
     "hardhat.config.cjs",
@@ -44,6 +48,12 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MAX_CONFIGURATION_BYTES = 1_000_000
 _CONFIGURATION_READ_CHUNK_BYTES = 64 * 1024
 _MAX_REPORT_BYTES = 100_000_000
+_MAX_REPORTER_SOURCE_BYTES = 1_000_000
+HARDHAT_REPORTER_SCHEMA_VERSION: Final = "1.0"
+HARDHAT_REPORTER_NAME: Final = "mmaudit-hardhat-reporter"
+HARDHAT_REPORTER_VERSION: Final = "1.0.0"
+HARDHAT_REPORTER_SHA256: Final = "2269138b1383a5cc37da5914b89cbd3d7c22c9f80503a5f69ebe5e1f7e404226"
+HARDHAT_REPORTER_SOURCE_PATH: Final = Path(__file__).with_name("hardhat_reporter.cjs")
 _DESCRIPTOR_RELATIVE_OPEN_SUPPORTED = os.open in os.supports_dir_fd
 _DESCRIPTOR_RELATIVE_STAT_SUPPORTED = os.stat in os.supports_dir_fd
 _NOFOLLOW_STAT_SUPPORTED = os.stat in os.supports_follow_symlinks
@@ -101,7 +111,7 @@ _UNSAFE_DEPENDENCY = re.compile(
 
 
 class HardhatReporterError(ValueError):
-    """Trusted Hardhat reporter output or selection failed strict validation."""
+    """Hardhat reporter observation or authority failed strict validation."""
 
 
 @runtime_checkable
@@ -288,8 +298,9 @@ class HardhatForkScanner(ScannerAdapter):
 
         return finish(
             ScannerStatus.UNAVAILABLE,
-            "trusted Hardhat reporter parsing and selection are implemented, but no "
-            "production single-loopback backend executes the two-phase inventory/test protocol",
+            "Hardhat observation parsing and direct-literal source-snapshot selection exist, "
+            "but no independent output/exit supervisor, image-side executable attestation, "
+            "or production single-loopback execution authority is available",
         )
 
 
@@ -359,41 +370,132 @@ def _loopback_rpc_port(value: str) -> int:
     return parsed.port
 
 
-def _strict_report_object(content: str, *, maximum_bytes: int) -> dict[str, Any]:
+def verified_hardhat_reporter_source() -> bytes:
+    """Read the committed reporter through one no-follow, identity-stable descriptor."""
+
+    source = HARDHAT_REPORTER_SOURCE_PATH
+    try:
+        trusted_parent = Path(__file__).resolve(strict=True).parent
+        if source.parent.resolve(strict=True) != trusted_parent:
+            raise HardhatReporterError("committed Hardhat reporter source escaped its package")
+        named_before = source.lstat()
+    except HardhatReporterError:
+        raise
+    except OSError as exc:
+        raise HardhatReporterError("committed Hardhat reporter source is unavailable") from exc
+    if (
+        stat.S_ISLNK(named_before.st_mode)
+        or not stat.S_ISREG(named_before.st_mode)
+        or named_before.st_nlink != 1
+    ):
+        raise HardhatReporterError("committed Hardhat reporter source is not a unique regular file")
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(source, flags)
+    except OSError as exc:
+        raise HardhatReporterError(
+            "committed Hardhat reporter source cannot be opened safely"
+        ) from exc
+    try:
+        opened_before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened_before.st_mode)
+            or opened_before.st_nlink != 1
+            or _hardhat_reporter_file_identity(opened_before)
+            != _hardhat_reporter_file_identity(named_before)
+        ):
+            raise HardhatReporterError("committed Hardhat reporter source identity changed")
+        chunks: list[bytes] = []
+        total_bytes = 0
+        while total_bytes <= _MAX_REPORTER_SOURCE_BYTES:
+            chunk = os.read(
+                descriptor, min(64 * 1024, _MAX_REPORTER_SOURCE_BYTES + 1 - total_bytes)
+            )
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total_bytes += len(chunk)
+        encoded = b"".join(chunks)
+        opened_after = os.fstat(descriptor)
+    except OSError as exc:
+        raise HardhatReporterError(
+            "committed Hardhat reporter source cannot be read safely"
+        ) from exc
+    finally:
+        os.close(descriptor)
+
+    try:
+        named_after = source.lstat()
+    except OSError as exc:
+        raise HardhatReporterError("committed Hardhat reporter source identity changed") from exc
+    opened_identity = _hardhat_reporter_file_identity(opened_before)
+    if opened_identity != _hardhat_reporter_file_identity(
+        opened_after
+    ) or opened_identity != _hardhat_reporter_file_identity(named_after):
+        raise HardhatReporterError("committed Hardhat reporter source identity changed")
+    if not encoded or len(encoded) > _MAX_REPORTER_SOURCE_BYTES:
+        raise HardhatReporterError("committed Hardhat reporter source has an invalid size")
+    if hashlib.sha256(encoded).hexdigest() != HARDHAT_REPORTER_SHA256:
+        raise HardhatReporterError("committed Hardhat reporter source hash does not match")
+    return encoded
+
+
+def _hardhat_reporter_file_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _strict_report_object(content: bytes | str, *, maximum_bytes: int) -> dict[str, Any]:
     if not 1_024 <= maximum_bytes <= _MAX_REPORT_BYTES:
         raise HardhatReporterError("Hardhat reporter byte ceiling is out of bounds")
     try:
-        encoded = content.encode("utf-8")
+        encoded = content if isinstance(content, bytes) else content.encode("utf-8")
     except UnicodeError as exc:
         raise HardhatReporterError("Hardhat reporter output is not valid UTF-8") from exc
     if not encoded or len(encoded) > maximum_bytes:
         raise HardhatReporterError("Hardhat reporter output is empty or exceeds its byte ceiling")
     try:
-        return _strict_json_object(content)
+        decoded = encoded.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HardhatReporterError("Hardhat reporter output is not valid UTF-8") from exc
+    try:
+        return _strict_json_object(decoded)
     except (json.JSONDecodeError, ValueError) as exc:
         raise HardhatReporterError("Hardhat reporter output is not one strict JSON object") from exc
 
 
 def parse_hardhat_inventory_report(
-    content: str,
+    content: bytes | str,
     *,
-    expected_reporter_version: str,
-    expected_reporter_sha256: str,
+    expected_request_sha256: str,
     expected_repository_sha256: str,
     maximum_bytes: int,
 ) -> HardhatReporterInventory:
     """Parse one complete inventory without retaining unvalidated reporter output."""
 
+    verified_hardhat_reporter_source()
     payload = _strict_report_object(content, maximum_bytes=maximum_bytes)
     try:
         inventory = HardhatReporterInventory.model_validate(payload)
     except ValueError as exc:
         raise HardhatReporterError("Hardhat reporter inventory failed strict validation") from exc
     if (
-        inventory.reporter_version != expected_reporter_version
-        or inventory.reporter_sha256 != expected_reporter_sha256
+        inventory.schema_version != HARDHAT_REPORTER_SCHEMA_VERSION
+        or inventory.reporter_name != HARDHAT_REPORTER_NAME
+        or inventory.reporter_version != HARDHAT_REPORTER_VERSION
+        or inventory.reporter_sha256 != HARDHAT_REPORTER_SHA256
     ):
-        raise HardhatReporterError("Hardhat reporter inventory differs from its trust pins")
+        raise HardhatReporterError("Hardhat reporter inventory differs from the committed reporter")
+    if inventory.request_sha256 != expected_request_sha256:
+        raise HardhatReporterError("Hardhat reporter inventory differs from its phase request")
     if inventory.repository_sha256 != expected_repository_sha256:
         raise HardhatReporterError("Hardhat reporter inventory differs from the frozen repository")
     return inventory
@@ -404,89 +506,28 @@ def select_hardhat_repository_suite(
     smart_contracts: SmartContractsConfig,
     *,
     repository_exclusion_path: str,
+    authority: HardhatSourceInventoryAuthority | None = None,
 ) -> RepositorySuiteSelection:
-    """Select an exact bounded Hardhat suite from trusted isolated inventory."""
+    """Select only from an exact process-local direct-literal source snapshot."""
 
-    config = smart_contracts.repository_suite
-    if not config.hardhat_include_paths or not config.hardhat_include_tests:
-        raise HardhatReporterError("Hardhat repository-suite selection is disabled")
-    descriptors: list[RepositorySuiteTestDescriptor] = []
-    exact_bare_matches: dict[str, set[tuple[str, str, str]]] = {
-        pattern: set()
-        for pattern in config.hardhat_include_tests
-        if not any(character in pattern for character in "*?[")
-    }
-    per_file_counts: dict[tuple[str, str], int] = {}
-    candidate_files = {(descriptor.project_root, descriptor.path) for descriptor in inventory.tests}
-
-    for descriptor in inventory.tests:
-        if not _matches_any(descriptor.path, config.hardhat_include_paths):
-            continue
-        if _matches_any(descriptor.path, config.hardhat_exclude_paths):
-            continue
-        stable_id = f"{descriptor.path}:{descriptor.suite_name}:{descriptor.test_name}"
-        if not _matches_hardhat_test(
-            descriptor.test_name,
-            stable_id,
-            config.hardhat_include_tests,
-        ):
-            continue
-        if _matches_hardhat_test(
-            descriptor.test_name,
-            stable_id,
-            config.hardhat_exclude_tests,
-        ):
-            continue
-        file_key = (descriptor.project_root, descriptor.path)
-        per_file_counts[file_key] = per_file_counts.get(file_key, 0) + 1
-        if per_file_counts[file_key] > config.max_tests_per_file:
-            raise HardhatReporterError(
-                f"selected Hardhat tests exceed per-file ceiling for {descriptor.path}"
-            )
-        for exact_name in exact_bare_matches:
-            if descriptor.test_name == exact_name:
-                exact_bare_matches[exact_name].add(
-                    (descriptor.path, descriptor.suite_name, descriptor.test_name)
-                )
-        descriptors.append(descriptor)
-
-    for exact_name, matches in exact_bare_matches.items():
-        if len(matches) > 1:
-            raise HardhatReporterError(
-                f"exact bare Hardhat test selector is ambiguous: {exact_name}"
-            )
-    descriptors.sort(key=lambda item: item.canonical_key)
-    if not descriptors:
-        raise HardhatReporterError("Hardhat repository-suite selection matched zero tests")
-    selected_files = {(descriptor.project_root, descriptor.path) for descriptor in descriptors}
-    if len(selected_files) > config.max_selected_files:
-        raise HardhatReporterError("selected Hardhat files exceed configured ceiling")
-    if len(descriptors) > config.max_total_tests:
-        raise HardhatReporterError("selected Hardhat tests exceed configured total ceiling")
-
-    return RepositorySuiteSelection.sealed(
-        profile=config.profile,
-        repository_sha256=inventory.repository_sha256,
-        repository_exclusion_path=repository_exclusion_path,
-        configuration_sha256=config.stable_hash(),
-        candidate_file_count=len(candidate_files),
-        candidate_test_count=len(inventory.tests),
-        selected_file_count=len(selected_files),
-        selected_test_count=len(descriptors),
-        omitted_file_count=len(candidate_files - selected_files),
-        omitted_test_count=len(inventory.tests) - len(descriptors),
-        limit_reached=False,
-        tests=tuple(descriptors),
-        safety_claim=False,
-    )
+    try:
+        return hardhat_selection_from_source_authority(
+            inventory,
+            smart_contracts,
+            repository_exclusion_path=repository_exclusion_path,
+            authority=authority,
+        )
+    except HardhatSourceBindingError as exc:
+        raise HardhatReporterError(
+            "Hardhat observations lack exact process-local source-snapshot authority"
+        ) from exc
 
 
 def parse_hardhat_execution_report(
-    content: str,
+    content: bytes | str,
     *,
     selection: RepositorySuiteSelection,
-    expected_reporter_version: str,
-    expected_reporter_sha256: str,
+    expected_request_sha256: str,
     expected_chain_id: int,
     expected_block_number: int,
     expected_block_hash: str,
@@ -496,6 +537,7 @@ def parse_hardhat_execution_report(
 ) -> HardhatReporterExecution:
     """Parse and exactly bind one complete report to its pre-execution selection."""
 
+    verified_hardhat_reporter_source()
     payload = _strict_report_object(content, maximum_bytes=maximum_bytes)
     try:
         report = HardhatReporterExecution.model_validate(payload)
@@ -507,10 +549,14 @@ def parse_hardhat_execution_report(
     ):
         raise HardhatReporterError("Hardhat execution selection contains another framework")
     if (
-        report.reporter_version != expected_reporter_version
-        or report.reporter_sha256 != expected_reporter_sha256
+        report.schema_version != HARDHAT_REPORTER_SCHEMA_VERSION
+        or report.reporter_name != HARDHAT_REPORTER_NAME
+        or report.reporter_version != HARDHAT_REPORTER_VERSION
+        or report.reporter_sha256 != HARDHAT_REPORTER_SHA256
     ):
-        raise HardhatReporterError("Hardhat execution reporter differs from its trust pins")
+        raise HardhatReporterError("Hardhat execution differs from the committed reporter")
+    if report.request_sha256 != expected_request_sha256:
+        raise HardhatReporterError("Hardhat execution differs from its phase request")
     if (
         report.repository_sha256 != selection.repository_sha256
         or report.selection_sha256 != selection.selection_sha256
@@ -546,21 +592,6 @@ def parse_hardhat_execution_report(
                 "Hardhat reporter test exceeded the configured per-test deadline"
             )
     return report
-
-
-def _matches_any(value: str, patterns: tuple[str, ...]) -> bool:
-    return any(fnmatch.fnmatchcase(value, pattern) for pattern in patterns)
-
-
-def _matches_hardhat_test(
-    test_name: str,
-    stable_id: str,
-    patterns: tuple[str, ...],
-) -> bool:
-    return any(
-        fnmatch.fnmatchcase(test_name, pattern) or fnmatch.fnmatchcase(stable_id, pattern)
-        for pattern in patterns
-    )
 
 
 def _target_configuration_error(root: Path) -> str | None:

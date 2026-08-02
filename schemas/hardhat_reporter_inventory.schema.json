@@ -1,0 +1,153 @@
+{
+  "$defs": {
+    "HardhatReporterObservedTest": {
+      "additionalProperties": false,
+      "description": "One untrusted Mocha test identity observed without source-authorship credit.",
+      "properties": {
+        "observation_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Observation Sha256",
+          "type": "string"
+        },
+        "path": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "project_root": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Project Root",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "suite_name": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Suite Name",
+          "type": "string"
+        },
+        "test_name": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Test Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_root",
+        "path",
+        "suite_name",
+        "test_name",
+        "observation_sha256"
+      ],
+      "title": "HardhatReporterObservedTest",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/hardhat_reporter_inventory.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Strict inventory of untrusted same-process Mocha observations.",
+  "properties": {
+    "authorship_claim": {
+      "const": false,
+      "default": false,
+      "title": "Authorship Claim",
+      "type": "boolean"
+    },
+    "completed": {
+      "const": true,
+      "default": true,
+      "title": "Completed",
+      "type": "boolean"
+    },
+    "execution_credit": {
+      "const": false,
+      "default": false,
+      "title": "Execution Credit",
+      "type": "boolean"
+    },
+    "inventory_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Inventory Sha256",
+      "type": "string"
+    },
+    "phase": {
+      "const": "inventory",
+      "default": "inventory",
+      "title": "Phase",
+      "type": "string"
+    },
+    "provenance": {
+      "const": "untrusted_target_process_observation",
+      "default": "untrusted_target_process_observation",
+      "title": "Provenance",
+      "type": "string"
+    },
+    "reporter_name": {
+      "const": "mmaudit-hardhat-reporter",
+      "default": "mmaudit-hardhat-reporter",
+      "title": "Reporter Name",
+      "type": "string"
+    },
+    "reporter_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Reporter Sha256",
+      "type": "string"
+    },
+    "reporter_version": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Reporter Version",
+      "type": "string"
+    },
+    "repository_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Repository Sha256",
+      "type": "string"
+    },
+    "request_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Request Sha256",
+      "type": "string"
+    },
+    "safety_claim": {
+      "const": false,
+      "default": false,
+      "title": "Safety Claim",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "tests": {
+      "items": {
+        "$ref": "#/$defs/HardhatReporterObservedTest"
+      },
+      "maxItems": 10000,
+      "minItems": 1,
+      "title": "Tests",
+      "type": "array"
+    }
+  },
+  "required": [
+    "reporter_version",
+    "reporter_sha256",
+    "request_sha256",
+    "repository_sha256",
+    "tests",
+    "inventory_sha256"
+  ],
+  "title": "mmaudit Hardhat inventory observation",
+  "type": "object"
+}

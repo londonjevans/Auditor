@@ -1234,12 +1234,37 @@ are invisible to source review by construction.
   `src/mmaudit/isolation/container.py`, new reporter source and published schema,
   `src/mmaudit/config.py`, `docs/remediation/v3/operator_prerequisites.md`, regressions.
 - **Dependencies:** `V3-OMISSION-001`.
-- **Status:** `IN_PROGRESS`
+- **Status:** `PARTIAL`
 - **Starting boundary:** Specify and test the versioned inventory/test reporter contracts and
   container-side executable identity first. Then implement the capability-derived
   single-loopback backend and exercise the two-phase protocol at the trusted process boundary.
   Preserve `UNAVAILABLE` without a real rootless runtime and do not credit host identity as
   container execution evidence.
+- **Implemented safe components:** Separate strict inventory/test schemas, the pinned in-repo
+  reporter, bounded semantic parsers, self-hashed two-phase requests, a conservative direct-literal
+  source snapshot, the network-none wrapper, fixed in-image executable tokens, bounded raw relay,
+  owner-only AF_UNIX read-only RPC listener, and an exact process/PID/object/private-directory/
+  socket/policy/state-bound lifetime seal are implemented. Positive wrapper construction now uses
+  the real local Unix bridge instead of a fabricated authority. Every component remains
+  observation-only or `UNVERIFIED`; none upgrades Hardhat execution evidence.
+- **Validation evidence:** The reporter/source/protocol/scanner/doctor slice passed `107` tests;
+  the joined backend/Unix/relay slice passed `62` local-only tests; the unchanged TCP bridge
+  compatibility suite passed `76` tests. Node syntax, release-schema synchronization, affected
+  Ruff, strict mypy, and diff checks passed. The source review's concrete alias, mutable hash,
+  accounting-join, slash, template, escaped-identifier, comment, line-terminator, and JSX/TSX
+  cases now fail closed. JSX/TSX is deliberately unsupported rather than parsed inaccurately.
+- **Remaining technical blockers:** No trusted `hardhat` executable, rootless Podman/Docker
+  runtime, approved digest-pinned image, image-side executable attestation, independent
+  output/exit supervisor, or real Hardhat/Mocha execution is available. The two-phase integration
+  uses a local Node/EventEmitter process double and is explicitly `MOCK`; it does not prove Mocha
+  `.only`, pending/filter behavior, or phase-one body non-execution. Unix per-test attribution and
+  monorepo project roots also remain fail closed. The returned command argv is deliberately
+  non-crediting and replayable; a future executor must retain the live binding and revalidate it
+  immediately before spawn and after execution rather than trusting constructed argv. These
+  blocked real-integration portions prevent `COMPLETE` but contain no substitute mock credit.
+- **Next action:** Retain the real image/Hardhat execution portions as `BLOCKED_TECHNICAL` for the
+  engine/autonomy integration track. `V3-CI-001` already has no independent safe code portion
+  remaining, so begin `V3-SHARD-001` after this checkpoint.
 
 ## V3-TOOLDIAG-001 — Diagnose scrubbed-environment tool failures and bound version capture
 
@@ -1577,11 +1602,11 @@ still applies within a track.
 
 **Track 1 — engine and execution evidence**
 
-**Next action: `V3-HARDHAT-001`.** `V3-TOOLDIAG-001` completed the operator-approved macOS
-priority on 2026-08-02 with a real Homebrew Semgrep execution under the process-attested
-`sandbox-exec` boundary and the complete local suite green. The Hardhat reporter, dedicated
-single-loopback backend, and container-side executable identity contract are now the next
-unblocked Track 1 work.
+**Next action: `V3-SHARD-001`.** `V3-HARDHAT-001` completed every currently safe local component
+but remains `PARTIAL`: its real Hardhat/Mocha, image-identity, rootless-container, supervision,
+and per-test relay integrations are explicit technical blockers and receive no execution credit.
+`V3-CI-001` likewise has no independent safe code portion remaining while its hosted real stack is
+blocked. Continue with deterministic coherent semantic sharding without weakening either blocker.
 
 1. `V3-TOKENS-001` — `COMPLETE`.
 2. `V3-FLOOR-001` — `COMPLETE`. Verified independently: the previously false-clean

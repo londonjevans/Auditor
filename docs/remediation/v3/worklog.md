@@ -6,11 +6,11 @@ Do not record credentials, raw private prompts, or raw provider completions here
 
 AUTORUN_STATUS: RUNNING
 CURRENT_MILESTONE: Hardhat reporter and single-loopback isolation
-CURRENT_TICKET: V3-HARDHAT-001 (IN_PROGRESS)
+CURRENT_TICKET: V3-HARDHAT-001 (PARTIAL; safe local slice validated)
 LAST_COMPLETED_TICKET: V3-TOOLDIAG-001
-NEXT_ACTION: Inspect the existing Hardhat adapter, strict parsers, rootless backend, schemas, and regressions; map the trusted reporter and single-loopback capability boundaries before implementation.
-LAST_COMMAND: `git commit -m "Harden macOS scanner diagnostics"`
-LAST_RESULT: PASS — cohesive V3-TOOLDIAG-001 implementation checkpoint `4f39bd19805bdf957f71745f2ae79e4b86533190` created after all validation gates passed.
+NEXT_ACTION: Review final diff and artifact/secret boundaries, create and push the isolated PARTIAL checkpoint, then immediately begin V3-SHARD-001.
+LAST_COMMAND: `.venv/bin/pytest -q`
+LAST_RESULT: PASS — 3992 tests passed and 11 explicit external-prerequisite tests skipped in 724.16s under the local-loopback-capable test boundary.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 4f39bd19805bdf957f71745f2ae79e4b86533190
+LAST_CHECKPOINT_COMMIT: 461d98dc3b9b66b274c7fc3cddc13394f2e1c6b5
 
 ## 2026-07-31 — V3-EFFORT-001
 
@@ -4906,3 +4906,86 @@ LAST_CHECKPOINT_COMMIT: 4f39bd19805bdf957f71745f2ae79e4b86533190
 - **Next safe action:** Inspect the existing Hardhat adapter, parser, rootless isolation backend,
   configuration schema, and tests; record the minimal cohesive implementation boundary before
   editing production code.
+- **Boundary map:** The existing parsers accepted self-hashed same-process Mocha output, but no
+  independent authority proved that repository JavaScript had not forged its descriptors or
+  replaced the shared output. The generic doctor path could also resolve a host `hardhat`, strip
+  that absolute path to a basename at the image boundary, and then pair the image response with
+  the host path. `ScannerRun` suite policy, workspace, RPC egress, and maximum-assurance authority
+  remain Foundry-specific. These are fail-closed integration gaps, not real Hardhat evidence.
+- **Completed identity guard:** `preflight_configured_scanner_tools` now handles Hardhat before any
+  host `PATH` lookup and returns an image-side-attestation-required diagnostic with no resolved
+  path or version. `.venv/bin/pytest -q tests/unit/test_doctor_tool_preflight.py` passed `17` tests
+  in `0.79s`; affected Ruff checks passed. A required Hardhat scanner therefore fails doctor
+  without falsely attributing a host executable to the image.
+- **Reporter and protocol slice:** Added separate published inventory/test schemas and separate
+  self-hashed phase-request schemas. The exact reporter version and committed source SHA-256 are
+  constants; source is read with no-follow identity checks. Parser tests reject malformed,
+  duplicate-key, non-UTF-8, oversized, truncated, version/hash/request/repository mismatches, and
+  semantic inconsistencies. Reporter values remain untrusted observations with
+  `authorship_claim=false` and `execution_credit=false`.
+- **Source and exact-join slice:** A process-local, non-serializable authority independently
+  inventories source through no-follow descriptors, validates the repository before/after, and
+  binds only complete direct-literal root-project Mocha snapshots. Every selection count, profile,
+  descriptor, configuration, request, inventory, and nested self-hash is revalidated between
+  phases. Independent review reproduced and closed direct/destructured aliases, stale nested
+  hashes, selection-accounting drift, division-token ambiguity, template interpolation, escaped
+  identifiers, Node hashbang/legacy HTML comments, ECMAScript line terminators, and JSX/TSX inert
+  text. JSX/TSX is now deliberately unsupported. The snapshot is not a complete JavaScript/Mocha
+  proof and grants no runtime, output, coverage, or execution credit.
+- **Single-loopback slice:** Added a network-none rootless wrapper with a fixed read-only source
+  mount, disposable output/home/tmp, bounded resources, seccomp, fixed in-image `hardhat`/`node`
+  tokens, and no host credentials or container socket. A bounded in-container raw relay exposes
+  only one IPv4 loopback listener backed by the fixed AF_UNIX mount; JSON-RPC authorization remains
+  exclusively in the host read-only bridge. The bridge now supports an exclusive owner-only
+  `0600` AF_UNIX endpoint beneath an exact `0700` control-plane directory with retained directory
+  and socket identity and race-aware cleanup.
+- **Process-local authority:** Positive wrapper tests no longer monkeypatch fabricated authority.
+  An opaque non-copyable/non-serializable lifetime handle joins the exact backend, bridge object,
+  PID, private directory, socket, upstream endpoint and forwarding host/port, policy, pinned state,
+  preflight identity, listener capability, dispatch object, live serve thread, and open admission.
+  Stop, close, copy, serialization, replacement, mode drift, policy/state/backend/forwarder drift,
+  dead listener, or admission shutdown invalidates command construction. This authority remains
+  `UNVERIFIED` and cannot claim that a container or Hardhat ran.
+- **Focused validation evidence:**
+  - `.venv/bin/pytest -q tests/unit/test_hardhat_scanner.py tests/unit/test_hardhat_source.py
+    tests/unit/test_hardhat_protocol.py tests/integration/test_hardhat_reporter_reference.py
+    tests/unit/test_doctor_tool_preflight.py` — PASS; `107 passed in 1.42s`.
+  - `.venv/bin/pytest -q tests/unit/test_hardhat_isolation_backend.py
+    tests/unit/test_read_only_rpc_unix_bridge.py tests/unit/test_hardhat_loopback_relay.py` — PASS
+    outside the managed socket restriction; `62 passed in 10.74s`.
+  - `.venv/bin/pytest -q tests/unit/test_read_only_rpc_bridge.py` — PASS outside the managed
+    socket restriction; all `76` existing TCP compatibility tests passed in `40.39s`.
+  - `.venv/bin/python scripts/generate_release_schemas.py` and
+    `node --check src/mmaudit/scanners/hardhat_reporter.cjs` — PASS.
+  - Affected Ruff and strict mypy checks passed; `git diff --check` was clean before the final
+    documentation and complete validation pass.
+- **Honest integration boundary:** `command -v` resolves Node.js but not `hardhat`, `podman`, or
+  `docker`; no approved digest-pinned image or image-side executable attestation is configured.
+  The reference integration therefore runs the reporter in a real local Node process behind a
+  handcrafted EventEmitter process double explicitly marked `MOCK`, not Hardhat/Mocha. It does
+  not prove `.only`, pending/filter semantics, phase-one body non-execution, monorepo projects,
+  container exit/output custody, or per-test relay attribution. The adapter remains
+  `UNAVAILABLE`, and these real portions are `BLOCKED_TECHNICAL` rather than fabricated.
+- **Independent authority review:** After closing mutable execution-credit, forwarding host/port,
+  copied-bridge, dispatch-object, serve-thread, and admission-liveness gaps, the final bounded
+  review found no remaining construction-time bypass. Constructed argv remains replayable and can
+  outlive its seal, so a future real executor must retain and revalidate the exact binding at
+  spawn and postflight; no current command receives execution credit.
+- **Affected matrix:** The complete affected command listed above passed `266` tests in `52.44s`.
+  Three tests skipped only because the rootless image and pinned integration-test compiler are not
+  configured. These skips are the same explicit real-integration blockers, not passing evidence.
+- **Pre-full-suite static gate:** `.venv/bin/ruff format .` left all `397` files unchanged;
+  `.venv/bin/ruff check .` passed; strict `.venv/bin/mypy` passed all `160` source files; release
+  schema verification and reporter `node --check` passed; `git diff --check` was clean.
+- **Complete suite gate:** The exact `.venv/bin/pytest -q` command recorded in `LAST_COMMAND`
+  passed `3992` tests with `11` explicit external-prerequisite skips in `724.16s`. Skips retain
+  unavailable rootless image, Echidna, Halmos, Medusa, pinned compiler/replay, fork differential,
+  realistic-scale AST, and paid-provider integration as unavailable; none was promoted to a pass.
+  Two inherited stale temporary-tree cleanup warnings were non-failing.
+- **Final diff and artifact review:** `git diff --check` passed. The changed and untracked inventory
+  contains only the documented source, schemas, reporter, tests, and remediation records; no cache,
+  log, run, or generated runtime artifact is present. Credential-pattern review found no private
+  key, OpenRouter token, or credential assignment; its sole match was the intentional
+  `synthetic-user:synthetic-password` URL rejection fixture. The `.env` file was not read. The
+  committed reporter SHA-256 recomputed as
+  `2269138b1383a5cc37da5914b89cbd3d7c22c9f80503a5f69ebe5e1f7e404226`, matching its source pin.

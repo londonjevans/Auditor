@@ -83,6 +83,29 @@ approved image digest is configured. The adapter therefore remains fail-closed
 as `UNAVAILABLE`; broad container networking or host-loopback access is not an
 acceptable substitute.
 
+`V3-HARDHAT-001` now supplies the safe local contracts needed before that external
+integration: pinned reporter source plus separate schemas, a non-crediting
+two-phase request protocol, an owner-only AF_UNIX read-only RPC listener, a bounded
+in-container raw relay, a `--network none` wrapper, fixed in-image executable
+tokens, and a process-local lifetime seal that revalidates the exact backend,
+bridge, PID, private directory, socket, endpoint, policy, and pinned state. Closing
+the seal, stopping or replacing the socket, copying the backend, or changing any
+bound identity invalidates command construction. This still grants only
+`UNVERIFIED` command-construction authority.
+
+The current trusted host resolves Node.js but not `hardhat`, `podman`, or `docker`.
+The local protocol test therefore uses a handcrafted Node/EventEmitter reporter
+process explicitly marked `MOCK`; it is not Hardhat/Mocha execution. It does not
+prove `.only`, callback-less pending tests, runtime filtering, phase-one body
+non-execution, relay-to-test attribution, monorepo project roots, container exit/
+output custody, or image-side executable identity. JSX/TSX source snapshots are
+deliberately rejected until a real syntax-aware parser exists. A real integration
+must supply and attest all of those missing facts; no filename, host path, process
+double, or serializable observation may substitute for them. Constructed container
+argv is replayable and receives no authority of its own: the eventual executor must
+retain the opaque live binding and revalidate it immediately before spawn and after
+process completion.
+
 ## External evaluation
 
 A private holdout and independently adjudicated professional comparison are not

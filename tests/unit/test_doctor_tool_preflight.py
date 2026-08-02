@@ -56,6 +56,19 @@ class _SyntheticIsolation:
         return command
 
 
+class _SyntheticRepositoryJavaScriptIsolation(_SyntheticIsolation):
+    def wrap_repository_javascript(
+        self,
+        command: list[str],
+        *,
+        workspace: Path,
+        private_dir: Path,
+        rpc_port: int,
+    ) -> list[str]:
+        del command, workspace, private_dir, rpc_port
+        pytest.fail("host Hardhat identity must not be translated into a container probe")
+
+
 def _preflight(
     state: ScannerExecutableState,
     *,
@@ -367,6 +380,44 @@ def test_configured_tool_preflight_preserves_other_results_after_per_tool_failur
     assert "repository-JavaScript" in (diagnostics["hardhat_fork"].diagnostic or "")
     assert paths["hardhat"] not in probed
     assert sorted(path.name for path in probed) == ["bad-tool", "good-tool"]
+
+
+def test_hardhat_preflight_never_labels_host_path_as_container_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+
+    def forbidden_host_resolution(_name: str) -> str:
+        pytest.fail("Hardhat container identity must not consult host PATH")
+
+    monkeypatch.setattr("mmaudit.scanners.runner.shutil.which", forbidden_host_resolution)
+    monkeypatch.setattr(
+        "mmaudit.scanners.runner.preflight_scanner_executable",
+        lambda *_args, **_kwargs: pytest.fail("generic host/image probe must not run"),
+    )
+
+    diagnostics = preflight_configured_scanner_tools(
+        {
+            "hardhat_fork": HardhatForkScanner(
+                SmartContractsConfig(),
+                ScannerConfig(),
+            )
+        },
+        backend=_SyntheticRepositoryJavaScriptIsolation(),
+        repository_root=repository,
+        trusted_output_root=tmp_path,
+        private_dir=tmp_path / "private",
+    )
+
+    result = diagnostics["hardhat_fork"]
+    assert result.state is ScannerExecutableState.PRESENT_ISOLATION_UNEXECUTABLE
+    assert result.resolved_path is None
+    assert result.version is None
+    assert result.failure_kind is ExecutableVersionProbeStatus.ISOLATION_FAILURE
+    assert "image-side toolchain" in (result.diagnostic or "")
+    assert "host PATH is not container executable identity" in (result.diagnostic or "")
 
 
 def test_doctor_reports_three_tool_states_and_absolute_resolved_paths(

@@ -1,0 +1,161 @@
+{
+  "$id": "https://mmaudit.local/schemas/hardhat_request_inventory.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Self-hashed exact request for the observation-only inventory phase.",
+  "properties": {
+    "attempt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Attempt Sha256",
+      "type": "string"
+    },
+    "block_hash": {
+      "pattern": "^0x[0-9a-f]{64}$",
+      "title": "Block Hash",
+      "type": "string"
+    },
+    "block_number": {
+      "minimum": 0,
+      "title": "Block Number",
+      "type": "integer"
+    },
+    "bridge_policy_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Bridge Policy Sha256",
+      "type": "string"
+    },
+    "chain_id": {
+      "minimum": 1,
+      "title": "Chain Id",
+      "type": "integer"
+    },
+    "configuration_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Configuration Sha256",
+      "type": "string"
+    },
+    "container_executable_path": {
+      "const": "/usr/local/bin/hardhat",
+      "default": "/usr/local/bin/hardhat",
+      "title": "Container Executable Path",
+      "type": "string"
+    },
+    "container_executable_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Container Executable Sha256",
+      "type": "string"
+    },
+    "execution_credit": {
+      "const": false,
+      "default": false,
+      "title": "Execution Credit",
+      "type": "boolean"
+    },
+    "fuzz_seed": {
+      "pattern": "^0x[0-9a-f]{64}$",
+      "title": "Fuzz Seed",
+      "type": "string"
+    },
+    "image": {
+      "maxLength": 1000,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}$",
+      "title": "Image",
+      "type": "string"
+    },
+    "isolation_capability_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Isolation Capability Sha256",
+      "type": "string"
+    },
+    "maximum_output_bytes": {
+      "maximum": 100000000,
+      "minimum": 1024,
+      "title": "Maximum Output Bytes",
+      "type": "integer"
+    },
+    "phase": {
+      "const": "inventory",
+      "default": "inventory",
+      "title": "Phase",
+      "type": "string"
+    },
+    "phase_sequence": {
+      "const": 1,
+      "default": 1,
+      "title": "Phase Sequence",
+      "type": "integer"
+    },
+    "reporter_name": {
+      "const": "mmaudit-hardhat-reporter",
+      "default": "mmaudit-hardhat-reporter",
+      "title": "Reporter Name",
+      "type": "string"
+    },
+    "reporter_schema_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Reporter Schema Sha256",
+      "type": "string"
+    },
+    "reporter_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Reporter Sha256",
+      "type": "string"
+    },
+    "reporter_version": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Reporter Version",
+      "type": "string"
+    },
+    "repository_exclusion_path": {
+      "maxLength": 1000,
+      "minLength": 1,
+      "title": "Repository Exclusion Path",
+      "type": "string"
+    },
+    "repository_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Repository Sha256",
+      "type": "string"
+    },
+    "request_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Request Sha256",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "timeout_seconds": {
+      "exclusiveMinimum": 0,
+      "maximum": 7200,
+      "title": "Timeout Seconds",
+      "type": "number"
+    }
+  },
+  "required": [
+    "attempt_sha256",
+    "repository_sha256",
+    "repository_exclusion_path",
+    "configuration_sha256",
+    "image",
+    "container_executable_sha256",
+    "isolation_capability_sha256",
+    "bridge_policy_sha256",
+    "reporter_version",
+    "reporter_sha256",
+    "reporter_schema_sha256",
+    "chain_id",
+    "block_number",
+    "block_hash",
+    "fuzz_seed",
+    "timeout_seconds",
+    "maximum_output_bytes",
+    "request_sha256"
+  ],
+  "title": "mmaudit Hardhat inventory phase request",
+  "type": "object"
+}

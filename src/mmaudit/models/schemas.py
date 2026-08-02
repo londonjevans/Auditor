@@ -3724,17 +3724,98 @@ class RepositorySuiteSelection(StrictModel):
         return _canonical_model_sha256(payload)
 
 
-class HardhatReporterInventory(StrictModel):
-    """Strict, self-hashed inventory emitted only by the trusted image reporter."""
+class HardhatReporterObservedTest(StrictModel):
+    """One untrusted Mocha test identity observed without source-authorship credit."""
 
     schema_version: Literal["1.0"] = "1.0"
+    project_root: str = Field(min_length=1, max_length=1_000)
+    path: str = Field(min_length=1, max_length=1_000)
+    suite_name: str = Field(min_length=1, max_length=1_000)
+    test_name: str = Field(min_length=1, max_length=1_000)
+    observation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @classmethod
+    def sealed(cls, **values: Any) -> HardhatReporterObservedTest:
+        """Validate and self-hash one observation without upgrading its provenance."""
+
+        if "observation_sha256" in values:
+            raise ValueError("observation_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, observation_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"observation_sha256"})
+        return cls.model_validate(
+            {
+                **payload,
+                "observation_sha256": _canonical_model_sha256(payload),
+            }
+        )
+
+    @field_validator("project_root")
+    @classmethod
+    def project_root_is_safe(cls, value: str) -> str:
+        if not _repository_suite_path_is_safe(value, allow_root=True):
+            raise ValueError("Hardhat observation project root must be repository-relative")
+        return value
+
+    @field_validator("path")
+    @classmethod
+    def path_is_safe(cls, value: str) -> str:
+        if not _repository_suite_path_is_safe(value, allow_root=False):
+            raise ValueError("Hardhat observation path must be repository-relative")
+        return value
+
+    @field_validator("suite_name", "test_name")
+    @classmethod
+    def names_are_bounded_printable_text(cls, value: str) -> str:
+        if not _repository_suite_text_is_safe(value):
+            raise ValueError("Hardhat observation names must be bounded printable text")
+        return value
+
+    @model_validator(mode="after")
+    def hash_is_consistent(self) -> HardhatReporterObservedTest:
+        if self.observation_sha256 != self.expected_observation_sha256():
+            raise ValueError("Hardhat observation hash does not match its fields")
+        return self
+
+    @property
+    def canonical_key(self) -> tuple[str, str, str, str]:
+        """Return the deterministic but explicitly unauthenticated observation identity."""
+
+        return (self.project_root, self.path, self.suite_name, self.test_name)
+
+    @property
+    def collision_key(self) -> tuple[str, str, str, str]:
+        """Return the case-insensitive collision identity."""
+
+        return (
+            self.project_root.casefold(),
+            self.path.casefold(),
+            self.suite_name.casefold(),
+            self.test_name.casefold(),
+        )
+
+    def expected_observation_sha256(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"observation_sha256"})
+        return _canonical_model_sha256(payload)
+
+
+class HardhatReporterInventory(StrictModel):
+    """Strict inventory of untrusted same-process Mocha observations."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    phase: Literal["inventory"] = "inventory"
     reporter_name: Literal["mmaudit-hardhat-reporter"] = "mmaudit-hardhat-reporter"
     reporter_version: str = Field(min_length=1, max_length=200)
     reporter_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     repository_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    tests: tuple[RepositorySuiteTestDescriptor, ...] = Field(max_length=10_000)
+    tests: tuple[HardhatReporterObservedTest, ...] = Field(min_length=1, max_length=10_000)
     completed: Literal[True] = True
     safety_claim: Literal[False] = False
+    authorship_claim: Literal[False] = False
+    execution_credit: Literal[False] = False
+    provenance: Literal["untrusted_target_process_observation"] = (
+        "untrusted_target_process_observation"
+    )
     inventory_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @field_validator("reporter_version")
@@ -3761,11 +3842,6 @@ class HardhatReporterInventory(StrictModel):
     def framework_order_and_hash_are_consistent(self) -> HardhatReporterInventory:
         keys = tuple(test.canonical_key for test in self.tests)
         collision_keys = tuple(test.collision_key for test in self.tests)
-        if any(
-            test.framework is not RepositorySuiteFramework.HARDHAT or test.inventory_bound
-            for test in self.tests
-        ):
-            raise ValueError("Hardhat reporter inventory must contain static Hardhat descriptors")
         if keys != tuple(sorted(set(keys))):
             raise ValueError(
                 "Hardhat reporter inventory descriptors must be unique and canonically sorted"
@@ -3784,7 +3860,7 @@ class HardhatReporterInventory(StrictModel):
 
 
 class HardhatReporterTestResult(StrictModel):
-    """One bounded terminal test record from the trusted Hardhat reporter."""
+    """One bounded terminal observation without independent execution credit."""
 
     schema_version: Literal["1.0"] = "1.0"
     descriptor_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -3798,7 +3874,7 @@ class HardhatReporterTestResult(StrictModel):
 
     @classmethod
     def sealed(cls, **values: Any) -> HardhatReporterTestResult:
-        """Validate and self-hash one trusted reporter result."""
+        """Validate and self-hash one explicitly uncredited reporter observation."""
 
         if "result_sha256" in values:
             raise ValueError("result_sha256 is derived and cannot be supplied to sealed()")
@@ -3862,21 +3938,28 @@ class HardhatReporterTestResult(StrictModel):
 
 
 class HardhatReporterExecution(StrictModel):
-    """Complete self-hashed reporter output bound to one explicit suite selection."""
+    """Complete untrusted same-process observation bound to one requested selection."""
 
     schema_version: Literal["1.0"] = "1.0"
+    phase: Literal["test"] = "test"
     reporter_name: Literal["mmaudit-hardhat-reporter"] = "mmaudit-hardhat-reporter"
     reporter_version: str = Field(min_length=1, max_length=200)
     reporter_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     repository_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     selection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     chain_id: int = Field(ge=1)
     block_number: int = Field(ge=0)
     block_hash: str = Field(pattern=r"^0x[0-9a-f]{64}$")
     fuzz_seed: str = Field(pattern=r"^0x[0-9a-f]{64}$")
-    results: tuple[HardhatReporterTestResult, ...] = Field(max_length=10_000)
+    results: tuple[HardhatReporterTestResult, ...] = Field(min_length=1, max_length=10_000)
     completed: Literal[True] = True
     safety_claim: Literal[False] = False
+    authorship_claim: Literal[False] = False
+    execution_credit: Literal[False] = False
+    provenance: Literal["untrusted_target_process_observation"] = (
+        "untrusted_target_process_observation"
+    )
     report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @field_validator("reporter_version")
@@ -3913,6 +3996,131 @@ class HardhatReporterExecution(StrictModel):
     def expected_report_sha256(self) -> str:
         payload = self.model_dump(mode="json", exclude={"report_sha256"})
         return _canonical_model_sha256(payload)
+
+
+class _HardhatPhaseRequestBase(StrictModel):
+    """Shared exact identities for one observation-only Hardhat phase request."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    attempt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    repository_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    repository_exclusion_path: str = Field(min_length=1, max_length=1_000)
+    configuration_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    image: str = Field(
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}$",
+        max_length=1_000,
+    )
+    container_executable_path: Literal["/usr/local/bin/hardhat"] = "/usr/local/bin/hardhat"
+    container_executable_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    isolation_capability_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    bridge_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reporter_name: Literal["mmaudit-hardhat-reporter"] = "mmaudit-hardhat-reporter"
+    reporter_version: str = Field(min_length=1, max_length=200)
+    reporter_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reporter_schema_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    chain_id: int = Field(ge=1)
+    block_number: int = Field(ge=0)
+    block_hash: str = Field(pattern=r"^0x[0-9a-f]{64}$")
+    fuzz_seed: str = Field(pattern=r"^0x[0-9a-f]{64}$")
+    timeout_seconds: float = Field(gt=0, le=7_200)
+    maximum_output_bytes: int = Field(ge=1_024, le=100_000_000)
+    execution_credit: Literal[False] = False
+    request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("repository_exclusion_path")
+    @classmethod
+    def repository_exclusion_path_is_safe(cls, value: str) -> str:
+        if not _repository_suite_path_is_safe(value, allow_root=False):
+            raise ValueError("Hardhat phase exclusion path must be repository-relative")
+        return value
+
+    @field_validator("reporter_version")
+    @classmethod
+    def reporter_version_is_public_safe(cls, value: str) -> str:
+        return _require_public_tool_version(value)
+
+    @model_validator(mode="after")
+    def authority_identities_are_nonzero(self) -> Self:
+        identity_hashes = (
+            self.attempt_sha256,
+            self.repository_sha256,
+            self.configuration_sha256,
+            self.container_executable_sha256,
+            self.isolation_capability_sha256,
+            self.bridge_policy_sha256,
+            self.reporter_sha256,
+            self.reporter_schema_sha256,
+        )
+        if any(value == "0" * 64 for value in identity_hashes):
+            raise ValueError("Hardhat phase request contains a zero authority identity")
+        return self
+
+
+class HardhatInventoryPhaseRequest(_HardhatPhaseRequestBase):
+    """Self-hashed exact request for the observation-only inventory phase."""
+
+    phase: Literal["inventory"] = "inventory"
+    phase_sequence: Literal[1] = 1
+
+    @classmethod
+    def sealed(cls, **values: Any) -> HardhatInventoryPhaseRequest:
+        if "request_sha256" in values:
+            raise ValueError("request_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, request_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"request_sha256"})
+        return cls.model_validate({**payload, "request_sha256": _canonical_model_sha256(payload)})
+
+    @model_validator(mode="after")
+    def request_hash_is_consistent(self) -> HardhatInventoryPhaseRequest:
+        if self.request_sha256 != self.expected_request_sha256():
+            raise ValueError("Hardhat inventory request hash does not match its fields")
+        return self
+
+    def expected_request_sha256(self) -> str:
+        return _canonical_model_sha256(self.model_dump(mode="json", exclude={"request_sha256"}))
+
+
+class HardhatTestPhaseRequest(_HardhatPhaseRequestBase):
+    """Self-hashed exact request binding inventory, source selection, and limits."""
+
+    phase: Literal["test"] = "test"
+    phase_sequence: Literal[2] = 2
+    inventory_request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    inventory_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_authority_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    selection_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    selected_test_count: int = Field(ge=1, le=10_000)
+    per_test_timeout_seconds: float = Field(gt=0, le=1_800)
+    maximum_output_bytes_per_test: int = Field(ge=1_024, le=10_000_000)
+
+    @classmethod
+    def sealed(cls, **values: Any) -> HardhatTestPhaseRequest:
+        if "request_sha256" in values:
+            raise ValueError("request_sha256 is derived and cannot be supplied to sealed()")
+        provisional = cls.model_construct(**values, request_sha256="0" * 64)
+        payload = provisional.model_dump(mode="json", exclude={"request_sha256"})
+        return cls.model_validate({**payload, "request_sha256": _canonical_model_sha256(payload)})
+
+    @model_validator(mode="after")
+    def request_limits_and_hash_are_consistent(self) -> HardhatTestPhaseRequest:
+        if self.per_test_timeout_seconds > self.timeout_seconds:
+            raise ValueError("Hardhat per-test timeout exceeds the phase timeout")
+        if self.maximum_output_bytes_per_test > self.maximum_output_bytes:
+            raise ValueError("Hardhat per-test output ceiling exceeds the phase ceiling")
+        phase_hashes = (
+            self.inventory_request_sha256,
+            self.inventory_sha256,
+            self.source_authority_sha256,
+            self.selection_sha256,
+        )
+        if any(value == "0" * 64 for value in phase_hashes):
+            raise ValueError("Hardhat test request contains a zero phase identity")
+        if self.request_sha256 != self.expected_request_sha256():
+            raise ValueError("Hardhat test request hash does not match its fields")
+        return self
+
+    def expected_request_sha256(self) -> str:
+        return _canonical_model_sha256(self.model_dump(mode="json", exclude={"request_sha256"}))
 
 
 class RepositorySuiteExecutionPolicy(StrictModel):
