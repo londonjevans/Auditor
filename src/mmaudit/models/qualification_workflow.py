@@ -20,6 +20,7 @@ from pydantic import Field, field_validator, model_validator
 from mmaudit.benchmark.model_portfolio import (
     ModelBenchmarkPortfolio,
     TrustedCandidateBenchmarkCampaignVerification,
+    TrustedCandidateReasoningProfileCampaignVerification,
 )
 from mmaudit.benchmark.models import (
     ModelBenchmarkReport,
@@ -29,7 +30,10 @@ from mmaudit.models.calibration import (
     ModelCalibrationArtifact,
     TrustedModelCalibrationVerification,
 )
-from mmaudit.models.candidate_benchmark import CandidateBenchmarkRunState
+from mmaudit.models.candidate_benchmark import (
+    CandidateBenchmarkRunState,
+    CandidateReasoningProfileBenchmarkPlan,
+)
 from mmaudit.models.discovery import (
     OpenRouterModelDiscoveryEvidence,
     OpenRouterModelDiscoveryRunManifest,
@@ -50,11 +54,13 @@ from mmaudit.models.qualification import (
     QualificationDisposition,
     QualificationPolicy,
     QualificationVerification,
+    RoleQualificationDisposition,
     RoleQualificationResult,
     TrustedBenchmarkVerificationEvidence,
     derive_approved_roles_for_role_qualification,
     evaluate_role_qualification_results,
     issue_trusted_calibrated_qualification_policy,
+    qualification_role_class_for_declared_role,
     seal_candidate_registry,
     seal_model_qualification_artifact,
     seal_model_qualification_result,
@@ -62,6 +68,7 @@ from mmaudit.models.qualification import (
     verify_and_seal_trusted_benchmark_evidence,
     verify_model_qualification,
 )
+from mmaudit.models.reasoning import ReasoningPolicyError, resolve_reasoning_request_role
 from mmaudit.models.release_attestation import TrustedReleaseBindingObservation
 from mmaudit.models.schemas import ExecutionEvidenceKind, StrictModel
 from mmaudit.orchestration.manifest import canonical_sha256
@@ -70,6 +77,7 @@ from mmaudit.reporting.json_report import stable_json
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _COMMIT_PATTERN = r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$"
 _MAX_REPORTS = 128
+_MAX_GENERATION_VERIFICATION_REQUESTS = 512
 _MAX_PRIVATE_REPORT_BYTES = 50_000_000
 _MAX_PRIVATE_BUNDLE_BYTES = 100_000_000
 _MAX_RELEASE_BINDINGS_BYTES = 1_000_000
@@ -133,20 +141,187 @@ def seal_qualification_release_bindings(
     return QualificationReleaseBindings.model_validate(payload)
 
 
+def _validated_reasoning_benchmark_report_set(
+    *,
+    reports: tuple[ModelBenchmarkReport, ...],
+    plan: CandidateReasoningProfileBenchmarkPlan | None,
+    candidates: dict[str, CandidateModel],
+    primary_reports: tuple[ModelBenchmarkReport, ...],
+) -> tuple[ModelBenchmarkReport, ...]:
+    """Validate duplicate-model reports against an exact distinct-profile route set."""
+
+    validated_plan = (
+        None
+        if plan is None
+        else CandidateReasoningProfileBenchmarkPlan.model_validate(plan.model_dump(mode="json"))
+    )
+    routes = () if validated_plan is None else validated_plan.routes
+    requirement_keys = tuple((item.exact_model_id, item.request_role) for item in routes)
+    if requirement_keys != tuple(sorted(set(requirement_keys))):
+        raise ValueError("reasoning benchmark requirements must be unique and sorted")
+    if len(primary_reports) + len(reports) > _MAX_REPORTS:
+        raise ValueError("combined qualification benchmark report set is too large")
+
+    primary_hashes = {report.report_sha256 for report in primary_reports}
+    validated: list[ModelBenchmarkReport] = []
+    observed_keys: list[tuple[str, str]] = []
+    observed_hashes = set(primary_hashes)
+    for supplied in reports:
+        if type(supplied) is not ModelBenchmarkReport:
+            raise ValueError("reasoning benchmark report is not an exact typed value")
+        report = ModelBenchmarkReport.model_validate(supplied.model_dump(mode="json"))
+        if len(report.results) != 1:
+            raise ValueError("reasoning qualification requires exact one-model reports")
+        target = report.results[0].target
+        try:
+            resolution = resolve_reasoning_request_role(target.request_role)
+        except ReasoningPolicyError as exc:
+            raise ValueError("reasoning benchmark report has an invalid request role") from exc
+        if resolution.mapping_kind != "prequalification_role_benchmark":
+            raise ValueError("reasoning benchmark report is not a distinct-profile route")
+        candidate = candidates.get(target.model_id)
+        if candidate is None or target.root_lineage != candidate.root_lineage:
+            raise ValueError("reasoning benchmark target differs from the candidate registry")
+        route = next(
+            (
+                item
+                for item in routes
+                if item.exact_model_id == target.model_id
+                and item.request_role == target.request_role
+            ),
+            None,
+        )
+        primary = next(
+            item for item in primary_reports if item.results[0].target.model_id == target.model_id
+        )
+        if route is None or route.primary_report_sha256 != primary.report_sha256:
+            raise ValueError("reasoning benchmark report differs from its frozen plan route")
+        if report.report_sha256 in observed_hashes:
+            raise ValueError("reasoning benchmark reports reuse report evidence")
+        observed_hashes.add(report.report_sha256)
+        observed_keys.append((target.model_id, target.request_role))
+        validated.append(report)
+    if tuple(sorted(observed_keys)) != requirement_keys or len(set(observed_keys)) != len(
+        observed_keys
+    ):
+        raise ValueError("reasoning benchmark report set differs from required profile routes")
+    return tuple(
+        report
+        for _key, report in sorted(
+            zip(observed_keys, validated, strict=True),
+            key=lambda item: item[0],
+        )
+    )
+
+
+def _reasoning_profile_evidence_passes_policy(
+    *,
+    evidence: TrustedBenchmarkVerificationEvidence,
+    qualified_roles: tuple[str, ...],
+    policy: QualificationPolicy,
+) -> bool:
+    dimensions = {item.dimension: item for item in evidence.dimensions}
+    thresholds = {item.dimension: item for item in policy.thresholds}
+    overall_score = round(
+        sum(item.score for item in evidence.dimensions) / len(evidence.dimensions),
+        6,
+    )
+    if (
+        set(dimensions) != set(thresholds)
+        or overall_score < policy.tier_a_minimum_overall_score
+        or any(
+            dimensions[dimension].evaluated < threshold.minimum_cases
+            or dimensions[dimension].score < threshold.minimum_score
+            for dimension, threshold in thresholds.items()
+        )
+    ):
+        return False
+    if not policy.role_policies:
+        return True
+    role_results = {
+        item.role_class: item
+        for item in evaluate_role_qualification_results(
+            global_disposition=QualificationDisposition.TIER_A,
+            dimensions=evidence.dimensions,
+            role_policies=policy.role_policies,
+        )
+    }
+    return all(
+        role_results[qualification_role_class_for_declared_role(role)].disposition
+        is RoleQualificationDisposition.QUALIFIED
+        for role in qualified_roles
+    )
+
+
+def _downgrade_profile_incomplete_verification(
+    verification: QualificationVerification,
+) -> QualificationVerification:
+    payload = verification.model_dump(mode="json", exclude={"verification_sha256"})
+    payload["production_selection_ready"] = False
+    payload["valid"] = False
+    payload["errors"] = sorted(
+        {*verification.errors, "supplemental reasoning profile thresholds failed"}
+    )
+    payload["verification_sha256"] = canonical_sha256(payload)
+    return QualificationVerification.model_validate(payload)
+
+
 def candidate_generation_verification_requests(
     *,
     registry: CandidateRegistry,
     benchmark_reports: tuple[ModelBenchmarkReport, ...],
+    reasoning_benchmark_reports: tuple[ModelBenchmarkReport, ...] = (),
+    reasoning_benchmark_plan: CandidateReasoningProfileBenchmarkPlan | None = None,
 ) -> tuple[GenerationVerificationRequest, ...]:
-    """Derive the exact report/case set that an authenticated client must re-fetch."""
+    """Derive one exact primary-plus-profile generation set for authenticated re-fetch."""
 
     registry = CandidateRegistry.model_validate(registry.model_dump(mode="json"))
     candidates = {candidate.exact_model_id: candidate for candidate in registry.candidates}
-    reports = _validated_exact_report_set(
+    primary_reports = _validated_exact_report_set(
         reports=benchmark_reports,
         expected_model_ids=tuple(candidates),
     )
+    if any(
+        report.results[0].target.request_role != "model_benchmark" for report in primary_reports
+    ):
+        raise ValueError("primary qualification report has a non-primary request role")
+    profile_reports = _validated_reasoning_benchmark_report_set(
+        reports=reasoning_benchmark_reports,
+        plan=reasoning_benchmark_plan,
+        candidates=candidates,
+        primary_reports=primary_reports,
+    )
+    reports = (*primary_reports, *profile_reports)
+    request_count = sum(len(report.results[0].cases) for report in reports)
+    if request_count > _MAX_GENERATION_VERIFICATION_REQUESTS:
+        raise ValueError("combined generation verification request set exceeds the bound")
+    reference = primary_reports[0]
+    if any(
+        report.corpus_name != reference.corpus_name
+        or report.corpus_sha256 != reference.corpus_sha256
+        or report.ground_truth_sha256 != reference.ground_truth_sha256
+        or report.case_ids != reference.case_ids
+        or report.execution_evidence is not ExecutionEvidenceKind.REAL
+        for report in reports
+    ):
+        raise ValueError("generation verification reports differ from the full REAL corpus")
+    report_hashes = tuple(report.report_sha256 for report in reports)
+    if len(set(report_hashes)) != len(report_hashes):
+        raise ValueError("generation verification reports reuse report evidence")
+
     requests: list[GenerationVerificationRequest] = []
+    request_ids: set[str] = set()
+    generation_ids: set[str] = set()
+    request_body_hashes: set[str] = set()
+    primary_prompt_schema = {
+        (report.results[0].target.model_id, case.case_id): (
+            case.usage_record.prompt_sha256,
+            case.usage_record.schema_sha256,
+        )
+        for report in primary_reports
+        for case in report.results[0].cases
+        if case.usage_record is not None
+    }
     for report in reports:
         target = report.results[0].target
         candidate = candidates[target.model_id]
@@ -159,7 +334,13 @@ def candidate_generation_verification_requests(
                     "generation verification requires complete benchmark runtime evidence"
                 )
             if (
-                record.requested_model != candidate.exact_model_id
+                case.execution_evidence is not ExecutionEvidenceKind.REAL
+                or report.results[0].execution_evidence is not ExecutionEvidenceKind.REAL
+                or record.execution_evidence is not ExecutionEvidenceKind.REAL
+                or record.role != target.request_role
+                or record.openrouter_generation_id is None
+                or record.request_body_sha256 is None
+                or record.requested_model != candidate.exact_model_id
                 or record.returned_model
                 not in {
                     candidate.exact_model_id,
@@ -171,6 +352,10 @@ def candidate_generation_verification_requests(
                     candidate.canonical_model_slug,
                 }
                 or record.actual_provider_endpoint != candidate.approved_provider_endpoint
+                or tuple(record.configured_provider_endpoints)
+                != (candidate.approved_provider_endpoint,)
+                or record.routing.get("selected_provider_endpoint")
+                != candidate.approved_provider_endpoint
                 or record.routing.get("selected_provider_name") != candidate.approved_provider_name
                 or record.routing.get("selected_model") != record.actual_model
                 or record.routing.get("canonical_model") != candidate.canonical_model_slug
@@ -187,8 +372,31 @@ def candidate_generation_verification_requests(
                 != candidate.endpoint_snapshot_sha256
                 or record.routing.get("endpoint_pricing_sha256")
                 != candidate.pricing_snapshot_sha256
+                or record.routing.get("output_capability_sha256")
+                != candidate.output_capability_sha256
+                or record.routing.get("model_metadata_snapshot_sha256")
+                != candidate.model_metadata_snapshot_sha256
+                or record.routing.get("certification_request") is not True
+                or record.openrouter_generation_id != case.generation_evidence.generation_id
             ):
                 raise ValueError("generation verification request differs from the candidate route")
+            prompt_schema = primary_prompt_schema.get((target.model_id, case.case_id))
+            if prompt_schema is None or prompt_schema != (
+                record.prompt_sha256,
+                record.schema_sha256,
+            ):
+                raise ValueError(
+                    "reasoning benchmark request differs from the primary corpus prompt"
+                )
+            if (
+                record.request_id in request_ids
+                or record.openrouter_generation_id in generation_ids
+                or record.request_body_sha256 in request_body_hashes
+            ):
+                raise ValueError("generation verification reports reuse request evidence")
+            request_ids.add(record.request_id)
+            generation_ids.add(record.openrouter_generation_id)
+            request_body_hashes.add(record.request_body_sha256)
             requests.append(
                 GenerationVerificationRequest(
                     benchmark_report_sha256=report.report_sha256,
@@ -214,12 +422,16 @@ async def refetch_trusted_benchmark_generations(
     client: OpenRouterClient,
     registry: CandidateRegistry,
     benchmark_reports: tuple[ModelBenchmarkReport, ...],
+    reasoning_benchmark_reports: tuple[ModelBenchmarkReport, ...] = (),
+    reasoning_benchmark_plan: CandidateReasoningProfileBenchmarkPlan | None = None,
 ) -> TrustedGenerationVerification:
-    """Authenticate and re-fetch every exact generation through the owned client."""
+    """Authenticate primary and required profile generations as one exact set."""
 
     requests = candidate_generation_verification_requests(
         registry=registry,
         benchmark_reports=benchmark_reports,
+        reasoning_benchmark_reports=reasoning_benchmark_reports,
+        reasoning_benchmark_plan=reasoning_benchmark_plan,
     )
     return await OpenRouterClient.create_trusted_generation_verification(
         client,
@@ -244,8 +456,17 @@ class QualificationWorkflowBundle(StrictModel):
         min_length=1,
         max_length=_MAX_REPORTS,
     )
+    reasoning_benchmark_plan: CandidateReasoningProfileBenchmarkPlan | None = None
+    reasoning_benchmark_reports: tuple[ModelBenchmarkReport, ...] = Field(
+        default=(),
+        max_length=_MAX_REPORTS,
+    )
     updated_registry: CandidateRegistry
     trusted_benchmark_evidence: tuple[TrustedBenchmarkVerificationEvidence, ...] = ()
+    trusted_reasoning_benchmark_evidence: tuple[
+        TrustedBenchmarkVerificationEvidence,
+        ...,
+    ] = Field(default=(), max_length=_MAX_REPORTS)
     qualification_artifact: ModelQualificationArtifact
     qualification_verification: QualificationVerification
     workflow_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -269,6 +490,62 @@ class QualificationWorkflowBundle(StrictModel):
         )
         if report_ids != candidate_ids:
             raise ValueError("qualification bundle report and candidate sets differ")
+        plan_routes = (
+            () if self.reasoning_benchmark_plan is None else self.reasoning_benchmark_plan.routes
+        )
+        requirement_keys = tuple((item.exact_model_id, item.request_role) for item in plan_routes)
+        reasoning_report_keys = tuple(
+            (report.results[0].target.model_id, report.results[0].target.request_role)
+            for report in self.reasoning_benchmark_reports
+            if len(report.results) == 1
+        )
+        if (
+            requirement_keys != tuple(sorted(set(requirement_keys)))
+            or len(reasoning_report_keys) != len(self.reasoning_benchmark_reports)
+            or reasoning_report_keys != requirement_keys
+        ):
+            raise ValueError(
+                "qualification bundle reasoning reports differ from required profile routes"
+            )
+        if self.reasoning_benchmark_plan is not None:
+            results_by_model = {
+                result.exact_model_id: result for result in self.qualification_artifact.results
+            }
+            primary_report_hashes = {
+                report.results[0].target.model_id: report.report_sha256
+                for report in self.benchmark_reports
+            }
+            if (
+                self.reasoning_benchmark_plan.qualification_artifact_sha256
+                != self.qualification_artifact.artifact_sha256
+                or any(
+                    route.exact_model_id not in results_by_model
+                    or route.qualification_result_sha256
+                    != results_by_model[route.exact_model_id].result_sha256
+                    or route.primary_report_sha256
+                    != primary_report_hashes.get(route.exact_model_id)
+                    for route in plan_routes
+                )
+            ):
+                raise ValueError("qualification bundle reasoning plan differs from its artifact")
+        reasoning_evidence_keys: list[tuple[str, str]] = []
+        reasoning_evidence_reports: list[str] = []
+        for evidence in self.trusted_reasoning_benchmark_evidence:
+            roles = tuple(sorted({record.role for record in evidence.usage_records}))
+            if len(roles) != 1:
+                raise ValueError("qualification bundle reasoning evidence mixed request roles")
+            reasoning_evidence_keys.append((evidence.exact_model_id, roles[0]))
+            reasoning_evidence_reports.append(evidence.benchmark_report_sha256)
+        if (
+            tuple(reasoning_evidence_keys) != requirement_keys
+            or tuple(reasoning_evidence_reports)
+            != tuple(report.report_sha256 for report in self.reasoning_benchmark_reports)
+            or set(reasoning_evidence_reports)
+            & {report.report_sha256 for report in self.benchmark_reports}
+        ):
+            raise ValueError(
+                "qualification bundle reasoning evidence differs from its exact reports"
+            )
         evidence_ids = tuple(item.exact_model_id for item in self.trusted_benchmark_evidence)
         if evidence_ids != tuple(sorted(set(evidence_ids))):
             raise ValueError("qualification bundle trusted evidence is duplicate or unsorted")
@@ -420,6 +697,11 @@ def run_qualification_workflow(
     trusted_release_observation: TrustedReleaseBindingObservation,
     evaluated_at: datetime,
     qualification_expires_at: datetime,
+    reasoning_benchmark_reports: tuple[ModelBenchmarkReport, ...] = (),
+    reasoning_benchmark_plan: CandidateReasoningProfileBenchmarkPlan | None = None,
+    trusted_reasoning_campaign_verification: (
+        TrustedCandidateReasoningProfileCampaignVerification | None
+    ) = None,
 ) -> QualificationWorkflowBundle:
     """Qualify an exact candidate set from independently verified benchmark evidence."""
 
@@ -533,6 +815,62 @@ def run_qualification_workflow(
             candidate.exact_model_id for candidate in candidate_registry.candidates
         ),
     )
+    candidates_by_id = {
+        candidate.exact_model_id: candidate for candidate in candidate_registry.candidates
+    }
+    reasoning_reports = _validated_reasoning_benchmark_report_set(
+        reports=reasoning_benchmark_reports,
+        plan=reasoning_benchmark_plan,
+        candidates=candidates_by_id,
+        primary_reports=reports,
+    )
+    validated_reasoning_plan = (
+        None
+        if reasoning_benchmark_plan is None
+        else CandidateReasoningProfileBenchmarkPlan.model_validate(
+            reasoning_benchmark_plan.model_dump(mode="json")
+        )
+    )
+    trusted_reasoning: list[TrustedBenchmarkVerificationEvidence] = []
+    if reasoning_reports:
+        if trusted_generation_verification is None:
+            raise ValueError(
+                "reasoning qualification requires authenticated generation re-fetch evidence"
+            )
+        if type(trusted_reasoning_campaign_verification) is not (
+            TrustedCandidateReasoningProfileCampaignVerification
+        ):
+            raise ValueError(
+                "reasoning qualification requires live supplemental response-content authority"
+            )
+        assert validated_reasoning_plan is not None
+        trusted_reasoning_campaign_verification.require_for(
+            plan_sha256=validated_reasoning_plan.plan_sha256,
+            reports=reasoning_reports,
+            policy_sha256=policy.policy_sha256,
+            effective_config_sha256=release_bindings.effective_config_sha256,
+        )
+        candidate_generation_verification_requests(
+            registry=candidate_registry,
+            benchmark_reports=reports,
+            reasoning_benchmark_reports=reasoning_reports,
+            reasoning_benchmark_plan=validated_reasoning_plan,
+        )
+        for report in reasoning_reports:
+            target = report.results[0].target
+            candidate = candidates_by_id[target.model_id]
+            trusted_reasoning.append(
+                verify_and_seal_trusted_benchmark_evidence(
+                    report=report,
+                    corpus=benchmark_suite,
+                    exact_model_id=candidate.exact_model_id,
+                    canonical_model_id=candidate.canonical_model_slug,
+                    discovery_evidence_sha256=candidate.discovery_evidence_sha256,
+                    trusted_generation_verification=trusted_generation_verification,
+                )
+            )
+    elif trusted_reasoning_campaign_verification is not None:
+        raise ValueError("supplemental content authority has no required reasoning reports")
     _validate_benchmark_portfolio_binding(
         portfolio=benchmark_portfolio,
         registry=candidate_registry,
@@ -548,9 +886,6 @@ def run_qualification_workflow(
             effective_config_sha256=release_bindings.effective_config_sha256,
         )
     thresholds = {threshold.dimension: threshold for threshold in policy.thresholds}
-    candidates_by_id = {
-        candidate.exact_model_id: candidate for candidate in candidate_registry.candidates
-    }
     trusted: list[TrustedBenchmarkVerificationEvidence] = []
     results: list[ModelQualificationResult] = []
     updated_candidates: list[CandidateModel] = []
@@ -755,6 +1090,33 @@ def run_qualification_workflow(
         now=observed_at,
         trusted_calibrated_policy=trusted_calibrated_policy,
     )
+    if validated_reasoning_plan is not None:
+        results_by_model = {result.exact_model_id: result for result in artifact.results}
+        if (
+            validated_reasoning_plan.qualification_artifact_sha256 != artifact.artifact_sha256
+            or any(
+                route.exact_model_id not in results_by_model
+                or route.qualification_result_sha256
+                != results_by_model[route.exact_model_id].result_sha256
+                for route in validated_reasoning_plan.routes
+            )
+        ):
+            raise ValueError("reasoning benchmark plan differs from recomputed qualification")
+        routes_by_key = {
+            (route.exact_model_id, route.request_role): route
+            for route in validated_reasoning_plan.routes
+        }
+        if any(
+            not _reasoning_profile_evidence_passes_policy(
+                evidence=evidence,
+                qualified_roles=routes_by_key[
+                    (evidence.exact_model_id, evidence.usage_records[0].role)
+                ].qualified_roles,
+                policy=policy,
+            )
+            for evidence in trusted_reasoning
+        ):
+            verification = _downgrade_profile_incomplete_verification(verification)
     payload: dict[str, Any] = {
         "schema_version": "1.0",
         "evaluated_at": campaign_completed_at.isoformat().replace("+00:00", "Z"),
@@ -770,8 +1132,19 @@ def run_qualification_workflow(
         "benchmark_ground_truth_sha256": benchmark_suite.ground_truth_sha256,
         "benchmark_portfolio_sha256": benchmark_portfolio.portfolio_sha256,
         "benchmark_reports": [report.model_dump(mode="json") for report in reports],
+        "reasoning_benchmark_plan": (
+            None
+            if validated_reasoning_plan is None
+            else validated_reasoning_plan.model_dump(mode="json")
+        ),
+        "reasoning_benchmark_reports": [
+            report.model_dump(mode="json") for report in reasoning_reports
+        ],
         "updated_registry": updated_registry.model_dump(mode="json"),
         "trusted_benchmark_evidence": [item.model_dump(mode="json") for item in trusted_tuple],
+        "trusted_reasoning_benchmark_evidence": [
+            item.model_dump(mode="json") for item in trusted_reasoning
+        ],
         "qualification_artifact": artifact.model_dump(mode="json"),
         "qualification_verification": verification.model_dump(mode="json"),
     }

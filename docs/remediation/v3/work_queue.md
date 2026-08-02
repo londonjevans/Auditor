@@ -846,7 +846,7 @@ are invisible to source review by construction.
   `src/mmaudit/orchestration/budgets.py`, `src/mmaudit/models/qualification.py`, usage and
   run-evidence schemas, `mmaudit.example.toml`, regressions.
 - **Dependencies:** `V3-TOKENS-001`.
-- **Status:** `PARTIAL`
+- **Status:** `COMPLETE`
 - **Starting boundary:** The current single global reasoning control is applied to every role.
   This provider-free slice will first bind exact per-role controls to endpoint capability,
   token/cost reservation, usage evidence, qualification evidence, and emitted run artifacts.
@@ -884,6 +884,20 @@ are invisible to source review by construction.
   candidate-campaign path to execute and authenticate those supplemental profile reports in one
   live campaign. Until that path and the complete suite are validated, this ticket remains
   `PARTIAL`; no real model call or qualification claim was made in this slice.
+- **2026-08-02 completion evidence:** The candidate campaign now derives an exact, sorted,
+  full-corpus supplemental route for every distinct production reasoning profile not covered by
+  the primary benchmark, persists each result and ledger transition in a private append-only
+  journal, and requires the original process-local report-content authority before final
+  qualification resolution. Resumed structural journals cannot regain authority or begin paid
+  work. The workflow authenticates primary and supplemental generation evidence as one bounded
+  set, rejects cross-route evidence reuse, and keeps production selection false for missing,
+  invalid, unauthenticated, or low-scoring supplemental evidence. Independent read-only review
+  accepted the boundary. The focused matrix passed `313` tests; Ruff format/check, strict mypy
+  over `156` source files, schema synchronization, and the complete suite passed, ending with
+  `3798 passed, 11 skipped in 776.53s`. The skips remain explicit external-engine, compiler,
+  rootless-image, and paid-provider prerequisites. No provider call, credential access, or spend
+  occurred; real staged qualification remains owned by `V3-QUALIFY-001`.
+- **Next action:** Continue with the operator-prioritized `V3-TOOLDIAG-001`.
 
 ## V3-RETRIEVAL-001 — Bounded read-only retrieval loop
 

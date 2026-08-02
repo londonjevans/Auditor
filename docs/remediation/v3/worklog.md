@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED
-CURRENT_MILESTONE: Per-role reasoning effort binding
-CURRENT_TICKET: V3-EFFORT-001 (PARTIAL)
-LAST_COMPLETED_TICKET: V3-EXECORIGIN-001
-NEXT_ACTION: Extend the qualification workflow and candidate campaign to execute and authenticate every distinct reasoning profile in one same-process live campaign, then run the affected and complete quality gates.
-LAST_COMMAND: `.venv/bin/python scripts/generate_release_schemas.py --write && .venv/bin/python scripts/generate_release_schemas.py`.
-LAST_RESULT: PASS — the joined focused matrix passed 398 tests, the maximum-assurance pipeline regression passed, the generated context-manifest schema is synchronized, and affected Ruff, strict mypy, diff, and secret-pattern checks are clean. No provider, network, secret, or cost activity occurred.
+AUTORUN_STATUS: RUNNING
+CURRENT_MILESTONE: Per-role reasoning effort binding complete
+CURRENT_TICKET: V3-EFFORT-001 (COMPLETE)
+LAST_COMPLETED_TICKET: V3-EFFORT-001
+NEXT_ACTION: Checkpoint this validated ticket, then mark V3-TOOLDIAG-001 IN_PROGRESS and diagnose resolved toolchain execution under the macOS isolation boundary.
+LAST_COMMAND: `.venv/bin/pytest -q` with approved numeric-loopback capability.
+LAST_RESULT: PASS — 3798 passed and 11 explicit external-engine, compiler, rootless-image, and paid-provider prerequisite skips in 776.53s. No provider, secret, or cost activity occurred.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -4761,3 +4761,50 @@ LAST_CHECKPOINT_COMMIT: 36eff43d3b79637ce193d6a3dff7c8d65fafddac
   is active. On resume, begin `V3-OUTPUT-001`.
 - **SSH publication:** Implementation checkpoint `4da4fa0` and state checkpoint
   `0195279` were pushed to `git@github.com:londonjevans/Auditor.git` on `main`.
+
+## 2026-08-02 — V3-EFFORT-001 supplemental campaign closure
+
+- **State:** `IN_PROGRESS` pending the complete local release gate.
+- **Implementation:** A frozen exact-route plan now drives one full-corpus supplemental
+  candidate benchmark for every distinct production reasoning profile not covered by the
+  primary benchmark. A fresh private append-only campaign journal binds the registry,
+  discovery snapshot, corpus, policy, effective configuration, cost ledger, reports,
+  diagnostics, request/generation evidence, and ledger transitions. Only the original live
+  campaign can issue the non-serializable content authority consumed by production
+  qualification; a structurally valid resumed journal cannot regain that authority or begin
+  provider work.
+- **Qualification integration:** The workflow authenticates primary and supplemental
+  generations as one bounded exact set, rejects report/request/generation/request-body reuse,
+  and binds the plan plus opaque authority into the final resolver. Missing, malformed,
+  low-scoring, or unauthenticated supplemental evidence keeps production selection false.
+- **Independent review:** A read-only adversarial review accepted the live-authority,
+  persistence, route, non-reuse, and readiness boundaries without a material defect.
+- **Focused validation:** `.venv/bin/pytest -q
+  tests/unit/test_candidate_reasoning_profile_campaign.py
+  tests/unit/test_qualification_workflow.py tests/unit/test_model_qualification.py
+  tests/unit/test_openrouter.py` passed `313` tests in `104.83s`. The reviewer independently
+  reproduced the same `313`-test pass; affected Ruff and strict mypy passed. Pytest emitted
+  inherited non-failing temporary-directory cleanup warnings only.
+- **External effects:** None. No credential was read, no network or provider was contacted,
+  and OpenRouter spend remains `0.0033415625 USD` with zero active reservation.
+- **First complete-suite attempt:** `.venv/bin/pytest -q` produced `3722` passes and `15`
+  explicit prerequisite skips, but exited nonzero with `71` local-loopback listener setup
+  errors denied by the managed sandbox and one model-refresh staging regression. The staging
+  regression had coupled an immutable `2026-07-30` fixture to the real wall clock, so it crossed
+  the unchanged 30-hour freshness threshold on 2026-08-02 before reaching the intended invalid
+  workflow-identity assertion. The test now supplies its existing fixed validation clock; its
+  focused rerun passed. Production freshness thresholds and validation are unchanged.
+- **Next safe action:** Run Ruff format/check, strict mypy, schema synchronization, and the
+  complete pytest gate with local-loopback capability; then review, checkpoint, and continue
+  with `V3-TOOLDIAG-001`.
+- **Complete local gate:** `.venv/bin/ruff format --check .` reported all `385` files formatted;
+  `.venv/bin/ruff check .` passed; strict `.venv/bin/mypy` passed `156` source files; release
+  schema synchronization passed; and the correctly authorized local-loopback
+  `.venv/bin/pytest -q` run passed `3798` tests with `11` explicit prerequisite skips in
+  `776.53s`. `git diff --check`, untracked-file inventory, and changed-diff credential-pattern
+  checks passed. No generated runtime artifact, credential, provider call, network egress, or
+  OpenRouter spend was added.
+- **Ticket result:** `V3-EFFORT-001` is `COMPLETE`. This proves the fail-closed local campaign,
+  authority, reasoning-profile qualification, and evidence path. It does not claim that a real
+  production ensemble has been qualified; that runtime requirement remains `V3-QUALIFY-001`.
+- **Next ticket:** `V3-TOOLDIAG-001` per the queue's operator-approved macOS priority.

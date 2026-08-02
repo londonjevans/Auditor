@@ -691,6 +691,7 @@ def test_invalid_workflow_identity_removes_partial_staging(tmp_path: Path) -> No
             soft_max_age_hours=30,
             hard_max_age_hours=72,
             expected_selected_routes=selected,
+            _validation_observed_at=NOW + timedelta(hours=1),
         )
     assert not staging.exists()
 

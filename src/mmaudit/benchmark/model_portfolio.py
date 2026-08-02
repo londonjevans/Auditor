@@ -35,6 +35,10 @@ from mmaudit.models.candidate_benchmark import (
     CandidateBenchmarkDiagnostic,
     CandidateBenchmarkRunState,
     CandidateCostLedgerSnapshot,
+    CandidateReasoningProfileBenchmarkExecutionResult,
+    CandidateReasoningProfileBenchmarkPlan,
+    CandidateReasoningProfileBenchmarkRoute,
+    CandidateReasoningProfileBenchmarkRun,
     candidate_cost_ledger_snapshot,
 )
 from mmaudit.models.identifiers import require_exact_openrouter_model_id
@@ -51,6 +55,8 @@ _REPORT_FILENAME_PATTERN = r"^model-report-[0-9a-f]{64}\.json$"
 _PORTFOLIO_MANIFEST_NAME = "model-benchmark-portfolio.json"
 _CAMPAIGN_MANIFEST_NAME = "candidate-benchmark-campaign.json"
 _CAMPAIGN_ENTRY_FILENAME_PATTERN = r"^candidate-[0-9]{3}-[0-9a-f]{64}\.json$"
+_REASONING_CAMPAIGN_MANIFEST_NAME = "reasoning-profile-benchmark-campaign.json"
+_REASONING_CAMPAIGN_ENTRY_FILENAME_PATTERN = r"^reasoning-route-[0-9]{4}-[0-9a-f]{64}\.json$"
 _MAX_CANDIDATES = 128
 _MAX_REPORT_BYTES = 50_000_000
 _MAX_MANIFEST_BYTES = 5_000_000
@@ -306,6 +312,225 @@ def _require_trusted_campaign_capability(
         policy_sha256,
         effective_config_sha256,
     )
+
+
+class TrustedCandidateReasoningProfileCampaignVerification:
+    """Opaque same-process authority over supplemental parsed response content."""
+
+    __slots__ = ("__weakref__",)
+
+    def __new__(
+        cls,
+        *_args: object,
+        **_kwargs: object,
+    ) -> TrustedCandidateReasoningProfileCampaignVerification:
+        del cls
+        raise TypeError("trusted reasoning-profile campaign verification is opaque")
+
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        del self, _args, _kwargs
+
+    def require_for(
+        self,
+        *,
+        plan_sha256: str,
+        reports: tuple[ModelBenchmarkReport, ...],
+        policy_sha256: str,
+        effective_config_sha256: str,
+    ) -> None:
+        _require_trusted_reasoning_campaign_capability_positional(
+            self,
+            plan_sha256,
+            reports,
+            policy_sha256,
+            effective_config_sha256,
+        )
+
+    def __copy__(self) -> None:
+        raise TypeError("trusted reasoning-profile campaign verification cannot be copied")
+
+    def __deepcopy__(self, _memo: object) -> None:
+        raise TypeError("trusted reasoning-profile campaign verification cannot be copied")
+
+    def __reduce__(self) -> Never:
+        raise TypeError("trusted reasoning-profile campaign verification cannot be serialized")
+
+    def __reduce_ex__(self, _protocol: SupportsIndex) -> Never:
+        raise TypeError("trusted reasoning-profile campaign verification cannot be serialized")
+
+
+def _build_reasoning_campaign_runtime_authority() -> tuple[
+    Callable[..., CandidateReasoningProfileBenchmarkCampaignJournal],
+    Callable[..., TrustedCandidateReasoningProfileCampaignVerification],
+    Callable[
+        [
+            TrustedCandidateReasoningProfileCampaignVerification,
+            str,
+            tuple[ModelBenchmarkReport, ...],
+            str,
+            str,
+        ],
+        None,
+    ],
+]:
+    """Hide live supplemental content bindings in closure-owned weak registries."""
+
+    @dataclass(frozen=True, slots=True)
+    class TrustedReasoningCampaignState:
+        plan_sha256: str
+        journal_sha256: str
+        policy_sha256: str
+        effective_config_sha256: str
+        report_content_bindings: tuple[tuple[str, str], ...]
+
+    journals: dict[int, tuple[weakref.ReferenceType[object], list[str]]] = {}
+    capabilities: dict[
+        int,
+        tuple[
+            weakref.ReferenceType[TrustedCandidateReasoningProfileCampaignVerification],
+            TrustedReasoningCampaignState,
+        ],
+    ] = {}
+    lock = threading.RLock()
+
+    def register(journal: object) -> Callable[[int, str], None]:
+        key = id(journal)
+
+        def discard(reference: weakref.ReferenceType[object]) -> None:
+            with lock:
+                current = journals.get(key)
+                if current is not None and current[0] is reference:
+                    journals.pop(key, None)
+
+        reference = weakref.ref(journal, discard)
+        with lock:
+            journals[key] = (reference, [])
+
+        def record(expected_prior_count: int, binding: str) -> None:
+            with lock:
+                current = journals.get(key)
+                if current is None or current[0]() is not journal:
+                    raise ValueError("reasoning-profile campaign authority is unavailable")
+                if len(current[1]) != expected_prior_count:
+                    journals.pop(key, None)
+                    raise ValueError("reasoning-profile campaign authority became inconsistent")
+                current[1].append(binding)
+
+        return record
+
+    def create(
+        path: Path,
+        *,
+        plan: CandidateReasoningProfileBenchmarkPlan,
+        candidate_registry: CandidateRegistry,
+        corpus: ModelBenchmarkSuite,
+        effective_config_sha256: str,
+        qualification_policy_sha256: str,
+        cost_ledger: AtomicCostLedger,
+    ) -> CandidateReasoningProfileBenchmarkCampaignJournal:
+        journal = _create_candidate_reasoning_profile_campaign_unregistered(
+            path,
+            plan=plan,
+            candidate_registry=candidate_registry,
+            corpus=corpus,
+            effective_config_sha256=effective_config_sha256,
+            qualification_policy_sha256=qualification_policy_sha256,
+            cost_ledger=cost_ledger,
+        )
+        journal._attach_live_binding_recorder(register(journal))
+        return journal
+
+    def issue(
+        *,
+        campaign: CandidateReasoningProfileBenchmarkCampaignJournal,
+        execution: CandidateReasoningProfileBenchmarkExecutionResult,
+    ) -> TrustedCandidateReasoningProfileCampaignVerification:
+        if type(campaign) is not CandidateReasoningProfileBenchmarkCampaignJournal:
+            raise ValueError("trusted reasoning-profile authority requires the original campaign")
+        campaign.require_complete()
+        validated = CandidateReasoningProfileBenchmarkExecutionResult.model_validate(
+            execution.model_dump(mode="json")
+        )
+        if validated.plan_sha256 != campaign.plan_sha256 or validated.runs != campaign.runs:
+            raise ValueError("reasoning-profile execution differs from its live journal")
+        with lock:
+            registered = journals.get(id(campaign))
+            live = (
+                tuple(registered[1])
+                if registered is not None and registered[0]() is campaign
+                else None
+            )
+        verify_candidate_reasoning_profile_benchmark_campaign(
+            campaign.path,
+            execution=validated,
+            plan=campaign.manifest.plan,
+            candidate_registry=campaign._candidate_registry,
+            corpus=campaign._corpus,
+            effective_config_sha256=campaign.manifest.effective_config_sha256,
+            qualification_policy_sha256=campaign.manifest.qualification_policy_sha256,
+            cost_ledger=campaign._cost_ledger,
+        )
+        expected = tuple(
+            binding for _model_id, binding in _report_content_bindings(validated.reports)
+        )
+        if live != expected:
+            raise ValueError(
+                "trusted reasoning-profile verification requires every original live report"
+            )
+        capability = object.__new__(TrustedCandidateReasoningProfileCampaignVerification)
+        state = TrustedReasoningCampaignState(
+            plan_sha256=campaign.plan_sha256,
+            journal_sha256=campaign.journal_sha256,
+            policy_sha256=campaign.manifest.qualification_policy_sha256,
+            effective_config_sha256=campaign.manifest.effective_config_sha256,
+            report_content_bindings=_report_content_bindings(validated.reports),
+        )
+        key = id(capability)
+
+        def discard_capability(
+            reference: weakref.ReferenceType[TrustedCandidateReasoningProfileCampaignVerification],
+        ) -> None:
+            with lock:
+                current = capabilities.get(key)
+                if current is not None and current[0] is reference:
+                    capabilities.pop(key, None)
+
+        reference = weakref.ref(capability, discard_capability)
+        with lock:
+            capabilities[key] = (reference, state)
+        return capability
+
+    def require(
+        capability: TrustedCandidateReasoningProfileCampaignVerification,
+        plan_sha256: str,
+        reports: tuple[ModelBenchmarkReport, ...],
+        policy_sha256: str,
+        effective_config_sha256: str,
+    ) -> None:
+        with lock:
+            registered = capabilities.get(id(capability))
+        state = registered[1] if registered is not None and registered[0]() is capability else None
+        if (
+            type(capability) is not TrustedCandidateReasoningProfileCampaignVerification
+            or state is None
+            or state.plan_sha256 != plan_sha256
+            or state.policy_sha256 != policy_sha256
+            or state.effective_config_sha256 != effective_config_sha256
+            or not state.journal_sha256
+            or state.report_content_bindings != _report_content_bindings(reports)
+        ):
+            raise ValueError(
+                "trusted reasoning-profile verification does not bind qualification inputs"
+            )
+
+    return create, issue, require
+
+
+(
+    create_candidate_reasoning_profile_benchmark_campaign,
+    issue_trusted_candidate_reasoning_profile_campaign_verification,
+    _require_trusted_reasoning_campaign_capability_positional,
+) = _build_reasoning_campaign_runtime_authority()
 
 
 class ModelBenchmarkPortfolioUsage(StrictModel):
@@ -841,6 +1066,493 @@ class CandidateBenchmarkCampaignJournal:
     def require_complete(self) -> None:
         if len(self._entries) != len(self._candidate_registry.candidates):
             raise ValueError("candidate campaign does not have exact-set report coverage")
+
+
+class CandidateReasoningProfileBenchmarkCampaignManifestPayload(StrictModel):
+    """Immutable supplemental route, corpus, config, policy, and ledger bindings."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    created_at: datetime
+    candidate_registry_sha256: str = Field(pattern=_SHA256_PATTERN)
+    discovery_run_manifest_sha256: str = Field(pattern=_SHA256_PATTERN)
+    corpus_sha256: str = Field(pattern=_SHA256_PATTERN)
+    ground_truth_sha256: str = Field(pattern=_SHA256_PATTERN)
+    qualification_policy_sha256: str = Field(pattern=_SHA256_PATTERN)
+    effective_config_sha256: str = Field(pattern=_SHA256_PATTERN)
+    plan: CandidateReasoningProfileBenchmarkPlan
+    cost_ledger_path_sha256: str = Field(pattern=_SHA256_PATTERN)
+    initial_cost_ledger_snapshot: CandidateCostLedgerSnapshot
+
+    @field_validator("created_at")
+    @classmethod
+    def reasoning_campaign_time_is_utc(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() != timedelta(0):
+            raise ValueError("reasoning-profile campaign creation time must be UTC")
+        return value
+
+
+class CandidateReasoningProfileBenchmarkCampaignManifest(
+    CandidateReasoningProfileBenchmarkCampaignManifestPayload
+):
+    campaign_manifest_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @model_validator(mode="after")
+    def reasoning_manifest_hash_matches(
+        self,
+    ) -> CandidateReasoningProfileBenchmarkCampaignManifest:
+        expected = canonical_sha256(
+            self.model_dump(mode="json", exclude={"campaign_manifest_sha256"})
+        )
+        if self.campaign_manifest_sha256 != expected:
+            raise ValueError("reasoning-profile campaign manifest hash is inconsistent")
+        return self
+
+
+class CandidateReasoningProfileBenchmarkCampaignEntryPayload(StrictModel):
+    """One durable supplemental route outcome and exact ledger transition."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    campaign_manifest_sha256: str = Field(pattern=_SHA256_PATTERN)
+    route_index: int = Field(ge=0, lt=4_096)
+    route: CandidateReasoningProfileBenchmarkRoute
+    report: ModelBenchmarkReport
+    diagnostic: CandidateBenchmarkDiagnostic
+    observed_usage: tuple[UsageRecord, ...] = Field(max_length=1_000)
+    ledger_before: CandidateCostLedgerSnapshot
+    ledger_after: CandidateCostLedgerSnapshot
+
+    @model_validator(mode="after")
+    def reasoning_entry_is_exactly_bound(
+        self,
+    ) -> CandidateReasoningProfileBenchmarkCampaignEntryPayload:
+        outcome = CandidateReasoningProfileBenchmarkRun(
+            route=self.route,
+            report=self.report,
+            diagnostic=self.diagnostic,
+        )
+        del outcome
+        if (
+            self.diagnostic.observed_usage_sha256
+            != canonical_sha256([item.model_dump(mode="json") for item in self.observed_usage])
+            or self.diagnostic.cost_ledger_before != self.ledger_before
+            or self.diagnostic.cost_ledger_after != self.ledger_after
+            or any(
+                item.requested_model != self.route.exact_model_id
+                or item.role != self.route.request_role
+                for item in self.observed_usage
+            )
+        ):
+            raise ValueError("reasoning-profile campaign entry bindings are inconsistent")
+        request_ids = tuple(item.request_id for item in self.observed_usage)
+        if len(request_ids) != len(set(request_ids)):
+            raise ValueError("reasoning-profile campaign entry replays a request ID")
+        report_usage = tuple(
+            case.usage_record
+            for result in self.report.results
+            for case in result.cases
+            if case.usage_record is not None
+        )
+        report_projection = _usage_records_public_projection(report_usage)
+        observed_projection = _usage_records_public_projection(self.observed_usage)
+        if self.diagnostic.state is not CandidateBenchmarkRunState.UNVERIFIED_FAILURE:
+            if report_projection != observed_projection:
+                raise ValueError("completed reasoning-profile report omits observed usage")
+        elif any(item not in observed_projection for item in report_projection):
+            raise ValueError("failed reasoning-profile report contains unobserved usage")
+        ledger_delta = Decimal(self.ledger_after.spent_usd) - Decimal(self.ledger_before.spent_usd)
+        observed_cost = sum(
+            (Decimal(str(item.accounted_cost_usd)) for item in self.observed_usage),
+            Decimal(0),
+        )
+        unresolved_before = (
+            self.ledger_before.reserved_count + self.ledger_before.uncertain_accounted_count
+        )
+        unresolved_after = (
+            self.ledger_after.reserved_count + self.ledger_after.uncertain_accounted_count
+        )
+        if (
+            self.ledger_after.entry_count < self.ledger_before.entry_count
+            or ledger_delta < 0
+            or ledger_delta != observed_cost
+            or unresolved_after - unresolved_before != self.diagnostic.unresolved_cost_count
+        ):
+            raise ValueError("reasoning-profile campaign usage and ledger disagree")
+        return self
+
+
+class CandidateReasoningProfileBenchmarkCampaignEntry(
+    CandidateReasoningProfileBenchmarkCampaignEntryPayload
+):
+    entry_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @model_validator(mode="after")
+    def reasoning_entry_hash_matches(
+        self,
+    ) -> CandidateReasoningProfileBenchmarkCampaignEntry:
+        expected = canonical_sha256(self.model_dump(mode="json", exclude={"entry_sha256"}))
+        if self.entry_sha256 != expected:
+            raise ValueError("reasoning-profile campaign entry hash is inconsistent")
+        return self
+
+
+class CandidateReasoningProfileBenchmarkCampaignJournal:
+    """Private append-only supplemental campaign with optional live authority."""
+
+    def __init__(
+        self,
+        *,
+        path: Path,
+        manifest: CandidateReasoningProfileBenchmarkCampaignManifest,
+        entries: tuple[CandidateReasoningProfileBenchmarkCampaignEntry, ...],
+        candidate_registry: CandidateRegistry,
+        corpus: ModelBenchmarkSuite,
+        cost_ledger: AtomicCostLedger,
+    ) -> None:
+        self.path = path
+        self.manifest = manifest
+        self._entries = list(entries)
+        self._candidate_registry = candidate_registry
+        self._corpus = corpus
+        self._cost_ledger = cost_ledger
+        self._live_binding_recorder: Callable[[int, str], None] | None = None
+
+    def _attach_live_binding_recorder(self, recorder: Callable[[int, str], None]) -> None:
+        if self._live_binding_recorder is not None:
+            raise ValueError("reasoning-profile campaign runtime authority is already attached")
+        self._live_binding_recorder = recorder
+
+    @property
+    def plan_sha256(self) -> str:
+        return self.manifest.plan.plan_sha256
+
+    @property
+    def runs(self) -> tuple[CandidateReasoningProfileBenchmarkRun, ...]:
+        return tuple(
+            CandidateReasoningProfileBenchmarkRun(
+                route=item.route,
+                report=item.report,
+                diagnostic=item.diagnostic,
+            )
+            for item in self._entries
+        )
+
+    @property
+    def final_cost_ledger_snapshot(self) -> CandidateCostLedgerSnapshot:
+        return (
+            self._entries[-1].ledger_after
+            if self._entries
+            else self.manifest.initial_cost_ledger_snapshot
+        )
+
+    @property
+    def journal_sha256(self) -> str:
+        return canonical_sha256(
+            {
+                "campaign_manifest_sha256": self.manifest.campaign_manifest_sha256,
+                "entry_sha256": [item.entry_sha256 for item in self._entries],
+            }
+        )
+
+    def require_live_authority(self) -> None:
+        """Reject reloaded journals before supplemental provider work can begin."""
+
+        if self._live_binding_recorder is None:
+            raise ValueError("reasoning-profile campaign lacks live runtime authority")
+
+    def validate_route_start(
+        self,
+        *,
+        route: CandidateReasoningProfileBenchmarkRoute,
+        ledger_before: CandidateCostLedgerSnapshot,
+    ) -> None:
+        index = len(self._entries)
+        if (
+            self._live_binding_recorder is None
+            or index >= len(self.manifest.plan.routes)
+            or route != self.manifest.plan.routes[index]
+            or ledger_before != self.final_cost_ledger_snapshot
+            or candidate_cost_ledger_snapshot(self._cost_ledger.snapshot()) != ledger_before
+        ):
+            raise ValueError("reasoning-profile campaign is not ready for the next route")
+
+    def persist_route(
+        self,
+        *,
+        route: CandidateReasoningProfileBenchmarkRoute,
+        report: ModelBenchmarkReport,
+        diagnostic: CandidateBenchmarkDiagnostic,
+        observed_usage: tuple[UsageRecord, ...],
+        ledger_before: CandidateCostLedgerSnapshot,
+        ledger_after: CandidateCostLedgerSnapshot,
+    ) -> None:
+        index = len(self._entries)
+        if (
+            self._live_binding_recorder is None
+            or index >= len(self.manifest.plan.routes)
+            or route != self.manifest.plan.routes[index]
+            or ledger_before != self.final_cost_ledger_snapshot
+        ):
+            raise ValueError("reasoning-profile campaign append is not the exact next route")
+        prior_request_ids = {
+            item.request_id for entry in self._entries for item in entry.observed_usage
+        }
+        prior_generation_ids = {
+            item.openrouter_generation_id
+            for entry in self._entries
+            for item in entry.observed_usage
+            if item.openrouter_generation_id is not None
+        }
+        if any(item.request_id in prior_request_ids for item in observed_usage) or any(
+            item.openrouter_generation_id in prior_generation_ids
+            for item in observed_usage
+            if item.openrouter_generation_id is not None
+        ):
+            raise ValueError("reasoning-profile campaign replays request or generation evidence")
+        if candidate_cost_ledger_snapshot(self._cost_ledger.snapshot()) != ledger_after:
+            raise ValueError("reasoning-profile campaign ledger snapshot is not current")
+        live_binding = _live_report_content_binding(
+            report=report,
+            observed_usage=observed_usage,
+        )
+        payload = CandidateReasoningProfileBenchmarkCampaignEntryPayload(
+            campaign_manifest_sha256=self.manifest.campaign_manifest_sha256,
+            route_index=index,
+            route=route,
+            report=report,
+            diagnostic=diagnostic,
+            observed_usage=observed_usage,
+            ledger_before=ledger_before,
+            ledger_after=ledger_after,
+        )
+        serialized = payload.model_dump(mode="json")
+        entry = CandidateReasoningProfileBenchmarkCampaignEntry.model_validate(
+            {**serialized, "entry_sha256": canonical_sha256(serialized)}
+        )
+        filename = _reasoning_campaign_entry_filename(index, route)
+        _atomic_write_private_bytes(
+            self.path / filename,
+            stable_json(entry).encode("utf-8"),
+            maximum=_MAX_REPORT_BYTES,
+        )
+        loaded = _load_reasoning_campaign_entry(self.path / filename)
+        if loaded != entry:
+            raise ValueError("reasoning-profile campaign entry changed during persistence")
+        self._entries.append(loaded)
+        if self._live_binding_recorder is not None:
+            self._live_binding_recorder(index, live_binding)
+
+    def require_complete(self) -> None:
+        if len(self._entries) != len(self.manifest.plan.routes):
+            raise ValueError("reasoning-profile campaign lacks exact route coverage")
+
+
+def _create_candidate_reasoning_profile_campaign_unregistered(
+    path: Path,
+    *,
+    plan: CandidateReasoningProfileBenchmarkPlan,
+    candidate_registry: CandidateRegistry,
+    corpus: ModelBenchmarkSuite,
+    effective_config_sha256: str,
+    qualification_policy_sha256: str,
+    cost_ledger: AtomicCostLedger,
+) -> CandidateReasoningProfileBenchmarkCampaignJournal:
+    """Create a fresh private supplemental journal before any provider work."""
+
+    frozen_plan = CandidateReasoningProfileBenchmarkPlan.model_validate(
+        plan.model_dump(mode="json")
+    )
+    registry = CandidateRegistry.model_validate(candidate_registry.model_dump(mode="json"))
+    suite = ModelBenchmarkSuite.model_validate(corpus.model_dump(mode="json"))
+    if not re.fullmatch(_SHA256_PATTERN, effective_config_sha256):
+        raise ValueError("reasoning-profile campaign effective-config hash is invalid")
+    if not re.fullmatch(_SHA256_PATTERN, qualification_policy_sha256):
+        raise ValueError("reasoning-profile campaign qualification-policy hash is invalid")
+    if not isinstance(cost_ledger, AtomicCostLedger):
+        raise ValueError("reasoning-profile campaign requires an atomic cost ledger")
+    candidate_ids = {item.exact_model_id for item in registry.candidates}
+    if any(route.exact_model_id not in candidate_ids for route in frozen_plan.routes):
+        raise ValueError("reasoning-profile plan names a model outside the candidate registry")
+
+    absolute = Path(os.path.abspath(path))
+    if absolute.exists() or absolute.is_symlink() or absolute.is_junction():
+        raise ValueError("reasoning-profile campaign journal destination must be fresh")
+    _reject_linked_components(absolute.parent)
+    absolute.parent.mkdir(parents=True, exist_ok=True, mode=_PRIVATE_DIRECTORY_MODE)
+    _reject_linked_components(absolute.parent)
+    payload = CandidateReasoningProfileBenchmarkCampaignManifestPayload(
+        created_at=datetime.now(UTC),
+        candidate_registry_sha256=registry.registry_sha256,
+        discovery_run_manifest_sha256=registry.discovery_run_sha256,
+        corpus_sha256=suite.corpus_sha256,
+        ground_truth_sha256=suite.ground_truth_sha256,
+        qualification_policy_sha256=qualification_policy_sha256,
+        effective_config_sha256=effective_config_sha256,
+        plan=frozen_plan,
+        cost_ledger_path_sha256=_cost_ledger_path_sha256(cost_ledger),
+        initial_cost_ledger_snapshot=candidate_cost_ledger_snapshot(cost_ledger.snapshot()),
+    )
+    serialized = payload.model_dump(mode="json")
+    manifest = CandidateReasoningProfileBenchmarkCampaignManifest.model_validate(
+        {
+            **serialized,
+            "campaign_manifest_sha256": canonical_sha256(serialized),
+        }
+    )
+    temporary = Path(
+        tempfile.mkdtemp(
+            prefix=f".{absolute.name}.",
+            suffix=".reasoning-campaign.tmp",
+            dir=absolute.parent,
+        )
+    )
+    os.chmod(temporary, _PRIVATE_DIRECTORY_MODE)
+    published = False
+    try:
+        _write_private_bytes(
+            temporary / _REASONING_CAMPAIGN_MANIFEST_NAME,
+            stable_json(manifest).encode("utf-8"),
+            maximum=_MAX_MANIFEST_BYTES,
+        )
+        _fsync_directory(temporary)
+        if absolute.exists() or absolute.is_symlink() or absolute.is_junction():
+            raise ValueError("reasoning-profile campaign journal destination was reused")
+        os.rename(temporary, absolute)
+        published = True
+        _fsync_directory(absolute.parent)
+    finally:
+        if not published:
+            shutil.rmtree(temporary, ignore_errors=True)
+    return CandidateReasoningProfileBenchmarkCampaignJournal(
+        path=absolute,
+        manifest=manifest,
+        entries=(),
+        candidate_registry=registry,
+        corpus=suite,
+        cost_ledger=cost_ledger,
+    )
+
+
+def resume_candidate_reasoning_profile_benchmark_campaign(
+    path: Path,
+    *,
+    plan: CandidateReasoningProfileBenchmarkPlan,
+    candidate_registry: CandidateRegistry,
+    corpus: ModelBenchmarkSuite,
+    effective_config_sha256: str,
+    qualification_policy_sha256: str,
+    cost_ledger: AtomicCostLedger,
+) -> CandidateReasoningProfileBenchmarkCampaignJournal:
+    """Resume exact structural evidence without restoring live response authority."""
+
+    frozen_plan = CandidateReasoningProfileBenchmarkPlan.model_validate(
+        plan.model_dump(mode="json")
+    )
+    registry = CandidateRegistry.model_validate(candidate_registry.model_dump(mode="json"))
+    suite = ModelBenchmarkSuite.model_validate(corpus.model_dump(mode="json"))
+    absolute = Path(os.path.abspath(path))
+    _require_private_directory(absolute, label="reasoning-profile campaign journal")
+    manifest_raw = _read_private_file(
+        absolute / _REASONING_CAMPAIGN_MANIFEST_NAME,
+        maximum=_MAX_MANIFEST_BYTES,
+    )
+    manifest = _parse_model(
+        manifest_raw,
+        CandidateReasoningProfileBenchmarkCampaignManifest,
+    )
+    if manifest_raw != stable_json(manifest).encode("utf-8"):
+        raise ValueError("reasoning-profile campaign manifest is not canonical")
+    if (
+        manifest.candidate_registry_sha256 != registry.registry_sha256
+        or manifest.discovery_run_manifest_sha256 != registry.discovery_run_sha256
+        or manifest.corpus_sha256 != suite.corpus_sha256
+        or manifest.ground_truth_sha256 != suite.ground_truth_sha256
+        or manifest.qualification_policy_sha256 != qualification_policy_sha256
+        or manifest.effective_config_sha256 != effective_config_sha256
+        or manifest.plan != frozen_plan
+        or manifest.cost_ledger_path_sha256 != _cost_ledger_path_sha256(cost_ledger)
+    ):
+        raise ValueError("reasoning-profile campaign resume bindings do not match")
+
+    entries: list[CandidateReasoningProfileBenchmarkCampaignEntry] = []
+    expected_names = {_REASONING_CAMPAIGN_MANIFEST_NAME}
+    missing_seen = False
+    for index, route in enumerate(frozen_plan.routes):
+        filename = _reasoning_campaign_entry_filename(index, route)
+        entry_path = absolute / filename
+        if not entry_path.exists():
+            missing_seen = True
+            continue
+        if missing_seen:
+            raise ValueError("reasoning-profile campaign entries are not a contiguous prefix")
+        entry = _load_reasoning_campaign_entry(entry_path)
+        if (
+            entry.campaign_manifest_sha256 != manifest.campaign_manifest_sha256
+            or entry.route_index != index
+            or entry.route != route
+        ):
+            raise ValueError("reasoning-profile campaign entry differs from its frozen route")
+        if entries:
+            if entry.ledger_before != entries[-1].ledger_after:
+                raise ValueError("reasoning-profile campaign ledger transitions are discontinuous")
+        elif entry.ledger_before != manifest.initial_cost_ledger_snapshot:
+            raise ValueError("reasoning-profile first ledger transition is inconsistent")
+        verify_model_benchmark_report_structure(entry.report, corpus=suite)
+        entries.append(entry)
+        expected_names.add(filename)
+    if {item.name for item in absolute.iterdir()} != expected_names:
+        raise ValueError("reasoning-profile campaign contains unmanifested artifacts")
+    request_ids = tuple(record.request_id for entry in entries for record in entry.observed_usage)
+    generation_ids = tuple(
+        record.openrouter_generation_id
+        for entry in entries
+        for record in entry.observed_usage
+        if record.openrouter_generation_id is not None
+    )
+    if len(request_ids) != len(set(request_ids)) or len(generation_ids) != len(set(generation_ids)):
+        raise ValueError("reasoning-profile campaign replays request or generation evidence")
+    expected_current = (
+        entries[-1].ledger_after if entries else manifest.initial_cost_ledger_snapshot
+    )
+    if candidate_cost_ledger_snapshot(cost_ledger.snapshot()) != expected_current:
+        raise ValueError("reasoning-profile campaign cost ledger changed outside its journal")
+    return CandidateReasoningProfileBenchmarkCampaignJournal(
+        path=absolute,
+        manifest=manifest,
+        entries=tuple(entries),
+        candidate_registry=registry,
+        corpus=suite,
+        cost_ledger=cost_ledger,
+    )
+
+
+def verify_candidate_reasoning_profile_benchmark_campaign(
+    path: Path,
+    *,
+    execution: CandidateReasoningProfileBenchmarkExecutionResult,
+    plan: CandidateReasoningProfileBenchmarkPlan,
+    candidate_registry: CandidateRegistry,
+    corpus: ModelBenchmarkSuite,
+    effective_config_sha256: str,
+    qualification_policy_sha256: str,
+    cost_ledger: AtomicCostLedger,
+) -> None:
+    """Verify persisted supplemental evidence without minting same-process authority."""
+
+    journal = resume_candidate_reasoning_profile_benchmark_campaign(
+        path,
+        plan=plan,
+        candidate_registry=candidate_registry,
+        corpus=corpus,
+        effective_config_sha256=effective_config_sha256,
+        qualification_policy_sha256=qualification_policy_sha256,
+        cost_ledger=cost_ledger,
+    )
+    journal.require_complete()
+    validated = CandidateReasoningProfileBenchmarkExecutionResult.model_validate(
+        execution.model_dump(mode="json")
+    )
+    if validated.plan_sha256 != journal.plan_sha256 or validated.runs != journal.runs:
+        raise ValueError("reasoning-profile execution differs from its campaign journal")
 
 
 def _create_candidate_benchmark_campaign_unregistered(
@@ -1520,6 +2232,14 @@ def _campaign_entry_filename(index: int, model_id: str) -> str:
     return f"candidate-{index:03d}-{hashlib.sha256(model_id.encode()).hexdigest()}.json"
 
 
+def _reasoning_campaign_entry_filename(
+    index: int,
+    route: CandidateReasoningProfileBenchmarkRoute,
+) -> str:
+    identity = f"{route.exact_model_id}\0{route.request_role}".encode()
+    return f"reasoning-route-{index:04d}-{hashlib.sha256(identity).hexdigest()}.json"
+
+
 def _report_usage_records(
     reports: tuple[ModelBenchmarkReport, ...],
 ) -> tuple[UsageRecord, ...]:
@@ -1602,6 +2322,18 @@ def _load_campaign_entry(path: Path) -> CandidateBenchmarkCampaignEntry:
     entry = _parse_model(raw, CandidateBenchmarkCampaignEntry)
     if raw != stable_json(entry).encode("utf-8"):
         raise ValueError("candidate campaign entry is not canonical")
+    return entry
+
+
+def _load_reasoning_campaign_entry(
+    path: Path,
+) -> CandidateReasoningProfileBenchmarkCampaignEntry:
+    if re.fullmatch(_REASONING_CAMPAIGN_ENTRY_FILENAME_PATTERN, path.name) is None:
+        raise ValueError("reasoning-profile campaign entry filename is invalid")
+    raw = _read_private_file(path, maximum=_MAX_REPORT_BYTES)
+    entry = _parse_model(raw, CandidateReasoningProfileBenchmarkCampaignEntry)
+    if raw != stable_json(entry).encode("utf-8"):
+        raise ValueError("reasoning-profile campaign entry is not canonical")
     return entry
 
 

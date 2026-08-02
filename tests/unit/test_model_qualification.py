@@ -5,6 +5,7 @@ import copy
 import hashlib
 import json
 import pickle
+from contextlib import nullcontext
 from dataclasses import FrozenInstanceError, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -16,6 +17,10 @@ from pydantic import ValidationError
 import mmaudit.models.generation_evidence as generation_evidence_module
 from mmaudit.benchmark.models import ModelBenchmarkDimension, load_model_benchmark_corpus
 from mmaudit.constants import ALL_MODEL_ROLES, ALL_SPECIALIST_ROLES
+from mmaudit.models.candidate_benchmark import (
+    CandidateReasoningProfileBenchmarkPlan,
+    CandidateReasoningProfileBenchmarkRoute,
+)
 from mmaudit.models.discovery import (
     DiscoveryCandidateRoute,
     DiscoveryEndpointMetadataBinding,
@@ -787,6 +792,7 @@ def _resolve_for_test(
     *,
     fresh_evidence: tuple[TrustedBenchmarkVerificationEvidence, ...] | None = None,
     fresh_reasoning_evidence: tuple[TrustedBenchmarkVerificationEvidence, ...] = (),
+    patch_reasoning_content_authority: bool = True,
     **overrides: object,
 ) -> VerifiedProductionQualification:
     """Exercise resolver logic while the fresh-provider boundary is tested separately."""
@@ -809,8 +815,14 @@ def _resolve_for_test(
         "now": _NOW + timedelta(hours=3),
     }
     arguments.update(overrides)
+    reasoning_content_authority = (
+        patch("mmaudit.models.qualification._require_live_reasoning_campaign_content_provenance")
+        if patch_reasoning_content_authority
+        else nullcontext()
+    )
     with (
         patch("mmaudit.models.qualification._require_live_campaign_content_provenance"),
+        reasoning_content_authority,
         patch(
             "mmaudit.models.qualification._freshly_reverify_production_benchmarks",
             return_value=(bundle.benchmark_evidence if fresh_evidence is None else fresh_evidence),
@@ -1046,6 +1058,38 @@ def _distinct_profile_policy() -> ReasoningPolicyArtifact:
     return ReasoningPolicyArtifact.build(controls_by_role=controls)
 
 
+def _exact_reasoning_plan_for_bundle(
+    bundle: _Bundle,
+    *,
+    reasoning_policy: ReasoningPolicyArtifact,
+) -> CandidateReasoningProfileBenchmarkPlan:
+    profile = reasoning_policy.role_policy("judge").control
+    routes = tuple(
+        CandidateReasoningProfileBenchmarkRoute(
+            exact_model_id=result.exact_model_id,
+            request_role=reasoning_qualification_benchmark_role(
+                qualified_role="judge",
+                configured_policy_role="judge",
+            ),
+            control_profile=profile,
+            control_profile_sha256=profile.profile_sha256,
+            qualified_roles=("judge",),
+            qualification_result_sha256=result.result_sha256,
+            primary_report_sha256=result.benchmark_report_sha256,
+        )
+        for result in bundle.artifact.results
+    )
+    payload = {
+        "schema_version": "1.0",
+        "qualification_artifact_sha256": bundle.artifact.artifact_sha256,
+        "reasoning_policy_sha256": reasoning_policy.artifact_sha256,
+        "routes": [route.model_dump(mode="json") for route in routes],
+    }
+    return CandidateReasoningProfileBenchmarkPlan.model_validate(
+        {**payload, "plan_sha256": canonical_sha256(payload)}
+    )
+
+
 def _supplemental_reasoning_evidence(
     bundle: _Bundle,
     *,
@@ -1127,6 +1171,39 @@ def test_distinct_reasoning_profiles_require_real_distinct_benchmark_evidence() 
             binding.reasoning_benchmark_report_sha256 == primary.benchmark_report_sha256
             for binding in model.reasoning_bindings
             if binding.configured_policy_role != "judge"
+        )
+
+
+def test_distinct_reasoning_profiles_require_live_content_authority_before_refetch() -> None:
+    reasoning_policy = _distinct_profile_policy()
+    bundle = _bundle(reasoning_policy=reasoning_policy)
+    supplemental = _supplemental_reasoning_evidence(
+        bundle,
+        reasoning_policy=reasoning_policy,
+    )
+    plan = _exact_reasoning_plan_for_bundle(
+        bundle,
+        reasoning_policy=reasoning_policy,
+    )
+
+    with pytest.raises(ValueError, match="live response-content provenance"):
+        _resolve_for_test(
+            bundle,
+            reasoning_policy=reasoning_policy,
+            fresh_reasoning_evidence=supplemental,
+            reasoning_benchmark_plan=plan,
+            reasoning_benchmark_reports=(),
+            patch_reasoning_content_authority=False,
+        )
+    with pytest.raises(ValueError, match="live response-content provenance"):
+        _resolve_for_test(
+            bundle,
+            reasoning_policy=reasoning_policy,
+            fresh_reasoning_evidence=supplemental,
+            reasoning_benchmark_plan=plan,
+            reasoning_benchmark_reports=(),
+            trusted_reasoning_campaign_verification=object(),
+            patch_reasoning_content_authority=False,
         )
 
 

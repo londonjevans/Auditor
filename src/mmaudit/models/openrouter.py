@@ -3265,7 +3265,7 @@ class OpenRouterClient:
         return (
             self.execution_evidence is ExecutionEvidenceKind.REAL
             and self.provider_policy.certification
-            and role not in _PREQUALIFICATION_PROVIDER_ROLES
+            and not _is_prequalification_provider_role(role)
         )
 
     def _require_real_postqualification_routing(
@@ -4244,7 +4244,7 @@ class OpenRouterClient:
             binding = self._qualification_routing.get(model)
             if (
                 self.provider_policy.certification
-                and role not in _PREQUALIFICATION_PROVIDER_ROLES
+                and not _is_prequalification_provider_role(role)
                 and binding is None
             ):
                 raise OpenRouterQualificationError(
@@ -6319,6 +6319,21 @@ def _qualification_role(role: str) -> str:
         raise OpenRouterQualificationError(
             "qualification routing received an unknown exact review role"
         ) from exc
+
+
+def _is_prequalification_provider_role(role: str) -> bool:
+    """Recognize only fixed provider-free benchmark routes before qualification."""
+
+    if role in _PREQUALIFICATION_PROVIDER_ROLES:
+        return True
+    try:
+        resolution = resolve_reasoning_request_role(role)
+    except ReasoningPolicyError:
+        return False
+    return resolution.mapping_kind in {
+        "prequalification_benchmark",
+        "prequalification_role_benchmark",
+    }
 
 
 def _is_safe_metadata_pair(key: str, value: str) -> bool:

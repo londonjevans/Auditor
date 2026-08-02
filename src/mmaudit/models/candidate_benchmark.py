@@ -6,7 +6,7 @@ import re
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import Protocol
+from typing import Literal, Protocol
 
 from pydantic import Field, field_validator, model_validator
 
@@ -38,10 +38,18 @@ from mmaudit.models.openrouter import (
 from mmaudit.models.qualification import (
     CandidateModel,
     CandidateRegistry,
+    ModelQualificationArtifact,
+    QualificationDisposition,
     QualificationPolicy,
     validate_candidate_registry_discovery,
 )
-from mmaudit.models.reasoning import ReasoningPolicyArtifact
+from mmaudit.models.reasoning import (
+    ReasoningControlProfile,
+    ReasoningPolicyArtifact,
+    reasoning_policy_roles_for_qualified_role,
+    reasoning_qualification_benchmark_role,
+    resolve_reasoning_request_role,
+)
 from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.schemas import ExecutionEvidenceKind, StrictModel, UsageRecord
 from mmaudit.models.usage import UsageLedger
@@ -312,6 +320,128 @@ class CandidateBenchmarkExecutionResult(StrictModel):
         return self
 
 
+class CandidateReasoningProfileBenchmarkRoute(StrictModel):
+    """One exact supplemental full-corpus route for an uncovered control profile."""
+
+    exact_model_id: str = Field(pattern=EXACT_MODEL_ID_PATTERN)
+    request_role: str = Field(min_length=1, max_length=200)
+    control_profile: ReasoningControlProfile
+    control_profile_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    qualified_roles: tuple[str, ...] = Field(min_length=1, max_length=128)
+    qualification_result_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    primary_report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("exact_model_id")
+    @classmethod
+    def route_model_id_is_exact(cls, value: str) -> str:
+        return require_exact_openrouter_model_id(value)
+
+    @model_validator(mode="after")
+    def route_is_canonical_and_profile_bound(self) -> CandidateReasoningProfileBenchmarkRoute:
+        resolution = resolve_reasoning_request_role(self.request_role)
+        if (
+            resolution.mapping_kind != "prequalification_role_benchmark"
+            or self.control_profile.profile_sha256 != self.control_profile_sha256
+            or self.qualified_roles != tuple(sorted(set(self.qualified_roles)))
+            or resolution.qualification_role not in self.qualified_roles
+        ):
+            raise ValueError("supplemental reasoning benchmark route is inconsistent")
+        return self
+
+
+class CandidateReasoningProfileBenchmarkPlan(StrictModel):
+    """Frozen exact route inventory created before supplemental provider work."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    qualification_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reasoning_policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    routes: tuple[CandidateReasoningProfileBenchmarkRoute, ...] = Field(max_length=4_096)
+    plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def plan_is_sorted_unique_and_self_hashed(self) -> CandidateReasoningProfileBenchmarkPlan:
+        keys = tuple((item.exact_model_id, item.request_role) for item in self.routes)
+        if keys != tuple(sorted(set(keys))):
+            raise ValueError("supplemental reasoning benchmark routes must be unique and sorted")
+        expected = canonical_sha256(self.model_dump(mode="json", exclude={"plan_sha256"}))
+        if self.plan_sha256 != expected:
+            raise ValueError("supplemental reasoning benchmark plan hash is inconsistent")
+        return self
+
+
+class CandidateReasoningProfileBenchmarkRun(StrictModel):
+    """One persisted route outcome retained in the bounded supplemental campaign."""
+
+    route: CandidateReasoningProfileBenchmarkRoute
+    report: ModelBenchmarkReport
+    diagnostic: CandidateBenchmarkDiagnostic
+
+    @model_validator(mode="after")
+    def outcome_is_route_bound(self) -> CandidateReasoningProfileBenchmarkRun:
+        if (
+            len(self.report.results) != 1
+            or self.report.results[0].target.model_id != self.route.exact_model_id
+            or self.report.results[0].target.request_role != self.route.request_role
+            or self.diagnostic.exact_model_id != self.route.exact_model_id
+            or self.diagnostic.report_sha256 != self.report.report_sha256
+            or self.diagnostic.execution_evidence is not self.report.execution_evidence
+        ):
+            raise ValueError("supplemental reasoning benchmark outcome differs from its route")
+        return self
+
+
+class CandidateReasoningProfileBenchmarkExecutionResult(StrictModel):
+    """Complete exact supplemental report set; it grants no live-content authority."""
+
+    plan_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    runs: tuple[CandidateReasoningProfileBenchmarkRun, ...] = Field(max_length=4_096)
+
+    @model_validator(mode="after")
+    def outcomes_are_sorted_unique(self) -> CandidateReasoningProfileBenchmarkExecutionResult:
+        keys = tuple((item.route.exact_model_id, item.route.request_role) for item in self.runs)
+        if keys != tuple(sorted(set(keys))):
+            raise ValueError("supplemental reasoning benchmark outcomes are not canonical")
+        return self
+
+    @property
+    def reports(self) -> tuple[ModelBenchmarkReport, ...]:
+        return tuple(item.report for item in self.runs)
+
+    @property
+    def diagnostics(self) -> tuple[CandidateBenchmarkDiagnostic, ...]:
+        return tuple(item.diagnostic for item in self.runs)
+
+
+class CandidateReasoningProfileEvidenceSink(Protocol):
+    """Durable route sink whose separate issuer may retain live content authority."""
+
+    @property
+    def plan_sha256(self) -> str: ...
+
+    @property
+    def runs(self) -> tuple[CandidateReasoningProfileBenchmarkRun, ...]: ...
+
+    def require_live_authority(self) -> None: ...
+
+    def validate_route_start(
+        self,
+        *,
+        route: CandidateReasoningProfileBenchmarkRoute,
+        ledger_before: CandidateCostLedgerSnapshot,
+    ) -> None: ...
+
+    def persist_route(
+        self,
+        *,
+        route: CandidateReasoningProfileBenchmarkRoute,
+        report: ModelBenchmarkReport,
+        diagnostic: CandidateBenchmarkDiagnostic,
+        observed_usage: tuple[UsageRecord, ...],
+        ledger_before: CandidateCostLedgerSnapshot,
+        ledger_after: CandidateCostLedgerSnapshot,
+    ) -> None: ...
+
+
 class CandidateBenchmarkClientFactory(Protocol):
     """Injectable construction boundary; production uses the concrete client."""
 
@@ -342,6 +472,221 @@ class _UnverifiedCandidateFailureProvider:
     ) -> ModelBenchmarkProviderResult:
         del target, system_prompt, user_prompt
         raise CandidateBenchmarkUnavailableError("candidate benchmark execution was unavailable")
+
+
+def build_candidate_reasoning_profile_benchmark_plan(
+    *,
+    artifact: ModelQualificationArtifact,
+    primary_reports: tuple[ModelBenchmarkReport, ...],
+    reasoning_policy: ReasoningPolicyArtifact,
+) -> CandidateReasoningProfileBenchmarkPlan:
+    """Derive one canonical supplemental run per model and uncovered profile."""
+
+    artifact = ModelQualificationArtifact.model_validate(artifact.model_dump(mode="json"))
+    reasoning_policy = ReasoningPolicyArtifact.model_validate(
+        reasoning_policy.model_dump(mode="python")
+    )
+    reports = tuple(
+        ModelBenchmarkReport.model_validate(item.model_dump(mode="json"))
+        for item in primary_reports
+    )
+    report_by_model: dict[str, ModelBenchmarkReport] = {}
+    for report in reports:
+        if len(report.results) != 1:
+            raise ValueError("primary reasoning benchmark reports must contain one model")
+        target = report.results[0].target
+        if target.request_role != "model_benchmark" or target.model_id in report_by_model:
+            raise ValueError("primary reasoning benchmark report set is not canonical")
+        report_by_model[target.model_id] = report
+    result_ids = tuple(result.exact_model_id for result in artifact.results)
+    if tuple(sorted(report_by_model)) != result_ids:
+        raise ValueError("primary reasoning benchmark reports differ from qualification results")
+
+    primary_profile = reasoning_policy.control_for_request("model_benchmark")
+    routes: list[CandidateReasoningProfileBenchmarkRoute] = []
+    for result in artifact.results:
+        if result.disposition is not QualificationDisposition.TIER_A:
+            continue
+        profiles: dict[
+            str,
+            tuple[ReasoningControlProfile, list[tuple[str, str]]],
+        ] = {}
+        for qualified_role in result.approved_roles:
+            for configured_policy_role in reasoning_policy_roles_for_qualified_role(qualified_role):
+                profile = reasoning_policy.role_policy(configured_policy_role).control
+                current = profiles.setdefault(profile.profile_sha256, (profile, []))
+                if current[0] != profile:
+                    raise ValueError("reasoning profile hash collision in supplemental plan")
+                current[1].append((qualified_role, configured_policy_role))
+        for profile, profile_routes in (item for _key, item in sorted(profiles.items())):
+            if profile == primary_profile:
+                continue
+            canonical_route = sorted(set(profile_routes))[0]
+            routes.append(
+                CandidateReasoningProfileBenchmarkRoute(
+                    exact_model_id=result.exact_model_id,
+                    request_role=reasoning_qualification_benchmark_role(
+                        qualified_role=canonical_route[0],
+                        configured_policy_role=canonical_route[1],
+                    ),
+                    control_profile=profile,
+                    control_profile_sha256=profile.profile_sha256,
+                    qualified_roles=tuple(
+                        sorted({qualified_role for qualified_role, _role in profile_routes})
+                    ),
+                    qualification_result_sha256=result.result_sha256,
+                    primary_report_sha256=report_by_model[result.exact_model_id].report_sha256,
+                )
+            )
+    payload = {
+        "schema_version": "1.0",
+        "qualification_artifact_sha256": artifact.artifact_sha256,
+        "reasoning_policy_sha256": reasoning_policy.artifact_sha256,
+        "routes": [
+            item.model_dump(mode="json")
+            for item in sorted(
+                routes,
+                key=lambda item: (item.exact_model_id, item.request_role),
+            )
+        ],
+    }
+    return CandidateReasoningProfileBenchmarkPlan.model_validate(
+        {**payload, "plan_sha256": canonical_sha256(payload)}
+    )
+
+
+async def run_candidate_reasoning_profile_benchmarks(
+    *,
+    config: AuditConfig,
+    discovery_manifest: OpenRouterModelDiscoveryRunManifest,
+    discovery_evidence: tuple[OpenRouterModelDiscoveryEvidence, ...],
+    candidate_registry: CandidateRegistry,
+    benchmark_suite: ModelBenchmarkSuite,
+    plan: CandidateReasoningProfileBenchmarkPlan,
+    budget: BudgetManager,
+    usage: UsageLedger,
+    operator_api_key: str,
+    explicitly_allow_synthetic_egress: bool,
+    evidence_sink: CandidateReasoningProfileEvidenceSink,
+    client_factory: CandidateBenchmarkClientFactory | None = None,
+) -> CandidateReasoningProfileBenchmarkExecutionResult:
+    """Execute every planned profile route while preserving each failed denominator."""
+
+    config = AuditConfig.model_validate(config.model_dump(mode="json"))
+    discovery_manifest = OpenRouterModelDiscoveryRunManifest.model_validate(
+        discovery_manifest.model_dump(mode="json")
+    )
+    discovery_evidence = tuple(
+        OpenRouterModelDiscoveryEvidence.model_validate(item.model_dump(mode="json"))
+        for item in discovery_evidence
+    )
+    registry = CandidateRegistry.model_validate(candidate_registry.model_dump(mode="json"))
+    suite = ModelBenchmarkSuite.model_validate(benchmark_suite.model_dump(mode="json"))
+    plan = CandidateReasoningProfileBenchmarkPlan.model_validate(plan.model_dump(mode="json"))
+    if not isinstance(budget, BudgetManager) or budget.atomic_ledger is None:
+        raise ValueError("supplemental reasoning benchmarks require a durable atomic cost ledger")
+    if not budget.require_endpoint_cost_bound:
+        raise ValueError("supplemental reasoning benchmarks require endpoint-bound cost controls")
+    if not isinstance(usage, UsageLedger):
+        raise ValueError("supplemental reasoning benchmarks require a shared usage ledger")
+    if not isinstance(operator_api_key, str) or not operator_api_key:
+        raise ValueError("supplemental reasoning benchmarks require an in-memory credential")
+    if evidence_sink.plan_sha256 != plan.plan_sha256:
+        raise ValueError("supplemental reasoning benchmark sink differs from the frozen plan")
+    evidence_sink.require_live_authority()
+    validate_candidate_benchmark_egress(
+        config=config,
+        benchmark_suite=suite,
+        explicitly_allowed=explicitly_allow_synthetic_egress,
+    )
+    validate_candidate_registry_discovery(
+        registry=registry,
+        run_manifest=discovery_manifest,
+        evidence=discovery_evidence,
+    )
+    reasoning_policy = build_reasoning_policy(config)
+    if reasoning_policy.artifact_sha256 != plan.reasoning_policy_sha256:
+        raise ValueError("supplemental plan differs from the effective reasoning policy")
+    candidates = {item.exact_model_id: item for item in registry.candidates}
+    evidence_by_model = {item.exact_model_id: item for item in discovery_evidence}
+    if any(route.exact_model_id not in candidates for route in plan.routes):
+        raise ValueError("supplemental plan names a model outside the candidate registry")
+    existing_runs = list(evidence_sink.runs)
+    expected_prefix = tuple(plan.routes[: len(existing_runs)])
+    if tuple(item.route for item in existing_runs) != expected_prefix:
+        raise ValueError("supplemental campaign journal is not an exact route prefix")
+    factory = client_factory or _build_concrete_client
+    try:
+        for route in plan.routes[len(existing_runs) :]:
+            candidate = candidates[route.exact_model_id]
+            if reasoning_policy.control_for_request(route.request_role) != route.control_profile:
+                raise ValueError("supplemental route differs from its effective control profile")
+            usage_start = len(usage.records)
+            assert budget.atomic_ledger is not None
+            raw_ledger_before = budget.atomic_ledger.snapshot()
+            ledger_before = candidate_cost_ledger_snapshot(raw_ledger_before)
+            evidence_sink.validate_route_start(route=route, ledger_before=ledger_before)
+            target = ModelBenchmarkTarget(
+                model_id=route.exact_model_id,
+                root_lineage=candidate.root_lineage,
+                request_role=route.request_role,
+            )
+            report, failure_stage, _requests_observed = await _execute_candidate(
+                config=config,
+                benchmark_suite=suite,
+                budget=budget,
+                usage=usage,
+                candidate=candidate,
+                target=target,
+                endpoint_evidence=evidence_by_model[route.exact_model_id],
+                discovery_manifest=discovery_manifest,
+                operator_api_key=operator_api_key,
+                reasoning_policy=reasoning_policy,
+                factory=factory,
+            )
+            observed_usage = tuple(usage.records[usage_start:])
+            raw_ledger_after = budget.atomic_ledger.snapshot()
+            ledger_after = candidate_cost_ledger_snapshot(raw_ledger_after)
+            _require_exact_candidate_usage_binding(
+                report=report,
+                observed_records=observed_usage,
+                failure_stage=failure_stage,
+            )
+            diagnostic = _candidate_diagnostic(
+                candidate=candidate,
+                report=report,
+                reasoning_suppressed=False,
+                failure_stage=failure_stage,
+                observed_usage=observed_usage,
+                ledger_before=ledger_before,
+                ledger_after=ledger_after,
+                raw_ledger_before=raw_ledger_before,
+                raw_ledger_after=raw_ledger_after,
+            )
+            evidence_sink.persist_route(
+                route=route,
+                report=report,
+                diagnostic=diagnostic,
+                observed_usage=observed_usage,
+                ledger_before=ledger_before,
+                ledger_after=ledger_after,
+            )
+            existing_runs.append(
+                CandidateReasoningProfileBenchmarkRun(
+                    route=route,
+                    report=report,
+                    diagnostic=diagnostic,
+                )
+            )
+    finally:
+        operator_api_key = ""
+    result = CandidateReasoningProfileBenchmarkExecutionResult(
+        plan_sha256=plan.plan_sha256,
+        runs=tuple(existing_runs),
+    )
+    if tuple(item.route for item in result.runs) != plan.routes:
+        raise ValueError("supplemental reasoning benchmark campaign is incomplete")
+    return result
 
 
 async def run_candidate_registry_benchmarks(
@@ -635,7 +980,7 @@ async def _execute_candidate(
             )
             if current_model_evidence != frozen_model_evidence:
                 raise ValueError("current model metadata differs from frozen discovery evidence")
-            benchmark_reasoning_profile = reasoning_policy.control_for_request("model_benchmark")
+            benchmark_reasoning_profile = reasoning_policy.control_for_request(target.request_role)
             current_model_evidence.reasoning_capability.require_compatible_profile(
                 benchmark_reasoning_profile
             )

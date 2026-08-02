@@ -6661,6 +6661,7 @@ async def test_real_postqualification_single_request_cannot_bypass_opaque_or_pla
     ("role", "reasoning"),
     [
         ("model_benchmark", None),
+        ("model_benchmark:judge:judge", OpenRouterReasoning(effort="low")),
         ("real_provider_smoke", OpenRouterReasoning(effort="high")),
     ],
 )

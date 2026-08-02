@@ -3069,6 +3069,68 @@ def _validate_supplemental_reasoning_benchmarks(
     return observed
 
 
+def _require_live_reasoning_campaign_content_provenance(
+    *,
+    trusted_campaign_verification: object | None,
+    reasoning_benchmark_plan: object | None,
+    reports: tuple[ModelBenchmarkReport, ...],
+    expected: Mapping[tuple[str, str], _ExpectedReasoningBenchmark],
+    artifact: ModelQualificationArtifact,
+    policy: QualificationPolicy,
+    expected_bindings: QualificationBindings,
+    reasoning_policy: ReasoningPolicyArtifact,
+) -> None:
+    """Require live parsed-content authority over the exact canonical profile plan."""
+
+    from mmaudit.benchmark.model_portfolio import (
+        TrustedCandidateReasoningProfileCampaignVerification,
+    )
+    from mmaudit.models.candidate_benchmark import CandidateReasoningProfileBenchmarkPlan
+
+    if not expected:
+        if (
+            reports
+            or reasoning_benchmark_plan is not None
+            or trusted_campaign_verification is not None
+        ):
+            raise ValueError("unexpected supplemental reasoning qualification inputs")
+        return
+    if type(reasoning_benchmark_plan) is not CandidateReasoningProfileBenchmarkPlan:
+        raise ValueError("reasoning qualification requires the exact frozen profile plan")
+    plan = CandidateReasoningProfileBenchmarkPlan.model_validate(
+        reasoning_benchmark_plan.model_dump(mode="json")
+    )
+    if type(trusted_campaign_verification) is not (
+        TrustedCandidateReasoningProfileCampaignVerification
+    ):
+        raise ValueError("reasoning qualification requires live response-content provenance")
+    results = {result.exact_model_id: result for result in artifact.results}
+    report_by_model = {
+        result.exact_model_id: result.benchmark_report_sha256 for result in artifact.results
+    }
+    route_keys = tuple((route.exact_model_id, route.request_role) for route in plan.routes)
+    if (
+        plan.qualification_artifact_sha256 != artifact.artifact_sha256
+        or plan.reasoning_policy_sha256 != reasoning_policy.artifact_sha256
+        or route_keys != tuple(sorted(expected))
+        or any(
+            route.control_profile != expected[(route.exact_model_id, route.request_role)].profile
+            or route.qualified_roles
+            != expected[(route.exact_model_id, route.request_role)].qualified_roles
+            or route.qualification_result_sha256 != results[route.exact_model_id].result_sha256
+            or route.primary_report_sha256 != report_by_model[route.exact_model_id]
+            for route in plan.routes
+        )
+    ):
+        raise ValueError("reasoning qualification plan differs from exact production profiles")
+    trusted_campaign_verification.require_for(
+        plan_sha256=plan.plan_sha256,
+        reports=reports,
+        policy_sha256=policy.policy_sha256,
+        effective_config_sha256=expected_bindings.effective_config_sha256,
+    )
+
+
 def resolve_verified_production_qualification(
     *,
     artifact: ModelQualificationArtifact,
@@ -3085,6 +3147,8 @@ def resolve_verified_production_qualification(
     now: datetime,
     trusted_calibrated_policy: TrustedCalibratedQualificationPolicy | None = None,
     reasoning_benchmark_reports: tuple[ModelBenchmarkReport, ...] = (),
+    reasoning_benchmark_plan: object | None = None,
+    trusted_reasoning_campaign_verification: object | None = None,
 ) -> VerifiedProductionQualification:
     """Issue an opaque production capability only from complete current REAL evidence."""
 
@@ -3210,6 +3274,16 @@ def resolve_verified_production_qualification(
         results=tier_a_results,
         reasoning_policy=reasoning_policy,
         primary_reasoning_by_model=primary_reasoning_by_model,
+    )
+    _require_live_reasoning_campaign_content_provenance(
+        trusted_campaign_verification=trusted_reasoning_campaign_verification,
+        reasoning_benchmark_plan=reasoning_benchmark_plan,
+        reports=reasoning_benchmark_reports,
+        expected=expected_reasoning_benchmarks,
+        artifact=artifact,
+        policy=policy,
+        expected_bindings=expected_bindings,
+        reasoning_policy=reasoning_policy,
     )
     if expected_reasoning_benchmarks or reasoning_benchmark_reports:
         supplemental_reasoning_evidence = _freshly_reverify_reasoning_benchmarks(

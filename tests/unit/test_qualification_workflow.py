@@ -10,12 +10,16 @@ from tempfile import TemporaryDirectory
 import pytest
 
 import mmaudit.benchmark.models as model_benchmark_module
+import mmaudit.models.generation_evidence as generation_evidence_module
 import mmaudit.models.openrouter as openrouter_module
+import mmaudit.models.qualification_workflow as qualification_workflow_module
 from mmaudit.benchmark.model_portfolio import (
     ModelBenchmarkPortfolio,
     TrustedCandidateBenchmarkCampaignVerification,
     create_candidate_benchmark_campaign,
+    create_candidate_reasoning_profile_benchmark_campaign,
     issue_trusted_candidate_benchmark_campaign_verification,
+    issue_trusted_candidate_reasoning_profile_campaign_verification,
     seal_model_benchmark_portfolio_from_campaign,
     verify_model_benchmark_portfolio_campaign,
     write_model_benchmark_portfolio,
@@ -30,6 +34,9 @@ from mmaudit.benchmark.models import (
 from mmaudit.models.candidate_benchmark import (
     CandidateBenchmarkDiagnostic,
     CandidateBenchmarkRunState,
+    CandidateReasoningProfileBenchmarkExecutionResult,
+    CandidateReasoningProfileBenchmarkPlan,
+    build_candidate_reasoning_profile_benchmark_plan,
     candidate_cost_ledger_snapshot,
 )
 from mmaudit.models.output_modes import supported_output_modes
@@ -54,6 +61,11 @@ from mmaudit.models.qualification_workflow import (
     seal_qualification_release_bindings,
     validate_qualification_portfolio_readiness,
     write_qualification_workflow_bundle,
+)
+from mmaudit.models.reasoning import (
+    CANONICAL_REASONING_POLICY_ROLES,
+    ReasoningControlProfile,
+    ReasoningPolicyArtifact,
 )
 from mmaudit.models.schemas import ExecutionEvidenceKind, UsageRecord
 from mmaudit.orchestration.cost_ledger import AtomicCostLedger
@@ -201,6 +213,21 @@ def _as_real_report(
         case["execution_evidence"] = ExecutionEvidenceKind.REAL.value
         usage = dict(case["usage_record"])
         routing = dict(usage["routing"])
+        request_role = str(usage["role"])
+        if request_role != "model_benchmark":
+            role_suffix = canonical_sha256(request_role)[:12]
+            usage["request_id"] = f"{usage['request_id']}-{role_suffix}"
+            usage["openrouter_generation_id"] = f"{usage['openrouter_generation_id']}-{role_suffix}"
+            routing["generation_id"] = usage["openrouter_generation_id"]
+            for key in (
+                "request_token_plan",
+                "request_token_plan_sha256",
+                "atomic_token_reservation",
+                "atomic_token_reservation_sha256",
+                "atomic_token_reservations",
+                "atomic_token_reservation_sha256s",
+            ):
+                routing.pop(key, None)
         assert candidate.output_capability_sha256 is not None
         assert candidate.structured_output_mode is not None
         benchmark_case = benchmark_cases[case["case_id"]]
@@ -217,16 +244,17 @@ def _as_real_report(
                 {"role": "user", "content": request_plan.user_prompt},
             ]
         )
-        request_body_sha256 = canonical_sha256(
-            {
-                "configured_provider_endpoints": [candidate.approved_provider_endpoint],
-                "model": candidate.exact_model_id,
-                "prompt_sha256": prompt_sha256,
-                "provider_policy_sha256": routing["provider_policy_sha256"],
-                "request_shape_sha256": request_plan.request_shape_sha256,
-                "schema_sha256": usage["schema_sha256"],
-            }
-        )
+        request_body_payload = {
+            "configured_provider_endpoints": [candidate.approved_provider_endpoint],
+            "model": candidate.exact_model_id,
+            "prompt_sha256": prompt_sha256,
+            "provider_policy_sha256": routing["provider_policy_sha256"],
+            "request_shape_sha256": request_plan.request_shape_sha256,
+            "schema_sha256": usage["schema_sha256"],
+        }
+        if request_role != "model_benchmark":
+            request_body_payload["reasoning_benchmark_request_role"] = request_role
+        request_body_sha256 = canonical_sha256(request_body_payload)
         response_format = (
             request_plan.response_format["type"]
             if request_plan.response_format is not None
@@ -259,6 +287,7 @@ def _as_real_report(
                 "endpoint_snapshot_sha256": candidate.endpoint_snapshot_sha256,
                 "output_capability_sha256": candidate.output_capability_sha256,
                 "endpoint_pricing_sha256": candidate.pricing_snapshot_sha256,
+                "model_metadata_snapshot_sha256": (candidate.model_metadata_snapshot_sha256),
                 "catalog_identity_binding_sha256": canonical_sha256(
                     {
                         "canonical_slug": candidate.canonical_model_slug,
@@ -473,6 +502,180 @@ def _portfolio(
         policy=policy,
     )
     return portfolio
+
+
+def _distinct_reasoning_policy() -> ReasoningPolicyArtifact:
+    disabled = ReasoningControlProfile.build(
+        mode="disabled",
+        reserved_reasoning_tokens=0,
+    )
+    controls = {role: disabled for role in CANONICAL_REASONING_POLICY_ROLES}
+    controls["threat_model"] = ReasoningControlProfile.build(
+        mode="effort",
+        effort="high",
+        reserved_reasoning_tokens=4_096,
+    )
+    return ReasoningPolicyArtifact.build(controls_by_role=controls)
+
+
+def _trusted_generation_authority(
+    *,
+    registry,
+    primary: ModelBenchmarkReport,
+    supplemental: tuple[ModelBenchmarkReport, ...] = (),
+    plan: CandidateReasoningProfileBenchmarkPlan | None = None,
+):
+    reports = (primary, *supplemental)
+    requests = candidate_generation_verification_requests(
+        registry=registry,
+        benchmark_reports=(primary,),
+        reasoning_benchmark_reports=supplemental,
+        reasoning_benchmark_plan=plan,
+    )
+    attestations = tuple(
+        case.generation_evidence
+        for report in reports
+        for case in report.results[0].cases
+        if case.generation_evidence is not None
+    )
+    return generation_evidence_module._issue_trusted_generation_verification(
+        requests=requests,
+        attestations=attestations,
+        verification_started_at=min(item.retrieved_at for item in attestations),
+    )
+
+
+def _authenticated_primary_bundle(
+    *,
+    manifest,
+    discovery_evidence,
+    registry,
+    primary: ModelBenchmarkReport,
+    policy,
+    portfolio: ModelBenchmarkPortfolio,
+    campaign_verification: TrustedCandidateBenchmarkCampaignVerification,
+    release_bindings,
+) -> QualificationWorkflowBundle:
+    return run_qualification_workflow(
+        candidate_registry=registry,
+        discovery_run_manifest=manifest,
+        discovery_evidence=discovery_evidence,
+        policy=policy,
+        benchmark_suite=load_model_benchmark_corpus(CORPUS_PATH),
+        benchmark_portfolio=portfolio,
+        benchmark_reports=(primary,),
+        release_bindings=release_bindings,
+        trusted_campaign_verification=campaign_verification,
+        trusted_generation_verification=_trusted_generation_authority(
+            registry=registry,
+            primary=primary,
+        ),
+        trusted_release_observation=synthetic_release_observation(
+            release_bindings,
+            observed_at=NOW + timedelta(hours=1),
+        ),
+        evaluated_at=NOW + timedelta(hours=1),
+        qualification_expires_at=NOW + timedelta(days=6),
+    )
+
+
+def _reasoning_campaign_authority(
+    *,
+    plan: CandidateReasoningProfileBenchmarkPlan,
+    registry,
+    report: ModelBenchmarkReport,
+    policy,
+):
+    suite = load_model_benchmark_corpus(CORPUS_PATH)
+    with TemporaryDirectory(dir="/private/tmp") as directory:
+        ledger = AtomicCostLedger.initialize(
+            Path(directory) / "cost-ledger.json",
+            cap_usd=Decimal("10"),
+        )
+        campaign = create_candidate_reasoning_profile_benchmark_campaign(
+            Path(directory) / "reasoning-campaign",
+            plan=plan,
+            candidate_registry=registry,
+            corpus=suite,
+            effective_config_sha256="3" * 64,
+            qualification_policy_sha256=policy.policy_sha256,
+            cost_ledger=ledger,
+        )
+        route = plan.routes[0]
+        initial_snapshot = campaign.manifest.initial_cost_ledger_snapshot
+        live_results = []
+        for report_result in report.results:
+            live_cases = [
+                case.model_copy(
+                    update={
+                        "usage_record": (
+                            reattest_synthetic_real_usage(case.usage_record)
+                            if case.usage_record is not None
+                            else None
+                        )
+                    }
+                )
+                for case in report_result.cases
+            ]
+            live_results.append(report_result.model_copy(update={"cases": live_cases}))
+        live_report = report.model_copy(update={"results": live_results})
+        result = live_report.results[0]
+        usage = tuple(case.usage_record for case in result.cases if case.usage_record is not None)
+        for record in usage:
+            cost = Decimal(str(record.accounted_cost_usd))
+            if cost:
+                reservation = ledger.reserve(record.request_id, cost)
+                ledger.reconcile(reservation, cost)
+        final_snapshot = candidate_cost_ledger_snapshot(ledger.snapshot())
+        failed_cases = sum(case.error_kind is not None for case in result.cases)
+        diagnostic = CandidateBenchmarkDiagnostic(
+            exact_model_id=result.target.model_id,
+            approved_provider_endpoint=registry.candidates[0].approved_provider_endpoint,
+            endpoint_snapshot_sha256=registry.candidates[0].endpoint_snapshot_sha256,
+            report_sha256=report.report_sha256,
+            execution_evidence=report.execution_evidence,
+            state=(
+                CandidateBenchmarkRunState.COMPLETE_WITH_FAILURES
+                if failed_cases
+                else CandidateBenchmarkRunState.COMPLETE
+            ),
+            failure_stage=None,
+            reasoning_suppressed=False,
+            corpus_cases=len(result.cases),
+            requests_observed=len(usage),
+            logical_request_count=len(usage),
+            provider_attempt_count=sum(record.attempts for record in usage),
+            retry_count=sum(record.attempts - 1 for record in usage),
+            successful_request_count=sum(record.status == "success" for record in usage),
+            failed_request_count=sum(record.status != "success" for record in usage),
+            unresolved_cost_count=0,
+            observed_usage_sha256=canonical_sha256(
+                [record.model_dump(mode="json") for record in usage]
+            ),
+            cost_ledger_before=initial_snapshot,
+            cost_ledger_after=final_snapshot,
+            successful_cases=len(result.cases) - failed_cases,
+            failed_cases=failed_cases,
+            error_kinds=tuple(
+                sorted({case.error_kind for case in result.cases if case.error_kind is not None})
+            ),
+        )
+        campaign.persist_route(
+            route=route,
+            report=live_report,
+            diagnostic=diagnostic,
+            observed_usage=usage,
+            ledger_before=initial_snapshot,
+            ledger_after=final_snapshot,
+        )
+        execution = CandidateReasoningProfileBenchmarkExecutionResult(
+            plan_sha256=plan.plan_sha256,
+            runs=campaign.runs,
+        )
+        return issue_trusted_candidate_reasoning_profile_campaign_verification(
+            campaign=campaign,
+            execution=execution,
+        )
 
 
 def _run(
@@ -972,6 +1175,396 @@ async def test_candidate_generation_requests_bind_exact_report_usage() -> None:
     assert {item.expected_provider_name for item in requests} == {
         registry.candidates[0].approved_provider_name
     }
+
+
+@pytest.mark.asyncio
+async def test_generation_refetch_set_binds_primary_and_required_reasoning_reports() -> None:
+    manifest, discovery_evidence, registry = _candidate_inputs()
+    candidate = registry.candidates[0]
+    primary = _as_real_report(await _mock_report(), candidate=candidate)
+    policy = _policy()
+    portfolio, campaign_verification = _portfolio_evidence(
+        registry=registry,
+        report=primary,
+    )
+    release_bindings = _release_bindings(primary)
+    primary_bundle = _authenticated_primary_bundle(
+        manifest=manifest,
+        discovery_evidence=discovery_evidence,
+        registry=registry,
+        primary=primary,
+        policy=policy,
+        portfolio=portfolio,
+        campaign_verification=campaign_verification,
+        release_bindings=release_bindings,
+    )
+    plan = build_candidate_reasoning_profile_benchmark_plan(
+        artifact=primary_bundle.qualification_artifact,
+        primary_reports=(primary,),
+        reasoning_policy=_distinct_reasoning_policy(),
+    )
+    assert len(plan.routes) == 1
+    request_role = plan.routes[0].request_role
+    supplemental = _as_real_report(
+        await _mock_report(
+            target=ModelBenchmarkTarget(
+                model_id=MODEL_ID,
+                root_lineage=ROOT_LINEAGE,
+                request_role=request_role,
+            )
+        ),
+        candidate=candidate,
+    )
+
+    requests = candidate_generation_verification_requests(
+        registry=registry,
+        benchmark_reports=(primary,),
+        reasoning_benchmark_reports=(supplemental,),
+        reasoning_benchmark_plan=plan,
+    )
+    attestations = tuple(
+        case.generation_evidence
+        for report in (primary, supplemental)
+        for case in report.results[0].cases
+        if case.generation_evidence is not None
+    )
+    authority = generation_evidence_module._issue_trusted_generation_verification(
+        requests=requests,
+        attestations=attestations,
+        verification_started_at=min(item.retrieved_at for item in attestations),
+    )
+
+    assert len(requests) == len(primary.case_ids) + len(supplemental.case_ids)
+    assert {item.benchmark_report_sha256 for item in requests} == {
+        primary.report_sha256,
+        supplemental.report_sha256,
+    }
+    assert {item.usage_record.role for item in requests} == {
+        "model_benchmark",
+        request_role,
+    }
+    for request in requests:
+        observed = authority.attestation_for(
+            benchmark_report_sha256=request.benchmark_report_sha256,
+            case_id=request.case_id,
+            exact_model_id=request.exact_model_id,
+            canonical_model_id=request.canonical_model_id,
+            catalog_identity_binding_sha256=request.catalog_identity_binding_sha256,
+            discovery_evidence_sha256=request.discovery_evidence_sha256,
+            usage_record=request.usage_record,
+            expected_provider_name=request.expected_provider_name,
+        )
+        assert observed.generation_id == request.usage_record.openrouter_generation_id
+
+    with pytest.raises(ValueError, match="fresh"):
+        generation_evidence_module._issue_trusted_generation_verification(
+            requests=requests,
+            attestations=attestations,
+            verification_started_at=max(item.retrieved_at for item in attestations)
+            + timedelta(seconds=1),
+        )
+
+
+@pytest.mark.asyncio
+async def test_generation_refetch_set_rejects_missing_or_relabelled_profile_reports() -> None:
+    manifest, discovery_evidence, registry = _candidate_inputs()
+    candidate = registry.candidates[0]
+    primary = _as_real_report(await _mock_report(), candidate=candidate)
+    policy = _policy()
+    portfolio, campaign_verification = _portfolio_evidence(
+        registry=registry,
+        report=primary,
+    )
+    release_bindings = _release_bindings(primary)
+    primary_bundle = _authenticated_primary_bundle(
+        manifest=manifest,
+        discovery_evidence=discovery_evidence,
+        registry=registry,
+        primary=primary,
+        policy=policy,
+        portfolio=portfolio,
+        campaign_verification=campaign_verification,
+        release_bindings=release_bindings,
+    )
+    plan = build_candidate_reasoning_profile_benchmark_plan(
+        artifact=primary_bundle.qualification_artifact,
+        primary_reports=(primary,),
+        reasoning_policy=_distinct_reasoning_policy(),
+    )
+    request_role = plan.routes[0].request_role
+    supplemental = _as_real_report(
+        await _mock_report(
+            target=ModelBenchmarkTarget(
+                model_id=MODEL_ID,
+                root_lineage=ROOT_LINEAGE,
+                request_role=request_role,
+            )
+        ),
+        candidate=candidate,
+    )
+
+    with pytest.raises(ValueError, match="required profile routes"):
+        candidate_generation_verification_requests(
+            registry=registry,
+            benchmark_reports=(primary,),
+            reasoning_benchmark_plan=plan,
+        )
+    with pytest.raises(ValueError, match="frozen plan route"):
+        candidate_generation_verification_requests(
+            registry=registry,
+            benchmark_reports=(primary,),
+            reasoning_benchmark_reports=(supplemental,),
+        )
+
+
+@pytest.mark.asyncio
+async def test_generation_refetch_set_preflights_combined_request_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest, discovery_evidence, registry = _candidate_inputs()
+    candidate = registry.candidates[0]
+    primary = _as_real_report(await _mock_report(), candidate=candidate)
+    policy = _policy()
+    portfolio, campaign_verification = _portfolio_evidence(
+        registry=registry,
+        report=primary,
+    )
+    release_bindings = _release_bindings(primary)
+    primary_bundle = _authenticated_primary_bundle(
+        manifest=manifest,
+        discovery_evidence=discovery_evidence,
+        registry=registry,
+        primary=primary,
+        policy=policy,
+        portfolio=portfolio,
+        campaign_verification=campaign_verification,
+        release_bindings=release_bindings,
+    )
+    plan = build_candidate_reasoning_profile_benchmark_plan(
+        artifact=primary_bundle.qualification_artifact,
+        primary_reports=(primary,),
+        reasoning_policy=_distinct_reasoning_policy(),
+    )
+    request_role = plan.routes[0].request_role
+    supplemental = _as_real_report(
+        await _mock_report(
+            target=ModelBenchmarkTarget(
+                model_id=MODEL_ID,
+                root_lineage=ROOT_LINEAGE,
+                request_role=request_role,
+            )
+        ),
+        candidate=candidate,
+    )
+    monkeypatch.setattr(
+        qualification_workflow_module,
+        "_MAX_GENERATION_VERIFICATION_REQUESTS",
+        len(primary.case_ids) + len(supplemental.case_ids) - 1,
+    )
+
+    with pytest.raises(ValueError, match="exceeds the bound"):
+        candidate_generation_verification_requests(
+            registry=registry,
+            benchmark_reports=(primary,),
+            reasoning_benchmark_reports=(supplemental,),
+            reasoning_benchmark_plan=plan,
+        )
+    with pytest.raises(ValueError, match="frozen plan route"):
+        candidate_generation_verification_requests(
+            registry=registry,
+            benchmark_reports=(primary,),
+            reasoning_benchmark_reports=(supplemental,),
+        )
+
+    relabelled_payload = primary.model_dump(mode="json", exclude={"report_sha256"})
+    relabelled_payload["results"][0]["target"]["request_role"] = request_role
+    relabelled_payload["report_sha256"] = canonical_sha256(relabelled_payload)
+    with pytest.raises(ValueError, match="not bound to its target"):
+        ModelBenchmarkReport.model_validate(relabelled_payload)
+    with pytest.raises(ValueError, match="reuse report evidence"):
+        candidate_generation_verification_requests(
+            registry=registry,
+            benchmark_reports=(primary,),
+            reasoning_benchmark_reports=(supplemental, supplemental),
+            reasoning_benchmark_plan=plan,
+        )
+
+
+@pytest.mark.asyncio
+async def test_workflow_bundle_binds_authenticated_reasoning_profile_evidence() -> None:
+    manifest, discovery_evidence, registry = _candidate_inputs()
+    candidate = registry.candidates[0]
+    primary = _as_real_report(await _mock_report(), candidate=candidate)
+    policy = _policy()
+    portfolio, campaign_verification = _portfolio_evidence(
+        registry=registry,
+        report=primary,
+    )
+    release_bindings = _release_bindings(primary)
+    primary_bundle = _authenticated_primary_bundle(
+        manifest=manifest,
+        discovery_evidence=discovery_evidence,
+        registry=registry,
+        primary=primary,
+        policy=policy,
+        portfolio=portfolio,
+        campaign_verification=campaign_verification,
+        release_bindings=release_bindings,
+    )
+    plan = build_candidate_reasoning_profile_benchmark_plan(
+        artifact=primary_bundle.qualification_artifact,
+        primary_reports=(primary,),
+        reasoning_policy=_distinct_reasoning_policy(),
+    )
+    request_role = plan.routes[0].request_role
+    supplemental = _as_real_report(
+        await _mock_report(
+            target=ModelBenchmarkTarget(
+                model_id=MODEL_ID,
+                root_lineage=ROOT_LINEAGE,
+                request_role=request_role,
+            )
+        ),
+        candidate=candidate,
+    )
+    trusted_generations = _trusted_generation_authority(
+        registry=registry,
+        primary=primary,
+        supplemental=(supplemental,),
+        plan=plan,
+    )
+    reasoning_campaign_verification = _reasoning_campaign_authority(
+        plan=plan,
+        registry=registry,
+        report=supplemental,
+        policy=policy,
+    )
+
+    common = {
+        "candidate_registry": registry,
+        "discovery_run_manifest": manifest,
+        "discovery_evidence": discovery_evidence,
+        "policy": policy,
+        "benchmark_suite": load_model_benchmark_corpus(CORPUS_PATH),
+        "benchmark_portfolio": portfolio,
+        "benchmark_reports": (primary,),
+        "release_bindings": release_bindings,
+        "trusted_campaign_verification": campaign_verification,
+        "trusted_generation_verification": trusted_generations,
+        "trusted_release_observation": synthetic_release_observation(
+            release_bindings,
+            observed_at=NOW + timedelta(hours=1),
+        ),
+        "evaluated_at": NOW + timedelta(hours=1),
+        "qualification_expires_at": NOW + timedelta(days=6),
+        "reasoning_benchmark_reports": (supplemental,),
+        "reasoning_benchmark_plan": plan,
+    }
+    with pytest.raises(ValueError, match="live supplemental response-content authority"):
+        run_qualification_workflow(**common)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="live supplemental response-content authority"):
+        run_qualification_workflow(  # type: ignore[arg-type]
+            **common,
+            trusted_reasoning_campaign_verification=object(),
+        )
+
+    bundle = run_qualification_workflow(
+        **common,  # type: ignore[arg-type]
+        trusted_reasoning_campaign_verification=reasoning_campaign_verification,
+    )
+
+    assert bundle.reasoning_benchmark_plan == plan
+    assert bundle.reasoning_benchmark_reports == (supplemental,)
+    assert len(bundle.trusted_reasoning_benchmark_evidence) == 1
+    assert bundle.trusted_reasoning_benchmark_evidence[0].benchmark_report_sha256 == (
+        supplemental.report_sha256
+    )
+    assert QualificationWorkflowBundle.model_validate_json(bundle.model_dump_json()) == bundle
+
+
+@pytest.mark.asyncio
+async def test_workflow_bundle_fails_readiness_for_low_scoring_reasoning_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("mmaudit.models.qualification._MIN_EXACT_MODELS", 1)
+    monkeypatch.setattr("mmaudit.models.qualification._MIN_ROOT_LINEAGES", 1)
+    manifest, discovery_evidence, registry = _candidate_inputs()
+    candidate = registry.candidates[0]
+    primary = _as_real_report(await _mock_report(), candidate=candidate)
+    policy = _policy()
+    portfolio, campaign_verification = _portfolio_evidence(
+        registry=registry,
+        report=primary,
+    )
+    release_bindings = _release_bindings(primary)
+    primary_bundle = _authenticated_primary_bundle(
+        manifest=manifest,
+        discovery_evidence=discovery_evidence,
+        registry=registry,
+        primary=primary,
+        policy=policy,
+        portfolio=portfolio,
+        campaign_verification=campaign_verification,
+        release_bindings=release_bindings,
+    )
+    assert primary_bundle.qualification_verification.production_selection_ready
+    plan = build_candidate_reasoning_profile_benchmark_plan(
+        artifact=primary_bundle.qualification_artifact,
+        primary_reports=(primary,),
+        reasoning_policy=_distinct_reasoning_policy(),
+    )
+    supplemental = _as_real_report(
+        await _mock_report(
+            target=ModelBenchmarkTarget(
+                model_id=MODEL_ID,
+                root_lineage=ROOT_LINEAGE,
+                request_role=plan.routes[0].request_role,
+            ),
+            semantic_failure=True,
+        ),
+        candidate=candidate,
+    )
+    trusted_generations = _trusted_generation_authority(
+        registry=registry,
+        primary=primary,
+        supplemental=(supplemental,),
+        plan=plan,
+    )
+    reasoning_campaign_verification = _reasoning_campaign_authority(
+        plan=plan,
+        registry=registry,
+        report=supplemental,
+        policy=policy,
+    )
+
+    bundle = run_qualification_workflow(
+        candidate_registry=registry,
+        discovery_run_manifest=manifest,
+        discovery_evidence=discovery_evidence,
+        policy=policy,
+        benchmark_suite=load_model_benchmark_corpus(CORPUS_PATH),
+        benchmark_portfolio=portfolio,
+        benchmark_reports=(primary,),
+        release_bindings=release_bindings,
+        trusted_campaign_verification=campaign_verification,
+        trusted_generation_verification=trusted_generations,
+        trusted_release_observation=synthetic_release_observation(
+            release_bindings,
+            observed_at=NOW + timedelta(hours=1),
+        ),
+        evaluated_at=NOW + timedelta(hours=1),
+        qualification_expires_at=NOW + timedelta(days=6),
+        reasoning_benchmark_reports=(supplemental,),
+        reasoning_benchmark_plan=plan,
+        trusted_reasoning_campaign_verification=reasoning_campaign_verification,
+    )
+
+    assert not bundle.qualification_verification.valid
+    assert not bundle.qualification_verification.production_selection_ready
+    assert bundle.qualification_verification.errors == (
+        "supplemental reasoning profile thresholds failed",
+    )
+    assert QualificationWorkflowBundle.model_validate_json(bundle.model_dump_json()) == bundle
 
 
 @pytest.mark.asyncio
