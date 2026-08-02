@@ -1234,7 +1234,12 @@ are invisible to source review by construction.
   `src/mmaudit/isolation/container.py`, new reporter source and published schema,
   `src/mmaudit/config.py`, `docs/remediation/v3/operator_prerequisites.md`, regressions.
 - **Dependencies:** `V3-OMISSION-001`.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
+- **Starting boundary:** Specify and test the versioned inventory/test reporter contracts and
+  container-side executable identity first. Then implement the capability-derived
+  single-loopback backend and exercise the two-phase protocol at the trusted process boundary.
+  Preserve `UNAVAILABLE` without a real rootless runtime and do not credit host identity as
+  container execution evidence.
 
 ## V3-TOOLDIAG-001 — Diagnose scrubbed-environment tool failures and bound version capture
 

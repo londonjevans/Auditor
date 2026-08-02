@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-02T07:31:34Z",
-  "candidate_commit": "a4efd086e3aff2e4b8c158f015c2e83d71e7beb6",
+  "updated_at": "2026-08-02T07:33:17Z",
+  "candidate_commit": "4f39bd19805bdf957f71745f2ae79e4b86533190",
   "autorun_status": "RUNNING",
-  "current_milestone": "macos_isolated_tool_diagnostics_checkpoint",
-  "current_ticket": "V3-TOOLDIAG-001 (COMPLETE; CHECKPOINT_PENDING)",
-  "last_checkpoint_commit": "a4efd086e3aff2e4b8c158f015c2e83d71e7beb6",
+  "current_milestone": "hardhat_reporter_and_single_loopback_isolation",
+  "current_ticket": "V3-HARDHAT-001 (IN_PROGRESS)",
+  "last_checkpoint_commit": "4f39bd19805bdf957f71745f2ae79e4b86533190",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,

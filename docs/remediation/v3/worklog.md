@@ -5,12 +5,12 @@ The objective source has SHA-256
 Do not record credentials, raw private prompts, or raw provider completions here.
 
 AUTORUN_STATUS: RUNNING
-CURRENT_MILESTONE: macOS isolated tool diagnostics checkpoint
-CURRENT_TICKET: V3-TOOLDIAG-001 (COMPLETE; CHECKPOINT_PENDING)
+CURRENT_MILESTONE: Hardhat reporter and single-loopback isolation
+CURRENT_TICKET: V3-HARDHAT-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-TOOLDIAG-001
-NEXT_ACTION: Review and create the isolated V3-TOOLDIAG-001 checkpoint, push it over SSH, then mark V3-HARDHAT-001 in progress.
-LAST_COMMAND: `git diff --check`
-LAST_RESULT: PASS — final complete pytest gate passed 3,890 tests with 11 explicit prerequisite/opt-in skips in 720.28s; Ruff format/check, strict mypy over 157 source files, schema synchronization, the real macOS Homebrew Semgrep integration, and diff integrity all passed.
+NEXT_ACTION: Inspect the existing Hardhat adapter, strict parsers, rootless backend, schemas, and regressions; map the trusted reporter and single-loopback capability boundaries before implementation.
+LAST_COMMAND: `git commit -m "Harden macOS scanner diagnostics"`
+LAST_RESULT: PASS — cohesive V3-TOOLDIAG-001 implementation checkpoint `4f39bd19805bdf957f71745f2ae79e4b86533190` created after all validation gates passed.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: a4efd086e3aff2e4b8c158f015c2e83d71e7beb6
+LAST_CHECKPOINT_COMMIT: 4f39bd19805bdf957f71745f2ae79e4b86533190
 
 ## 2026-07-31 — V3-EFFORT-001
 
@@ -4891,3 +4891,18 @@ LAST_CHECKPOINT_COMMIT: a4efd086e3aff2e4b8c158f015c2e83d71e7beb6
   does not credit a container executable from host identity; that separate contract is now an
   explicit `V3-HARDHAT-001` acceptance item.
 - **Next ticket:** Create and publish this cohesive checkpoint, then begin `V3-HARDHAT-001`.
+
+## 2026-08-02 — V3-HARDHAT-001
+
+- **Status:** `IN_PROGRESS`.
+- **Defensive objective:** Specify the trusted Hardhat reporter and implement a dedicated,
+  capability-derived single-loopback execution boundary without treating host tool identity or a
+  process stub as real container execution.
+- **Starting invariant:** Reporter output is untrusted until strict schema, version, semantic, and
+  source binding validation succeeds. The backend must expose exactly one read-only loopback RPC
+  capability, no general network, no host credential or socket access, and no caller-supplied
+  attestation authority. Missing real runtime or image-side executable identity remains
+  `UNAVAILABLE`.
+- **Next safe action:** Inspect the existing Hardhat adapter, parser, rootless isolation backend,
+  configuration schema, and tests; record the minimal cohesive implementation boundary before
+  editing production code.
