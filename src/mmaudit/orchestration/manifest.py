@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import stat
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from importlib.resources import files
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import Field, field_validator, model_validator
@@ -46,6 +47,13 @@ from mmaudit.models.schemas import (
     Severity,
     StrictModel,
 )
+from mmaudit.models.sharding import (
+    SolidityGraphsArtifact,
+    SolidityIndexArtifact,
+    SolidityShardPolicy,
+    SolidityShardReportBinding,
+    SolidityShardsArtifact,
+)
 from mmaudit.models.token_planning import PromptAllocationCategory, RequestTokenPlan
 from mmaudit.orchestration.context_manifest import (
     ContextManifest,
@@ -62,6 +70,10 @@ from mmaudit.orchestration.execution_candidates import (
 from mmaudit.reporting.json_report import write_json
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_name, is_sensitive_workspace_path
+from mmaudit.solidity.sharding import (
+    verify_solidity_shard_projection,
+    verify_solidity_shard_repository_projection,
+)
 
 if TYPE_CHECKING:
     from mmaudit.models.qualification import (
@@ -1246,6 +1258,102 @@ def collect_run_artifacts(run_dir: Path) -> list[ManifestFileBinding]:
     return _collect_artifacts(run_dir.resolve(strict=True))
 
 
+def validate_solidity_shard_artifacts(
+    run_dir: Path,
+    report: AuditReport,
+) -> None:
+    """Cross-check persisted typed shard evidence against its index, graphs, and report."""
+
+    root = run_dir.resolve(strict=True)
+    artifact_names = {binding.path for binding in collect_run_artifacts(root)}
+    relevant = {"solidity-index.json", "solidity-graphs.json", "solidity-shards.json"}
+    solidity_metadata = report.metadata.get("solidity")
+    shard_summary = (
+        solidity_metadata.get("shard_summary") if isinstance(solidity_metadata, dict) else None
+    )
+    current_shard_metadata = bool(
+        isinstance(solidity_metadata, dict)
+        and {"index_summary", "graph_summary", "shard_summary"} <= set(solidity_metadata)
+    )
+    current_shards_required = report.schema_version == "1.2" and report.completed
+    report_has_solidity = False
+    for source in report.repository.files:
+        suffix_is_solidity = PurePosixPath(source.path).suffix.lower() == ".sol"
+        language_is_solidity = source.language == "Solidity"
+        if suffix_is_solidity != language_is_solidity:
+            raise ValueError("report repository Solidity membership is inconsistent")
+        report_has_solidity = report_has_solidity or suffix_is_solidity
+    if not artifact_names & relevant:
+        if shard_summary is not None:
+            raise ValueError("Solidity shard report binding lacks persisted artifacts")
+        if report_has_solidity and current_shards_required:
+            raise ValueError("completed Solidity report lacks persisted shard evidence")
+        return
+    if not relevant <= artifact_names:
+        raise ValueError("persisted Solidity shard evidence is incomplete")
+    index_artifact = SolidityIndexArtifact.model_validate(
+        _read_json_artifact(root, "solidity-index.json")
+    )
+    graphs_artifact = SolidityGraphsArtifact.model_validate(
+        _read_json_artifact(root, "solidity-graphs.json")
+    )
+    shards_artifact = SolidityShardsArtifact.model_validate(
+        _read_json_artifact(root, "solidity-shards.json")
+    )
+    if not isinstance(solidity_metadata, dict):
+        raise ValueError("persisted Solidity artifacts lack report metadata")
+    expected_index_summary = {
+        "entities": len(index_artifact.index.entities) if index_artifact.index is not None else 0,
+        "ast_sources": (
+            len(index_artifact.index.ast_sources) if index_artifact.index is not None else 0
+        ),
+        "fallback_sources": (
+            len(index_artifact.index.fallback_sources) if index_artifact.index is not None else 0
+        ),
+    }
+    expected_graph_summary = {
+        "edges": len(graphs_artifact.graphs.edges) if graphs_artifact.graphs is not None else 0,
+        "warnings": (
+            len(graphs_artifact.graphs.warnings) if graphs_artifact.graphs is not None else 0
+        ),
+    }
+    if solidity_metadata.get("index_summary") != expected_index_summary:
+        raise ValueError("Solidity index report summary differs from its typed artifact")
+    if solidity_metadata.get("graph_summary") != expected_graph_summary:
+        raise ValueError("Solidity graph report summary differs from its typed artifact")
+    inventory = shards_artifact.inventory
+    if inventory is None:
+        if shard_summary is not None:
+            raise ValueError("empty Solidity shard artifact has a report binding")
+        if (
+            report.completed
+            and (current_shards_required or current_shard_metadata)
+            and (
+                report_has_solidity
+                or index_artifact.index is not None
+                or graphs_artifact.graphs is not None
+            )
+        ):
+            raise ValueError("completed report has a null Solidity shard inventory")
+        return
+    if index_artifact.index is None or graphs_artifact.graphs is None:
+        raise ValueError("non-empty Solidity shard inventory lacks upstream artifacts")
+    if not isinstance(shard_summary, dict):
+        raise ValueError("non-empty Solidity shard inventory lacks a typed report binding")
+    report_binding = SolidityShardReportBinding.model_validate(shard_summary)
+    verify_solidity_shard_repository_projection(
+        repository=report.repository,
+        inventory=inventory,
+    )
+    verify_solidity_shard_projection(
+        index=index_artifact.index,
+        graphs=graphs_artifact.graphs,
+        inventory=inventory,
+        expected_policy=SolidityShardPolicy.build(),
+        report_binding=report_binding,
+    )
+
+
 def validate_manifest_artifacts(
     manifest: RunEvidenceManifest,
     run_dir: Path,
@@ -1270,6 +1378,7 @@ def validate_manifest_artifacts(
     if "final-findings.json" in expected:
         report = AuditReport.model_validate(_read_json_artifact(root, "final-findings.json"))
         _validate_report_artifact_consistency(root, report)
+        validate_solidity_shard_artifacts(root, report)
         context_manifest = _validated_context_manifest(root, report)
         if manifest.run_configuration is not None:
             effective_config = manifest.run_configuration.reconstruct_effective_config()
@@ -2590,14 +2699,95 @@ def _read_json_artifact(run_dir: Path, name: str) -> dict[str, Any]:
         raise ValueError(f"run JSON artifact may not be a link: {name}")
     resolved = path.resolve(strict=True)
     resolved.relative_to(run_dir)
-    if not resolved.is_file() or resolved.stat().st_nlink != 1:
-        raise ValueError(f"run JSON artifact is not a unique regular file: {name}")
-    if resolved.stat().st_size > _MAX_JSON_ARTIFACT_BYTES:
-        raise ValueError(f"run JSON artifact exceeds its byte limit: {name}")
-    payload = json.loads(resolved.read_text(encoding="utf-8"))
+    content = _read_stable_json_artifact_bytes(resolved, name=name)
+
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"run JSON artifact contains duplicate keys: {name}")
+            result[key] = value
+        return result
+
+    def reject_nonfinite(_value: str) -> None:
+        raise ValueError(f"run JSON artifact contains a non-finite value: {name}")
+
+    def finite_float(value: str) -> float:
+        parsed = float(value)
+        if not math.isfinite(parsed):
+            raise ValueError(f"run JSON artifact contains an out-of-range number: {name}")
+        return parsed
+
+    try:
+        payload = json.loads(
+            content.decode("utf-8"),
+            object_pairs_hook=unique_object,
+            parse_constant=reject_nonfinite,
+            parse_float=finite_float,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"run JSON artifact is not valid UTF-8 JSON: {name}") from exc
     if not isinstance(payload, dict):
         raise ValueError(f"run JSON artifact must contain an object: {name}")
     return payload
+
+
+def _read_stable_json_artifact_bytes(path: Path, *, name: str) -> bytes:
+    """Read one bounded unique artifact while holding and rechecking its descriptor identity."""
+
+    try:
+        before = path.lstat()
+    except OSError as exc:
+        raise ValueError(f"run JSON artifact is unavailable: {name}") from exc
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or before.st_size > _MAX_JSON_ARTIFACT_BYTES
+    ):
+        raise ValueError(f"run JSON artifact is not a bounded unique regular file: {name}")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(f"run JSON artifact could not be opened safely: {name}") from exc
+    chunks: list[bytes] = []
+    size = 0
+    try:
+        opened = os.fstat(descriptor)
+        while True:
+            remaining = _MAX_JSON_ARTIFACT_BYTES - size
+            chunk = os.read(descriptor, min(1024 * 1024, remaining + 1))
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > _MAX_JSON_ARTIFACT_BYTES:
+                raise ValueError(f"run JSON artifact exceeds its byte limit: {name}")
+            chunks.append(chunk)
+        finished = os.fstat(descriptor)
+    except OSError as exc:
+        raise ValueError(f"run JSON artifact could not be read safely: {name}") from exc
+    finally:
+        os.close(descriptor)
+    try:
+        after = path.lstat()
+    except OSError as exc:
+        raise ValueError(f"run JSON artifact changed while it was read: {name}") from exc
+    if (
+        len(
+            {
+                _artifact_stat_identity(before),
+                _artifact_stat_identity(opened),
+                _artifact_stat_identity(finished),
+                _artifact_stat_identity(after),
+            }
+        )
+        != 1
+        or not stat.S_ISREG(finished.st_mode)
+        or finished.st_nlink != 1
+        or finished.st_size != size
+    ):
+        raise ValueError(f"run JSON artifact changed while it was read: {name}")
+    return b"".join(chunks)
 
 
 def _object_list(payload: dict[str, Any], key: str) -> list[dict[str, Any]]:

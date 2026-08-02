@@ -169,6 +169,12 @@ from mmaudit.models.schemas import (
     VerificationTest,
     VerificationVerdict,
 )
+from mmaudit.models.sharding import (
+    SolidityShardInventory,
+    SolidityShardPolicy,
+    SolidityShardReportBinding,
+    SolidityShardsArtifact,
+)
 from mmaudit.models.usage import (
     UsageLedger,
     candidate_falsifier_role,
@@ -313,6 +319,10 @@ from mmaudit.solidity.reproduction import (
     translate_foundry_test,
 )
 from mmaudit.solidity.reproduction_integrity import verify_reproduction_integrity
+from mmaudit.solidity.sharding import (
+    build_solidity_shard_inventory,
+    verify_solidity_shard_inventory,
+)
 from mmaudit.traceability import (
     build_traceability_matrix,
     validate_traceability_evidence,
@@ -890,6 +900,8 @@ class AuditPipeline:
         )
         solidity_index: SoliditySymbolIndex | None = None
         solidity_graphs: SolidityGraphSet | None = None
+        solidity_shards: SolidityShardInventory | None = None
+        solidity_shard_binding: SolidityShardReportBinding | None = None
         solidity_invariants: InvariantSuite | None = None
         invariant_review_batch: InvariantReviewBatch | None = None
         invariant_review: InvariantReviewResult | None = None
@@ -1211,6 +1223,23 @@ class AuditPipeline:
             )
             solidity_index = index_build.index
             solidity_graphs = build_solidity_graphs(discovery, index_build)
+            if any(item.language == "Solidity" for item in discovery.files):
+                shard_policy = SolidityShardPolicy.build()
+                solidity_shards = build_solidity_shard_inventory(
+                    discovery,
+                    solidity_index,
+                    solidity_graphs,
+                    policy=shard_policy,
+                )
+                solidity_shard_binding = SolidityShardReportBinding.from_inventory(solidity_shards)
+                verify_solidity_shard_inventory(
+                    discovery=discovery,
+                    index=solidity_index,
+                    graphs=solidity_graphs,
+                    inventory=solidity_shards,
+                    expected_policy=shard_policy,
+                    report_binding=solidity_shard_binding,
+                )
             solidity_invariants = discover_invariants(
                 discovery,
                 solidity_index,
@@ -1373,6 +1402,10 @@ class AuditPipeline:
                 "schema_version": REPORT_SCHEMA_VERSION,
                 "graphs": solidity_graphs.model_dump(mode="json") if solidity_graphs else None,
             },
+        )
+        write_json(
+            run_dir / "solidity-shards.json",
+            SolidityShardsArtifact(inventory=solidity_shards),
         )
         write_json(
             run_dir / "solidity-invariants.json",
@@ -3496,6 +3529,7 @@ class AuditPipeline:
             dependency_preparation=dependency_preparation,
             solidity_index=solidity_index,
             solidity_graphs=solidity_graphs,
+            solidity_shard_binding=solidity_shard_binding,
             solidity_invariants=solidity_invariants,
             property_corpus=property_corpus,
             invariant_review=invariant_review,
@@ -4012,6 +4046,7 @@ class AuditPipeline:
         dependency_preparation: DependencyPreparationRun,
         solidity_index: SoliditySymbolIndex | None,
         solidity_graphs: SolidityGraphSet | None,
+        solidity_shard_binding: SolidityShardReportBinding | None,
         solidity_invariants: InvariantSuite | None,
         property_corpus: PropertyCorpus,
         invariant_review: InvariantReviewResult | None,
@@ -4196,6 +4231,11 @@ class AuditPipeline:
                         "edges": len(solidity_graphs.edges) if solidity_graphs else 0,
                         "warnings": len(solidity_graphs.warnings) if solidity_graphs else 0,
                     },
+                    "shard_summary": (
+                        solidity_shard_binding.model_dump(mode="json")
+                        if solidity_shard_binding is not None
+                        else None
+                    ),
                     "invariant_summary": {
                         "discovered": (
                             len(solidity_invariants.invariants) if solidity_invariants else 0
@@ -4553,6 +4593,7 @@ class AuditPipeline:
             "solidity-compilation.json",
             "solidity-index.json",
             "solidity-graphs.json",
+            "solidity-shards.json",
             "solidity-invariants.json",
             "invariant-review.json",
             "invariant-harness-plan.json",

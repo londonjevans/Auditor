@@ -279,7 +279,29 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
 - **Acceptance criteria:** Shards retain coherent graph boundaries, stable IDs and
   hashes, explicit overlap, risk surfaces, and complete source coverage.
 - **Dependencies:** `V3-TOKENS-001`.
-- **Status:** `QUEUED`
+- **Status:** `COMPLETE`
+- **Implementation direction:** Reuse the canonical Solidity symbol index and semantic graph set
+  as the only fact sources. The shard layer adds deterministic root ownership, explicit
+  graph-boundary overlap, typed risk-surface classification, complete Solidity source-unit
+  coverage, and stable structural identities. Serialized inventories are explicitly
+  `comparison_required`; completeness authority requires exact comparison with the trusted source,
+  index, graph, policy, and report inputs and is never inferred from public self-hashes alone.
+- **Evidence:** Typed schema `1.0` and a deterministic file-primary builder consume every exact
+  Solidity source, entity, graph node, graph edge, and storage fact. Stable source/shard IDs,
+  semantic commitments, coherent cross-source boundaries, explicit overlap, closed risk surfaces,
+  policy caps, and complete coverage denominators are validated both at construction and persisted
+  readback. Current completed reports exact-join the typed index, graph set, shard inventory,
+  repository source projection, git commit, report summaries, and manifest-bound artifact bytes;
+  null, erased, malformed, duplicate-key, non-finite, stale, or coherently re-sealed inconsistent
+  evidence fails closed. The 4,952/15,116/35,444-line corpus passed deterministic sharding. The
+  affected matrix passed `155` tests in `93.68s`; Ruff, strict mypy over `162` source files,
+  release schemas, and diff integrity passed; the full socket-enabled suite passed `4062` tests
+  with `11` explicit external-prerequisite skips in `931.46s`.
+- **Honest limitations:** Version 1 uses one primary shard per source file and fails closed rather
+  than splitting an oversized logical block. Same-length stale compiler AST content is not
+  cryptographically source-bound by this layer. Pre-sharding historical runs with partial Solidity
+  artifact sets intentionally verify as stale.
+- **Next action:** Begin `V3-SCHEDULER-001`.
 
 ## V3-SCHEDULER-001 — Resumable seven-pass map-reduce scheduler
 
@@ -618,7 +640,7 @@ are invisible to source review by construction.
   `src/mmaudit/solidity/coverage.py`, `src/mmaudit/orchestration/model_coverage.py`,
   reporting, regressions.
 - **Dependencies:** `V3-EXECORIGIN-001`; reuse `V3-MUTATION-001` work where already built.
-- **Status:** `PARTIAL`
+- **Status:** `COMPLETE`
 - **Validated result:** Source-only audited contract/function denominators,
   source-hash-bound non-finding gaps, conservative critical classification,
   per-graph/invariant/economic applicability, and elevated model-review routing
@@ -1171,13 +1193,12 @@ are invisible to source review by construction.
   `solc 0.8.30` integration proved AST-backed inheritance for the 5k root. The
   complete suite passed `3005` tests with `11` explicit prerequisite skips and
   the two exact `V3-OMISSION-001` expected reds.
-- **Remaining acceptance gap:** No semantic-sharding implementation exists yet,
-  so the acceptance item requiring a scale fixture to be consumed by a real
-  sharding regression remains uncredited. `V3-SHARD-001` must consume this
-  corpus before this ticket can become `COMPLETE`.
-- **Next action:** Operator-requested pause boundary. On resume, begin
-  `V3-OMISSION-001`; revisit this ticket when `V3-SHARD-001` implements the
-  missing semantic-sharding regression.
+- **Closure evidence:** `V3-SHARD-001` now consumes all three generated roots through discovery,
+  fallback indexing, semantic graph construction, and deterministic shard inventory validation.
+  The marked 5k/15k/35k sharding regression passed as part of the `155`-test affected matrix and
+  the `4062`-test complete suite.
+- **Next action:** None; the remaining real compiler integration stays independently gated by its
+  explicit test prerequisite and is not claimed by this fixture ticket.
 
 ## V3-HARDHAT-001 — Hardhat reporter contract and single-loopback backend
 
@@ -1602,11 +1623,11 @@ still applies within a track.
 
 **Track 1 — engine and execution evidence**
 
-**Next action: `V3-SHARD-001`.** `V3-HARDHAT-001` completed every currently safe local component
-but remains `PARTIAL`: its real Hardhat/Mocha, image-identity, rootless-container, supervision,
-and per-test relay integrations are explicit technical blockers and receive no execution credit.
-`V3-CI-001` likewise has no independent safe code portion remaining while its hosted real stack is
-blocked. Continue with deterministic coherent semantic sharding without weakening either blocker.
+**Next action: `V3-SCHEDULER-001`.** `V3-SHARD-001` and the remaining scale-fixture acceptance
+item are complete. `V3-HARDHAT-001` completed every currently safe local component but remains
+`PARTIAL`: its real Hardhat/Mocha, image-identity, rootless-container, supervision, and per-test
+relay integrations are explicit technical blockers and receive no execution credit. `V3-CI-001`
+likewise has no independent safe code portion remaining while its hosted real stack is blocked.
 
 1. `V3-TOKENS-001` — `COMPLETE`.
 2. `V3-FLOOR-001` — `COMPLETE`. Verified independently: the previously false-clean

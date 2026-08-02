@@ -26,6 +26,7 @@ from mmaudit.models.schemas import (
     HardhatReporterInventory,
     HardhatTestPhaseRequest,
 )
+from mmaudit.models.sharding import SolidityShardsArtifact
 from mmaudit.orchestration.context_manifest import ContextManifest
 from mmaudit.privacy import PrivacyRetentionConsent
 from mmaudit.release_candidate import ReleaseCandidateObservation
@@ -65,6 +66,7 @@ MODELS: dict[str, type[BaseModel]] = {
     "release_run_binding.schema.json": ReleaseRunBinding,
     "release_run_verification_binding.schema.json": ReleaseRunVerificationBinding,
     "release_static_evidence.schema.json": StaticReleaseEvidence,
+    "semantic_shard_inventory.schema.json": SolidityShardsArtifact,
 }
 TITLE_OVERRIDES = {
     "benchmark_report.schema.json": "mmaudit benchmark report",
@@ -81,6 +83,7 @@ TITLE_OVERRIDES = {
     "model_refresh_snapshot.schema.json": "mmaudit model refresh snapshot",
     "model_refresh_source_evidence.schema.json": "mmaudit model refresh source evidence",
     "model_refresh_workflow_status.schema.json": "mmaudit model refresh workflow status",
+    "semantic_shard_inventory.schema.json": "mmaudit Solidity semantic shard inventory",
 }
 
 

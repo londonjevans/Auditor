@@ -166,9 +166,13 @@ def _load_ast_documents(
             source = _artifact_source_name(payload)
             resolved = _resolve_source_path(source, projects, by_path)
             if resolved:
-                documents.setdefault(
-                    resolved, AstDocument(source_path=resolved, ast=payload["ast"])
-                )
+                ast = payload["ast"]
+                if _ast_document_matches_source(ast, by_path[resolved].content):
+                    documents.setdefault(resolved, AstDocument(source_path=resolved, ast=ast))
+                else:
+                    warnings.append(
+                        f"{resolved}: artifact AST byte spans did not match current source"
+                    )
             elif source:
                 warnings.append(f"{source}: artifact AST source could not be mapped to repository")
         output = payload.get("output", {})
@@ -180,15 +184,64 @@ def _load_ast_documents(
                         continue
                     resolved = _resolve_source_path(str(source), projects, by_path)
                     if resolved:
-                        documents.setdefault(
-                            resolved,
-                            AstDocument(source_path=resolved, ast=item["ast"]),
-                        )
+                        ast = item["ast"]
+                        if _ast_document_matches_source(ast, by_path[resolved].content):
+                            documents.setdefault(
+                                resolved,
+                                AstDocument(source_path=resolved, ast=ast),
+                            )
+                        else:
+                            warnings.append(
+                                f"{resolved}: build-info AST byte spans did not match current "
+                                "source"
+                            )
                     else:
                         warnings.append(
                             f"{source}: build-info AST source could not be mapped to repository"
                         )
     return list(documents.values()), warnings
+
+
+def _parse_src_components(src: str) -> tuple[int, int, int] | None:
+    parts = src.split(":")
+    if len(parts) != 3:
+        return None
+    try:
+        return int(parts[0]), int(parts[1]), int(parts[2])
+    except ValueError:
+        return None
+
+
+def _ast_document_matches_source(ast: dict[str, Any], content: str) -> bool:
+    """Require every present compiler span to bind to one current source byte inventory."""
+
+    expected_source_id: int | None = None
+    observed_span = False
+    source_size = len(content.encode("utf-8"))
+    pending: list[Any] = [ast]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, dict):
+            if "src" in current:
+                span = _parse_src_components(str(current["src"]))
+                if span is None:
+                    return False
+                start, length, source_id = span
+                if expected_source_id is None:
+                    expected_source_id = source_id
+                observed_span = True
+                if (
+                    source_id != expected_source_id
+                    or start < 0
+                    or length < 0
+                    or start >= source_size
+                    or start + length > source_size
+                ):
+                    return False
+            pending.extend(current.values())
+        elif isinstance(current, list):
+            pending.extend(current)
+    return observed_span and expected_source_id is not None and expected_source_id >= 0
 
 
 def _load_storage_layouts(
@@ -902,12 +955,10 @@ def _fallback_mutability(line: str) -> str | None:
 
 
 def _line_range_from_src(content: str, src: str) -> tuple[int, int, int, int, bool] | None:
-    try:
-        start_raw, length_raw, _file_index = src.split(":", 2)
-        byte_start = int(start_raw)
-        byte_length = int(length_raw)
-    except (ValueError, TypeError):
+    parsed = _parse_src_components(src)
+    if parsed is None:
         return None
+    byte_start, byte_length, _file_index = parsed
     raw_byte_end = byte_start + byte_length
     encoded = content.encode()
     if byte_start < 0 or byte_length <= 0 or byte_start >= len(encoded):

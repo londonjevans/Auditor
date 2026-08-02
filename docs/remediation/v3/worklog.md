@@ -5,12 +5,12 @@ The objective source has SHA-256
 Do not record credentials, raw private prompts, or raw provider completions here.
 
 AUTORUN_STATUS: RUNNING
-CURRENT_MILESTONE: Hardhat reporter and single-loopback isolation
-CURRENT_TICKET: V3-HARDHAT-001 (PARTIAL; safe local slice validated)
-LAST_COMPLETED_TICKET: V3-TOOLDIAG-001
-NEXT_ACTION: Review final diff and artifact/secret boundaries, create and push the isolated PARTIAL checkpoint, then immediately begin V3-SHARD-001.
+CURRENT_MILESTONE: Deterministic coherent semantic shards
+CURRENT_TICKET: V3-SHARD-001 (COMPLETE; checkpoint pending)
+LAST_COMPLETED_TICKET: V3-SHARD-001
+NEXT_ACTION: Complete final diff/secret/artifact review, create and push the isolated V3-SHARD-001 checkpoint, then begin V3-SCHEDULER-001.
 LAST_COMMAND: `.venv/bin/pytest -q`
-LAST_RESULT: PASS — 3992 tests passed and 11 explicit external-prerequisite tests skipped in 724.16s under the local-loopback-capable test boundary.
+LAST_RESULT: PASS — `4062 passed, 11 skipped in 931.46s` with the socket-enabled local test permission required by existing isolation regressions. Skips are explicit unavailable external prerequisites and receive no credit. The affected `155`-test matrix, Ruff format/check, strict mypy over `162` source files, release schemas, and diff integrity also pass.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,97 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 461d98dc3b9b66b274c7fc3cddc13394f2e1c6b5
+LAST_CHECKPOINT_COMMIT: ca2209b0b292272f594dcac590a302a3ee7c3811
+
+## 2026-08-02 — V3-SHARD-001
+
+- **Status:** `COMPLETE`; isolated checkpoint pending.
+- **Defensive objective:** Turn the complete deterministic Solidity symbol and graph inventories
+  into stable, coherent review shards with machine-checked source coverage and explicit overlap.
+- **Starting evidence:** No shard schema or production builder exists. The 5k/15k/35k synthetic
+  scale corpus currently characterizes only deterministic bounded inputs and deliberately grants
+  no semantic-sharding credit. Existing graph kinds already represent call/state, inheritance,
+  proxy/storage, asset/accounting, privilege/governance, oracle, initializer, cross-chain,
+  signature, reentrancy, and external dependency relationships.
+- **Implementation boundary:** This ticket will partition those trusted deterministic facts; it
+  will not manufacture findings, count context delivery as review, call a provider, or claim an
+  external engine execution.
+- **Implemented slice:** A bounded file-primary shard algorithm now consumes every discovered
+  Solidity source and every exact entity, graph-node, graph-edge, and storage fact. It derives
+  stable source/shard IDs, canonical semantic hashes, cross-source boundaries, explicit remote
+  and shared-node overlap, and the closed risk-surface set. Primary, overlap, boundary, aggregate,
+  and source-byte caps fail closed and are re-enforced during deserialization. Source provenance,
+  graph coverage counters, source-owned node kinds/locations, edge endpoints, ownership, and all
+  denominators are exact-checked.
+- **Authority boundary:** Public hashes prove only structural consistency. Every serialized
+  inventory declares `comparison_required`; trusted-input verification detached-validates and
+  deterministically rebuilds the complete inventory, while persisted readback exact-compares the
+  typed index, graphs, shard envelope, and report binding. The run evidence manifest separately
+  binds exact artifact bytes. Canonical index/graph fields are semantic typed-content hashes, not
+  raw file-byte hashes.
+- **Focused evidence:** `tests/unit/test_semantic_sharding.py` passed `44` tests in `3.13s`,
+  including a fully re-sealed relocation that remains structurally parseable but is rejected by
+  both trusted-source rebuild and persisted upstream comparison. The maximum-assurance pipeline
+  integration passed `1` test in `19.41s`; the 5k/15k/35k shard scale regression previously passed
+  `3` cases in `28.51s`. Affected Ruff and strict mypy passed. Release schema generation and
+  verification passed after changing the schema to match the emitted typed envelope.
+- **Honest limitation:** Version 1 uses one primary shard per source file and fails closed when a
+  source exceeds its configured byte cap; it does not subdivide an oversized logical block.
+  The scheduler/truncation track must not claim that remaining token-context problem is solved.
+- **Consolidated validation:** The final affected matrix passed `93` tests in `82.96s` across
+  shard integrity, manifest/release verification, maximum-assurance serialization, and all
+  realistic-scale profiles. Repository-wide Ruff format/check, strict mypy over `162` source
+  files, release-schema synchronization, and diff checks passed.
+- **Full-suite remediation:** The first complete run exposed one compiler-AST half-open range
+  ending on a trailing newline and was stopped after `1 failed, 79 passed, 9 skipped in 258.37s`.
+  The graph source-location converter now maps the last included byte instead of treating the
+  exclusive end as a new line; its direct regression, the previously failing pipeline case, and
+  all shard tests passed `46` tests in `3.66s`. This corrects normalized evidence rather than
+  weakening shard location checks.
+- **Managed-sandbox rerun:** The unchanged full suite advanced to `1668 passed, 16 skipped` before
+  an intentional early stop. Its `5` failures and `7` setup errors were exclusively operating-
+  system `PermissionError` results from pre-existing Hardhat tests attempting local TCP or AF_UNIX
+  socket binds inside the restricted command sandbox. The earlier source-range failure did not
+  recur. This is environmental and grants no passing credit; the next command reruns the exact
+  suite with local socket permission.
+- **Independent persisted-evidence review:** Review identified that a fully re-sealed public
+  artifact could previously preserve an impossible graph coverage counter, omit the repository
+  source join, or set a null shard inventory despite non-empty upstream evidence. It also found
+  that the initial trailing-newline correction could convert a past-EOF AST start into a valid
+  final-line citation. No affected result was granted completion credit.
+- **Integrity remediation:** Compiler spans now require exactly three numeric components,
+  non-negative in-bounds byte coordinates, and half-open end handling; compiler ASTs are
+  source-ID and byte-inventory checked before use, so malformed, cross-source-ID, or
+  out-of-inventory spans fall back rather than producing normalized compiler evidence. This does
+  not prove content identity for a same-length stale artifact. Persisted comparison validates index provenance,
+  graph kinds/counters/source-owned nodes, fact ranges, all six semantic/context/projection
+  commitments, exact report repository source membership and hashes, commit binding, and typed
+  report summaries. Completed reports cannot omit or null their Solidity shard evidence. JSON
+  artifacts are read with duplicate-key/non-finite rejection through a bounded stable descriptor.
+- **Compatibility boundary:** Runs emitted before this ticket that contain index/graph artifacts
+  without the new shard artifact are intentionally unverifiable and become `STALE`; report schema
+  `1.2` predates sharding, so preserving replay acceptance for those incomplete artifact sets would
+  retain an all-shard-evidence erasure ambiguity. This does not rewrite their historical evidence.
+- **Focused remediation evidence:** The range, stale-artifact pipeline, full shard suite, and all
+  three independent persisted negative assays passed `59` tests in `3.14s`.
+- **Final focused evidence:** Independent context/projection drift, report-summary drift,
+  duplicate-key/non-finite JSON, null/erased inventory, repository projection, graph coverage,
+  and manifest-bound verify-run mismatch regressions all fail closed. The consolidated shard,
+  manifest, verification, Solidity, realistic-scale, reproduction, and maximum-assurance matrix
+  passed `155` tests in `93.68s`. Ruff format/check, strict mypy over `162` source files, release
+  schema synchronization, and diff checks passed.
+- **Complete suite gate:** The exact `.venv/bin/pytest -q` command passed `4062` tests with `11`
+  explicit external-prerequisite skips in `931.46s` after granting only the local TCP and AF_UNIX
+  listener permission used by existing isolation tests. No unavailable engine, rootless image,
+  compiler, replay, or paid-provider integration was promoted to passing evidence. Two inherited
+  stale temporary-tree cleanup warnings remained non-failing.
+- **Independent final review:** After remediation of persisted graph counters, all semantic hash
+  projections, report/repository joins, null/erased evidence, strict JSON reads, AST byte spans,
+  and current-report erasure, the read-only reviewer found no remaining material ticket blocker.
+  Same-length stale AST content identity and historical pre-sharding replay compatibility remain
+  explicitly limited.
+- **Next action:** Review the final diff and artifact inventory, create and push the isolated
+  checkpoint, then begin `V3-SCHEDULER-001`.
 
 ## 2026-07-31 — V3-EFFORT-001
 

@@ -26,7 +26,7 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.repository.chunking import line_range_hash
 from mmaudit.repository.discovery import DiscoveredFile, DiscoveryResult
-from mmaudit.solidity.index import AstDocument, SolidityIndexBuild
+from mmaudit.solidity.index import AstDocument, SolidityIndexBuild, _parse_src_components
 
 _LOW_LEVEL_MEMBERS = {"call", "staticcall", "delegatecall", "callcode", "send", "transfer"}
 _TOKEN_FLOW_MEMBERS = {
@@ -2727,16 +2727,20 @@ def _entity_range_node(
 
 
 def _line_range(content: str, src: str) -> tuple[int, int]:
-    try:
-        start_raw, length_raw, _ = src.split(":", 2)
-        start = int(start_raw)
-        end = start + int(length_raw)
-    except (TypeError, ValueError):
-        return 1, max(1, len(content.splitlines()))
+    """Convert a valid half-open compiler byte span to an inclusive line range."""
+
+    parsed = _parse_src_components(src)
+    if parsed is None:
+        raise ValueError("compiler source range is malformed")
+    start, length, source_id = parsed
     encoded = content.encode()
+    end = start + length
+    if source_id < 0 or start < 0 or length < 0 or start >= len(encoded) or end > len(encoded):
+        raise ValueError("compiler source range is outside the source bytes")
     start_line = encoded[:start].count(b"\n") + 1
-    end_line = encoded[:end].count(b"\n") + 1
-    return max(1, start_line), max(start_line, end_line)
+    end_position = start if length == 0 else end - 1
+    end_line = encoded[:end_position].count(b"\n") + 1
+    return start_line, max(start_line, end_line)
 
 
 def _src_start(node: dict[str, Any]) -> int:

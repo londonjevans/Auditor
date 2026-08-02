@@ -85,6 +85,7 @@ from mmaudit.models.schemas import (
     TransactionOrderingCapability,
     UsageRecord,
 )
+from mmaudit.models.sharding import SolidityShardReportBinding, SolidityShardsArtifact
 from mmaudit.models.usage import UsageLedger
 from mmaudit.operator_secrets import load_operator_secrets
 from mmaudit.orchestration import ci as ci_module
@@ -107,6 +108,7 @@ from mmaudit.orchestration.manifest import (
     canonical_sha256,
     validate_manifest_artifacts,
     validate_report_privacy_consistency,
+    validate_solidity_shard_artifacts,
     write_run_evidence_manifest,
 )
 from mmaudit.orchestration.pipeline import AuditPipeline
@@ -2124,6 +2126,7 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
     )
     for artifact in (
         "solidity-graphs.json",
+        "solidity-shards.json",
         "solidity-invariants.json",
         "invariant-review.json",
         "property-corpus.json",
@@ -2139,6 +2142,34 @@ async def test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete(
         "audit-results.sarif",
     ):
         assert (result.run_dir / artifact).is_file()
+    shard_payload = json.loads(
+        (result.run_dir / "solidity-shards.json").read_text(encoding="utf-8")
+    )
+    shard_artifact = SolidityShardsArtifact.model_validate(shard_payload)
+    assert shard_artifact.inventory is not None
+    shard_inventory = shard_artifact.inventory
+    shard_binding = SolidityShardReportBinding.model_validate(
+        result.report.metadata["solidity"]["shard_summary"]
+    )
+    shard_binding.require_exact_inventory(shard_inventory)
+    assert shard_inventory.coverage.complete is True
+    assert shard_inventory.evidence_authority == "comparison_required"
+    assert shard_inventory.inventory_sha256 == shard_binding.inventory_sha256
+    validate_solidity_shard_artifacts(result.run_dir, result.report)
+    tampered_shard_dir = tmp_path / "tampered-shard-readback"
+    tampered_shard_dir.mkdir()
+    for artifact_name in (
+        "solidity-index.json",
+        "solidity-graphs.json",
+        "solidity-shards.json",
+    ):
+        shutil.copy2(result.run_dir / artifact_name, tampered_shard_dir / artifact_name)
+    tampered_index_path = tampered_shard_dir / "solidity-index.json"
+    tampered_index = json.loads(tampered_index_path.read_text(encoding="utf-8"))
+    tampered_index["index"]["entities"][0]["documentation"] = "synthetic stale readback"
+    tampered_index_path.write_text(json.dumps(tampered_index), encoding="utf-8")
+    with pytest.raises(ValueError, match=r"upstream artifacts|semantic hashes"):
+        validate_solidity_shard_artifacts(tampered_shard_dir, result.report)
     reproduction_payload = json.loads(
         (result.run_dir / "reproduction-results.json").read_text(encoding="utf-8")
     )

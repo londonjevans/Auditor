@@ -8,6 +8,7 @@ import pytest
 
 from mmaudit.agents.specialists import specialist_context_budget
 from mmaudit.models.schemas import ContextPackage, SolidityCoverage, SolidityGraphKind
+from mmaudit.models.sharding import SolidityShardRiskSurface
 from mmaudit.models.token_planning import (
     CONTEXT_OMISSION_GROUP_CAP,
     CONTEXT_OMISSION_SAMPLE_CAP,
@@ -27,6 +28,7 @@ from mmaudit.solidity.graphs import build_solidity_graphs
 from mmaudit.solidity.index import build_solidity_index
 from mmaudit.solidity.projects import discover_solidity_projects
 from mmaudit.solidity.retrieval import compact_solidity_graphs, compact_solidity_index
+from mmaudit.solidity.sharding import build_solidity_shard_inventory
 
 pytestmark = [pytest.mark.large_scale, pytest.mark.slow]
 
@@ -170,6 +172,44 @@ def test_realistic_scale_has_stable_bounded_semantic_sharding_inputs(
     assert any("graph edges omitted" in warning for warning in compact_graphs_a.warnings)
     assert any(entity.name == "pause" for entity in compact_index_a.entities)
     assert any(edge.graph is SolidityGraphKind.PRIVILEGE for edge in compact_graphs_a.edges)
+
+
+@pytest.mark.parametrize("profile_id", PROFILE_IDS)
+def test_realistic_scale_builds_stable_complete_semantic_shards(
+    profile_id: str,
+    config_factory,
+) -> None:
+    """Prove actual shard coverage without treating graph truncation as sharding."""
+
+    _, discovery, _, index_build, graphs, _ = _analyze(profile_id, config_factory)
+    first = build_solidity_shard_inventory(discovery, index_build.index, graphs)
+    second = build_solidity_shard_inventory(discovery, index_build.index, graphs)
+    solidity_files = [item for item in discovery.files if item.language == "Solidity"]
+
+    assert first == second
+    assert first.inventory_sha256 == second.inventory_sha256
+    assert len(first.shards) == len(solidity_files)
+    assert first.coverage.source_units_total == len(solidity_files)
+    assert first.coverage.source_bytes_total == sum(item.size for item in solidity_files)
+    assert first.coverage.entities_total == len(index_build.index.entities)
+    assert first.coverage.graph_nodes_total == len(graphs.nodes)
+    assert first.coverage.graph_edges_total == len(graphs.edges)
+    assert first.coverage.storage_entries_total == len(graphs.storage_layout)
+    assert first.coverage.complete is True
+    assert first.overlaps
+    assert all(
+        boundary.graph_kind is not SolidityGraphKind.ASSET_FLOW for boundary in first.boundaries
+    )
+    risks = {risk for shard in first.shards for risk in shard.risk_surfaces}
+    assert risks >= {
+        SolidityShardRiskSurface.ASSET_FLOW,
+        SolidityShardRiskSurface.AUTHORITY_GOVERNANCE,
+        SolidityShardRiskSurface.CALL_FLOW,
+        SolidityShardRiskSurface.CONTRACTS,
+        SolidityShardRiskSurface.INHERITANCE_UPGRADE,
+        SolidityShardRiskSurface.ORACLE_DEPENDENCY,
+        SolidityShardRiskSurface.STATE_ACCOUNTING,
+    }
 
 
 @pytest.mark.parametrize(

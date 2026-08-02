@@ -1,0 +1,991 @@
+{
+  "$defs": {
+    "SolidityEntityKind": {
+      "enum": [
+        "contract",
+        "interface",
+        "library",
+        "function",
+        "constructor",
+        "modifier",
+        "event",
+        "error",
+        "struct",
+        "enum",
+        "state_variable",
+        "immutable",
+        "constant"
+      ],
+      "title": "SolidityEntityKind",
+      "type": "string"
+    },
+    "SolidityGraphKind": {
+      "enum": [
+        "inheritance",
+        "modifier",
+        "internal_call",
+        "external_call",
+        "low_level_call",
+        "delegatecall",
+        "contract_creation",
+        "state_read",
+        "state_write",
+        "state_dependency",
+        "asset_flow",
+        "privilege",
+        "governance",
+        "dependency",
+        "proxy",
+        "storage_layout",
+        "upgrade_compatibility",
+        "initializer",
+        "oracle_dependency",
+        "event_state",
+        "event_flow",
+        "cross_chain",
+        "offchain_dependency",
+        "signature_replay",
+        "reentrancy",
+        "state_growth",
+        "sensitive_reachability"
+      ],
+      "title": "SolidityGraphKind",
+      "type": "string"
+    },
+    "SoliditySemanticShard": {
+      "additionalProperties": false,
+      "description": "One source-primary shard plus exact graph-boundary overlap.",
+      "properties": {
+        "inbound_boundary_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Inbound Boundary Ids",
+          "type": "array"
+        },
+        "outbound_boundary_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Outbound Boundary Ids",
+          "type": "array"
+        },
+        "overlap_entity_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Overlap Entity Ids",
+          "type": "array"
+        },
+        "overlap_graph_edge_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Overlap Graph Edge Ids",
+          "type": "array"
+        },
+        "overlap_graph_node_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Overlap Graph Node Ids",
+          "type": "array"
+        },
+        "overlap_storage_entry_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Overlap Storage Entry Ids",
+          "type": "array"
+        },
+        "primary_entity_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Primary Entity Ids",
+          "type": "array"
+        },
+        "primary_graph_edge_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Primary Graph Edge Ids",
+          "type": "array"
+        },
+        "primary_graph_node_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Primary Graph Node Ids",
+          "type": "array"
+        },
+        "primary_storage_entry_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Primary Storage Entry Ids",
+          "type": "array"
+        },
+        "risk_surfaces": {
+          "items": {
+            "$ref": "#/$defs/SolidityShardRiskSurface"
+          },
+          "minItems": 1,
+          "title": "Risk Surfaces",
+          "type": "array"
+        },
+        "semantic_dependency_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Semantic Dependency Sha256",
+          "type": "string"
+        },
+        "shard_id": {
+          "pattern": "^shard-[0-9a-f]{24}$",
+          "title": "Shard Id",
+          "type": "string"
+        },
+        "shard_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Shard Sha256",
+          "type": "string"
+        },
+        "source_content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Content Sha256",
+          "type": "string"
+        },
+        "source_path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Source Path",
+          "type": "string"
+        },
+        "source_unit_id": {
+          "pattern": "^source-[0-9a-f]{24}$",
+          "title": "Source Unit Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "shard_id",
+        "source_unit_id",
+        "source_path",
+        "source_content_sha256",
+        "semantic_dependency_sha256",
+        "risk_surfaces",
+        "shard_sha256"
+      ],
+      "title": "SoliditySemanticShard",
+      "type": "object"
+    },
+    "SolidityShardBoundary": {
+      "additionalProperties": false,
+      "description": "One entity-backed graph edge crossing two primary source shards.",
+      "properties": {
+        "boundary_id": {
+          "pattern": "^boundary-[0-9a-f]{24}$",
+          "title": "Boundary Id",
+          "type": "string"
+        },
+        "boundary_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Boundary Sha256",
+          "type": "string"
+        },
+        "graph_edge_id": {
+          "pattern": "^edge-[0-9a-f]{32}$",
+          "title": "Graph Edge Id",
+          "type": "string"
+        },
+        "graph_kind": {
+          "$ref": "#/$defs/SolidityGraphKind"
+        },
+        "source_node_id": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Source Node Id",
+          "type": "string"
+        },
+        "source_shard_id": {
+          "pattern": "^shard-[0-9a-f]{24}$",
+          "title": "Source Shard Id",
+          "type": "string"
+        },
+        "target_node_id": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Target Node Id",
+          "type": "string"
+        },
+        "target_shard_id": {
+          "pattern": "^shard-[0-9a-f]{24}$",
+          "title": "Target Shard Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "boundary_id",
+        "graph_edge_id",
+        "graph_kind",
+        "source_node_id",
+        "target_node_id",
+        "source_shard_id",
+        "target_shard_id",
+        "boundary_sha256"
+      ],
+      "title": "SolidityShardBoundary",
+      "type": "object"
+    },
+    "SolidityShardCoverage": {
+      "additionalProperties": false,
+      "description": "Non-vacuous exact-denominator coverage summary for one inventory.",
+      "properties": {
+        "complete": {
+          "const": true,
+          "default": true,
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "entities_covered": {
+          "minimum": 0,
+          "title": "Entities Covered",
+          "type": "integer"
+        },
+        "entities_total": {
+          "minimum": 0,
+          "title": "Entities Total",
+          "type": "integer"
+        },
+        "graph_edges_covered": {
+          "minimum": 0,
+          "title": "Graph Edges Covered",
+          "type": "integer"
+        },
+        "graph_edges_total": {
+          "minimum": 0,
+          "title": "Graph Edges Total",
+          "type": "integer"
+        },
+        "graph_nodes_covered": {
+          "minimum": 0,
+          "title": "Graph Nodes Covered",
+          "type": "integer"
+        },
+        "graph_nodes_total": {
+          "minimum": 0,
+          "title": "Graph Nodes Total",
+          "type": "integer"
+        },
+        "source_bytes_covered": {
+          "minimum": 0,
+          "title": "Source Bytes Covered",
+          "type": "integer"
+        },
+        "source_bytes_total": {
+          "minimum": 0,
+          "title": "Source Bytes Total",
+          "type": "integer"
+        },
+        "source_units_covered": {
+          "exclusiveMinimum": 0,
+          "title": "Source Units Covered",
+          "type": "integer"
+        },
+        "source_units_total": {
+          "exclusiveMinimum": 0,
+          "title": "Source Units Total",
+          "type": "integer"
+        },
+        "storage_entries_covered": {
+          "minimum": 0,
+          "title": "Storage Entries Covered",
+          "type": "integer"
+        },
+        "storage_entries_total": {
+          "minimum": 0,
+          "title": "Storage Entries Total",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "source_units_total",
+        "source_units_covered",
+        "source_bytes_total",
+        "source_bytes_covered",
+        "entities_total",
+        "entities_covered",
+        "graph_nodes_total",
+        "graph_nodes_covered",
+        "graph_edges_total",
+        "graph_edges_covered",
+        "storage_entries_total",
+        "storage_entries_covered"
+      ],
+      "title": "SolidityShardCoverage",
+      "type": "object"
+    },
+    "SolidityShardEntityFact": {
+      "additionalProperties": false,
+      "description": "Hash-only source-index fact sufficient to validate shard ownership.",
+      "properties": {
+        "entity_kind": {
+          "$ref": "#/$defs/SolidityEntityKind"
+        },
+        "primary_shard_id": {
+          "pattern": "^shard-[0-9a-f]{24}$",
+          "title": "Primary Shard Id",
+          "type": "string"
+        },
+        "record_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Record Sha256",
+          "type": "string"
+        },
+        "resource_id": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Resource Id",
+          "type": "string"
+        },
+        "source_unit_id": {
+          "pattern": "^source-[0-9a-f]{24}$",
+          "title": "Source Unit Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource_id",
+        "source_unit_id",
+        "primary_shard_id",
+        "entity_kind",
+        "record_sha256"
+      ],
+      "title": "SolidityShardEntityFact",
+      "type": "object"
+    },
+    "SolidityShardGraphEdgeFact": {
+      "additionalProperties": false,
+      "description": "Hash-only edge projection that makes boundaries and risk derivable.",
+      "properties": {
+        "graph_kind": {
+          "$ref": "#/$defs/SolidityGraphKind"
+        },
+        "primary_shard_id": {
+          "pattern": "^shard-[0-9a-f]{24}$",
+          "title": "Primary Shard Id",
+          "type": "string"
+        },
+        "record_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Record Sha256",
+          "type": "string"
+        },
+        "resource_id": {
+          "pattern": "^edge-[0-9a-f]{32}$",
+          "title": "Resource Id",
+          "type": "string"
+        },
+        "source_node_id": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Source Node Id",
+          "type": "string"
+        },
+        "source_unit_id": {
+          "pattern": "^source-[0-9a-f]{24}$",
+          "title": "Source Unit Id",
+          "type": "string"
+        },
+        "target_node_id": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Target Node Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource_id",
+        "source_unit_id",
+        "primary_shard_id",
+        "graph_kind",
+        "source_node_id",
+        "target_node_id",
+        "record_sha256"
+      ],
+      "title": "SolidityShardGraphEdgeFact",
+      "type": "object"
+    },
+    "SolidityShardGraphNodeFact": {
+      "additionalProperties": false,
+      "description": "Hash-only graph-node fact with explicit source-ownership classification.",
+      "properties": {
+        "primary_shard_id": {
+          "pattern": "^shard-[0-9a-f]{24}$",
+          "title": "Primary Shard Id",
+          "type": "string"
+        },
+        "record_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Record Sha256",
+          "type": "string"
+        },
+        "resource_id": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Resource Id",
+          "type": "string"
+        },
+        "source_owned": {
+          "title": "Source Owned",
+          "type": "boolean"
+        },
+        "source_unit_id": {
+          "pattern": "^source-[0-9a-f]{24}$",
+          "title": "Source Unit Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource_id",
+        "source_unit_id",
+        "primary_shard_id",
+        "source_owned",
+        "record_sha256"
+      ],
+      "title": "SolidityShardGraphNodeFact",
+      "type": "object"
+    },
+    "SolidityShardInventory": {
+      "additionalProperties": false,
+      "description": "Structurally validated shard inventory requiring exact upstream comparison.",
+      "properties": {
+        "algorithm_version": {
+          "const": "mmaudit.solidity-file-shards.v1",
+          "default": "mmaudit.solidity-file-shards.v1",
+          "title": "Algorithm Version",
+          "type": "string"
+        },
+        "boundaries": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SolidityShardBoundary"
+          },
+          "title": "Boundaries",
+          "type": "array"
+        },
+        "coverage": {
+          "$ref": "#/$defs/SolidityShardCoverage"
+        },
+        "entity_facts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SolidityShardEntityFact"
+          },
+          "title": "Entity Facts",
+          "type": "array"
+        },
+        "entity_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Entity Ids",
+          "type": "array"
+        },
+        "evidence_authority": {
+          "const": "comparison_required",
+          "default": "comparison_required",
+          "title": "Evidence Authority",
+          "type": "string"
+        },
+        "git_commit": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{40}(?:[0-9a-f]{24})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Git Commit"
+        },
+        "graph_edge_facts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SolidityShardGraphEdgeFact"
+          },
+          "title": "Graph Edge Facts",
+          "type": "array"
+        },
+        "graph_edge_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Graph Edge Ids",
+          "type": "array"
+        },
+        "graph_node_facts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SolidityShardGraphNodeFact"
+          },
+          "title": "Graph Node Facts",
+          "type": "array"
+        },
+        "graph_node_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Graph Node Ids",
+          "type": "array"
+        },
+        "graph_set_context_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Graph Set Context Sha256",
+          "type": "string"
+        },
+        "graph_set_projection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Graph Set Projection Sha256",
+          "type": "string"
+        },
+        "graph_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Graph Set Sha256",
+          "type": "string"
+        },
+        "inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Inventory Sha256",
+          "type": "string"
+        },
+        "overlaps": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SolidityShardOverlap"
+          },
+          "title": "Overlaps",
+          "type": "array"
+        },
+        "policy": {
+          "$ref": "#/$defs/SolidityShardPolicy"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "shards": {
+          "items": {
+            "$ref": "#/$defs/SoliditySemanticShard"
+          },
+          "minItems": 1,
+          "title": "Shards",
+          "type": "array"
+        },
+        "source_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Inventory Sha256",
+          "type": "string"
+        },
+        "source_units": {
+          "items": {
+            "$ref": "#/$defs/SolidityShardSourceUnit"
+          },
+          "minItems": 1,
+          "title": "Source Units",
+          "type": "array"
+        },
+        "storage_entry_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Storage Entry Ids",
+          "type": "array"
+        },
+        "storage_facts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SolidityShardStorageFact"
+          },
+          "title": "Storage Facts",
+          "type": "array"
+        },
+        "symbol_index_context_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Symbol Index Context Sha256",
+          "type": "string"
+        },
+        "symbol_index_projection_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Symbol Index Projection Sha256",
+          "type": "string"
+        },
+        "symbol_index_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Symbol Index Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "policy",
+        "source_inventory_sha256",
+        "symbol_index_context_sha256",
+        "symbol_index_sha256",
+        "symbol_index_projection_sha256",
+        "graph_set_context_sha256",
+        "graph_set_sha256",
+        "graph_set_projection_sha256",
+        "source_units",
+        "shards",
+        "coverage",
+        "inventory_sha256"
+      ],
+      "title": "SolidityShardInventory",
+      "type": "object"
+    },
+    "SolidityShardOverlap": {
+      "additionalProperties": false,
+      "description": "Explicit non-primary membership of one semantic resource.",
+      "properties": {
+        "consumer_shard_id": {
+          "pattern": "^shard-[0-9a-f]{24}$",
+          "title": "Consumer Shard Id",
+          "type": "string"
+        },
+        "overlap_id": {
+          "pattern": "^overlap-[0-9a-f]{24}$",
+          "title": "Overlap Id",
+          "type": "string"
+        },
+        "overlap_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Overlap Sha256",
+          "type": "string"
+        },
+        "primary_shard_id": {
+          "pattern": "^shard-[0-9a-f]{24}$",
+          "title": "Primary Shard Id",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/SolidityShardOverlapReason"
+        },
+        "resource_id": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Resource Id",
+          "type": "string"
+        },
+        "resource_kind": {
+          "$ref": "#/$defs/SolidityShardOverlapKind"
+        }
+      },
+      "required": [
+        "overlap_id",
+        "resource_kind",
+        "resource_id",
+        "primary_shard_id",
+        "consumer_shard_id",
+        "reason",
+        "overlap_sha256"
+      ],
+      "title": "SolidityShardOverlap",
+      "type": "object"
+    },
+    "SolidityShardOverlapKind": {
+      "enum": [
+        "entity",
+        "graph_node",
+        "graph_edge",
+        "storage_entry"
+      ],
+      "title": "SolidityShardOverlapKind",
+      "type": "string"
+    },
+    "SolidityShardOverlapReason": {
+      "enum": [
+        "graph_boundary",
+        "shared_graph_node"
+      ],
+      "title": "SolidityShardOverlapReason",
+      "type": "string"
+    },
+    "SolidityShardPolicy": {
+      "additionalProperties": false,
+      "description": "Fixed-cap, self-hashed policy used to construct a shard inventory.",
+      "properties": {
+        "algorithm_version": {
+          "const": "mmaudit.solidity-file-shards.v1",
+          "default": "mmaudit.solidity-file-shards.v1",
+          "title": "Algorithm Version",
+          "type": "string"
+        },
+        "max_boundaries_per_shard": {
+          "default": 100000,
+          "maximum": 500000,
+          "minimum": 1,
+          "title": "Max Boundaries Per Shard",
+          "type": "integer"
+        },
+        "max_overlap_entities_per_shard": {
+          "default": 20000,
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Max Overlap Entities Per Shard",
+          "type": "integer"
+        },
+        "max_overlap_graph_edges_per_shard": {
+          "default": 100000,
+          "maximum": 500000,
+          "minimum": 1,
+          "title": "Max Overlap Graph Edges Per Shard",
+          "type": "integer"
+        },
+        "max_overlap_graph_nodes_per_shard": {
+          "default": 50000,
+          "maximum": 250000,
+          "minimum": 1,
+          "title": "Max Overlap Graph Nodes Per Shard",
+          "type": "integer"
+        },
+        "max_overlap_storage_entries_per_shard": {
+          "default": 20000,
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Max Overlap Storage Entries Per Shard",
+          "type": "integer"
+        },
+        "max_primary_entities_per_shard": {
+          "default": 20000,
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Max Primary Entities Per Shard",
+          "type": "integer"
+        },
+        "max_primary_graph_edges_per_shard": {
+          "default": 100000,
+          "maximum": 500000,
+          "minimum": 1,
+          "title": "Max Primary Graph Edges Per Shard",
+          "type": "integer"
+        },
+        "max_primary_graph_nodes_per_shard": {
+          "default": 50000,
+          "maximum": 250000,
+          "minimum": 1,
+          "title": "Max Primary Graph Nodes Per Shard",
+          "type": "integer"
+        },
+        "max_primary_storage_entries_per_shard": {
+          "default": 20000,
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Max Primary Storage Entries Per Shard",
+          "type": "integer"
+        },
+        "max_shards": {
+          "default": 10000,
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Max Shards",
+          "type": "integer"
+        },
+        "max_source_bytes_per_shard": {
+          "default": 250000,
+          "maximum": 10000000,
+          "minimum": 4,
+          "title": "Max Source Bytes Per Shard",
+          "type": "integer"
+        },
+        "max_total_boundaries": {
+          "default": 500000,
+          "maximum": 1000000,
+          "minimum": 1,
+          "title": "Max Total Boundaries",
+          "type": "integer"
+        },
+        "max_total_overlap_records": {
+          "default": 2000000,
+          "maximum": 5000000,
+          "minimum": 1,
+          "title": "Max Total Overlap Records",
+          "type": "integer"
+        },
+        "max_total_semantic_memberships_per_shard": {
+          "default": 250000,
+          "maximum": 1000000,
+          "minimum": 1,
+          "title": "Max Total Semantic Memberships Per Shard",
+          "type": "integer"
+        },
+        "policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Policy Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "policy_sha256"
+      ],
+      "title": "SolidityShardPolicy",
+      "type": "object"
+    },
+    "SolidityShardRiskSurface": {
+      "description": "Closed deterministic risk taxonomy projected from existing graph facts.",
+      "enum": [
+        "contracts",
+        "call_flow",
+        "state_accounting",
+        "inheritance_upgrade",
+        "asset_flow",
+        "authority_governance",
+        "oracle_dependency",
+        "initialization",
+        "cross_chain_messaging",
+        "signature_replay",
+        "reentrancy",
+        "external_dependency"
+      ],
+      "title": "SolidityShardRiskSurface",
+      "type": "string"
+    },
+    "SolidityShardSourceUnit": {
+      "additionalProperties": false,
+      "description": "One exact Solidity source file, primary-owned by exactly one shard.",
+      "properties": {
+        "content_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "line_count": {
+          "minimum": 0,
+          "title": "Line Count",
+          "type": "integer"
+        },
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "primary_shard_id": {
+          "pattern": "^shard-[0-9a-f]{24}$",
+          "title": "Primary Shard Id",
+          "type": "string"
+        },
+        "source_unit_id": {
+          "pattern": "^source-[0-9a-f]{24}$",
+          "title": "Source Unit Id",
+          "type": "string"
+        },
+        "unit_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Unit Sha256",
+          "type": "string"
+        },
+        "utf8_bytes": {
+          "minimum": 0,
+          "title": "Utf8 Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "source_unit_id",
+        "path",
+        "utf8_bytes",
+        "line_count",
+        "content_sha256",
+        "primary_shard_id",
+        "unit_sha256"
+      ],
+      "title": "SolidityShardSourceUnit",
+      "type": "object"
+    },
+    "SolidityShardStorageFact": {
+      "additionalProperties": false,
+      "description": "Hash-only storage-layout fact sufficient to validate shard ownership.",
+      "properties": {
+        "primary_shard_id": {
+          "pattern": "^shard-[0-9a-f]{24}$",
+          "title": "Primary Shard Id",
+          "type": "string"
+        },
+        "record_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Record Sha256",
+          "type": "string"
+        },
+        "resource_id": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Resource Id",
+          "type": "string"
+        },
+        "source_unit_id": {
+          "pattern": "^source-[0-9a-f]{24}$",
+          "title": "Source Unit Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource_id",
+        "source_unit_id",
+        "primary_shard_id",
+        "record_sha256"
+      ],
+      "title": "SolidityShardStorageFact",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/semantic_shard_inventory.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Typed envelope matching the emitted ``solidity-shards.json`` artifact.",
+  "properties": {
+    "inventory": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SolidityShardInventory"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "inventory"
+  ],
+  "title": "mmaudit Solidity semantic shard inventory",
+  "type": "object"
+}

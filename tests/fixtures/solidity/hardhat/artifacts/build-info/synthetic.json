@@ -9,13 +9,14 @@
       "contracts/Token.sol": {
         "ast": {
           "nodeType": "SourceUnit",
+          "src": "32:420:0",
           "nodes": [
             {
               "id": 10,
               "nodeType": "ContractDefinition",
               "contractKind": "contract",
               "name": "Token",
-              "src": "58:400:0",
+              "src": "58:394:0",
               "baseContracts": [],
               "nodes": [
                 {
@@ -101,4 +102,3 @@
     }
   }
 }
-

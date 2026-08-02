@@ -30,6 +30,7 @@ from mmaudit.orchestration.manifest import (
     load_run_evidence_manifest,
     rebuild_run_evidence_manifest_for_verification,
     resolve_run_evidence_config,
+    validate_solidity_shard_artifacts,
 )
 from mmaudit.reporting.json_report import stable_json
 from mmaudit.repository.ignore import normalize_relative_path
@@ -194,6 +195,26 @@ def verify_run_evidence(
         report = load_manifest_bound_report(run_dir=root, manifest=manifest)
     except ValueError:
         report = None
+    if report is not None:
+        try:
+            validate_solidity_shard_artifacts(root, report)
+        except (OSError, ValueError):
+            shard_binding = next(
+                (
+                    binding
+                    for binding in manifest.artifacts
+                    if binding.path == "solidity-shards.json"
+                ),
+                None,
+            )
+            mismatches.append(
+                RunVerificationMismatch(
+                    category=RunVerificationCategory.ARTIFACT,
+                    identifier="solidity-shards/cross-artifact",
+                    kind=RunVerificationMismatchKind.UNVERIFIABLE,
+                    expected_sha256=(shard_binding.sha256 if shard_binding is not None else None),
+                )
+            )
     metadata_binding = next(
         (binding for binding in manifest.artifacts if binding.path == "metadata.json"),
         None,

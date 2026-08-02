@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-02T07:33:17Z",
-  "candidate_commit": "4f39bd19805bdf957f71745f2ae79e4b86533190",
+  "updated_at": "2026-08-02T11:48:08Z",
+  "candidate_commit": "ca2209b0b292272f594dcac590a302a3ee7c3811",
   "autorun_status": "RUNNING",
-  "current_milestone": "hardhat_reporter_and_single_loopback_isolation",
-  "current_ticket": "V3-HARDHAT-001 (IN_PROGRESS)",
-  "last_checkpoint_commit": "4f39bd19805bdf957f71745f2ae79e4b86533190",
+  "current_milestone": "deterministic_coherent_semantic_shards",
+  "current_ticket": "V3-SHARD-001 (COMPLETE; checkpoint pending)",
+  "last_checkpoint_commit": "ca2209b0b292272f594dcac590a302a3ee7c3811",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,

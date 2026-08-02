@@ -47,7 +47,7 @@ from mmaudit.repository.mapping import build_repository_map
 from mmaudit.scanners.slither import SlitherScanner
 from mmaudit.solidity.compile import _artifact_summary, compile_solidity_projects
 from mmaudit.solidity.coverage import build_solidity_coverage
-from mmaudit.solidity.graphs import build_solidity_graphs
+from mmaudit.solidity.graphs import _line_range, build_solidity_graphs
 from mmaudit.solidity.index import build_solidity_index
 from mmaudit.solidity.invariants import discover_invariants
 from mmaudit.solidity.projects import discover_solidity_projects
@@ -309,6 +309,62 @@ def test_solidity_index_and_graphs_from_foundry_artifact(tmp_path: Path, config_
     assert "Vault inherits Owned" in labels
     assert "applies onlyOwner" in labels
     assert "calls _withdraw" in labels
+
+
+def test_solidity_index_rejects_ast_byte_spans_outside_current_source_inventory(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    root = _copy_fixture(tmp_path, "foundry")
+    source = root / "src" / "Vault.sol"
+    source.write_text(
+        source.read_text(encoding="utf-8").replace(" external onlyOwner", " external"),
+        encoding="utf-8",
+    )
+    discovery = discover_repository(root, config_factory().repository, IgnoreMatcher())
+    projects = discover_solidity_projects(discovery, config_factory().smart_contracts)
+    compilation = compile_solidity_projects(
+        root, projects, config_factory().smart_contracts, tmp_path / "private-stale-ast"
+    )
+
+    build = build_solidity_index(discovery, projects, compilation.artifact_roots)
+
+    assert build.index.ast_sources == []
+    assert "src/Vault.sol" in build.index.fallback_sources
+    assert any(
+        "AST byte spans did not match current source" in item for item in build.index.warnings
+    )
+
+
+def test_ast_line_range_treats_the_compiler_byte_span_as_half_open() -> None:
+    content = "contract Synthetic {\n    function check() external {}\n}\n"
+
+    assert _line_range(content, f"0:{len(content.encode())}:0") == (1, 3)
+
+
+@pytest.mark.parametrize(
+    "source_range",
+    (
+        "malformed",
+        "-1:1:0",
+        "0:-1:0",
+        "999:1:0",
+        "0:999:0",
+        "0:1:-1",
+        "0:1:",
+        "0:1:not-an-int",
+        "0:1:0:extra",
+    ),
+)
+def test_ast_line_range_rejects_invalid_or_stale_compiler_byte_spans(
+    source_range: str,
+) -> None:
+    with pytest.raises(ValueError, match="compiler source range"):
+        _line_range("a\nb\n", source_range)
+
+
+def test_ast_line_range_accepts_a_bounded_zero_length_compiler_point() -> None:
+    assert _line_range("a\nb\n", "2:0:0") == (2, 2)
 
 
 def test_hardhat_build_info_ast_is_indexed(tmp_path: Path, config_factory) -> None:
@@ -1961,6 +2017,7 @@ contract SignedLedger {
                                                 "src": src(emit_source),
                                                 "eventCall": {
                                                     "nodeType": "FunctionCall",
+                                                    "src": src("Deposited(msg.sender, amount)"),
                                                     "expression": {
                                                         "nodeType": "Identifier",
                                                         "name": "Deposited",
