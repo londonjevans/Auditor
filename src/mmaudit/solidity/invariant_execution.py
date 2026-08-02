@@ -49,7 +49,11 @@ from mmaudit.models.schemas import (
     StatefulActionSpec,
     TransactionOrderingCapability,
 )
-from mmaudit.scanners.base import sanitized_scanner_environment
+from mmaudit.scanners.base import (
+    isolated_executable_version_probe,
+    sanitized_scanner_environment,
+)
+from mmaudit.scanners.diagnostics import ExecutableVersionProbeStatus
 from mmaudit.scanners.foundry import (
     _foundry_kind,
     _foundry_status,
@@ -992,7 +996,11 @@ class FoundryInvariantRunner:
                     repository_root,
                     self.solc_executable,
                 )
-                compiler_version = _external_executable_version(compiler, private_dir)
+                compiler_version = _external_executable_version(
+                    compiler,
+                    backend=self.backend,
+                    private_dir=private_dir,
+                )
                 compiler_sha256 = _file_sha256(compiler)
             except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
                 return InvariantExecutionResult(
@@ -1638,22 +1646,28 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _external_executable_version(executable: Path, private_dir: Path) -> str:
-    """Probe one trusted external executable without exposing operator environment."""
+def _external_executable_version(
+    executable: Path,
+    *,
+    backend: IsolationBackend,
+    private_dir: Path,
+) -> str:
+    """Probe one trusted compiler only inside the selected hardened isolation backend."""
 
     private_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    completed = subprocess.run(
-        [str(executable), "--version"],
-        cwd=private_dir,
-        env=sanitized_scanner_environment(private_dir),
-        check=False,
-        capture_output=True,
-        timeout=10,
+    workspace = private_dir / "compiler-version-workspace"
+    workspace.mkdir(mode=0o700, exist_ok=True)
+    probe = isolated_executable_version_probe(
+        executable,
+        sanitized_scanner_environment(private_dir),
+        backend,
+        workspace,
+        private_dir,
+        timeout_seconds=10,
     )
-    output = completed.stdout + completed.stderr
-    if completed.returncode != 0 or not output or len(output) > 64_000:
-        raise ValueError("external compiler version probe did not return bounded output")
-    return output.decode("utf-8", errors="replace").strip()[:1_000]
+    if probe.status is not ExecutableVersionProbeStatus.SUCCESS or probe.version is None:
+        raise ValueError("external compiler version probe failed closed under isolation")
+    return probe.version
 
 
 def _limit_invariant_process() -> None:

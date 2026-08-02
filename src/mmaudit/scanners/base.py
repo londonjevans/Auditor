@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import hashlib
 import json
 import os
@@ -9,12 +11,15 @@ import re
 import shutil
 import signal
 import stat
+import struct
 import subprocess
+import sys
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
@@ -45,6 +50,14 @@ from mmaudit.repository.workspace import (
     audited_workspace_relative_excluded,
     require_audited_workspace_paths_included,
 )
+from mmaudit.scanners.diagnostics import (
+    ExecutableVersionProbe,
+    ExecutableVersionProbeStatus,
+    ScannerExecutablePreflight,
+    ScannerExecutableState,
+    select_public_tool_version_line,
+)
+from mmaudit.solidity.reproduction import MacOSToolchainResolutionError
 
 _MAX_WORKSPACE_ENTRIES = 100_000
 _MAX_WORKSPACE_FILES = 100_000
@@ -52,6 +65,48 @@ _MAX_WORKSPACE_FILE_BYTES = 100_000_000
 _MAX_WORKSPACE_BYTES = 2 * 1024**3
 _MAX_WORKSPACE_DEPTH = 128
 _WORKSPACE_READ_BYTES = 1024 * 1024
+_VERSION_PROBE_OUTPUT_BYTES = 64 * 1024
+_SCANNER_OUTPUT_CAPTURE_BYTES = 50_000_000
+_VERSION_PROBE_MEMORY_BYTES = 1024**3
+_SCANNER_MEMORY_BYTES = 4 * 1024**3
+_DARWIN_PROCESS_TREE_MAXIMUM = 128
+_VERSION_PROBE_POLL_SECONDS = 0.02
+_INTERPRETER_OR_LOADER_FAILURE_MARKERS = (
+    "bad interpreter",
+    "cannot open shared object file",
+    "could not find platform independent libraries",
+    "dyld: library not loaded",
+    "error while loading shared libraries",
+    "fatal python error: init_fs_encoding",
+    "library not loaded",
+    "pythonhome =",
+)
+
+_INTERPRETER_OR_LOADER_DIAGNOSTIC = (
+    "tool interpreter or dynamic loader could not initialize under the scrubbed isolated "
+    "environment; install a self-contained tool distribution, for example with pipx or "
+    "Homebrew"
+)
+_ISOLATION_FAILURE_DIAGNOSTIC = (
+    "tool is present but its version command could not execute successfully under hardened "
+    "isolation"
+)
+_INVALID_VERSION_DIAGNOSTIC = (
+    "tool version is unavailable because its output was not bounded path-free single-line text"
+)
+_VERSION_TIMEOUT_DIAGNOSTIC = "tool version command timed out under hardened isolation"
+_VERSION_MEMORY_DIAGNOSTIC = "tool version command exceeded the private memory limit"
+_VERSION_MEMORY_MONITOR_DIAGNOSTIC = (
+    "tool version command was stopped because private memory monitoring failed closed"
+)
+_SCANNER_MEMORY_DIAGNOSTIC = "scanner exceeded the private memory limit"
+_SCANNER_MEMORY_MONITOR_DIAGNOSTIC = (
+    "scanner stopped because private memory monitoring failed closed"
+)
+_VERSION_DESCENDANT_DIAGNOSTIC = (
+    "tool version command left a descendant process after its leader exited"
+)
+_SCANNER_DESCENDANT_DIAGNOSTIC = "scanner left a descendant process after its leader exited"
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +130,14 @@ class _WorkspaceIdentity:
             modified_ns=metadata.st_mtime_ns,
             changed_ns=metadata.st_ctime_ns,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _PrivateProbeStreamIdentity:
+    device: int
+    inode: int
+    mode: int
+    owner: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,6 +439,34 @@ class ScannerIsolationBackend(Protocol):
     ) -> list[str]: ...
 
 
+def wrap_scanner_without_network(
+    backend: ScannerIsolationBackend,
+    command: list[str],
+    *,
+    workspace: Path,
+    private_dir: Path,
+) -> list[str]:
+    """Wrap a static scanner command without granting a loopback entitlement."""
+
+    no_network_wrapper = getattr(backend, "wrap_without_network", None)
+    if callable(no_network_wrapper):
+        wrapped = no_network_wrapper(
+            command,
+            workspace=workspace,
+            private_dir=private_dir,
+            rpc_port=0,
+        )
+        if not isinstance(wrapped, list) or not all(isinstance(item, str) for item in wrapped):
+            raise ValueError("scanner isolation returned an invalid command")
+        return wrapped
+    return backend.wrap(
+        command,
+        workspace=workspace,
+        private_dir=private_dir,
+        rpc_port=0,
+    )
+
+
 class ScannerSourceIntegrityError(RuntimeError):
     """Scanner execution could not preserve the frozen audited source identity."""
 
@@ -558,17 +649,17 @@ class ScannerAdapter(ABC):
             findings: list[ScannerFinding] | None = None,
             error: str | None = None,
             raw_output_path: str | None = None,
+            attested_output_sha256: str | None = None,
+            attested_output_bytes: int = 0,
             process_exit_code: int | None = None,
             machine_output_validated: bool = False,
         ) -> ScannerRun:
-            output_sha256 = (
-                _file_sha256(raw_path)
-                if raw_output_path is not None and raw_path.is_file()
-                else None
-            )
-            output_bytes = (
-                raw_path.stat().st_size if raw_output_path is not None and raw_path.is_file() else 0
-            )
+            if raw_output_path is None and (
+                attested_output_sha256 is not None or attested_output_bytes != 0
+            ):
+                raise ValueError("scanner output evidence requires a private relative path")
+            if raw_output_path is not None and attested_output_sha256 is None:
+                raise ValueError("scanner output path requires descriptor-attested evidence")
             run = ScannerRun(
                 scanner=self.name,
                 status=status,
@@ -592,8 +683,8 @@ class ScannerAdapter(ABC):
                 findings=findings or [],
                 error=error,
                 raw_output_path=raw_output_path,
-                raw_output_sha256=output_sha256,
-                raw_output_bytes=output_bytes,
+                raw_output_sha256=attested_output_sha256,
+                raw_output_bytes=attested_output_bytes,
                 process_exit_code=process_exit_code,
                 isolation_backend=isolation_backend,
                 isolation_attestation_sha256=isolation_attestation_sha256(backend),
@@ -696,13 +787,13 @@ class ScannerAdapter(ABC):
                 )
                 repository_code_execution = RepositoryCodeExecutionState.ISOLATED
             else:
-                command = backend.wrap(
+                command = wrap_scanner_without_network(
+                    backend,
                     command,
                     workspace=workspace,
                     private_dir=private_dir,
-                    rpc_port=1,
                 )
-            version = isolated_executable_version(
+            version_probe = isolated_executable_version_probe(
                 str(executable_path) if executable_path is not None else self.executable,
                 environment,
                 backend,
@@ -710,6 +801,25 @@ class ScannerAdapter(ABC):
                 private_dir,
                 repository_javascript=loads_repository_code,
             )
+            if version_probe.status is not ExecutableVersionProbeStatus.SUCCESS:
+                status = (
+                    ScannerStatus.INTERPRETER_OR_LOADER_FAILURE
+                    if version_probe.status
+                    is ExecutableVersionProbeStatus.INTERPRETER_OR_LOADER_FAILURE
+                    else (
+                        ScannerStatus.TIMED_OUT
+                        if version_probe.status is ExecutableVersionProbeStatus.TIMED_OUT
+                        else ScannerStatus.UNAVAILABLE
+                    )
+                )
+                return finish(
+                    status,
+                    version=None,
+                    error=version_probe.diagnostic,
+                )
+            version = version_probe.version
+            if version is None:
+                raise ValueError("successful scanner version probe omitted its version")
             trust_error = scanner_trust_pin_error(
                 version=version,
                 executable_sha256=executable_sha256,
@@ -728,6 +838,13 @@ class ScannerAdapter(ABC):
                 private_dir,
                 environment,
             )
+        except MacOSToolchainResolutionError:
+            cleanup_error = _scanner_cleanup_error(backend, private_dir)
+            return finish(
+                ScannerStatus.INTERPRETER_OR_LOADER_FAILURE,
+                version=version,
+                error=cleanup_error or _INTERPRETER_OR_LOADER_DIAGNOSTIC,
+            )
         except (OSError, RuntimeError, subprocess.TimeoutExpired, ValueError) as exc:
             cleanup_error = _scanner_cleanup_error(backend, private_dir)
             return finish(
@@ -740,10 +857,21 @@ class ScannerAdapter(ABC):
             )
         timed_out = False
         output_exceeded = False
+        memory_exceeded = False
+        memory_monitor_failed = False
         process: subprocess.Popen[bytes] | None = None
         process_error: str | None = None
+        descendant_error: str | None = None
+        raw_identity: _PrivateProbeStreamIdentity | None = None
+        error_identity: _PrivateProbeStreamIdentity | None = None
         try:
-            with raw_path.open("wb") as stdout_handle, error_path.open("wb") as stderr_handle:
+            nproc_ceiling = _darwin_uid_process_ceiling(64)
+            with (
+                _open_private_probe_stream(raw_path) as stdout_handle,
+                _open_private_probe_stream(error_path) as stderr_handle,
+            ):
+                raw_identity = _private_probe_stream_identity(stdout_handle)
+                error_identity = _private_probe_stream_identity(stderr_handle)
                 process = subprocess.Popen(
                     command,
                     cwd=workspace,
@@ -757,7 +885,14 @@ class ScannerAdapter(ABC):
                         if os.name == "nt"
                         else 0
                     ),
-                    preexec_fn=_limit_scanner_process if os.name != "nt" else None,
+                    preexec_fn=(
+                        partial(
+                            _limit_scanner_process,
+                            nproc_ceiling=nproc_ceiling,
+                        )
+                        if os.name != "nt"
+                        else None
+                    ),
                 )
                 deadline = time.monotonic() + timeout_seconds
                 while process.poll() is None:
@@ -766,31 +901,104 @@ class ScannerAdapter(ABC):
                         _stop_process(process)
                         break
                     if (
-                        raw_path.stat().st_size > self.max_stdout_bytes
-                        or error_path.stat().st_size > self.max_stderr_bytes
+                        os.fstat(stdout_handle.fileno()).st_size > self.max_stdout_bytes
+                        or os.fstat(stderr_handle.fileno()).st_size > self.max_stderr_bytes
                     ):
                         output_exceeded = True
                         _stop_process(process)
                         break
+                    try:
+                        resident_bytes = _darwin_process_group_rss_bytes(process.pid)
+                    except OSError:
+                        try:
+                            process.wait(timeout=0.05)
+                        except subprocess.TimeoutExpired:
+                            pass
+                        else:
+                            break
+                        memory_monitor_failed = True
+                        _stop_process(process)
+                        break
+                    if resident_bytes > _SCANNER_MEMORY_BYTES:
+                        memory_exceeded = True
+                        _stop_process(process)
+                        break
                     time.sleep(0.05)
                 return_code = process.wait(timeout=5)
+                descendant_error = _cleanup_lingering_process_group(
+                    process,
+                    diagnostic=_SCANNER_DESCENDANT_DIAGNOSTIC,
+                )
         except subprocess.TimeoutExpired:
             timed_out = True
             if process is not None:
                 _stop_process(process)
+                descendant_error = _cleanup_lingering_process_group(
+                    process,
+                    diagnostic=_SCANNER_DESCENDANT_DIAGNOSTIC,
+                )
             return_code = (
                 process.returncode if process is not None and process.returncode is not None else -1
             )
-        except OSError as exc:
+        except (OSError, subprocess.SubprocessError) as exc:
+            if process is not None:
+                _stop_process(process)
+                descendant_error = _cleanup_lingering_process_group(
+                    process,
+                    diagnostic=_SCANNER_DESCENDANT_DIAGNOSTIC,
+                )
             process_error = f"scanner process failed: {type(exc).__name__}"
-            return_code = -1
+            return_code = process.returncode if process is not None else -1
         cleanup_error = _scanner_cleanup_error(backend, private_dir)
-        if process_error or cleanup_error:
+        if process_error or cleanup_error or descendant_error:
             return finish(
                 ScannerStatus.FAILED,
                 version=version,
                 command=command,
-                error=cleanup_error or process_error,
+                error=cleanup_error or descendant_error or process_error,
+            )
+        if raw_identity is None or error_identity is None:
+            return finish(
+                ScannerStatus.FAILED,
+                version=version,
+                command=command,
+                error="private scanner output identity was not established",
+            )
+        try:
+            raw_bytes = _read_attested_private_stream(
+                raw_path,
+                raw_identity,
+                maximum_bytes=_SCANNER_OUTPUT_CAPTURE_BYTES,
+            )
+            error_bytes = _read_attested_private_stream(
+                error_path,
+                error_identity,
+                maximum_bytes=_SCANNER_OUTPUT_CAPTURE_BYTES,
+            )
+        except (OSError, ValueError):
+            return finish(
+                ScannerStatus.FAILED,
+                version=version,
+                command=command,
+                error="private scanner output identity changed and was rejected",
+                process_exit_code=return_code,
+            )
+        raw_output_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+        raw_output_bytes = len(raw_bytes)
+        if memory_monitor_failed or memory_exceeded:
+            return finish(
+                ScannerStatus.FAILED,
+                version=version,
+                command=command,
+                error=(
+                    _SCANNER_MEMORY_MONITOR_DIAGNOSTIC
+                    if memory_monitor_failed
+                    else _SCANNER_MEMORY_DIAGNOSTIC
+                ),
+                raw_output_path=str(raw_path.relative_to(private_dir.parent)),
+                attested_output_sha256=raw_output_sha256,
+                attested_output_bytes=raw_output_bytes,
+                process_exit_code=return_code,
             )
         if timed_out:
             return finish(
@@ -799,12 +1007,14 @@ class ScannerAdapter(ABC):
                 command=command,
                 error=f"scanner exceeded {timeout_seconds:.0f}s timeout",
                 raw_output_path=str(raw_path.relative_to(private_dir.parent)),
+                attested_output_sha256=raw_output_sha256,
+                attested_output_bytes=raw_output_bytes,
                 process_exit_code=return_code,
             )
         if (
             output_exceeded
-            or raw_path.stat().st_size > self.max_stdout_bytes
-            or error_path.stat().st_size > self.max_stderr_bytes
+            or raw_output_bytes > self.max_stdout_bytes
+            or len(error_bytes) > self.max_stderr_bytes
         ):
             return finish(
                 ScannerStatus.FAILED,
@@ -812,10 +1022,12 @@ class ScannerAdapter(ABC):
                 command=command,
                 error="scanner output exceeded the private output limit",
                 raw_output_path=str(raw_path.relative_to(private_dir.parent)),
+                attested_output_sha256=raw_output_sha256,
+                attested_output_bytes=raw_output_bytes,
                 process_exit_code=return_code,
             )
 
-        stdout = raw_path.read_text(encoding="utf-8", errors="replace")
+        stdout = raw_bytes.decode("utf-8", errors="replace")
         if return_code not in self.finding_exit_codes:
             return finish(
                 ScannerStatus.FAILED,
@@ -823,6 +1035,8 @@ class ScannerAdapter(ABC):
                 command=command,
                 error=f"scanner exited with code {return_code}",
                 raw_output_path=str(raw_path.relative_to(private_dir.parent)),
+                attested_output_sha256=raw_output_sha256,
+                attested_output_bytes=raw_output_bytes,
                 process_exit_code=return_code,
             )
         try:
@@ -834,6 +1048,8 @@ class ScannerAdapter(ABC):
                 command=command,
                 error=f"invalid scanner output: {type(exc).__name__}",
                 raw_output_path=str(raw_path.relative_to(private_dir.parent)),
+                attested_output_sha256=raw_output_sha256,
+                attested_output_bytes=raw_output_bytes,
                 process_exit_code=return_code,
             )
         return finish(
@@ -842,6 +1058,8 @@ class ScannerAdapter(ABC):
             command=command,
             findings=findings,
             raw_output_path=str(raw_path.relative_to(private_dir.parent)),
+            attested_output_sha256=raw_output_sha256,
+            attested_output_bytes=raw_output_bytes,
             process_exit_code=return_code,
             machine_output_validated=self.strict_machine_output,
         )
@@ -862,11 +1080,11 @@ def scanner_trust_pin_error(
         return "scanner trust policy requires paired version and SHA-256 pins"
     if executable_sha256 != expected_sha256:
         return "scanner executable SHA-256 does not match the configured trust pin"
-    normalized_expected_version = " ".join(expected_version.split())
-    normalized_version = " ".join(version.split()) if version is not None else None
+    normalized_expected_version = select_public_tool_version_line(expected_version)
+    normalized_version = select_public_tool_version_line(version) if version is not None else None
     if (
         normalized_version is None
-        or not normalized_expected_version
+        or normalized_expected_version is None
         or re.search(
             rf"(?<![0-9.]){re.escape(normalized_expected_version)}(?![0-9.])",
             normalized_version,
@@ -1806,7 +2024,339 @@ def _write_all(descriptor: int, value: bytes) -> None:
         offset += written
 
 
-def isolated_executable_version(
+def _version_probe_directory(private_dir: Path, executable: str | Path) -> Path:
+    """Create a private, collision-safe directory for raw version-probe streams."""
+
+    private_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    metadata = private_dir.lstat()
+    absolute = Path(os.path.abspath(private_dir))
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or private_dir.is_symlink()
+        or private_dir.resolve(strict=True) != absolute
+        or (os.name != "nt" and stat.S_IMODE(metadata.st_mode) & 0o077)
+        or (hasattr(os, "getuid") and metadata.st_uid != os.getuid())
+    ):
+        raise ValueError("private version-probe root is not a private owned directory")
+    identity = hashlib.sha256(os.fsencode(str(executable))).hexdigest()[:16]
+    for sequence in range(100):
+        candidate = private_dir / f"version-probe-{identity}-{sequence:02d}"
+        try:
+            candidate.mkdir(mode=0o700)
+        except FileExistsError:
+            continue
+        if stat.S_IMODE(candidate.lstat().st_mode) != 0o700 or candidate.is_symlink():
+            raise ValueError("private version-probe artifact directory is invalid")
+        return candidate
+    raise OSError("private version-probe artifact slots are exhausted")
+
+
+def _open_private_probe_stream(path: Path) -> Any:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        return os.fdopen(descriptor, "wb")
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _private_probe_stream_identity(handle: Any) -> _PrivateProbeStreamIdentity:
+    metadata = os.fstat(handle.fileno())
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or (hasattr(os, "getuid") and metadata.st_uid != os.getuid())
+    ):
+        raise ValueError("private version-probe stream identity is invalid")
+    return _PrivateProbeStreamIdentity(
+        device=metadata.st_dev,
+        inode=metadata.st_ino,
+        mode=metadata.st_mode,
+        owner=metadata.st_uid,
+    )
+
+
+def _read_attested_private_stream(
+    path: Path,
+    expected: _PrivateProbeStreamIdentity,
+    *,
+    maximum_bytes: int,
+) -> bytes:
+    """Read one original bounded private stream without following path replacement."""
+
+    if not 1 <= maximum_bytes <= 100_000_000:
+        raise ValueError("private stream read bound is invalid")
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    if no_follow == 0:
+        raise OSError("no-follow private probe access is unavailable")
+    path_before = path.lstat()
+    descriptor = os.open(path, flags | no_follow)
+    try:
+        descriptor_before = os.fstat(descriptor)
+
+        def identity_tuple(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
+            return (
+                metadata.st_dev,
+                metadata.st_ino,
+                metadata.st_mode,
+                metadata.st_uid,
+                metadata.st_nlink,
+            )
+
+        expected_tuple = (
+            expected.device,
+            expected.inode,
+            expected.mode,
+            expected.owner,
+            1,
+        )
+        if (
+            identity_tuple(path_before) != expected_tuple
+            or identity_tuple(descriptor_before) != expected_tuple
+            or not stat.S_ISREG(descriptor_before.st_mode)
+            or descriptor_before.st_size > maximum_bytes
+        ):
+            raise OSError("private version-probe stream identity changed")
+        raw = bytearray()
+        while len(raw) <= maximum_bytes:
+            chunk = os.read(
+                descriptor,
+                min(4096, maximum_bytes + 1 - len(raw)),
+            )
+            if not chunk:
+                break
+            raw.extend(chunk)
+        descriptor_after = os.fstat(descriptor)
+        path_after = path.lstat()
+        stable_fields_before = (
+            identity_tuple(descriptor_before),
+            descriptor_before.st_size,
+            descriptor_before.st_mtime_ns,
+            descriptor_before.st_ctime_ns,
+        )
+        stable_fields_after = (
+            identity_tuple(descriptor_after),
+            descriptor_after.st_size,
+            descriptor_after.st_mtime_ns,
+            descriptor_after.st_ctime_ns,
+        )
+        if (
+            len(raw) > maximum_bytes
+            or len(raw) != descriptor_before.st_size
+            or stable_fields_after != stable_fields_before
+            or identity_tuple(path_after) != expected_tuple
+        ):
+            raise OSError("private version-probe stream changed during read")
+        return bytes(raw)
+    finally:
+        os.close(descriptor)
+
+
+def _darwin_nproc_ceiling_from_uid_listing(
+    listing: str,
+    *,
+    current_uid: int,
+    allowance: int,
+    inherited_hard_limit: int,
+) -> int:
+    """Derive a per-login-UID Darwin process ceiling from one trusted snapshot."""
+
+    if not 1 <= allowance <= 256 or len(listing.encode("utf-8")) > 1_000_000:
+        raise OSError("Darwin process-count evidence is outside its fixed bound")
+    try:
+        observed_uids = tuple(int(line.strip()) for line in listing.splitlines() if line.strip())
+    except ValueError as exc:
+        raise OSError("Darwin process-count evidence is malformed") from exc
+    observed_count = sum(uid == current_uid for uid in observed_uids)
+    if observed_count < 1:
+        raise OSError("Darwin process-count evidence omitted the current UID")
+    requested = observed_count + allowance
+    ceiling = requested if inherited_hard_limit < 0 else min(requested, inherited_hard_limit)
+    if ceiling <= observed_count:
+        raise OSError("Darwin inherited process limit has no safe child allowance")
+    return ceiling
+
+
+def _darwin_current_uid_process_count() -> int:
+    """Count the real UID's processes through the fixed macOS libproc ABI."""
+
+    maximum_bytes = 1_000_000
+    try:
+        libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        list_pids = libproc.proc_listpids
+        list_pids.argtypes = [
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+            ctypes.c_int,
+        ]
+        list_pids.restype = ctypes.c_int
+        current_uid = os.getuid()
+        required = int(list_pids(5, current_uid, None, 0))  # PROC_RUID_ONLY
+        capacity = required + 64 * 1024
+        if required <= 0 or capacity > maximum_bytes:
+            raise OSError("Darwin process inventory size is invalid")
+        buffer = ctypes.create_string_buffer(capacity)
+        captured = int(list_pids(5, current_uid, buffer, capacity))
+        if captured <= 0 or captured >= capacity or captured % 4:
+            raise OSError("Darwin process inventory capture is incomplete")
+        pids = {pid for pid in struct.unpack_from(f"={captured // 4}i", buffer.raw) if pid > 0}
+        if os.getpid() not in pids:
+            raise OSError("Darwin process inventory omitted the current process")
+        return len(pids)
+    except (AttributeError, OSError, TypeError, ValueError) as exc:
+        raise OSError("Darwin process inventory could not be established") from exc
+
+
+def _darwin_process_group_rss_bytes(root_pid: int) -> int:
+    """Measure resident memory for one bounded Darwin process group via libproc."""
+
+    if sys.platform != "darwin":
+        return 0
+    try:
+        libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        list_pids = libproc.proc_listpids
+        list_pids.argtypes = [
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+            ctypes.c_int,
+        ]
+        list_pids.restype = ctypes.c_int
+        pid_info = libproc.proc_pidinfo
+        pid_info.argtypes = [
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_uint64,
+            ctypes.c_void_p,
+            ctypes.c_int,
+        ]
+        pid_info.restype = ctypes.c_int
+
+        def capture_group() -> set[int]:
+            required = int(list_pids(2, root_pid, None, 0))  # PROC_PGRP_ONLY
+            capacity = required + 64 * 1024
+            if required <= 0 or capacity > 1_000_000:
+                raise OSError("Darwin process-group inventory size is invalid")
+            buffer = ctypes.create_string_buffer(capacity)
+            captured = int(list_pids(2, root_pid, buffer, capacity))
+            if captured <= 0 or captured >= capacity or captured % 4:
+                raise OSError("Darwin process-group inventory capture is incomplete")
+            pids = {pid for pid in struct.unpack_from(f"={captured // 4}i", buffer.raw) if pid > 0}
+            if not pids or len(pids) > _DARWIN_PROCESS_TREE_MAXIMUM:
+                raise OSError("Darwin process group exceeded its fixed monitor bound")
+            return pids
+
+        pids = capture_group()
+        if root_pid not in pids:
+            raise OSError("Darwin process-group inventory omitted its leader")
+        resident_bytes = 0
+        observed_pids = 0
+        for pid in pids:
+            task_info = ctypes.create_string_buffer(256)
+            ctypes.set_errno(0)
+            size = int(pid_info(pid, 4, 0, task_info, len(task_info)))  # PROC_PIDTASKINFO
+            if size < 16:
+                # PROC_PGRP_ONLY may briefly retain an exited PID while the
+                # task-info query already reports ESRCH. That exact kernel race
+                # has no resident task to charge; every other short read remains
+                # a fail-closed monitor error.
+                if ctypes.get_errno() == errno.ESRCH:
+                    continue
+                raise OSError("Darwin process-group memory could not be observed")
+            resident = int(struct.unpack_from("=Q", task_info.raw, 8)[0])
+            if resident < 0 or resident > 1 << 60:
+                raise OSError("Darwin process-group memory evidence is invalid")
+            resident_bytes += resident
+            observed_pids += 1
+        if observed_pids < 1:
+            return 0
+        return resident_bytes
+    except (AttributeError, OSError, TypeError, ValueError) as exc:
+        raise OSError("Darwin process-group memory could not be established") from exc
+
+
+def _darwin_uid_process_ceiling(allowance: int) -> int | None:
+    """Observe and bound Darwin's per-login-UID RLIMIT_NPROC semantics."""
+
+    if sys.platform != "darwin":
+        return None
+    try:
+        import resource
+
+        observed_count = _darwin_current_uid_process_count()
+        inherited_hard_limit = int(resource.getrlimit(resource.RLIMIT_NPROC)[1])
+        return _darwin_nproc_ceiling_from_uid_listing(
+            f"{os.getuid()}\n" * observed_count,
+            current_uid=os.getuid(),
+            allowance=allowance,
+            inherited_hard_limit=inherited_hard_limit,
+        )
+    except (OSError, ValueError) as exc:
+        raise OSError("Darwin process-count ceiling could not be established") from exc
+
+
+def _limit_version_probe_process(*, nproc_ceiling: int | None) -> None:
+    """Apply stricter resource bounds than a full scanner process."""
+
+    try:
+        import resource
+    except ImportError as exc:
+        raise RuntimeError("version-probe resource bounds are unavailable") from exc
+    try:
+        resource.setrlimit(resource.RLIMIT_CPU, (15, 15))
+        resource.setrlimit(
+            resource.RLIMIT_FSIZE,
+            (_VERSION_PROBE_OUTPUT_BYTES, _VERSION_PROBE_OUTPUT_BYTES),
+        )
+        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+        if hasattr(resource, "RLIMIT_NPROC"):
+            limit = 16 if nproc_ceiling is None else nproc_ceiling
+            resource.setrlimit(resource.RLIMIT_NPROC, (limit, limit))
+        if hasattr(resource, "RLIMIT_AS"):
+            try:
+                resource.setrlimit(resource.RLIMIT_AS, (1024**3, 1024**3))
+            except (OSError, ValueError):
+                # Darwin maps the system shared-cache reservation into every
+                # process, so a 1 GiB virtual-address ceiling is below the
+                # already-inherited footprint and cannot be installed. The
+                # CPU/file/FD/NPROC remain enforced here; the parent process
+                # independently enforces a resident-memory ceiling for the whole
+                # isolated process group through the fixed libproc ABI.
+                if sys.platform != "darwin":
+                    raise
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("version-probe resource bounds could not be applied") from exc
+
+
+def _probe_has_interpreter_or_loader_failure(stdout: str, stderr: str) -> bool:
+    normalized = f"{stdout}\n{stderr}".casefold()
+    return any(marker in normalized for marker in _INTERPRETER_OR_LOADER_FAILURE_MARKERS)
+
+
+def _public_version_line(
+    stdout: str,
+    stderr: str,
+    environment: dict[str, str],
+) -> str | None:
+    for output in (stdout, stderr):
+        selected = select_public_tool_version_line(
+            output,
+            forbidden_values=environment.values(),
+        )
+        if selected is not None:
+            return selected
+    return None
+
+
+def isolated_executable_version_probe(
     executable: str | Path,
     environment: dict[str, str],
     backend: ScannerIsolationBackend,
@@ -1815,10 +2365,25 @@ def isolated_executable_version(
     *,
     repository_javascript: bool = False,
     timeout_seconds: float = 15.0,
-) -> str | None:
+) -> ExecutableVersionProbe:
+    """Probe one exact executable without exposing raw output outside ``private_dir``."""
+
     if not 0 < timeout_seconds <= 15.0:
         raise ValueError("isolated executable version timeout is outside its fixed bound")
-    result: subprocess.CompletedProcess[str] | None = None
+    probe_dir = _version_probe_directory(private_dir, executable)
+    stdout_path = probe_dir / "stdout.txt"
+    stderr_path = probe_dir / "stderr.txt"
+    process: subprocess.Popen[bytes] | None = None
+    return_code: int | None = None
+    timed_out = False
+    output_exceeded = False
+    memory_exceeded = False
+    memory_monitor_failed = False
+    launch_failed = False
+    toolchain_resolution_failed = False
+    descendant_error: str | None = None
+    stdout_identity: _PrivateProbeStreamIdentity | None = None
+    stderr_identity: _PrivateProbeStreamIdentity | None = None
     try:
         if repository_javascript:
             if not isinstance(backend, RepositoryJavaScriptIsolationBackend):
@@ -1830,35 +2395,322 @@ def isolated_executable_version(
                 rpc_port=1,
             )
         else:
-            command = backend.wrap(
+            command = wrap_scanner_without_network(
+                backend,
                 [str(executable), "--version"],
                 workspace=workspace,
                 private_dir=private_dir,
-                rpc_port=1,
             )
         process_environment = isolation_host_environment(
             backend,
             private_dir,
             environment,
         )
-        result = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            env=process_environment,
-            shell=False,
-            cwd=workspace,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        result = None
+        nproc_ceiling = _darwin_uid_process_ceiling(16)
+        with (
+            _open_private_probe_stream(stdout_path) as stdout_handle,
+            _open_private_probe_stream(stderr_path) as stderr_handle,
+        ):
+            stdout_identity = _private_probe_stream_identity(stdout_handle)
+            stderr_identity = _private_probe_stream_identity(stderr_handle)
+            process = subprocess.Popen(
+                command,
+                cwd=workspace,
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+                env=process_environment,
+                shell=False,
+                start_new_session=os.name != "nt",
+                creationflags=(
+                    int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+                    if os.name == "nt"
+                    else 0
+                ),
+                preexec_fn=(
+                    partial(
+                        _limit_version_probe_process,
+                        nproc_ceiling=nproc_ceiling,
+                    )
+                    if os.name != "nt"
+                    else None
+                ),
+            )
+            deadline = time.monotonic() + timeout_seconds
+            while process.poll() is None:
+                if time.monotonic() >= deadline:
+                    timed_out = True
+                    _stop_process(process)
+                    break
+                if (
+                    os.fstat(stdout_handle.fileno()).st_size >= _VERSION_PROBE_OUTPUT_BYTES
+                    or os.fstat(stderr_handle.fileno()).st_size >= _VERSION_PROBE_OUTPUT_BYTES
+                ):
+                    output_exceeded = True
+                    _stop_process(process)
+                    break
+                try:
+                    resident_bytes = _darwin_process_group_rss_bytes(process.pid)
+                except OSError:
+                    try:
+                        process.wait(timeout=_VERSION_PROBE_POLL_SECONDS)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    else:
+                        break
+                    memory_monitor_failed = True
+                    _stop_process(process)
+                    break
+                if resident_bytes > _VERSION_PROBE_MEMORY_BYTES:
+                    memory_exceeded = True
+                    _stop_process(process)
+                    break
+                time.sleep(_VERSION_PROBE_POLL_SECONDS)
+            return_code = process.wait(timeout=5)
+            descendant_error = _cleanup_lingering_process_group(
+                process,
+                diagnostic=_VERSION_DESCENDANT_DIAGNOSTIC,
+            )
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        if process is not None:
+            _stop_process(process)
+            return_code = process.returncode
+            descendant_error = _cleanup_lingering_process_group(
+                process,
+                diagnostic=_VERSION_DESCENDANT_DIAGNOSTIC,
+            )
+    except MacOSToolchainResolutionError:
+        toolchain_resolution_failed = True
+    except (OSError, subprocess.SubprocessError):
+        if process is not None:
+            _stop_process(process)
+            return_code = process.returncode
+            descendant_error = _cleanup_lingering_process_group(
+                process,
+                diagnostic=_VERSION_DESCENDANT_DIAGNOSTIC,
+            )
+        launch_failed = True
     finally:
-        cleanup_isolation_backend(backend, private_dir)
-    if result is None:
-        return None
-    output = (result.stdout or result.stderr).strip().splitlines()
-    return "\n".join(output)[:1_000] if output else None
+        cleanup_error = _scanner_cleanup_error(backend, private_dir)
+
+    if toolchain_resolution_failed:
+        return ExecutableVersionProbe(
+            status=ExecutableVersionProbeStatus.INTERPRETER_OR_LOADER_FAILURE,
+            version=None,
+            diagnostic=_INTERPRETER_OR_LOADER_DIAGNOSTIC,
+            return_code=return_code,
+        )
+    if cleanup_error is not None or launch_failed or descendant_error is not None:
+        return ExecutableVersionProbe(
+            status=ExecutableVersionProbeStatus.ISOLATION_FAILURE,
+            version=None,
+            diagnostic=descendant_error or _ISOLATION_FAILURE_DIAGNOSTIC,
+            return_code=return_code,
+        )
+    if stdout_identity is None or stderr_identity is None:
+        return ExecutableVersionProbe(
+            status=ExecutableVersionProbeStatus.ISOLATION_FAILURE,
+            version=None,
+            diagnostic=_ISOLATION_FAILURE_DIAGNOSTIC,
+            return_code=return_code,
+        )
+    try:
+        stdout_bytes = _read_attested_private_stream(
+            stdout_path,
+            stdout_identity,
+            maximum_bytes=_VERSION_PROBE_OUTPUT_BYTES,
+        )
+        stderr_bytes = _read_attested_private_stream(
+            stderr_path,
+            stderr_identity,
+            maximum_bytes=_VERSION_PROBE_OUTPUT_BYTES,
+        )
+    except (OSError, ValueError):
+        return ExecutableVersionProbe(
+            status=ExecutableVersionProbeStatus.ISOLATION_FAILURE,
+            version=None,
+            diagnostic="private tool-version evidence identity changed and was rejected",
+            return_code=return_code,
+        )
+    stdout = stdout_bytes.decode("utf-8", errors="replace")
+    stderr = stderr_bytes.decode("utf-8", errors="replace")
+    stdout_size = len(stdout_bytes)
+    stderr_size = len(stderr_bytes)
+    if timed_out:
+        return ExecutableVersionProbe(
+            status=ExecutableVersionProbeStatus.TIMED_OUT,
+            version=None,
+            diagnostic=_VERSION_TIMEOUT_DIAGNOSTIC,
+            return_code=return_code,
+        )
+    if memory_monitor_failed or memory_exceeded:
+        return ExecutableVersionProbe(
+            status=ExecutableVersionProbeStatus.ISOLATION_FAILURE,
+            version=None,
+            diagnostic=(
+                _VERSION_MEMORY_MONITOR_DIAGNOSTIC
+                if memory_monitor_failed
+                else _VERSION_MEMORY_DIAGNOSTIC
+            ),
+            return_code=return_code,
+        )
+    if _probe_has_interpreter_or_loader_failure(stdout, stderr):
+        return ExecutableVersionProbe(
+            status=ExecutableVersionProbeStatus.INTERPRETER_OR_LOADER_FAILURE,
+            version=None,
+            diagnostic=_INTERPRETER_OR_LOADER_DIAGNOSTIC,
+            return_code=return_code,
+        )
+    if (
+        output_exceeded
+        or stdout_size >= _VERSION_PROBE_OUTPUT_BYTES
+        or stderr_size >= _VERSION_PROBE_OUTPUT_BYTES
+    ):
+        return ExecutableVersionProbe(
+            status=ExecutableVersionProbeStatus.INVALID_VERSION,
+            version=None,
+            diagnostic=_INVALID_VERSION_DIAGNOSTIC,
+            return_code=return_code,
+        )
+    if return_code != 0:
+        return ExecutableVersionProbe(
+            status=ExecutableVersionProbeStatus.ISOLATION_FAILURE,
+            version=None,
+            diagnostic=_ISOLATION_FAILURE_DIAGNOSTIC,
+            return_code=return_code,
+        )
+    version = _public_version_line(stdout, stderr, process_environment)
+    if version is None:
+        return ExecutableVersionProbe(
+            status=ExecutableVersionProbeStatus.INVALID_VERSION,
+            version=None,
+            diagnostic=_INVALID_VERSION_DIAGNOSTIC,
+            return_code=return_code,
+        )
+    return ExecutableVersionProbe(
+        status=ExecutableVersionProbeStatus.SUCCESS,
+        version=version,
+        diagnostic=None,
+        return_code=return_code,
+    )
+
+
+def isolated_executable_version(
+    executable: str | Path,
+    environment: dict[str, str],
+    backend: ScannerIsolationBackend,
+    workspace: Path,
+    private_dir: Path,
+    *,
+    repository_javascript: bool = False,
+    timeout_seconds: float = 15.0,
+) -> str | None:
+    """Compatibility projection returning only a validated public version."""
+
+    return isolated_executable_version_probe(
+        executable,
+        environment,
+        backend,
+        workspace,
+        private_dir,
+        repository_javascript=repository_javascript,
+        timeout_seconds=timeout_seconds,
+    ).version
+
+
+def preflight_scanner_executable(
+    executable: str | Path,
+    environment: dict[str, str],
+    backend: ScannerIsolationBackend,
+    workspace: Path,
+    private_dir: Path,
+    *,
+    repository_javascript: bool = False,
+    timeout_seconds: float = 15.0,
+) -> ScannerExecutablePreflight:
+    """Resolve and probe a tool into the exact three operator-facing states."""
+
+    requested = Path(executable)
+    candidate: str | None
+    if requested.is_absolute():
+        candidate = str(requested)
+    elif requested.parent == Path("."):
+        candidate = shutil.which(str(executable))
+    else:
+        return ScannerExecutablePreflight(
+            state=ScannerExecutableState.PRESENT_ISOLATION_UNEXECUTABLE,
+            resolved_path=None,
+            version=None,
+            failure_kind=ExecutableVersionProbeStatus.EXECUTION_REFUSED,
+            diagnostic="relative executable paths are refused by scanner preflight",
+        )
+    if candidate is None:
+        return ScannerExecutablePreflight(
+            state=ScannerExecutableState.ABSENT,
+            resolved_path=None,
+            version=None,
+            failure_kind=None,
+            diagnostic="tool was not found on PATH",
+        )
+    try:
+        resolved = Path(candidate).resolve(strict=True)
+    except (OSError, RuntimeError):
+        return ScannerExecutablePreflight(
+            state=ScannerExecutableState.PRESENT_ISOLATION_UNEXECUTABLE,
+            resolved_path=None,
+            version=None,
+            failure_kind=ExecutableVersionProbeStatus.EXECUTION_REFUSED,
+            diagnostic="resolved tool identity could not be validated safely",
+        )
+    if not resolved.is_file() or not os.access(resolved, os.X_OK):
+        return ScannerExecutablePreflight(
+            state=ScannerExecutableState.PRESENT_ISOLATION_UNEXECUTABLE,
+            resolved_path=resolved,
+            version=None,
+            failure_kind=ExecutableVersionProbeStatus.EXECUTION_REFUSED,
+            diagnostic="resolved tool is not an executable regular file",
+        )
+    try:
+        probe = isolated_executable_version_probe(
+            resolved,
+            environment,
+            backend,
+            workspace,
+            private_dir,
+            repository_javascript=repository_javascript,
+            timeout_seconds=timeout_seconds,
+        )
+    except (OSError, RuntimeError, ValueError):
+        return ScannerExecutablePreflight(
+            state=ScannerExecutableState.PRESENT_ISOLATION_UNEXECUTABLE,
+            resolved_path=resolved,
+            version=None,
+            failure_kind=ExecutableVersionProbeStatus.ISOLATION_FAILURE,
+            diagnostic="private tool-probe evidence could not be retained safely",
+        )
+    if probe.status is ExecutableVersionProbeStatus.SUCCESS:
+        return ScannerExecutablePreflight(
+            state=ScannerExecutableState.PRESENT_EXECUTABLE,
+            resolved_path=resolved,
+            version=probe.version,
+            failure_kind=None,
+            diagnostic=None,
+        )
+    if probe.status is ExecutableVersionProbeStatus.INVALID_VERSION:
+        return ScannerExecutablePreflight(
+            state=ScannerExecutableState.PRESENT_EXECUTABLE,
+            resolved_path=resolved,
+            version=None,
+            failure_kind=probe.status,
+            diagnostic=probe.diagnostic,
+        )
+    return ScannerExecutablePreflight(
+        state=ScannerExecutableState.PRESENT_ISOLATION_UNEXECUTABLE,
+        resolved_path=resolved,
+        version=None,
+        failure_kind=probe.status,
+        diagnostic=probe.diagnostic,
+    )
 
 
 def _scanner_cleanup_error(backend: object, private_dir: Path) -> str | None:
@@ -1869,9 +2721,17 @@ def _scanner_cleanup_error(backend: object, private_dir: Path) -> str | None:
     return None
 
 
+def _fixed_darwin_scanner_ca_bundle() -> Path | None:
+    """Return the public system CA alias, never an inherited environment value."""
+
+    candidate = Path("/etc/ssl/cert.pem")
+    return candidate if sys.platform == "darwin" and candidate.is_file() else None
+
+
 def sanitized_scanner_environment(private_dir: Path) -> dict[str, str]:
     """Create a minimal environment without inherited application credentials."""
 
+    private_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     home = private_dir / "home"
     cache = private_dir / "cache"
     temporary = private_dir / "tmp"
@@ -1886,7 +2746,11 @@ def sanitized_scanner_environment(private_dir: Path) -> dict[str, str]:
         "TMPDIR": str(temporary),
         "NO_COLOR": "1",
         "CI": "true",
+        "SEMGREP_SEND_METRICS": "off",
+        "SEMGREP_ENABLE_VERSION_CHECK": "0",
     }
+    if (ca_bundle := _fixed_darwin_scanner_ca_bundle()) is not None:
+        environment["SSL_CERT_FILE"] = str(ca_bundle)
     if os.name == "nt":
         for key in ("SYSTEMROOT", "WINDIR", "PATHEXT"):
             if key in os.environ:
@@ -1894,34 +2758,82 @@ def sanitized_scanner_environment(private_dir: Path) -> dict[str, str]:
     return environment
 
 
-def _limit_scanner_process() -> None:
+def _limit_scanner_process(*, nproc_ceiling: int | None) -> None:
     try:
         import resource
-
+    except ImportError as exc:
+        raise RuntimeError("scanner resource bounds are unavailable") from exc
+    try:
         resource.setrlimit(resource.RLIMIT_CPU, (900, 900))
         resource.setrlimit(resource.RLIMIT_FSIZE, (50_000_000, 50_000_000))
         resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
         if hasattr(resource, "RLIMIT_NPROC"):
-            resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
+            limit = 64 if nproc_ceiling is None else nproc_ceiling
+            resource.setrlimit(resource.RLIMIT_NPROC, (limit, limit))
         if hasattr(resource, "RLIMIT_AS"):
-            resource.setrlimit(resource.RLIMIT_AS, (4 * 1024**3, 4 * 1024**3))
-    except (ImportError, OSError, ValueError):
-        return
+            try:
+                resource.setrlimit(resource.RLIMIT_AS, (4 * 1024**3, 4 * 1024**3))
+            except (OSError, ValueError):
+                # See the version-probe note above. The parent-side process-group
+                # monitor supplies the memory bound, and NPROC failure remains
+                # fail-closed.
+                if sys.platform != "darwin":
+                    raise
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("scanner resource bounds could not be applied") from exc
 
 
 def _stop_process(process: subprocess.Popen[bytes]) -> None:
     """Terminate a scanner and its process group after a bound is crossed."""
 
-    if process.poll() is not None:
-        return
     try:
         if os.name == "nt":
+            if process.poll() is not None:
+                return
             process.kill()
         else:
             os.killpg(process.pid, signal.SIGKILL)
-        process.wait(timeout=5)
+        if process.poll() is None:
+            process.wait(timeout=5)
     except (OSError, subprocess.TimeoutExpired):
-        process.kill()
+        if process.poll() is None:
+            process.kill()
+
+
+def _cleanup_lingering_process_group(
+    process: subprocess.Popen[bytes],
+    *,
+    diagnostic: str,
+) -> str | None:
+    """Kill and reject descendants that outlive a completed process-group leader."""
+
+    if os.name == "nt":
+        return None
+
+    def group_exists() -> bool:
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return False
+        except OSError as exc:
+            raise OSError("process-group absence could not be attested") from exc
+        return True
+
+    try:
+        if not group_exists():
+            return None
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return diagnostic
+        deadline = time.monotonic() + 5
+        while group_exists():
+            if time.monotonic() >= deadline:
+                return "scanner process-group descendants could not be terminated"
+            time.sleep(0.01)
+    except OSError:
+        return "scanner process-group absence could not be attested"
+    return diagnostic
 
 
 def make_finding(

@@ -49,7 +49,7 @@ def _provenance(
         "execution_observation_sha256": "5" * 64,
         "executable_sha256": "6" * 64,
         "source_sha256": "7" * 64,
-        "compiler_version": "forge 1.5.0 / solc 0.8.30",
+        "compiler_version": "Version: 0.8.30",
         "compiler_sha256": "8" * 64,
         "isolation_backend": "rootless-container",
         "isolation_attestation_sha256": "9" * 64,

@@ -2166,7 +2166,18 @@ def test_slither_normalization(vulnerable_repo: Path, tmp_path: Path) -> None:
     assert findings[0].locations[0].path == "app.py"
 
 
-def test_coverage_reports_denominators(tmp_path: Path, config_factory) -> None:
+@pytest.mark.parametrize(
+    "scanner_status",
+    [
+        ScannerStatus.UNAVAILABLE,
+        ScannerStatus.INTERPRETER_OR_LOADER_FAILURE,
+    ],
+)
+def test_coverage_reports_denominators(
+    tmp_path: Path,
+    config_factory,
+    scanner_status: ScannerStatus,
+) -> None:
     root = _copy_fixture(tmp_path, "foundry")
     discovery = discover_repository(root, config_factory().repository, IgnoreMatcher())
     projects = discover_solidity_projects(discovery, config_factory().smart_contracts)
@@ -2177,7 +2188,7 @@ def test_coverage_reports_denominators(tmp_path: Path, config_factory) -> None:
     graphs = build_solidity_graphs(discovery, build)
     run = ScannerRun(
         scanner="slither",
-        status=ScannerStatus.UNAVAILABLE,
+        status=scanner_status,
         started_at=datetime.now(UTC),
         finished_at=datetime.now(UTC),
         duration_seconds=0,
@@ -2211,7 +2222,7 @@ def test_coverage_reports_denominators(tmp_path: Path, config_factory) -> None:
     assert scanner_completion.denominator == 1
     assert scanner_completion.population == 2
     assert [exclusion.subject for exclusion in scanner_completion.exclusions] == ["codeql[1]"]
-    assert scanner_completion.failures == ["slither: scanner status unavailable"]
+    assert scanner_completion.failures == [f"slither: scanner status {scanner_status.value}"]
     compiler_contracts = coverage.quality_metrics["compiler_contracts_indexed"]
     assert compiler_contracts.denominator >= coverage.contracts_indexed
     assert compiler_contracts.population == compiler_contracts.denominator

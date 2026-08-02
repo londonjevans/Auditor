@@ -5,12 +5,12 @@ The objective source has SHA-256
 Do not record credentials, raw private prompts, or raw provider completions here.
 
 AUTORUN_STATUS: RUNNING
-CURRENT_MILESTONE: macOS isolated tool diagnostics
-CURRENT_TICKET: V3-TOOLDIAG-001 (IN_PROGRESS)
-LAST_COMPLETED_TICKET: V3-EFFORT-001
-NEXT_ACTION: Inspect the current tool resolver, macOS sandbox profile, version capture, scanner result evidence, doctor output, and focused tests; reproduce the three recorded defects locally without weakening isolation.
-LAST_COMMAND: `git commit -m "Complete reasoning profile qualification campaign"`.
-LAST_RESULT: PASS — isolated implementation checkpoint `7dbf5ad916f2ce101888baa37c7f748686712c32` created from the validated V3-EFFORT file set.
+CURRENT_MILESTONE: macOS isolated tool diagnostics checkpoint
+CURRENT_TICKET: V3-TOOLDIAG-001 (COMPLETE; CHECKPOINT_PENDING)
+LAST_COMPLETED_TICKET: V3-TOOLDIAG-001
+NEXT_ACTION: Review and create the isolated V3-TOOLDIAG-001 checkpoint, push it over SSH, then mark V3-HARDHAT-001 in progress.
+LAST_COMMAND: `git diff --check`
+LAST_RESULT: PASS — final complete pytest gate passed 3,890 tests with 11 explicit prerequisite/opt-in skips in 720.28s; Ruff format/check, strict mypy over 157 source files, schema synchronization, the real macOS Homebrew Semgrep integration, and diff integrity all passed.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 7dbf5ad916f2ce101888baa37c7f748686712c32
+LAST_CHECKPOINT_COMMIT: a4efd086e3aff2e4b8c158f015c2e83d71e7beb6
 
 ## 2026-07-31 — V3-EFFORT-001
 
@@ -4818,5 +4818,76 @@ LAST_CHECKPOINT_COMMIT: 7dbf5ad916f2ce101888baa37c7f748686712c32
 - **Starting invariant:** Environment scrubbing, network denial, bounded subprocess execution, and
   fail-closed unavailable results remain mandatory. Read access may be added only for validated
   prefixes derived from the exact resolved toolchain in use; no unisolated fallback is permitted.
+- **Local reproduction:** On the operator's Darwin host, resolution selected the supported
+  Homebrew installations ahead of a shadowing Anaconda Slither. Sanitized, bounded `--version`
+  probes for exact resolved Semgrep and Slither executables through the unmodified macOS backend
+  both exited `71` with the sandbox-denial signature. The diagnostic emitted only typed booleans
+  and exit codes; raw host-path-bearing stderr was neither copied here nor persisted as public
+  evidence. This reproduces defect 1 before implementation.
 - **Next safe action:** Map the resolver-to-backend-to-result-to-report flow and reproduce the
   recorded failure classes with synthetic local executables before implementing the bounded fix.
+- **Implementation slice:** Added exact resolved-executable and shebang-chain validation, derived
+  read-only Homebrew/MacPorts/pipx grants, private staged Semgrep rules, typed bounded version
+  probes, path-safe public version validation, the interpreter/loader scanner status, and doctor
+  preflight states. No unisolated fallback or network entitlement was introduced.
+- **Focused validation command:** `.venv/bin/pytest -q tests/unit/test_reproduction.py
+  tests/unit/test_scanners_reporting.py tests/unit/test_doctor_tool_preflight.py
+  tests/unit/test_scanner_runner_source_binding.py tests/unit/test_runtime_evidence.py
+  tests/unit/test_solidity.py`
+- **Focused validation result:** `231 passed, 18 failed in 5.73s`. All 18 failures had the same
+  fail-closed cause before target execution: the initial Darwin process inventory classified too
+  few real-UID processes, so the derived `RLIMIT_NPROC` ceiling was already below the live login
+  population. No failed test executed its scanner target. Independent comparison showed that a
+  per-PID effective-UID inventory is unsuitable under the enclosing sandbox. The implementation is
+  being corrected to use the fixed Darwin `PROC_RUID_ONLY` kernel filter and retain a fixed child
+  allowance; this is a code defect under repair, not an external blocker or a waived gate.
+- **Independent review findings under repair:** Public version validation must reject absolute
+  paths after all punctuation delimiters and any value copied from the scrubbed process
+  environment. Generic self-contained tool prefixes and indirect shebangs must either derive a
+  narrow validated read root or fail closed. Darwin's unsupported `RLIMIT_AS` must not silently
+  remove the memory bound; an explicit parent-side bounded memory observation is required.
+- **Post-implementation focused validation:** `.venv/bin/pytest -q
+  tests/unit/test_reproduction.py tests/unit/test_scanners_reporting.py
+  tests/unit/test_doctor_tool_preflight.py tests/unit/test_scanner_runner_source_binding.py
+  tests/unit/test_runtime_evidence.py tests/unit/test_solidity.py
+  tests/unit/test_execution_origin_consensus.py tests/unit/test_execution_origin_reporting.py`
+  passed `311` tests in `13.11s`. The extended formal, audited-suite, inventory, Hardhat, and fork
+  matrix subset passed `197` tests in `5.13s`.
+- **Real-integration race and correction:** The first post-monitor real Homebrew Semgrep run failed
+  closed after `2.86s` because Darwin retained exited process IDs in a process-group inventory after
+  `PROC_PIDTASKINFO` returned `ESRCH`. The run was killed, remained `UNVERIFIED`, and credited no
+  finding. A bounded local churn assay reproduced `1,309` stale-membership observations among
+  `1,312` short task-info reads. The monitor now clears errno and tolerates only the exact
+  short-read-plus-`ESRCH` exited-process race; zero errno, `EPERM`, `EINVAL`, missing group evidence,
+  and every other failure remain fail closed. Regressions cover each branch.
+- **Real macOS acceptance command:** `.venv/bin/pytest -q
+  tests/integration/test_macos_homebrew_scanner_isolation.py -vv` executed outside the enclosing
+  managed sandbox so the real process-attested `sandbox-exec` boundary could run. Result: `1 passed
+  in 3.83s`; exact Homebrew Semgrep executed against a synthetic local fixture, its target policy
+  contained no network entitlement, and normalized evidence was nonempty.
+- **Static validation:** `.venv/bin/ruff format .` left `388` files unchanged;
+  `.venv/bin/ruff check .` passed; `.venv/bin/mypy` passed for `157` source files; and
+  `.venv/bin/python scripts/generate_release_schemas.py` exited `0` with schemas synchronized.
+- **First complete-suite command:** `.venv/bin/pytest -q` with local numeric-loopback listener
+  capability enabled for the repository's local-only integration tests. Result: `14 failed, 3876
+  passed, 11 skipped in 725.47s`. Every failure came from one helper in
+  `tests/unit/test_execution_candidate_schema.py` using the synthetic combined string `forge 1.5.0
+  / solc 0.8.30` as a `compiler_version`. Production constructs that field directly from
+  `InvariantExecutionResult.compiler_version`, which is the isolated solc probe's single public
+  version. The fixture was corrected to that production shape (`Version: 0.8.30`); the strict path
+  validator was not weakened. Both affected files then passed `57` tests in `1.72s`.
+- **Final complete-suite result:** The corrected `.venv/bin/pytest -q` run passed `3890` tests
+  with `11` explicit external-prerequisite or opt-in skips in `720.28s`. The skips cover only the
+  documented unavailable rootless image/external engines or explicit local compiler, replay,
+  provider, scale, fork-matrix, and Foundry-fork opt-ins. Non-failing pytest cleanup warnings are
+  inherited and do not affect execution evidence.
+- **Final static and artifact gate:** `.venv/bin/ruff format --check .` reported all `388` files
+  formatted; `.venv/bin/ruff check .` passed; `.venv/bin/mypy` passed for `157` source files;
+  `.venv/bin/python scripts/generate_release_schemas.py` synchronized the release schemas; and
+  `git diff --check` passed. Changed-file review found no generated runtime artifact or real
+  credential. The only secret-shaped values in new tests are explicit synthetic canaries.
+- **Ticket result:** `V3-TOOLDIAG-001` is `COMPLETE`. This proves the supported Homebrew scanner
+  path on the real macOS isolation backend and the fail-closed diagnostic/version boundary. It
+  does not credit a container executable from host identity; that separate contract is now an
+  explicit `V3-HARDHAT-001` acceptance item.
+- **Next ticket:** Create and publish this cohesive checkpoint, then begin `V3-HARDHAT-001`.

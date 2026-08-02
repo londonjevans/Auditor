@@ -35,6 +35,7 @@ from mmaudit.solidity.reproduction import (
     BubblewrapBackend,
     ForkReproductionRunner,
     MacOSSandboxBackend,
+    MacOSToolchainResolutionError,
     capability_policy_error,
     default_isolation_backend,
     translate_foundry_test,
@@ -61,6 +62,13 @@ class SelfAssertedRealIsolationBackend(TestIsolationBackend):
 
     name = "sandbox-exec"
     execution_evidence = ExecutionEvidenceKind.REAL
+
+
+def _synthetic_executable(path: Path, *, interpreter: Path = Path("/bin/sh")) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"#!{interpreter}\nexit 0\n", encoding="utf-8")
+    path.chmod(0o700)
+    return path
 
 
 def _spec() -> GeneratedFoundryTestSpec:
@@ -307,9 +315,10 @@ def test_macos_policy_allows_compiler_children_but_not_host_or_remote_access(
     private = tmp_path / "private"
     workspace = private / "workspace"
     workspace.mkdir(parents=True)
+    forge = _synthetic_executable(tmp_path / "trusted" / "bin" / "forge")
     backend = MacOSSandboxBackend(executable="/usr/bin/sandbox-exec")
     command = backend.wrap(
-        ["/usr/local/bin/forge", "test"],
+        [str(forge), "test"],
         workspace=workspace,
         private_dir=private,
         rpc_port=8545,
@@ -330,10 +339,11 @@ def test_macos_inventory_policy_grants_no_network_entitlement(tmp_path: Path) ->
     compiler = private / "toolchain" / "solc"
     compiler.parent.mkdir()
     compiler.write_bytes(b"synthetic pinned compiler")
+    forge = _synthetic_executable(tmp_path / "trusted" / "bin" / "forge")
     backend = MacOSSandboxBackend(executable="/usr/bin/sandbox-exec")
 
     command = backend.wrap_without_network(
-        ["/usr/local/bin/forge", "test", "--use", str(compiler)],
+        [str(forge), "test", "--use", str(compiler)],
         workspace=workspace,
         private_dir=private,
         rpc_port=1,
@@ -350,10 +360,11 @@ def test_macos_policy_grants_no_network_entitlement_without_rpc(tmp_path: Path) 
     private = tmp_path / "private"
     workspace = private / "workspace"
     workspace.mkdir(parents=True)
+    forge = _synthetic_executable(tmp_path / "trusted" / "bin" / "forge")
     backend = MacOSSandboxBackend(executable="/usr/bin/sandbox-exec")
 
     command = backend.wrap(
-        ["/usr/local/bin/forge", "test"],
+        [str(forge), "test"],
         workspace=workspace,
         private_dir=private,
         rpc_port=0,
@@ -363,6 +374,294 @@ def test_macos_policy_grants_no_network_entitlement_without_rpc(tmp_path: Path) 
     assert command[:2] == ["/usr/bin/sandbox-exec", "-f"]
     assert "(allow network" not in policy
     assert "localhost:0" not in policy
+
+
+@pytest.mark.parametrize(
+    ("relative_executable", "expected_root"),
+    [
+        (
+            "prefix/homebrew/Cellar/semgrep/1.2.3/bin/semgrep",
+            "prefix/homebrew",
+        ),
+        (
+            "prefix/opt/local/bin/semgrep",
+            "prefix/opt/local",
+        ),
+    ],
+)
+def test_macos_policy_derives_read_only_install_root_from_exact_executable(
+    tmp_path: Path,
+    relative_executable: str,
+    expected_root: str,
+) -> None:
+    private = tmp_path / "private"
+    workspace = private / "workspace"
+    workspace.mkdir(parents=True)
+    executable = _synthetic_executable(tmp_path / relative_executable)
+    root = (tmp_path / expected_root).resolve(strict=True)
+
+    command = MacOSSandboxBackend(executable="/usr/bin/sandbox-exec").wrap(
+        [str(executable), "scan"],
+        workspace=workspace,
+        private_dir=private,
+        rpc_port=0,
+    )
+
+    policy = (private / "sandbox.sb").read_text(encoding="utf-8")
+    assert command[3] == str(executable.resolve(strict=True))
+    assert f'(subpath "{root}")' in policy
+    assert f'(allow file-write* (subpath "{private.resolve(strict=True)}"))' in policy
+    assert "(allow network" not in policy
+
+
+def test_macos_policy_derives_pipx_venv_from_exact_shebang_interpreter(
+    tmp_path: Path,
+) -> None:
+    private = tmp_path / "private"
+    workspace = private / "workspace"
+    workspace.mkdir(parents=True)
+    venv = tmp_path / "operator" / ".local" / "share" / "pipx" / "venvs" / "semgrep"
+    interpreter = _synthetic_executable(venv / "bin" / "python")
+    wrapper = _synthetic_executable(
+        tmp_path / "operator" / ".local" / "bin" / "semgrep",
+        interpreter=interpreter,
+    )
+
+    MacOSSandboxBackend(executable="/usr/bin/sandbox-exec").wrap(
+        [str(wrapper), "scan"],
+        workspace=workspace,
+        private_dir=private,
+        rpc_port=0,
+    )
+
+    policy = (private / "sandbox.sb").read_text(encoding="utf-8")
+    operator_root = (tmp_path / "operator").resolve(strict=True)
+    assert f'(subpath "{venv.resolve(strict=True)}")' in policy
+    assert f'(literal "{wrapper.resolve(strict=True)}")' in policy
+    assert f'(literal "{interpreter.resolve(strict=True)}")' in policy
+    assert f'(subpath "{operator_root}")' not in policy
+
+
+def test_macos_policy_derives_generic_marker_bound_virtual_environment(
+    tmp_path: Path,
+) -> None:
+    private = tmp_path / "private"
+    workspace = private / "workspace"
+    workspace.mkdir(parents=True)
+    operator_root = tmp_path / "operator"
+    venv = operator_root / ".cache" / "uv" / "tools" / "semgrep"
+    venv.mkdir(parents=True)
+    (venv / "pyvenv.cfg").write_text(
+        "home = /opt/synthetic-python\ninclude-system-site-packages = false\nversion = 3.12.0\n",
+        encoding="utf-8",
+    )
+    interpreter = _synthetic_executable(venv / "bin" / "python")
+    executable = _synthetic_executable(
+        operator_root / ".local" / "bin" / "semgrep",
+        interpreter=interpreter,
+    )
+
+    MacOSSandboxBackend(executable="/usr/bin/sandbox-exec").wrap(
+        [str(executable), "scan"],
+        workspace=workspace,
+        private_dir=private,
+        rpc_port=0,
+    )
+
+    policy = (private / "sandbox.sb").read_text(encoding="utf-8")
+    assert f'(subpath "{venv.resolve(strict=True)}")' in policy
+    assert f'(literal "{interpreter.resolve(strict=True)}")' in policy
+    assert f'(literal "{executable.resolve(strict=True)}")' in policy
+    assert f'(subpath "{operator_root.resolve(strict=True)}")' not in policy
+    assert "(allow network" not in policy
+
+
+@pytest.mark.parametrize("marker_kind", ["symlink", "writable", "incomplete"])
+def test_macos_policy_rejects_unsafe_generic_virtual_environment_marker(
+    tmp_path: Path,
+    marker_kind: str,
+) -> None:
+    private = tmp_path / "private"
+    workspace = private / "workspace"
+    workspace.mkdir(parents=True)
+    venv = tmp_path / "operator" / ".venvs" / "scanner"
+    venv.mkdir(parents=True)
+    marker = venv / "pyvenv.cfg"
+    if marker_kind == "symlink":
+        outside = tmp_path / "outside-pyvenv.cfg"
+        outside.write_text(
+            "home = /opt/synthetic-python\n"
+            "include-system-site-packages = false\n"
+            "version = 3.12.0\n",
+            encoding="utf-8",
+        )
+        marker.symlink_to(outside)
+    elif marker_kind == "writable":
+        marker.write_text(
+            "home = /opt/synthetic-python\n"
+            "include-system-site-packages = false\n"
+            "version = 3.12.0\n",
+            encoding="utf-8",
+        )
+        marker.chmod(0o666)
+    else:
+        marker.write_text("version = 3.12.0\n", encoding="utf-8")
+    executable = _synthetic_executable(venv / "bin" / "scanner")
+
+    with pytest.raises(MacOSToolchainResolutionError, match="virtual-environment") as error:
+        MacOSSandboxBackend(executable="/usr/bin/sandbox-exec").wrap(
+            [str(executable), "scan"],
+            workspace=workspace,
+            private_dir=private,
+            rpc_port=0,
+        )
+
+    assert not (private / "sandbox.sb").exists()
+    assert str(tmp_path) not in str(error.value)
+
+
+def test_macos_policy_fails_closed_for_environment_shebang_indirection(tmp_path: Path) -> None:
+    private = tmp_path / "private"
+    workspace = private / "workspace"
+    workspace.mkdir(parents=True)
+    executable = tmp_path / "toolchain" / "bin" / "scanner"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    executable.chmod(0o700)
+
+    with pytest.raises(MacOSToolchainResolutionError, match="shebang indirection") as error:
+        MacOSSandboxBackend(executable="/usr/bin/sandbox-exec").wrap(
+            [str(executable), "scan"],
+            workspace=workspace,
+            private_dir=private,
+            rpc_port=0,
+        )
+
+    assert not (private / "sandbox.sb").exists()
+    assert str(tmp_path) not in str(error.value)
+
+
+def test_macos_policy_grants_validated_system_ca_alias_and_canonical_file_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private"
+    workspace = private / "workspace"
+    workspace.mkdir(parents=True)
+    canonical_root = tmp_path / "canonical-ca"
+    canonical_root.mkdir()
+    canonical = canonical_root / "cert.pem"
+    canonical.write_text("synthetic public CA fixture\n", encoding="utf-8")
+    alias_root = tmp_path / "ca-alias"
+    alias_root.symlink_to(canonical_root, target_is_directory=True)
+    alias = alias_root / "cert.pem"
+    executable = _synthetic_executable(tmp_path / "trusted" / "bin" / "scanner")
+    monkeypatch.setattr(
+        "mmaudit.solidity.reproduction._MACOS_SYSTEM_READ_FILE_CANDIDATES",
+        (alias,),
+    )
+
+    MacOSSandboxBackend(executable="/usr/bin/sandbox-exec").wrap(
+        [str(executable), "scan"],
+        workspace=workspace,
+        private_dir=private,
+        rpc_port=0,
+    )
+
+    policy = (private / "sandbox.sb").read_text(encoding="utf-8")
+    assert f'(literal "{alias}")' in policy
+    assert f'(literal "{canonical.resolve(strict=True)}")' in policy
+    assert f'(subpath "{alias_root}")' not in policy
+    assert f'(subpath "{canonical_root}")' not in policy
+
+
+def test_macos_policy_does_not_broaden_unrecognized_operator_prefix(tmp_path: Path) -> None:
+    private = tmp_path / "private"
+    workspace = private / "workspace"
+    workspace.mkdir(parents=True)
+    prefix = tmp_path / "operator" / "anaconda3"
+    executable = _synthetic_executable(prefix / "bin" / "scanner")
+
+    MacOSSandboxBackend(executable="/usr/bin/sandbox-exec").wrap(
+        [str(executable), "scan"],
+        workspace=workspace,
+        private_dir=private,
+        rpc_port=0,
+    )
+
+    policy = (private / "sandbox.sb").read_text(encoding="utf-8")
+    assert f'(literal "{executable.resolve(strict=True)}")' in policy
+    assert f'(subpath "{prefix.resolve(strict=True)}")' not in policy
+
+
+def test_macos_policy_rejects_toolchain_root_equal_to_operator_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private"
+    workspace = private / "workspace"
+    workspace.mkdir(parents=True)
+    operator_home = tmp_path / "operator"
+    executable = _synthetic_executable(
+        operator_home / "Cellar" / "scanner" / "1.0" / "bin" / "scanner"
+    )
+    monkeypatch.setattr(Path, "home", lambda: operator_home)
+
+    with pytest.raises(MacOSToolchainResolutionError, match="operator home"):
+        MacOSSandboxBackend(executable="/usr/bin/sandbox-exec").wrap(
+            [str(executable), "scan"],
+            workspace=workspace,
+            private_dir=private,
+            rpc_port=0,
+        )
+
+
+def test_macos_policy_fails_closed_when_operator_home_cannot_be_scoped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private"
+    workspace = private / "workspace"
+    workspace.mkdir(parents=True)
+    executable = _synthetic_executable(
+        tmp_path / "prefix" / "homebrew" / "Cellar" / "scanner" / "1.0" / "bin" / "scanner"
+    )
+    monkeypatch.setattr(
+        Path,
+        "home",
+        lambda: (_ for _ in ()).throw(OSError("synthetic unavailable home identity")),
+    )
+
+    with pytest.raises(
+        MacOSToolchainResolutionError,
+        match="operator home could not be resolved",
+    ):
+        MacOSSandboxBackend(executable="/usr/bin/sandbox-exec").wrap(
+            [str(executable), "scan"],
+            workspace=workspace,
+            private_dir=private,
+            rpc_port=0,
+        )
+
+    assert not (private / "sandbox.sb").exists()
+
+
+@pytest.mark.parametrize("raw_executable", ["scanner", "/missing/scanner", "/tmp/bad\npath"])
+def test_macos_policy_rejects_unvalidated_executable(
+    tmp_path: Path,
+    raw_executable: str,
+) -> None:
+    private = tmp_path / "private"
+    workspace = private / "workspace"
+    workspace.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="executable"):
+        MacOSSandboxBackend(executable="/usr/bin/sandbox-exec").wrap(
+            [raw_executable, "scan"],
+            workspace=workspace,
+            private_dir=private,
+            rpc_port=0,
+        )
 
 
 def test_bubblewrap_denies_network_and_mounts_only_private_workspace(

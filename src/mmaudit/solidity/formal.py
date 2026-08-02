@@ -42,7 +42,11 @@ from mmaudit.models.schemas import (
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_path
 from mmaudit.repository.workspace import validate_copyable_workspace
-from mmaudit.scanners.base import sanitized_scanner_environment
+from mmaudit.scanners.base import (
+    isolated_executable_version_probe,
+    sanitized_scanner_environment,
+)
+from mmaudit.scanners.diagnostics import ExecutableVersionProbeStatus
 from mmaudit.solidity.engines.certora import (
     CertoraPreparation,
     parse_certora_results,
@@ -2285,36 +2289,21 @@ def _isolated_tool_version(
     environment: dict[str, str],
     artifact_prefix: str = "",
 ) -> str | None:
-    stdout_path = private_dir / f"{artifact_prefix}version.stdout.txt"
-    stderr_path = private_dir / f"{artifact_prefix}version.stderr.txt"
+    del artifact_prefix
     try:
-        command = backend.wrap(
-            [str(executable), "--version"],
-            workspace=workspace,
-            private_dir=private_dir,
-            rpc_port=1,
+        probe = isolated_executable_version_probe(
+            executable,
+            environment,
+            backend,
+            workspace,
+            private_dir,
+            timeout_seconds=10,
         )
-        result = _bounded_process(
-            command,
-            cwd=workspace,
-            environment=environment,
-            stdout_path=stdout_path,
-            stderr_path=stderr_path,
-            timeout=10,
-            max_output_bytes=100_000,
-        )
-    except (OSError, ValueError, subprocess.TimeoutExpired):
+    except (OSError, RuntimeError, ValueError):
         return None
-    if result != 0:
+    if probe.status is not ExecutableVersionProbeStatus.SUCCESS:
         return None
-    output = "\n".join(
-        (
-            _read_bounded(stdout_path, 100_000),
-            _read_bounded(stderr_path, 100_000),
-        )
-    ).strip()
-    lines = output.splitlines()
-    return lines[0][:200] if lines else None
+    return probe.version
 
 
 def _locations_from_text(

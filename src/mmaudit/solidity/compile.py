@@ -29,7 +29,11 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.repository.secrets import is_sensitive_workspace_path
 from mmaudit.repository.workspace import validate_copyable_workspace
-from mmaudit.scanners.base import sanitized_scanner_environment
+from mmaudit.scanners.base import (
+    isolated_executable_version_probe,
+    sanitized_scanner_environment,
+)
+from mmaudit.scanners.diagnostics import ExecutableVersionProbeStatus
 from mmaudit.solidity.reproduction import (
     IsolationBackend,
     default_isolation_backend,
@@ -288,6 +292,7 @@ def _compile_one(
     stdout_path = private_dir / digest / "compile.stdout.txt"
     stderr_path = private_dir / digest / "compile.stderr.txt"
     try:
+        (private_dir / digest).mkdir(parents=True, exist_ok=False, mode=0o700)
         _copy_project(
             repository_root,
             project,
@@ -681,47 +686,21 @@ def _isolated_tool_versions(
     *,
     repository_javascript: bool,
 ) -> tuple[dict[str, str], str | None]:
-    result: subprocess.CompletedProcess[str] | None = None
     try:
-        if repository_javascript:
-            if not isinstance(backend, RepositoryJavaScriptIsolationBackend):
-                return {}, None
-            command = backend.wrap_repository_javascript(
-                [executable, "--version"],
-                workspace=workspace,
-                private_dir=private_dir,
-                rpc_port=1,
-            )
-        else:
-            command = backend.wrap(
-                [executable, "--version"],
-                workspace=workspace,
-                private_dir=private_dir,
-                rpc_port=1,
-            )
-        process_environment = isolation_host_environment(
-            backend,
-            private_dir,
+        probe = isolated_executable_version_probe(
+            executable,
             environment,
-        )
-        result = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env=process_environment,
-            cwd=workspace,
-            shell=False,
+            backend,
+            workspace,
+            private_dir,
+            repository_javascript=repository_javascript,
+            timeout_seconds=10,
         )
     except (OSError, RuntimeError, subprocess.TimeoutExpired, ValueError):
-        result = None
-    cleanup_error = _cleanup_error(backend, private_dir)
-    if result is None or cleanup_error:
-        return {}, cleanup_error
-    output = (result.stdout or result.stderr).strip().splitlines()
-    versions = {Path(executable).name: output[0][:200]} if output else {}
-    return versions, None
+        return {}, "compilation tool version probe failed closed before public evidence"
+    if probe.status is not ExecutableVersionProbeStatus.SUCCESS or probe.version is None:
+        return {}, probe.diagnostic or "compilation tool version probe failed closed"
+    return {Path(executable).name: probe.version}, None
 
 
 def _cleanup_error(backend: object, private_dir: Path) -> str | None:

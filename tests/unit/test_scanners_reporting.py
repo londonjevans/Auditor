@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
+import os
 import shutil
+import struct
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from mmaudit.config import ReproductionConfig, SmartContractsConfig
 from mmaudit.models.openrouter import safe_headers
@@ -19,6 +23,7 @@ from mmaudit.models.schemas import (
     AuditedSuiteCoverage,
     AuditedSuiteCoverageGap,
     AuditedSuiteCoverageGapKind,
+    AuditedSuiteStatementCoverageEvidence,
     AuditedSuiteStatementStatus,
     AuditedSuiteSurfaceCoverage,
     AuditQualityStatus,
@@ -36,6 +41,11 @@ from mmaudit.models.schemas import (
     FinancialSettlementEvidence,
     Finding,
     FindingStatus,
+    FormalDependencyProvenance,
+    FormalToolRun,
+    HardhatReporterExecution,
+    HardhatReporterInventory,
+    InvariantExecutionCandidateProvenance,
     InvariantExecutionMinimizationEvidence,
     InvariantExecutionRemovalTrial,
     InvariantExecutionResult,
@@ -46,11 +56,15 @@ from mmaudit.models.schemas import (
     MinimumAnalysisFloor,
     ModelReviewCoverage,
     ModelReviewSurfaceKind,
+    RepositoryCleanStateAttestationEvidence,
     RepositoryCodeExecutionState,
     RepositoryFile,
     RepositoryMap,
+    RepositorySuiteExecutionPolicy,
     RepositorySuiteFramework,
+    RepositorySuiteInventoryEvidence,
     RepositorySuiteTestDescriptor,
+    RepositoryTestExecution,
     RepositoryTestExecutionStatus,
     ReproductionResult,
     ReproductionState,
@@ -59,6 +73,7 @@ from mmaudit.models.schemas import (
     ScannerStatus,
     Severity,
     SharePriceBoundaryEvidence,
+    SolidityCompilationResult,
     SolidityCoverage,
     SolidityEntityKind,
     TransactionOrderingCapability,
@@ -80,11 +95,21 @@ from mmaudit.reporting.markdown import render_markdown
 from mmaudit.reporting.sarif import generate_sarif
 from mmaudit.scanners.base import (
     ScannerAdapter,
+    _darwin_current_uid_process_count,
+    _darwin_nproc_ceiling_from_uid_listing,
+    _darwin_process_group_rss_bytes,
+    isolated_executable_version,
+    isolated_executable_version_probe,
+    preflight_scanner_executable,
     sanitized_scanner_environment,
     scanner_trust_pin_error,
     scanner_workspace_sha256,
 )
 from mmaudit.scanners.codeql import CodeQLScanner
+from mmaudit.scanners.diagnostics import (
+    ExecutableVersionProbeStatus,
+    ScannerExecutableState,
+)
 from mmaudit.scanners.fork_rpc import PinnedForkObservation
 from mmaudit.scanners.foundry import (
     FoundryForkScanner,
@@ -98,6 +123,7 @@ from mmaudit.scanners.osv import OsvScanner
 from mmaudit.scanners.semgrep import SemgrepScanner
 from mmaudit.scanners.slither import SlitherScanner
 from mmaudit.scanners.trivy import TrivyScanner
+from mmaudit.solidity.reproduction import MacOSToolchainResolutionError
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 
@@ -137,6 +163,75 @@ class _PassthroughIsolation:
 
 class _NoLocalForkIsolation(_PassthroughIsolation):
     supports_local_fork_rpc = False
+
+
+class _NoNetworkOnlyIsolation(_PassthroughIsolation):
+    def __init__(self) -> None:
+        self.commands: list[list[str]] = []
+
+    def wrap(
+        self,
+        command: list[str],
+        *,
+        workspace: Path,
+        private_dir: Path,
+        rpc_port: int,
+    ) -> list[str]:
+        del command, workspace, private_dir, rpc_port
+        pytest.fail("static scanners must not request a network-capable wrapper")
+
+    def wrap_without_network(
+        self,
+        command: list[str],
+        *,
+        workspace: Path,
+        private_dir: Path,
+        rpc_port: int,
+    ) -> list[str]:
+        del workspace, private_dir
+        assert rpc_port == 0
+        self.commands.append(command.copy())
+        return command
+
+
+class _DeletingScannerOutputIsolation(_PassthroughIsolation):
+    def __init__(self, pid_path: Path) -> None:
+        self.pid_path = pid_path
+
+    def wrap(
+        self,
+        command: list[str],
+        *,
+        workspace: Path,
+        private_dir: Path,
+        rpc_port: int,
+    ) -> list[str]:
+        del workspace, rpc_port
+        if command[-1] == "--version":
+            return command
+        raw_path = private_dir / "synthetic.json"
+        code = (
+            "import os, pathlib, time; "
+            f"pathlib.Path({str(self.pid_path)!r}).write_text(str(os.getpid())); "
+            f"pathlib.Path({str(raw_path)!r}).unlink(); "
+            "time.sleep(10)"
+        )
+        return [sys.executable, "-c", code]
+
+
+class _ToolchainResolutionFailureIsolation(_PassthroughIsolation):
+    def wrap(
+        self,
+        command: list[str],
+        *,
+        workspace: Path,
+        private_dir: Path,
+        rpc_port: int,
+    ) -> list[str]:
+        del command, workspace, private_dir, rpc_port
+        raise MacOSToolchainResolutionError(
+            "synthetic private path /Users/SYNTHETIC-OPERATOR/toolchain"
+        )
 
 
 class _UndeclaredForkIsolation:
@@ -1003,6 +1098,54 @@ def test_scanner_commands_are_fixed_argument_arrays(tmp_path: Path) -> None:
         assert not any(token in command for token in ("curl", "wget", "ssh"))
 
 
+def test_semgrep_stages_exact_bundled_rules_inside_private_directory(tmp_path: Path) -> None:
+    private = tmp_path / "private"
+
+    command = SemgrepScanner().build_command(tmp_path, private)
+
+    config_index = command.index("--config") + 1
+    staged = Path(command[config_index]).resolve(strict=True)
+    staged.relative_to(private.resolve(strict=True))
+    bundled = Path(__file__).parents[2] / "src/mmaudit/scanners/rules/security.yml"
+    assert staged.read_bytes() == bundled.read_bytes()
+    assert staged.stat().st_mode & 0o777 == 0o600
+    assert str(bundled.resolve(strict=True)) not in command
+
+
+def test_semgrep_refuses_to_replace_existing_staged_rules(tmp_path: Path) -> None:
+    private = tmp_path / "private"
+    scanner = SemgrepScanner()
+    scanner.build_command(tmp_path, private)
+
+    with pytest.raises(FileExistsError):
+        scanner.build_command(tmp_path, private)
+
+
+def test_semgrep_rejects_oversized_bundled_rules_before_staging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = tmp_path / "synthetic-package"
+    rules = package / "rules"
+    rules.mkdir(parents=True)
+    (rules / "security.yml").write_bytes(b"x" * 1_000_001)
+    monkeypatch.setattr("mmaudit.scanners.semgrep.files", lambda _package: package)
+
+    with pytest.raises(ValueError, match="exceeds its fixed bound"):
+        SemgrepScanner().build_command(tmp_path, tmp_path / "private")
+
+    assert not (tmp_path / "private").exists()
+
+
+def test_semgrep_rejects_non_private_staging_directory(tmp_path: Path) -> None:
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    private.chmod(0o755)
+
+    with pytest.raises(ValueError, match="mode 0700"):
+        SemgrepScanner().build_command(tmp_path, private)
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -1107,11 +1250,981 @@ def test_scanner_environment_drops_unrelated_secrets(tmp_path: Path, monkeypatch
     monkeypatch.setenv("OPENROUTER_API_KEY", "should-not-propagate")
     monkeypatch.setenv("MMAUDIT_SECRETS_ENV_FILE", "/synthetic/operator.env")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "should-not-propagate")
+    monkeypatch.setenv("SSL_CERT_FILE", "/Users/synthetic-operator/private-ca.pem")
+    monkeypatch.setenv("SEMGREP_SEND_METRICS", "on")
+    monkeypatch.setenv("SEMGREP_ENABLE_VERSION_CHECK", "1")
+    monkeypatch.setattr(
+        "mmaudit.scanners.base._fixed_darwin_scanner_ca_bundle",
+        lambda: Path("/etc/ssl/cert.pem"),
+    )
     environment = sanitized_scanner_environment(tmp_path)
     assert "OPENROUTER_API_KEY" not in environment
     assert "MMAUDIT_SECRETS_ENV_FILE" not in environment
     assert "AWS_SECRET_ACCESS_KEY" not in environment
+    assert environment["SSL_CERT_FILE"] == "/etc/ssl/cert.pem"
+    assert environment["SEMGREP_SEND_METRICS"] == "off"
+    assert environment["SEMGREP_ENABLE_VERSION_CHECK"] == "0"
     assert environment["HOME"].startswith(str(tmp_path))
+
+
+def test_scanner_preflight_probes_exact_absolute_executable_without_path_lookup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executable = tmp_path / "synthetic-tool"
+    executable.write_text(
+        f"#!{sys.executable}\nprint('synthetic-tool 1.2.3')\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    private = tmp_path / "private-preflight"
+    environment = sanitized_scanner_environment(private)
+    monkeypatch.setattr(
+        "mmaudit.scanners.base.shutil.which",
+        lambda _name: pytest.fail("an absolute executable must not be resolved again through PATH"),
+    )
+
+    result = preflight_scanner_executable(
+        executable,
+        environment,
+        _PassthroughIsolation(),
+        tmp_path,
+        private,
+    )
+
+    assert result.state is ScannerExecutableState.PRESENT_EXECUTABLE
+    assert result.resolved_path == executable.resolve(strict=True)
+    assert result.version == "synthetic-tool 1.2.3"
+    assert result.failure_kind is None
+    assert result.diagnostic is None
+
+
+def test_scanner_preflight_selects_multiline_solc_version_line(tmp_path: Path) -> None:
+    executable = tmp_path / "solc"
+    executable.write_text(
+        "\n".join(
+            (
+                f"#!{sys.executable}",
+                "print('solc, the solidity compiler commandline interface')",
+                "print('Version: 0.8.30+commit.synthetic.Darwin.appleclang')",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    private = tmp_path / "private-solc-version"
+    environment = sanitized_scanner_environment(private)
+
+    result = preflight_scanner_executable(
+        executable,
+        environment,
+        _PassthroughIsolation(),
+        tmp_path,
+        private,
+    )
+
+    assert result.state is ScannerExecutableState.PRESENT_EXECUTABLE
+    assert result.version == "Version: 0.8.30+commit.synthetic.Darwin.appleclang"
+    raw_stdout = next(private.glob("version-probe-*/stdout.txt")).read_text(encoding="utf-8")
+    assert raw_stdout.startswith("solc, the solidity compiler commandline interface\nVersion:")
+
+
+def test_legacy_version_projection_returns_only_validated_public_line(tmp_path: Path) -> None:
+    executable = tmp_path / "legacy-version-tool"
+    executable.write_text(
+        f"#!{sys.executable}\nprint('tool 4.5.6')\nprint('private build metadata')\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    private = tmp_path / "private-legacy-version"
+    environment = sanitized_scanner_environment(private)
+
+    version = isolated_executable_version(
+        executable,
+        environment,
+        _PassthroughIsolation(),
+        tmp_path,
+        private,
+    )
+
+    assert version == "tool 4.5.6"
+
+
+@pytest.mark.parametrize("kind", ["permissive", "symlink"])
+def test_scanner_preflight_refuses_non_private_probe_root(tmp_path: Path, kind: str) -> None:
+    executable = tmp_path / "synthetic-private-root-tool"
+    executable.write_text(f"#!{sys.executable}\nprint('tool 1.0')\n", encoding="utf-8")
+    executable.chmod(0o755)
+    outside = tmp_path / "outside-private-root"
+    outside.mkdir(mode=0o700)
+    private = tmp_path / "probe-root"
+    if kind == "permissive":
+        private.mkdir(mode=0o700)
+        private.chmod(0o755)
+    else:
+        private.symlink_to(outside, target_is_directory=True)
+    environment = {
+        "PATH": "",
+        "HOME": str(tmp_path),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+    }
+
+    result = preflight_scanner_executable(
+        executable,
+        environment,
+        _PassthroughIsolation(),
+        tmp_path,
+        private,
+    )
+
+    assert result.state is ScannerExecutableState.PRESENT_ISOLATION_UNEXECUTABLE
+    assert result.failure_kind is ExecutableVersionProbeStatus.ISOLATION_FAILURE
+    assert result.diagnostic == "private tool-probe evidence could not be retained safely"
+    assert list(outside.iterdir()) == []
+
+
+def test_scanner_preflight_distinguishes_absent_from_isolation_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private-preflight-states"
+    environment = sanitized_scanner_environment(private)
+    monkeypatch.setattr("mmaudit.scanners.base.shutil.which", lambda _name: None)
+
+    absent = preflight_scanner_executable(
+        "synthetic-missing-tool",
+        environment,
+        _PassthroughIsolation(),
+        tmp_path,
+        private,
+    )
+
+    assert absent.state is ScannerExecutableState.ABSENT
+    assert absent.resolved_path is None
+    assert absent.failure_kind is None
+
+    executable = tmp_path / "synthetic-failing-tool"
+    executable.write_text(f"#!{sys.executable}\nraise SystemExit(7)\n", encoding="utf-8")
+    executable.chmod(0o755)
+    failed = preflight_scanner_executable(
+        executable,
+        environment,
+        _PassthroughIsolation(),
+        tmp_path,
+        private,
+    )
+
+    assert failed.state is ScannerExecutableState.PRESENT_ISOLATION_UNEXECUTABLE
+    assert failed.resolved_path == executable.resolve(strict=True)
+    assert failed.version is None
+    assert failed.failure_kind is ExecutableVersionProbeStatus.ISOLATION_FAILURE
+    assert failed.diagnostic is not None
+    assert str(tmp_path) not in failed.diagnostic
+
+
+def test_toolchain_resolution_failure_is_typed_and_path_free(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repository-toolchain-resolution"
+    root.mkdir()
+    executable = tmp_path / "synthetic-toolchain-resolution-tool"
+    executable.write_text(f"#!{sys.executable}\nprint('tool 1.0')\n", encoding="utf-8")
+    executable.chmod(0o755)
+    backend = _ToolchainResolutionFailureIsolation()
+    preflight_private = tmp_path / "private-toolchain-preflight"
+
+    preflight = preflight_scanner_executable(
+        executable,
+        sanitized_scanner_environment(preflight_private),
+        backend,
+        root,
+        preflight_private,
+    )
+    scanner = _SyntheticProcessScanner("print('{}')")
+    scanner.executable = str(executable)
+    run = scanner.run(
+        root,
+        tmp_path / "private-toolchain-scanner",
+        2,
+        backend=backend,
+    )
+
+    assert preflight.state is ScannerExecutableState.PRESENT_ISOLATION_UNEXECUTABLE
+    assert preflight.failure_kind is ExecutableVersionProbeStatus.INTERPRETER_OR_LOADER_FAILURE
+    assert preflight.diagnostic is not None
+    assert "self-contained tool distribution" in preflight.diagnostic
+    assert run.status is ScannerStatus.INTERPRETER_OR_LOADER_FAILURE
+    for public_diagnostic in (preflight.diagnostic, run.error or ""):
+        assert "SYNTHETIC-OPERATOR" not in public_diagnostic
+        assert "/Users/" not in public_diagnostic
+
+
+def test_darwin_process_ceiling_is_relative_bounded_and_fail_closed() -> None:
+    listing = "501\n0\n501\n502\n501\n"
+
+    assert (
+        _darwin_nproc_ceiling_from_uid_listing(
+            listing,
+            current_uid=501,
+            allowance=16,
+            inherited_hard_limit=1_000,
+        )
+        == 19
+    )
+    assert (
+        _darwin_nproc_ceiling_from_uid_listing(
+            listing,
+            current_uid=501,
+            allowance=16,
+            inherited_hard_limit=10,
+        )
+        == 10
+    )
+    with pytest.raises(OSError, match="no safe child allowance"):
+        _darwin_nproc_ceiling_from_uid_listing(
+            listing,
+            current_uid=501,
+            allowance=16,
+            inherited_hard_limit=3,
+        )
+    with pytest.raises(OSError, match="malformed"):
+        _darwin_nproc_ceiling_from_uid_listing(
+            "501\nnot-a-uid\n",
+            current_uid=501,
+            allowance=16,
+            inherited_hard_limit=1_000,
+        )
+
+
+def test_darwin_process_inventory_uses_real_uid_kernel_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[int, int]] = []
+    raw = struct.pack("=3i", os.getpid(), 123, 456)
+
+    class FakeListPids:
+        argtypes: object = None
+        restype: object = None
+
+        def __call__(
+            self,
+            mode: int,
+            typeinfo: int,
+            buffer: object,
+            capacity: int,
+        ) -> int:
+            calls.append((mode, typeinfo))
+            if buffer is None:
+                return len(raw)
+            assert capacity >= len(raw)
+            import ctypes
+
+            ctypes.memmove(buffer, raw, len(raw))
+            return len(raw)
+
+    class FakeLibproc:
+        proc_listpids = FakeListPids()
+
+    monkeypatch.setattr(
+        "mmaudit.scanners.base.ctypes.CDLL", lambda *_args, **_kwargs: FakeLibproc()
+    )
+
+    assert _darwin_current_uid_process_count() == 3
+    assert calls == [(5, os.getuid()), (5, os.getuid())]
+
+
+def test_darwin_memory_monitor_sums_one_bounded_process_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_pid = 123
+    pids = (root_pid, 456)
+    raw_pids = struct.pack("=2i", *pids)
+    resident_by_pid = {root_pid: 4_096, 456: 8_192}
+    list_calls: list[tuple[int, int]] = []
+    info_calls: list[int] = []
+
+    class FakeListPids:
+        argtypes: object = None
+        restype: object = None
+
+        def __call__(
+            self,
+            mode: int,
+            typeinfo: int,
+            buffer: object,
+            capacity: int,
+        ) -> int:
+            list_calls.append((mode, typeinfo))
+            if buffer is None:
+                return len(raw_pids)
+            assert capacity >= len(raw_pids)
+            import ctypes
+
+            ctypes.memmove(buffer, raw_pids, len(raw_pids))
+            return len(raw_pids)
+
+    class FakePidInfo:
+        argtypes: object = None
+        restype: object = None
+
+        def __call__(
+            self,
+            pid: int,
+            flavor: int,
+            argument: int,
+            buffer: object,
+            capacity: int,
+        ) -> int:
+            del argument
+            assert flavor == 4
+            assert capacity >= 16
+            info_calls.append(pid)
+            import ctypes
+
+            task_info = struct.pack("=QQ", 1_000_000, resident_by_pid[pid])
+            ctypes.memmove(buffer, task_info, len(task_info))
+            return len(task_info)
+
+    class FakeLibproc:
+        proc_listpids = FakeListPids()
+        proc_pidinfo = FakePidInfo()
+
+    monkeypatch.setattr("mmaudit.scanners.base.sys.platform", "darwin")
+    monkeypatch.setattr(
+        "mmaudit.scanners.base.ctypes.CDLL", lambda *_args, **_kwargs: FakeLibproc()
+    )
+
+    assert _darwin_process_group_rss_bytes(root_pid) == 12_288
+    assert list_calls == [(2, root_pid), (2, root_pid)]
+    assert sorted(info_calls) == sorted(pids)
+
+
+@pytest.mark.parametrize(
+    ("task_info_errno", "expected_resident_bytes"),
+    [
+        (errno.ESRCH, 4_096),
+        (0, None),
+        (errno.EPERM, None),
+        (errno.EINVAL, None),
+    ],
+)
+def test_darwin_memory_monitor_only_tolerates_stale_esrch_pids(
+    monkeypatch: pytest.MonkeyPatch,
+    task_info_errno: int,
+    expected_resident_bytes: int | None,
+) -> None:
+    root_pid = 123
+    stale_pid = 456
+    raw_pids = struct.pack("=2i", root_pid, stale_pid)
+
+    class FakeListPids:
+        argtypes: object = None
+        restype: object = None
+
+        def __call__(
+            self,
+            mode: int,
+            typeinfo: int,
+            buffer: object,
+            capacity: int,
+        ) -> int:
+            assert (mode, typeinfo) == (2, root_pid)
+            if buffer is None:
+                return len(raw_pids)
+            assert capacity >= len(raw_pids)
+            import ctypes
+
+            ctypes.memmove(buffer, raw_pids, len(raw_pids))
+            return len(raw_pids)
+
+    class FakePidInfo:
+        argtypes: object = None
+        restype: object = None
+
+        def __call__(
+            self,
+            pid: int,
+            flavor: int,
+            argument: int,
+            buffer: object,
+            capacity: int,
+        ) -> int:
+            del argument
+            assert flavor == 4
+            assert capacity >= 16
+            import ctypes
+
+            if pid == root_pid:
+                task_info = struct.pack("=QQ", 1_000_000, 4_096)
+                ctypes.memmove(buffer, task_info, len(task_info))
+                return len(task_info)
+            assert pid == stale_pid
+            ctypes.set_errno(task_info_errno)
+            return 0
+
+    class FakeLibproc:
+        proc_listpids = FakeListPids()
+        proc_pidinfo = FakePidInfo()
+
+    monkeypatch.setattr("mmaudit.scanners.base.sys.platform", "darwin")
+    monkeypatch.setattr(
+        "mmaudit.scanners.base.ctypes.CDLL", lambda *_args, **_kwargs: FakeLibproc()
+    )
+
+    if expected_resident_bytes is None:
+        with pytest.raises(OSError, match="could not be established"):
+            _darwin_process_group_rss_bytes(root_pid)
+    else:
+        assert _darwin_process_group_rss_bytes(root_pid) == expected_resident_bytes
+
+
+def test_version_probe_memory_limit_stops_before_target_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = tmp_path / "target-ran-after-version-memory-limit"
+    root = tmp_path / "repository-version-memory"
+    root.mkdir()
+    executable = tmp_path / "synthetic-memory-probe-tool"
+    executable.write_text(
+        "\n".join(
+            (
+                f"#!{sys.executable}",
+                "import pathlib",
+                "import sys",
+                "import time",
+                'if "--version" in sys.argv:',
+                "    print('synthetic tool 1.0', flush=True)",
+                "    time.sleep(1)",
+                "else:",
+                f"    pathlib.Path({str(marker)!r}).write_text('executed')",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    scanner = _SyntheticProcessScanner("print('{}')")
+    scanner.executable = str(executable)
+    monkeypatch.setattr(
+        "mmaudit.scanners.base._darwin_process_group_rss_bytes",
+        lambda _pid: 1024**3 + 1,
+    )
+
+    result = scanner.run(
+        root,
+        tmp_path / ".mmaudit" / "private-version-memory-bound",
+        2,
+        backend=_PassthroughIsolation(),
+    )
+
+    assert result.status is ScannerStatus.UNAVAILABLE
+    assert result.error == "tool version command exceeded the private memory limit"
+    assert result.command == []
+    assert result.process_exit_code is None
+    assert not marker.exists()
+
+
+def test_oversized_version_output_is_invalid_not_an_execution_failure(tmp_path: Path) -> None:
+    executable = tmp_path / "oversized-version-tool"
+    executable.write_text(
+        f"#!{sys.executable}\nimport sys\nsys.stdout.write('1' * (70 * 1024))\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    private = tmp_path / "private-oversized-version"
+    environment = sanitized_scanner_environment(private)
+
+    result = isolated_executable_version_probe(
+        executable,
+        environment,
+        _PassthroughIsolation(),
+        tmp_path,
+        private,
+    )
+
+    assert result.status is ExecutableVersionProbeStatus.INVALID_VERSION
+    assert result.version is None
+    assert result.diagnostic is not None
+    assert "bounded path-free single-line" in result.diagnostic
+    assert next(private.glob("version-probe-*/stdout.txt")).stat().st_size <= 64 * 1024
+
+
+def test_scanner_process_group_memory_limit_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "repository-target-memory"
+    root.mkdir()
+    executable = tmp_path / "synthetic-target-memory-tool"
+    executable.write_text(
+        "\n".join(
+            (
+                f"#!{sys.executable}",
+                "import sys",
+                "import time",
+                'if "--version" in sys.argv:',
+                "    print('synthetic tool 1.0', flush=True)",
+                "    time.sleep(0.1)",
+                "else:",
+                "    time.sleep(5)",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    scanner = _SyntheticProcessScanner("print('{}')")
+    scanner.executable = str(executable)
+    version_pid: int | None = None
+
+    def resident_bytes(pid: int) -> int:
+        nonlocal version_pid
+        if version_pid is None:
+            version_pid = pid
+        return 0 if pid == version_pid else 4 * 1024**3 + 1
+
+    monkeypatch.setattr(
+        "mmaudit.scanners.base._darwin_process_group_rss_bytes",
+        resident_bytes,
+    )
+
+    result = scanner.run(
+        root,
+        tmp_path / ".mmaudit" / "private-target-memory-bound",
+        2,
+        backend=_PassthroughIsolation(),
+    )
+
+    assert result.status is ScannerStatus.FAILED
+    assert result.error == "scanner exceeded the private memory limit"
+    assert result.command
+    assert result.process_exit_code is not None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group attestation")
+def test_version_probe_rejects_descendant_that_outlives_process_group_leader(
+    tmp_path: Path,
+) -> None:
+    executable = tmp_path / "synthetic-version-descendant-tool"
+    child_code = "import time; time.sleep(10)"
+    executable.write_text(
+        "\n".join(
+            (
+                f"#!{sys.executable}",
+                "import subprocess",
+                "import sys",
+                f"subprocess.Popen([sys.executable, '-c', {child_code!r}])",
+                "print('synthetic tool 1.0')",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    private = tmp_path / "private-version-descendant"
+
+    result = isolated_executable_version_probe(
+        executable,
+        sanitized_scanner_environment(private),
+        _PassthroughIsolation(),
+        tmp_path,
+        private,
+    )
+
+    assert result.status is ExecutableVersionProbeStatus.ISOLATION_FAILURE
+    assert result.version is None
+    assert result.diagnostic == (
+        "tool version command left a descendant process after its leader exited"
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group attestation")
+def test_scanner_rejects_descendant_that_outlives_process_group_leader(tmp_path: Path) -> None:
+    root = tmp_path / "repository-target-descendant"
+    root.mkdir()
+    executable = tmp_path / "synthetic-target-descendant-tool"
+    child_code = "import time; time.sleep(10)"
+    executable.write_text(
+        "\n".join(
+            (
+                f"#!{sys.executable}",
+                "import subprocess",
+                "import sys",
+                'if "--version" in sys.argv:',
+                "    print('synthetic tool 1.0')",
+                "else:",
+                f"    subprocess.Popen([sys.executable, '-c', {child_code!r}])",
+                "    print('{}')",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    scanner = _SyntheticProcessScanner("print('{}')")
+    scanner.executable = str(executable)
+
+    result = scanner.run(
+        root,
+        tmp_path / ".mmaudit" / "private-target-descendant",
+        2,
+        backend=_PassthroughIsolation(),
+    )
+
+    assert result.status is ScannerStatus.FAILED
+    assert result.error == "scanner left a descendant process after its leader exited"
+    assert result.command
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group attestation")
+def test_post_launch_output_observation_failure_stops_scanner_process(tmp_path: Path) -> None:
+    root = tmp_path / "repository-output-observation"
+    root.mkdir()
+    pid_path = tmp_path / "scanner.pid"
+    backend = _DeletingScannerOutputIsolation(pid_path)
+    scanner = _SyntheticProcessScanner("print('{}')")
+
+    result = scanner.run(
+        root,
+        tmp_path / ".mmaudit" / "private-output-observation",
+        2,
+        backend=backend,
+    )
+
+    assert result.status is ScannerStatus.FAILED
+    assert result.error == "private scanner output identity changed and was rejected"
+    assert result.raw_output_path is None
+    process_id = int(pid_path.read_text(encoding="utf-8"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(process_id, 0)
+
+
+def test_missing_process_bound_evidence_stops_before_version_or_target_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = tmp_path / "target-ran-without-process-bound"
+    scanner = _SyntheticProcessScanner(
+        f"from pathlib import Path; Path({str(marker)!r}).write_text('executed')"
+    )
+    monkeypatch.setattr(
+        "mmaudit.scanners.base._darwin_uid_process_ceiling",
+        lambda _allowance: (_ for _ in ()).throw(OSError("synthetic unavailable count")),
+    )
+
+    result = scanner.run(
+        tmp_path,
+        tmp_path / ".mmaudit" / "private-process-bound",
+        2,
+        backend=_PassthroughIsolation(),
+    )
+
+    assert result.status is ScannerStatus.UNAVAILABLE
+    assert result.version is None
+    assert result.command == []
+    assert result.process_exit_code is None
+    assert not marker.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows does not expose POSIX preexec resource limits")
+def test_resource_limit_application_failure_stops_before_target_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = tmp_path / "target-ran-without-resource-bounds"
+    scanner = _SyntheticProcessScanner(
+        f"from pathlib import Path; Path({str(marker)!r}).write_text('executed')"
+    )
+
+    def fail_limits(*, nproc_ceiling: int | None) -> None:
+        del nproc_ceiling
+        raise RuntimeError("synthetic setrlimit failure")
+
+    monkeypatch.setattr("mmaudit.scanners.base._limit_version_probe_process", fail_limits)
+
+    result = scanner.run(
+        tmp_path,
+        tmp_path / ".mmaudit" / "private-resource-bound",
+        2,
+        backend=_PassthroughIsolation(),
+    )
+
+    assert result.status is ScannerStatus.UNAVAILABLE
+    assert result.version is None
+    assert result.command == []
+    assert result.process_exit_code is None
+    assert not marker.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows does not expose POSIX preexec resource limits")
+def test_target_resource_limit_failure_is_not_silently_ignored(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = tmp_path / "target-ran-after-resource-limit-failure"
+    scanner = _SyntheticProcessScanner(
+        f"from pathlib import Path; Path({str(marker)!r}).write_text('executed')"
+    )
+
+    def fail_limits(*, nproc_ceiling: int | None) -> None:
+        del nproc_ceiling
+        raise RuntimeError("synthetic scanner setrlimit failure")
+
+    monkeypatch.setattr("mmaudit.scanners.base._limit_scanner_process", fail_limits)
+
+    result = scanner.run(
+        tmp_path,
+        tmp_path / ".mmaudit" / "private-target-resource-bound",
+        2,
+        backend=_PassthroughIsolation(),
+    )
+
+    assert result.status is ScannerStatus.FAILED
+    assert "SubprocessError" in (result.error or "")
+    assert result.process_exit_code is None
+    assert not marker.exists()
+
+
+def test_static_scanner_and_version_probe_use_no_network_wrapper(tmp_path: Path) -> None:
+    backend = _NoNetworkOnlyIsolation()
+    scanner = _SyntheticProcessScanner("print('{}')")
+
+    result = scanner.run(
+        tmp_path,
+        tmp_path / ".mmaudit" / "private-no-network",
+        2,
+        backend=backend,
+    )
+
+    assert result.status is ScannerStatus.SUCCESS
+    assert len(backend.commands) == 2
+    assert backend.commands[0][0] == str(Path(sys.executable).resolve(strict=True))
+    assert backend.commands[1] == [str(Path(sys.executable).resolve(strict=True)), "--version"]
+
+
+def test_invalid_path_bearing_version_is_unavailable_and_private(tmp_path: Path) -> None:
+    root = tmp_path / "repository-invalid-version"
+    root.mkdir()
+    executable = tmp_path / "path-bearing-version-tool"
+    raw_version = "tool 1.2.3 from /Users/SYNTHETIC-OPERATOR/private/tool"
+    executable.write_text(
+        "\n".join(
+            (
+                f"#!{sys.executable}",
+                "import sys",
+                'if "--version" in sys.argv:',
+                f"    print({raw_version!r})",
+                "else:",
+                "    print('{}')",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    scanner = _SyntheticProcessScanner("print('{}')")
+    scanner.executable = str(executable)
+    preflight_private = tmp_path / "private-invalid-version-preflight"
+    preflight = preflight_scanner_executable(
+        executable,
+        sanitized_scanner_environment(preflight_private),
+        _PassthroughIsolation(),
+        root,
+        preflight_private,
+    )
+    private = tmp_path / "private-invalid-version"
+
+    result = scanner.run(root, private, 2, backend=_PassthroughIsolation())
+
+    assert preflight.state is ScannerExecutableState.PRESENT_EXECUTABLE
+    assert preflight.version is None
+    assert preflight.failure_kind is ExecutableVersionProbeStatus.INVALID_VERSION
+    assert result.status is ScannerStatus.UNAVAILABLE
+    assert result.version is None
+    assert result.error is not None
+    assert "bounded path-free single-line" in result.error
+    assert result.command == []
+    assert result.process_exit_code is None
+    assert raw_version not in result.model_dump_json()
+    assert (
+        next(private.glob("version-probe-*/stdout.txt")).read_text(encoding="utf-8").strip()
+        == raw_version
+    )
+
+
+def test_version_probe_rejects_scrubbed_environment_value_echo(tmp_path: Path) -> None:
+    executable = tmp_path / "environment-echo-version-tool"
+    environment_canary = "SYNTHETIC_SCRUBBED_ENVIRONMENT_CANARY_987"
+    raw_version = f"tool 1.2.3 {environment_canary}"
+    executable.write_text(
+        f"#!{sys.executable}\nprint({raw_version!r})\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    private = tmp_path / "private-environment-echo-version"
+    environment = sanitized_scanner_environment(private)
+    environment["SYNTHETIC_TEST_CANARY"] = environment_canary
+
+    result = preflight_scanner_executable(
+        executable,
+        environment,
+        _PassthroughIsolation(),
+        tmp_path,
+        private,
+    )
+
+    assert result.state is ScannerExecutableState.PRESENT_EXECUTABLE
+    assert result.version is None
+    assert result.failure_kind is ExecutableVersionProbeStatus.INVALID_VERSION
+    assert environment_canary not in (result.diagnostic or "")
+    assert (
+        next(private.glob("version-probe-*/stdout.txt")).read_text(encoding="utf-8").strip()
+        == raw_version
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX no-follow private-artifact attestation")
+def test_version_probe_rejects_symlink_replacement_without_reading_host_canary(
+    tmp_path: Path,
+) -> None:
+    host_canary = tmp_path / "host-version-canary.txt"
+    canary_text = "SYNTHETIC_HOST_VERSION_CANARY_9.9.9"
+    host_canary.write_text(canary_text, encoding="utf-8")
+    private = tmp_path / "private-version-symlink"
+    executable = tmp_path / "symlink-replacing-version-tool"
+    executable.write_text(
+        "\n".join(
+            (
+                f"#!{sys.executable}",
+                "from pathlib import Path",
+                f"probe = next(Path({str(private)!r}).glob('version-probe-*'))",
+                "stdout_path = probe / 'stdout.txt'",
+                "stdout_path.unlink()",
+                f"stdout_path.symlink_to(Path({str(host_canary)!r}))",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+
+    result = preflight_scanner_executable(
+        executable,
+        sanitized_scanner_environment(private),
+        _PassthroughIsolation(),
+        tmp_path,
+        private,
+    )
+
+    assert result.state is ScannerExecutableState.PRESENT_ISOLATION_UNEXECUTABLE
+    assert result.failure_kind is ExecutableVersionProbeStatus.ISOLATION_FAILURE
+    assert result.version is None
+    assert result.diagnostic == ("private tool-version evidence identity changed and was rejected")
+    assert canary_text not in (result.diagnostic or "")
+    replaced_path = next(private.glob("version-probe-*/stdout.txt"))
+    assert replaced_path.is_symlink()
+    assert os.readlink(replaced_path) == str(host_canary)
+    assert host_canary.read_text(encoding="utf-8") == canary_text
+
+
+@pytest.mark.parametrize(
+    "version",
+    [
+        "tool 1.2.3\nprivate prefix",
+        "tool 1.2.3\x00",
+        "tool 1.2.3 at /Users/synthetic-operator/anaconda3/bin/python",
+        "tool 1.2.3 built-from-/Users/synthetic-operator/anaconda3/bin/python",
+        "tool 1.2.3,-/Users/synthetic-operator/anaconda3/bin/python",
+        "tool 1.2.3 at C:\\Users\\synthetic-operator\\python.exe",
+        "tool 1.2.3 environment=SYNTHETIC_ENVIRONMENT_VALUE_CANARY",
+        "tool 1.2.3/",
+        "tool 1.2.3=",
+        "x" * 257,
+    ],
+)
+def test_scanner_run_schema_rejects_unsafe_public_versions(version: str) -> None:
+    now = datetime.now(UTC)
+
+    with pytest.raises(ValueError, match="bounded path-free single-line"):
+        ScannerRun(
+            scanner="synthetic",
+            status=ScannerStatus.UNAVAILABLE,
+            version=version,
+            started_at=now,
+            finished_at=now,
+            duration_seconds=0,
+        )
+
+
+@pytest.mark.parametrize(
+    ("model", "payload", "field"),
+    [
+        (InvariantExecutionCandidateProvenance, {"compiler_version": "unsafe"}, "compiler_version"),
+        (RepositorySuiteInventoryEvidence, {"tool_version": "unsafe"}, "tool_version"),
+        (
+            RepositorySuiteInventoryEvidence,
+            {"compiler_version": "unsafe"},
+            "compiler_version",
+        ),
+        (HardhatReporterInventory, {"reporter_version": "unsafe"}, "reporter_version"),
+        (HardhatReporterExecution, {"reporter_version": "unsafe"}, "reporter_version"),
+        (RepositorySuiteExecutionPolicy, {"tool_version": "unsafe"}, "tool_version"),
+        (
+            RepositorySuiteExecutionPolicy,
+            {"compiler_version": "unsafe"},
+            "compiler_version",
+        ),
+        (RepositoryTestExecution, {"compiler_version": "unsafe"}, "compiler_version"),
+        (
+            RepositoryCleanStateAttestationEvidence,
+            {"configured_tool_version": "unsafe"},
+            "configured_tool_version",
+        ),
+        (
+            RepositoryCleanStateAttestationEvidence,
+            {"observed_tool_version": "unsafe"},
+            "observed_tool_version",
+        ),
+        (ScannerRun, {"version": "unsafe"}, "version"),
+        (SolidityCompilationResult, {"tool_versions": {"forge": "unsafe"}}, "tool_versions"),
+        (InvariantExecutionResult, {"compiler_version": "unsafe"}, "compiler_version"),
+        (FormalDependencyProvenance, {"version": "unsafe"}, "version"),
+        (FormalToolRun, {"version": "unsafe"}, "version"),
+        (
+            AuditedSuiteStatementCoverageEvidence,
+            {"producer_version": "unsafe"},
+            "producer_version",
+        ),
+        (
+            AuditedSuiteStatementCoverageEvidence,
+            {"tool_version": "unsafe"},
+            "tool_version",
+        ),
+    ],
+)
+def test_all_runtime_tool_version_evidence_schemas_reject_host_paths(
+    model,
+    payload: dict[str, object],
+    field: str,
+) -> None:
+    unsafe_version = "tool 1.2.3 at /Users/SYNTHETIC-OPERATOR/private/tool"
+    invalid_payload = {
+        key: (
+            {name: unsafe_version for name in value} if isinstance(value, dict) else unsafe_version
+        )
+        for key, value in payload.items()
+    }
+
+    with pytest.raises(ValidationError) as exc_info:
+        model.model_validate(invalid_payload)
+
+    assert any(
+        error["loc"] == (field,) and "bounded path-free single-line" in str(error["msg"])
+        for error in exc_info.value.errors()
+    )
 
 
 def test_scanner_fails_closed_without_hardened_isolation(tmp_path: Path) -> None:
@@ -1141,9 +2254,9 @@ def test_scanner_trust_pin_mismatch_blocks_target_execution(tmp_path: Path) -> N
     assert not marker.exists()
 
 
-def test_scanner_trust_pin_normalizes_multiline_version_output() -> None:
+def test_scanner_trust_pin_selects_one_version_line_from_private_multiline_output() -> None:
     version = "forge Version: 1.3.2-stable\nCommit SHA: synthetic\nBuild Timestamp: synthetic"
-    expected = "forge Version: 1.3.2-stable Commit SHA: synthetic Build Timestamp: synthetic"
+    expected = version
 
     assert (
         scanner_trust_pin_error(
@@ -1457,6 +2570,91 @@ def _report(findings: list[Finding]) -> AuditReport:
         rejected_findings=[],
         metadata={"configured_models": {}},
     )
+
+
+def test_anaconda_interpreter_failure_is_typed_private_and_absent_from_public_artifacts(
+    tmp_path: Path,
+) -> None:
+    host_path_canary = "/Users/SYNTHETIC-OPERATOR/anaconda3/bin/python3.11"
+    environment_canary = "SYNTHETIC_ENVIRONMENT_VALUE_CANARY"
+    raw_failure = "\n".join(
+        (
+            "Could not find platform independent libraries <prefix>",
+            "Python path configuration:",
+            "  PYTHONHOME = (not set)",
+            f"  sys._base_executable = '{host_path_canary}'",
+            "  sys.base_prefix = '/Users/SYNTHETIC-OPERATOR/anaconda3'",
+            "  sys.path = ['/Users/SYNTHETIC-OPERATOR/anaconda3/lib/python3.11']",
+            f"  environment canary = '{environment_canary}'",
+            "Fatal Python error: init_fs_encoding: failed to get the Python codec",
+            "",
+        )
+    )
+    root = tmp_path / "repository"
+    root.mkdir()
+    (root / "contract.sol").write_text("contract Synthetic {}\n", encoding="utf-8")
+    executable = tmp_path / "trusted-bin" / "synthetic-scanner"
+    executable.parent.mkdir()
+    marker = tmp_path / "target-command-ran"
+    executable.write_text(
+        "\n".join(
+            (
+                f"#!{sys.executable}",
+                "import pathlib",
+                "import sys",
+                'if "--version" in sys.argv:',
+                f"    sys.stderr.write({raw_failure!r})",
+                "    raise SystemExit(1)",
+                f"pathlib.Path({str(marker)!r}).write_text('executed')",
+                "print('{}')",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    scanner = _SyntheticProcessScanner("print('{}')")
+    scanner.executable = str(executable)
+    private = tmp_path / "private-anaconda-failure"
+
+    run = scanner.run(root, private, 2, backend=_PassthroughIsolation())
+
+    assert run.status is ScannerStatus.INTERPRETER_OR_LOADER_FAILURE
+    assert run.version is None
+    assert run.error is not None
+    assert "self-contained tool distribution" in run.error
+    assert "pipx or Homebrew" in run.error
+    assert run.command == []
+    assert run.process_exit_code is None
+    assert run.raw_output_path is None
+    assert not marker.exists()
+    probe_directories = list(private.glob("version-probe-*"))
+    assert len(probe_directories) == 1
+    assert probe_directories[0].stat().st_mode & 0o777 == 0o700
+    private_stderr = probe_directories[0] / "stderr.txt"
+    assert private_stderr.stat().st_mode & 0o777 == 0o600
+    assert private_stderr.read_text(encoding="utf-8") == raw_failure
+
+    report = _report([]).model_copy(update={"scanner_runs": [run]})
+    scanner_results = stable_json({"schema_version": "1.2", "runs": [run.model_dump(mode="json")]})
+    final_report = stable_json(report)
+    markdown = render_markdown(report)
+    sarif = stable_json(
+        generate_sarif(
+            report.findings,
+            run_status=AuditRunStatus.INCOMPLETE,
+            quality_status=AuditQualityStatus.INCOMPLETE,
+            completed=False,
+            incomplete_reasons=[run.error],
+        )
+    )
+    for public_artifact in (scanner_results, final_report, markdown, sarif):
+        assert raw_failure not in public_artifact
+        assert host_path_canary not in public_artifact
+        assert "/Users/SYNTHETIC-OPERATOR/anaconda3" not in public_artifact
+        assert "PYTHONHOME" not in public_artifact
+        assert "sys.path" not in public_artifact
+        assert environment_canary not in public_artifact
 
 
 def test_markdown_exposes_model_coverage_applicability_classification_and_limitations() -> None:

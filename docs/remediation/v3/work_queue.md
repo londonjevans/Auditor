@@ -1214,6 +1214,10 @@ are invisible to source review by construction.
     refuses non-loopback endpoints, multiple endpoints, write methods, host credentials, the
     container socket, and any broader network capability. Its capability attestation hash is
     computed from its own effective configuration, not supplied by a caller.
+  - Container-side executable identity is attested from the exact binary that actually runs in
+    the pinned image. A host `PATH` resolution, host hash, or host version must not stand in for
+    the image executable, and doctor must not report a host path as the executable used by the
+    container. Missing or mismatched container identity remains fail closed.
   - The two-phase inventory-then-test protocol is exercised end to end against a local
     Hardhat fixture with the backend stubbed at the process boundary, so the protocol is
     proven without a container runtime.
@@ -1306,7 +1310,7 @@ are invisible to source review by construction.
   `src/mmaudit/reporting/markdown.py`, `src/mmaudit/reporting/json_report.py`,
   `src/mmaudit/cli.py`, scanner-result schema, regressions.
 - **Dependencies:** None; independent of the model and sharding tracks.
-- **Status:** `IN_PROGRESS`
+- **Status:** `COMPLETE`
 - **Starting boundary:** Inspect the current resolver, macOS sandbox profile, scanner result
   schemas, version capture, doctor output, and existing tests before changing behaviour. Preserve
   environment scrubbing, network denial, and fail-closed execution. Derive any read-only toolchain
@@ -1321,6 +1325,27 @@ are invisible to source review by construction.
   `slither` execution once `(allow file-read-metadata (literal "/opt"))` was added as well.
   Both grants are required. Derive them from resolved tool prefixes rather than hard-coding
   `/opt/homebrew`.
+- **Implementation evidence:** Exact resolved executables and their shebang chains now drive
+  bounded read-only grants for validated Homebrew, MacPorts, pipx, and generic marker-bound
+  virtual-environment prefixes. Version probes and scanner streams execute under the same
+  scrubbed, no-network isolation boundary, use private descriptor-attested output files, and
+  expose only a typed, single-line, bounded public version. Interpreter/loader failures have a
+  distinct status. Doctor reports absent, isolated-unexecutable, and isolated-executable states.
+  Darwin applies a kernel real-UID process bound, parent-side process-group RSS enforcement, and
+  fail-closed descendant monitoring.
+- **Real integration evidence:** `.venv/bin/pytest -q
+  tests/integration/test_macos_homebrew_scanner_isolation.py -vv` passed `1` test in `3.83s` on
+  the real macOS `sandbox-exec` backend. The exact Homebrew Semgrep installation produced a
+  nonempty normalized result against a synthetic local target, with no network entitlement.
+- **Validation:** The affected scanner, Solidity, doctor, runtime-evidence, execution-origin,
+  formal, inventory, Hardhat, and fork-matrix groups passed `508` tests. The final
+  `.venv/bin/pytest -q` run passed `3890` tests with `11` explicit unavailable-prerequisite or
+  opt-in skips in `720.28s`. Ruff format/check, strict mypy over `157` source files, release-schema
+  synchronization, and `git diff --check` passed. No paid provider call or external target was
+  used.
+- **Remaining boundary:** Container/image executable identity is deliberately not credited from
+  a host path. It remains fail closed and is an explicit acceptance item of `V3-HARDHAT-001`.
+- **Next action:** Checkpoint this ticket, then begin `V3-HARDHAT-001`.
 
 ## V3-BOOTSTRAP-001 — Separate declared model identity from measured model quality
 
@@ -1547,13 +1572,11 @@ still applies within a track.
 
 **Track 1 — engine and execution evidence**
 
-**Next action: `V3-TOOLDIAG-001`, ahead of any remaining Track 1 work.** Operator-approved
-reprioritisation, 2026-07-31. Every deterministic scanner currently fails to execute on
-macOS, so the engine cannot perform a real audit on the operator's own platform, and the
-deterministic-only product cannot be demonstrated at all. The remedy is two profile rules and
-has already been verified directly against `sandbox-exec` on the host; see the ticket. This
-blocks demonstrable usability, not just breadth, and is cheap. Finish the ticket in progress
-first, then take it.
+**Next action: `V3-HARDHAT-001`.** `V3-TOOLDIAG-001` completed the operator-approved macOS
+priority on 2026-08-02 with a real Homebrew Semgrep execution under the process-attested
+`sandbox-exec` boundary and the complete local suite green. The Hardhat reporter, dedicated
+single-loopback backend, and container-side executable identity contract are now the next
+unblocked Track 1 work.
 
 1. `V3-TOKENS-001` — `COMPLETE`.
 2. `V3-FLOOR-001` — `COMPLETE`. Verified independently: the previously false-clean
@@ -1564,7 +1587,7 @@ first, then take it.
    a 15,551-line Solidity target now delivers 100 per cent of its source to a specialist
    package, and the omission ledger fell from 143,479 bytes across 536 records to a single
    970-byte aggregate.
-5. `V3-FORKDIFF-001` and `V3-EXECORIGIN-001` — `COMPLETE`. Then `V3-TOOLDIAG-001`, then
+5. `V3-FORKDIFF-001`, `V3-EXECORIGIN-001`, and `V3-TOOLDIAG-001` — `COMPLETE`. Then
    `V3-HARDHAT-001` to unblock the Hardhat share of the market.
 6. `V3-CI-001`.
 7. `V3-SHARD-001`, `V3-SCHEDULER-001`, `V3-TRUNCATION-001`, `V3-COVERAGE-001`,

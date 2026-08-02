@@ -194,7 +194,11 @@ from mmaudit.privacy import (
 )
 from mmaudit.repository.discovery import RepositorySafetyError, safe_repository_root
 from mmaudit.repository.secrets import is_sensitive_workspace_name
-from mmaudit.scanners.runner import ScannerRunner
+from mmaudit.scanners.diagnostics import ScannerExecutablePreflight, ScannerExecutableState
+from mmaudit.scanners.runner import (
+    configured_scanner_adapters,
+    preflight_configured_scanner_tools,
+)
 from mmaudit.snapshots.importer import (
     ReadOnlySnapshotImporter,
     load_snapshot_import_plan,
@@ -421,11 +425,12 @@ def doctor_command(
             True,
         )
     )
-    checks.append(
+    output_check = (
         _writable_output_check(output_path)
         if repository_ok
         else ("Output directory", False, "not checked because repository scope is invalid", True)
     )
+    checks.append(output_check)
     checks.append(
         (
             "Output separation",
@@ -497,15 +502,42 @@ def doctor_command(
             fork_isolation_required,
         )
     )
-    for name, adapter in ScannerRunner(config).adapters.items():
+    scanner_adapters = configured_scanner_adapters(config)
+    scanner_preflights: dict[str, ScannerExecutablePreflight] = {}
+    scanner_preflight_error: str | None = None
+    if repository_ok and output_check[1]:
+        try:
+            scanner_preflights = preflight_configured_scanner_tools(
+                scanner_adapters,
+                backend=isolation_backend,
+                repository_root=repo_path,
+                trusted_output_root=output_path,
+                private_dir=(output_path / "private" / "doctor-tool-preflight" / uuid.uuid4().hex),
+                timeout_seconds=5.0,
+            )
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
+            scanner_preflight_error = type(exc).__name__
+    else:
+        scanner_preflight_error = "repository or private output is unavailable"
+    for name in scanner_adapters:
         enabled = getattr(config.scanners, name).enabled
         required = getattr(config.scanners, name).required
-        available = adapter.available()
+        preflight = scanner_preflights.get(name)
+        release_ready = (
+            preflight is not None
+            and preflight.state is ScannerExecutableState.PRESENT_EXECUTABLE
+            and preflight.version is not None
+            and preflight.failure_kind is None
+        )
         checks.append(
             (
                 f"Scanner: {name}",
-                available or not enabled or not required,
-                "available" if available else ("disabled" if not enabled else "unavailable"),
+                release_ready or (not enabled and not required),
+                (
+                    _scanner_preflight_detail(preflight, enabled=enabled)
+                    if preflight is not None
+                    else f"preflight failed closed: {scanner_preflight_error or 'unknown error'}"
+                ),
                 required,
             )
         )
@@ -656,7 +688,11 @@ def doctor_command(
     table.add_column("Result")
     table.add_column("Detail")
     for name, ok, detail, _required in checks:
-        table.add_row(name, "[green]PASS[/green]" if ok else "[red]FAIL[/red]", detail)
+        table.add_row(
+            Text(_terminal_text(name)),
+            "[green]PASS[/green]" if ok else "[red]FAIL[/red]",
+            Text(_terminal_text(detail)),
+        )
     local_console.print(table)
     if any(not ok and required for _name, ok, _detail, required in checks):
         raise typer.Exit(ExitCode.CONFIGURATION)
@@ -3419,6 +3455,32 @@ def _writable_output_check(path: Path) -> tuple[str, bool, str, bool]:
         return ("Output directory", True, str(path), True)
     except OSError as exc:
         return ("Output directory", False, type(exc).__name__, True)
+
+
+def _scanner_preflight_detail(
+    preflight: ScannerExecutablePreflight,
+    *,
+    enabled: bool,
+) -> str:
+    state_detail = {
+        ScannerExecutableState.ABSENT: "absent from PATH",
+        ScannerExecutableState.PRESENT_ISOLATION_UNEXECUTABLE: (
+            "resolved but not executable under isolation"
+        ),
+        ScannerExecutableState.PRESENT_EXECUTABLE: "resolved and executable under isolation",
+    }[preflight.state]
+    details = [state_detail]
+    if preflight.resolved_path is not None:
+        details.append(f"resolved absolute path: {preflight.resolved_path}")
+    if preflight.version is not None:
+        details.append(f"version: {preflight.version}")
+    if preflight.failure_kind is not None:
+        details.append(f"failure: {preflight.failure_kind.value}")
+    if preflight.diagnostic is not None:
+        details.append(preflight.diagnostic)
+    if not enabled:
+        details.insert(0, "disabled by configuration")
+    return "; ".join(details)
 
 
 def platform_python() -> str:

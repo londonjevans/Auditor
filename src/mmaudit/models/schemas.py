@@ -43,6 +43,15 @@ from mmaudit.models.token_planning import (
     ContextOmissionNoticeLevel,
     RequestTokenPlan,
 )
+from mmaudit.scanners.diagnostics import validated_public_tool_version
+
+
+def _require_public_tool_version(value: str) -> str:
+    """Enforce the public executable-version contract at evidence boundaries."""
+
+    if validated_public_tool_version(value) != value:
+        raise ValueError("tool version is not bounded path-free single-line text")
+    return value
 
 
 class StrictModel(BaseModel):
@@ -533,6 +542,7 @@ class VerificationVerdict(StrEnum):
 class ScannerStatus(StrEnum):
     SUCCESS = "success"
     UNAVAILABLE = "unavailable"
+    INTERPRETER_OR_LOADER_FAILURE = "interpreter_or_loader_failure"
     FAILED = "failed"
     TIMED_OUT = "timed_out"
     SKIPPED = "skipped"
@@ -1058,6 +1068,11 @@ class InvariantExecutionCandidateProvenance(StrictModel):
     minimized: bool
     source_locations: tuple[Location, ...] = Field(min_length=1, max_length=100)
     provenance_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("compiler_version")
+    @classmethod
+    def compiler_version_is_public_safe(cls, value: str) -> str:
+        return _require_public_tool_version(value)
 
     @classmethod
     def sealed(cls, **values: Any) -> InvariantExecutionCandidateProvenance:
@@ -3388,6 +3403,11 @@ class RepositorySuiteInventoryEvidence(StrictModel):
     safety_claim: Literal[False] = False
     inventory_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
+    @field_validator("tool_version", "compiler_version")
+    @classmethod
+    def runtime_versions_are_public_safe(cls, value: str) -> str:
+        return _require_public_tool_version(value)
+
     @classmethod
     def sealed(cls, **values: Any) -> RepositorySuiteInventoryEvidence:
         """Validate and self-hash one terminal isolated inventory."""
@@ -3717,6 +3737,11 @@ class HardhatReporterInventory(StrictModel):
     safety_claim: Literal[False] = False
     inventory_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
+    @field_validator("reporter_version")
+    @classmethod
+    def reporter_version_is_public_safe(cls, value: str) -> str:
+        return _require_public_tool_version(value)
+
     @classmethod
     def sealed(cls, **values: Any) -> HardhatReporterInventory:
         """Validate and self-hash one complete reporter inventory."""
@@ -3854,6 +3879,11 @@ class HardhatReporterExecution(StrictModel):
     safety_claim: Literal[False] = False
     report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
+    @field_validator("reporter_version")
+    @classmethod
+    def reporter_version_is_public_safe(cls, value: str) -> str:
+        return _require_public_tool_version(value)
+
     @classmethod
     def sealed(cls, **values: Any) -> HardhatReporterExecution:
         """Validate and self-hash one complete reporter execution."""
@@ -3916,6 +3946,11 @@ class RepositorySuiteExecutionPolicy(StrictModel):
     storage_caching: Literal[False] = False
     threads: Literal[1] = 1
     policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("tool_version", "compiler_version")
+    @classmethod
+    def runtime_versions_are_public_safe(cls, value: str) -> str:
+        return _require_public_tool_version(value)
 
     @classmethod
     def sealed(cls, **values: Any) -> RepositorySuiteExecutionPolicy:
@@ -4000,6 +4035,13 @@ class RepositoryTestExecution(StrictModel):
     )
     safety_claim: Literal[False] = False
     execution_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("compiler_version")
+    @classmethod
+    def compiler_version_is_public_safe(cls, value: str | None) -> str | None:
+        if value is not None:
+            _require_public_tool_version(value)
+        return value
 
     @classmethod
     def sealed(cls, **values: Any) -> RepositoryTestExecution:
@@ -4729,9 +4771,7 @@ class RepositoryCleanStateAttestationEvidence(StrictModel):
     @field_validator("configured_tool_version", "observed_tool_version")
     @classmethod
     def tool_version_is_bounded_printable_text(cls, value: str) -> str:
-        if not _repository_suite_text_is_safe(value):
-            raise ValueError("clean-state tool version must be bounded printable text")
-        return value
+        return _require_public_tool_version(value)
 
     @field_validator(
         "expected_chain_id",
@@ -5304,6 +5344,15 @@ class ScannerRun(StrictModel):
     repository_code_execution: RepositoryCodeExecutionState = (
         RepositoryCodeExecutionState.NOT_APPLICABLE
     )
+
+    @field_validator("version")
+    @classmethod
+    def version_is_public_safe(cls, value: str | None) -> str | None:
+        """Reject raw or host-identifying tool output at the report schema boundary."""
+
+        if value is not None:
+            _require_public_tool_version(value)
+        return value
 
     def expected_execution_observation_sha256(self) -> str:
         """Bind every scanner observation except the digest itself."""
@@ -7318,6 +7367,15 @@ class SolidityCompilationResult(StrictModel):
         RepositoryCodeExecutionState.NOT_APPLICABLE
     )
 
+    @field_validator("tool_versions")
+    @classmethod
+    def tool_versions_are_public_safe(cls, value: dict[str, str]) -> dict[str, str]:
+        for name, version in value.items():
+            if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+-]{0,99}", name) is None:
+                raise ValueError("compilation tool version key is not a bounded tool name")
+            _require_public_tool_version(version)
+        return value
+
     @model_validator(mode="after")
     def repository_code_isolation_evidence_is_consistent(
         self,
@@ -8518,10 +8576,18 @@ class InvariantExecutionResult(StrictModel):
         default=None,
         pattern=r"^[0-9a-f]{64}$",
     )
+
     execution_observation_sha256: str | None = Field(
         default=None,
         pattern=r"^[0-9a-f]{64}$",
     )
+
+    @field_validator("compiler_version")
+    @classmethod
+    def compiler_version_is_public_safe(cls, value: str | None) -> str | None:
+        if value is not None:
+            _require_public_tool_version(value)
+        return value
 
     def expected_execution_observation_sha256(self) -> str:
         """Bind the normalized campaign result to every retained execution attempt."""
@@ -8772,6 +8838,13 @@ class FormalDependencyProvenance(StrictModel):
     version: str | None = Field(default=None, max_length=200)
     executable_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
+    @field_validator("version")
+    @classmethod
+    def version_is_public_safe(cls, value: str | None) -> str | None:
+        if value is not None:
+            _require_public_tool_version(value)
+        return value
+
 
 class FormalCampaignBounds(StrictModel):
     """Configured campaign limits; these are not runtime observations."""
@@ -8846,6 +8919,7 @@ class FormalToolRun(StrictModel):
     failure_reason: str | None = None
     stdout_path: str | None = None
     stderr_path: str | None = None
+
     result_path: str | None = None
     process_exit_code: int | None = None
     stdout_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
@@ -8859,6 +8933,13 @@ class FormalToolRun(StrictModel):
         default=None,
         pattern=r"^[0-9a-f]{64}$",
     )
+
+    @field_validator("version")
+    @classmethod
+    def version_is_public_safe(cls, value: str | None) -> str | None:
+        if value is not None:
+            _require_public_tool_version(value)
+        return value
 
     def expected_execution_observation_sha256(self) -> str:
         """Bind normalized outcomes and campaign coverage to retained process evidence."""
@@ -9254,6 +9335,11 @@ class AuditedSuiteStatementCoverageEvidence(StrictModel):
     machine_output_validated: Literal[True] = True
     isolation_attestation_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("producer_version", "tool_version")
+    @classmethod
+    def runtime_versions_are_public_safe(cls, value: str) -> str:
+        return _require_public_tool_version(value)
 
     @classmethod
     def sealed(cls, **values: Any) -> AuditedSuiteStatementCoverageEvidence:

@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-02T05:46:31Z",
-  "candidate_commit": "7dbf5ad916f2ce101888baa37c7f748686712c32",
+  "updated_at": "2026-08-02T07:31:34Z",
+  "candidate_commit": "a4efd086e3aff2e4b8c158f015c2e83d71e7beb6",
   "autorun_status": "RUNNING",
-  "current_milestone": "macos_isolated_tool_diagnostics",
-  "current_ticket": "V3-TOOLDIAG-001 (IN_PROGRESS)",
-  "last_checkpoint_commit": "7dbf5ad916f2ce101888baa37c7f748686712c32",
+  "current_milestone": "macos_isolated_tool_diagnostics_checkpoint",
+  "current_ticket": "V3-TOOLDIAG-001 (COMPLETE; CHECKPOINT_PENDING)",
+  "last_checkpoint_commit": "a4efd086e3aff2e4b8c158f015c2e83d71e7beb6",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,

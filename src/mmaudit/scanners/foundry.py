@@ -63,13 +63,14 @@ from mmaudit.scanners.base import (
     ScannerWorkspaceCopyObservation,
     _file_sha256,
     copy_scanner_workspace_with_custody,
-    isolated_executable_version,
+    isolated_executable_version_probe,
     make_finding,
     sanitized_scanner_environment,
     scanner_trust_pin_error,
     scanner_workspace_exclusion_path,
     scanner_workspace_sha256,
 )
+from mmaudit.scanners.diagnostics import ExecutableVersionProbeStatus
 from mmaudit.scanners.fork_rpc import (
     ForkRpcBindingError,
     ForkRpcUnavailableError,
@@ -828,7 +829,7 @@ class FoundryForkScanner(ScannerAdapter):
                 or workspace_copy_custody.workspace_inventory_sha256_after_copy != repository_sha256
             ):
                 raise ValueError("disposable scanner workspace differs from the selected source")
-            version = isolated_executable_version(
+            forge_version_probe = isolated_executable_version_probe(
                 executable_path,
                 environment,
                 backend,
@@ -839,6 +840,23 @@ class FoundryForkScanner(ScannerAdapter):
                     maximum=15.0,
                 ),
             )
+            if forge_version_probe.status is not ExecutableVersionProbeStatus.SUCCESS:
+                return finish(
+                    (
+                        ScannerStatus.INTERPRETER_OR_LOADER_FAILURE
+                        if forge_version_probe.status
+                        is ExecutableVersionProbeStatus.INTERPRETER_OR_LOADER_FAILURE
+                        else (
+                            ScannerStatus.TIMED_OUT
+                            if forge_version_probe.status is ExecutableVersionProbeStatus.TIMED_OUT
+                            else ScannerStatus.UNAVAILABLE
+                        )
+                    ),
+                    forge_version_probe.diagnostic,
+                )
+            version = forge_version_probe.version
+            if version is None:
+                raise ValueError("successful forge version probe omitted its version")
             _remaining_deadline_seconds(deadline)
             trust_error = scanner_trust_pin_error(
                 version=version,
@@ -853,14 +871,8 @@ class FoundryForkScanner(ScannerAdapter):
                     ScannerStatus.UNAVAILABLE,
                     "forge version could not be attested before repository execution",
                 )
-            version = " ".join(version.split())
-            if not version or len(version) > 1_000:
-                return finish(
-                    ScannerStatus.FAILED,
-                    "forge version attestation is not bounded printable text",
-                )
             assert compiler_path is not None
-            observed_compiler_version = isolated_executable_version(
+            compiler_version_probe = isolated_executable_version_probe(
                 compiler_path,
                 environment,
                 backend,
@@ -871,6 +883,24 @@ class FoundryForkScanner(ScannerAdapter):
                     maximum=15.0,
                 ),
             )
+            if compiler_version_probe.status is not ExecutableVersionProbeStatus.SUCCESS:
+                return finish(
+                    (
+                        ScannerStatus.INTERPRETER_OR_LOADER_FAILURE
+                        if compiler_version_probe.status
+                        is ExecutableVersionProbeStatus.INTERPRETER_OR_LOADER_FAILURE
+                        else (
+                            ScannerStatus.TIMED_OUT
+                            if compiler_version_probe.status
+                            is ExecutableVersionProbeStatus.TIMED_OUT
+                            else ScannerStatus.UNAVAILABLE
+                        )
+                    ),
+                    compiler_version_probe.diagnostic,
+                )
+            observed_compiler_version = compiler_version_probe.version
+            if observed_compiler_version is None:
+                raise ValueError("successful compiler version probe omitted its version")
             _remaining_deadline_seconds(deadline)
             if (
                 observed_compiler_version is None

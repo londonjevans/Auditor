@@ -9,6 +9,7 @@ import platform
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import time
 from dataclasses import dataclass
@@ -46,7 +47,6 @@ from mmaudit.models.schemas import (
     TransactionOrderingCapability,
 )
 from mmaudit.repository.workspace import validate_copyable_workspace
-from mmaudit.scanners.base import sanitized_scanner_environment
 from mmaudit.solidity.reproduction_integrity import (
     REPRODUCTION_WORKSPACE_EXCLUDED_NAMES,
     reproduction_repository_sha256,
@@ -55,6 +55,31 @@ from mmaudit.solidity.reproduction_integrity import (
 )
 
 _FOUNDRY_CHEATCODE_ADDRESS = "0x7109709ecfa91a80626ff3989d68f67f5b1dd12d"
+_MACOS_SHEBANG_BYTES = 512
+_MACOS_VENV_CONFIG_BYTES = 16 * 1024
+_MACOS_VENV_PARENT_DEPTH = 16
+_MACOS_TOOLCHAIN_LAYOUT_DIRECTORIES = frozenset(
+    {
+        "bin",
+        "Caskroom",
+        "Cellar",
+        "libexec",
+        "Library",
+        "sbin",
+    }
+)
+_MACOS_SYSTEM_READ_ROOTS = (
+    Path("/System"),
+    Path("/usr"),
+    Path("/Library"),
+    Path("/dev"),
+    Path("/private/var/select"),
+)
+_MACOS_SYSTEM_READ_FILE_CANDIDATES = (Path("/etc/ssl/cert.pem"),)
+
+
+class MacOSToolchainResolutionError(ValueError):
+    """A macOS toolchain cannot be scoped without broadening host read access."""
 
 
 class IsolationBackend(Protocol):
@@ -143,11 +168,29 @@ class MacOSSandboxBackend:
         private_dir: Path,
         network_rule: str,
     ) -> list[str]:
+        if not command:
+            raise ValueError("sandboxed command must not be empty")
         resolved_private = private_dir.resolve(strict=True)
         resolved_workspace = workspace.resolve(strict=True)
         resolved_workspace.relative_to(resolved_private)
         profile_path = resolved_private / "sandbox.sb"
-        forge_path = Path(command[0]).resolve()
+        command_paths = _validated_macos_command_paths(command[0])
+        executable_path = command_paths[0]
+        system_read_files = tuple(
+            path
+            for candidate in _MACOS_SYSTEM_READ_FILE_CANDIDATES
+            for path in _validated_regular_file_aliases(candidate)
+        )
+        toolchain_roots = sorted(
+            {
+                root
+                for path in command_paths
+                if (root := _macos_toolchain_read_root(path)) is not None
+                and not any(path.is_relative_to(fixed) for fixed in _MACOS_SYSTEM_READ_ROOTS)
+                and not root.is_relative_to(resolved_private)
+            },
+            key=str,
+        )
         private_command_files: set[Path] = set()
         for argument in command[1:]:
             candidate = Path(argument)
@@ -163,7 +206,9 @@ class MacOSSandboxBackend:
         metadata_paths = sorted(
             {
                 *resolved_private.parents,
-                *forge_path.parents,
+                *(parent for path in command_paths for parent in path.parents),
+                *(parent for root in toolchain_roots for parent in root.parents),
+                *(parent for path in system_read_files for parent in path.parents),
                 *(parent for path in private_command_files for parent in path.parents),
             },
             key=str,
@@ -177,6 +222,15 @@ class MacOSSandboxBackend:
         # Process execution is therefore allowed inside the boundary; file reads,
         # writes, and network remain deny-by-default, and command construction
         # outside the sandbox remains fixed and typed.
+        toolchain_read_rules = " ".join(
+            f'(subpath "{_sandbox_quote(str(path))}")' for path in toolchain_roots
+        )
+        command_read_rules = " ".join(
+            f'(literal "{_sandbox_quote(str(path))}")' for path in command_paths
+        )
+        system_file_read_rules = " ".join(
+            f'(literal "{_sandbox_quote(str(path))}")' for path in system_read_files
+        )
         policy = "\n".join(
             (
                 "(version 1)",
@@ -193,11 +247,12 @@ class MacOSSandboxBackend:
                 '(allow mach-lookup (global-name "com.apple.SystemConfiguration.configd"))',
                 '(allow file-read* (subpath "/System") (subpath "/usr") '
                 '(subpath "/Library") (subpath "/dev") '
-                '(subpath "/private/var/select"))',
+                '(subpath "/private/var/select") '
+                f"{toolchain_read_rules} {system_file_read_rules})",
                 f"(allow file-read-metadata {metadata_rules})",
                 f'(allow file-read* (subpath "{_sandbox_quote(str(resolved_workspace))}") '
                 f'(subpath "{_sandbox_quote(str(resolved_private))}") '
-                f'(literal "{_sandbox_quote(str(forge_path))}") '
+                f"{command_read_rules} "
                 + " ".join(
                     f'(literal "{_sandbox_quote(str(path))}")'
                     for path in sorted(private_command_files, key=str)
@@ -208,7 +263,13 @@ class MacOSSandboxBackend:
             )
         )
         profile_path.write_text(policy, encoding="utf-8")
-        return [self.executable, "-f", str(profile_path), *command]
+        return [
+            self.executable,
+            "-f",
+            str(profile_path),
+            str(executable_path),
+            *command[1:],
+        ]
 
 
 @dataclass(frozen=True)
@@ -720,6 +781,8 @@ class ForkReproductionRunner:
         rpc_port: int,
         attempt: int,
     ) -> _Execution:
+        from mmaudit.scanners.base import sanitized_scanner_environment
+
         private_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         assert self.backend is not None
         wrapped = self.backend.wrap(
@@ -1220,6 +1283,279 @@ def _specification_hash(specification: GeneratedFoundryTestSpec) -> str:
         separators=(",", ":"),
     )
     return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _validated_macos_command_paths(raw_executable: str) -> tuple[Path, ...]:
+    """Resolve one executable and its absolute shebang chain without PATH lookup."""
+
+    executable = _validated_macos_executable(raw_executable)
+    resolved = [executable]
+    seen = {executable}
+    current = executable
+    for _depth in range(4):
+        interpreter_paths = _macos_shebang_interpreter(current)
+        if interpreter_paths is None:
+            break
+        interpreter_alias, interpreter = interpreter_paths
+        if interpreter in seen:
+            raise MacOSToolchainResolutionError(
+                "sandboxed executable has a cyclic shebang interpreter chain"
+            )
+        seen.add(interpreter)
+        if interpreter_alias not in resolved:
+            resolved.append(interpreter_alias)
+        resolved.append(interpreter)
+        current = interpreter
+    else:
+        raise MacOSToolchainResolutionError(
+            "sandboxed executable shebang chain exceeds its fixed bound"
+        )
+    return tuple(resolved)
+
+
+def _validated_regular_file_aliases(path: Path) -> tuple[Path, ...]:
+    if not path.is_absolute():
+        return ()
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError:
+        return ()
+    if not resolved.is_file():
+        return ()
+    return tuple(sorted({path, resolved}, key=str))
+
+
+def _validated_macos_executable_aliases(raw_path: str) -> tuple[Path, Path]:
+    if not raw_path or any(ord(character) < 32 or ord(character) == 127 for character in raw_path):
+        raise ValueError("sandboxed executable path contains invalid characters")
+    path = Path(raw_path)
+    if not path.is_absolute() or ".." in path.parts:
+        raise ValueError("sandboxed executable path must be absolute")
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("sandboxed executable path could not be resolved") from exc
+    if not resolved.is_file() or not os.access(resolved, os.X_OK):
+        raise ValueError("sandboxed executable path must be an executable regular file")
+    if any(ord(character) < 32 or ord(character) == 127 for character in str(resolved)):
+        raise ValueError("resolved sandboxed executable path contains invalid characters")
+    return path, resolved
+
+
+def _validated_macos_executable(raw_path: str) -> Path:
+    return _validated_macos_executable_aliases(raw_path)[1]
+
+
+def _macos_shebang_interpreter(executable: Path) -> tuple[Path, Path] | None:
+    try:
+        with executable.open("rb") as handle:
+            first_line = handle.read(_MACOS_SHEBANG_BYTES + 1).split(b"\n", 1)[0]
+    except OSError as exc:
+        raise MacOSToolchainResolutionError(
+            "sandboxed executable shebang could not be inspected"
+        ) from exc
+    if not first_line.startswith(b"#!"):
+        return None
+    if len(first_line) > _MACOS_SHEBANG_BYTES or b"\x00" in first_line:
+        raise MacOSToolchainResolutionError(
+            "sandboxed executable shebang is invalid or exceeds its fixed bound"
+        )
+    try:
+        shebang = first_line[2:].decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise MacOSToolchainResolutionError("sandboxed executable shebang is not UTF-8") from exc
+    fields = shebang.split()
+    if not fields:
+        raise MacOSToolchainResolutionError("sandboxed executable shebang omitted its interpreter")
+    try:
+        interpreter_alias, interpreter = _validated_macos_executable_aliases(fields[0])
+    except ValueError as exc:
+        raise MacOSToolchainResolutionError(
+            "sandboxed executable shebang interpreter could not be resolved safely"
+        ) from exc
+    try:
+        system_env = Path("/usr/bin/env").resolve(strict=True)
+    except OSError:
+        system_env = Path("/usr/bin/env")
+    if interpreter == system_env:
+        raise MacOSToolchainResolutionError(
+            "sandboxed executable uses /usr/bin/env shebang indirection; install a wrapper "
+            "with an exact absolute interpreter"
+        )
+    return interpreter_alias, interpreter
+
+
+def _macos_toolchain_read_root(executable: Path) -> Path | None:
+    """Infer a narrow supported installation root from an exact resolved executable."""
+
+    parts = executable.parts
+    for marker in ("Cellar", "Caskroom"):
+        if marker not in parts:
+            continue
+        index = parts.index(marker)
+        if index >= 2:
+            return _validated_macos_toolchain_root(Path(*parts[:index]), executable)
+
+    for index, part in enumerate(parts):
+        if part != "pipx" or index + 2 >= len(parts):
+            continue
+        layout = parts[index + 1]
+        if layout == "venvs" and index + 3 < len(parts):
+            return _validated_macos_toolchain_root(
+                Path(*parts[: index + 3]),
+                executable,
+            )
+        if layout == "shared":
+            return _validated_macos_toolchain_root(
+                Path(*parts[: index + 2]),
+                executable,
+            )
+
+    if (venv_root := _validated_macos_venv_toolchain_root(executable)) is not None:
+        return venv_root
+
+    for index, part in enumerate(parts):
+        if part != "opt" or index + 2 >= len(parts):
+            continue
+        candidate = Path(*parts[: index + 2])
+        try:
+            relative = executable.relative_to(candidate)
+        except ValueError:
+            continue
+        if relative.parts and relative.parts[0] in _MACOS_TOOLCHAIN_LAYOUT_DIRECTORIES:
+            return _validated_macos_toolchain_root(candidate, executable)
+    return None
+
+
+def _validated_macos_venv_toolchain_root(executable: Path) -> Path | None:
+    """Recognize one exact owner-controlled Python venv from its fixed marker."""
+
+    for candidate in tuple(executable.parents)[:_MACOS_VENV_PARENT_DEPTH]:
+        marker = candidate / "pyvenv.cfg"
+        try:
+            marker_metadata = marker.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise MacOSToolchainResolutionError(
+                "sandboxed virtual-environment marker could not be inspected"
+            ) from exc
+        try:
+            candidate_metadata = candidate.lstat()
+        except OSError as exc:
+            raise MacOSToolchainResolutionError(
+                "sandboxed virtual-environment root could not be inspected"
+            ) from exc
+        getuid = getattr(os, "getuid", None)
+        current_uid = int(getuid()) if callable(getuid) else candidate_metadata.st_uid
+        relative = executable.relative_to(candidate)
+        if (
+            not stat.S_ISDIR(candidate_metadata.st_mode)
+            or stat.S_ISLNK(candidate_metadata.st_mode)
+            or candidate_metadata.st_uid != current_uid
+            or stat.S_IMODE(candidate_metadata.st_mode) & 0o022
+            or not stat.S_ISREG(marker_metadata.st_mode)
+            or stat.S_ISLNK(marker_metadata.st_mode)
+            or marker_metadata.st_uid != current_uid
+            or stat.S_IMODE(marker_metadata.st_mode) & 0o022
+            or not relative.parts
+            or relative.parts[0] != "bin"
+            or not 0 < marker_metadata.st_size <= _MACOS_VENV_CONFIG_BYTES
+        ):
+            raise MacOSToolchainResolutionError(
+                "sandboxed virtual-environment marker or root is unsafe"
+            )
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        no_follow = getattr(os, "O_NOFOLLOW", 0)
+        if no_follow == 0:
+            raise MacOSToolchainResolutionError(
+                "no-follow virtual-environment marker access is unavailable"
+            )
+        try:
+            descriptor = os.open(marker, flags | no_follow)
+        except OSError as exc:
+            raise MacOSToolchainResolutionError(
+                "sandboxed virtual-environment marker could not be opened safely"
+            ) from exc
+        try:
+            opened_metadata = os.fstat(descriptor)
+            if (
+                opened_metadata.st_dev != marker_metadata.st_dev
+                or opened_metadata.st_ino != marker_metadata.st_ino
+                or not stat.S_ISREG(opened_metadata.st_mode)
+                or opened_metadata.st_size != marker_metadata.st_size
+            ):
+                raise MacOSToolchainResolutionError(
+                    "sandboxed virtual-environment marker identity changed"
+                )
+            marker_bytes = bytearray()
+            while len(marker_bytes) <= _MACOS_VENV_CONFIG_BYTES:
+                chunk = os.read(
+                    descriptor,
+                    min(4096, _MACOS_VENV_CONFIG_BYTES + 1 - len(marker_bytes)),
+                )
+                if not chunk:
+                    break
+                marker_bytes.extend(chunk)
+        finally:
+            os.close(descriptor)
+        if len(marker_bytes) != marker_metadata.st_size:
+            raise MacOSToolchainResolutionError(
+                "sandboxed virtual-environment marker read was incomplete"
+            )
+        try:
+            marker_text = bytes(marker_bytes).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise MacOSToolchainResolutionError(
+                "sandboxed virtual-environment marker is not UTF-8"
+            ) from exc
+        values: dict[str, str] = {}
+        for raw_line in marker_text.splitlines():
+            key, separator, value = raw_line.partition("=")
+            if separator:
+                values[key.strip().casefold()] = value.strip()
+        if (
+            not values.get("home")
+            or values.get("include-system-site-packages", "").casefold() != "false"
+            or not (values.get("version") or values.get("version_info"))
+        ):
+            raise MacOSToolchainResolutionError(
+                "sandboxed virtual-environment marker is incomplete"
+            )
+        return _validated_macos_toolchain_root(candidate, executable)
+    return None
+
+
+def _validated_macos_toolchain_root(candidate: Path, executable: Path) -> Path:
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise MacOSToolchainResolutionError(
+            "sandboxed toolchain root could not be resolved"
+        ) from exc
+    if resolved != candidate or not resolved.is_dir():
+        raise MacOSToolchainResolutionError(
+            "sandboxed toolchain root must be an exact regular directory"
+        )
+    if resolved == Path("/") or executable == resolved:
+        raise MacOSToolchainResolutionError("sandboxed toolchain root is too broad or invalid")
+    try:
+        operator_home = Path.home().resolve(strict=True)
+    except OSError as exc:
+        raise MacOSToolchainResolutionError(
+            "operator home could not be resolved for toolchain scoping"
+        ) from exc
+    if operator_home.is_relative_to(resolved):
+        raise MacOSToolchainResolutionError(
+            "sandboxed toolchain root may not expose the operator home"
+        )
+    try:
+        executable.relative_to(resolved)
+    except ValueError as exc:
+        raise MacOSToolchainResolutionError(
+            "sandboxed executable is outside its derived toolchain root"
+        ) from exc
+    return resolved
 
 
 def _sandbox_quote(value: str) -> str:

@@ -703,7 +703,12 @@ def build_solidity_coverage(
     tools_unavailable = [
         run.scanner
         for run in scanner_runs
-        if run.status is ScannerStatus.UNAVAILABLE and run.scanner == "slither"
+        if run.status
+        in {
+            ScannerStatus.UNAVAILABLE,
+            ScannerStatus.INTERPRETER_OR_LOADER_FAILURE,
+        }
+        and run.scanner == "slither"
     ]
     tools_failed = [
         run.scanner
