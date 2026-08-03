@@ -222,6 +222,27 @@ def _write_report_artifacts(run_dir: Path, report: AuditReport) -> None:
         + "\n",
         encoding="utf-8",
     )
+    write_json(
+        run_dir / "verification-results.json",
+        {
+            "schema_version": report.schema_version,
+            "decisions": [
+                decision.model_dump(mode="json") for decision in report.verification_decisions
+            ],
+            "threat_model": None,
+            "threat_model_location_rejections": [],
+        },
+    )
+    write_json(
+        run_dir / "cross-examination.json",
+        {
+            "schema_version": report.schema_version,
+            "decisions": [
+                decision.model_dump(mode="json")
+                for decision in report.cross_examination_decisions
+            ],
+        },
+    )
     (run_dir / "candidate-findings.json").write_text(
         CandidateFindingArtifact(
             schema_version="1.1",

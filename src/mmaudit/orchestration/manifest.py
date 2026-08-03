@@ -8,7 +8,7 @@ import math
 import os
 import stat
 import unicodedata
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -32,12 +32,20 @@ from mmaudit.models.scheduler import (
     SchedulerActivationStatus,
     SchedulerArtifact,
     SchedulerCampaignStatus,
+    SchedulerCrossShardIntegrationOutput,
+    SchedulerEvidenceCapJudgmentOutput,
+    SchedulerEvidencePayloadBinding,
+    SchedulerFindingReductionOutput,
     SchedulerModelRequestEvidence,
+    SchedulerPassKind,
+    SchedulerPassResult,
+    SchedulerPassStatus,
     SchedulerPrivacyEvidenceCustody,
     SchedulerReportBinding,
     SchedulerRetainedJournalReference,
     SchedulerShardInventory,
     SchedulerTaskKind,
+    SchedulerTerminalFindingState,
     SchedulerTerminalStatus,
     scheduler_canonical_sha256,
 )
@@ -59,6 +67,7 @@ from mmaudit.models.schemas import (
     GeneratedFoundryTestSpec,
     InvariantExecutionOriginDispositionArtifact,
     InvariantExecutionResult,
+    JudgeDecisionBatch,
     LocationValidation,
     MaximumAssuranceStatus,
     ModelIdentityStrength,
@@ -137,6 +146,7 @@ _MAX_SCHEDULER_PRIVACY_EVIDENCE_BYTES = 1_048_576
 _MAX_MANIFEST_FILES = 100_000
 _MAX_MANIFEST_BYTES = 4 * 1024**3
 _MAX_JSON_ARTIFACT_BYTES = 100_000_000
+_CURRENT_SCANNER_REPLAY_AUTHORITY = frozenset({"gitleaks", "osv", "semgrep", "slither", "trivy"})
 SCHEDULER_RETAINED_JOURNAL_REFERENCE_FILENAME = "scheduler-journal-reference.json"
 
 
@@ -1088,8 +1098,8 @@ def _validate_model_execution_cost_ledger_custody(
 def _validate_scanner_stream_artifact_custody(
     root: Path,
     scanner_runs: list[ScannerRun],
-) -> None:
-    """Join scanner stdout/stderr claims to exact manifest-bound local bytes."""
+) -> frozenset[str]:
+    """Join scanner streams to bytes and return only replay-authorized fingerprints."""
 
     claims_by_run: dict[
         int,
@@ -1159,7 +1169,7 @@ def _validate_scanner_stream_artifact_custody(
             runs_by_index[run_index] = run
 
     if not claims_by_run:
-        return
+        return frozenset()
 
     absolute_root = Path(os.path.abspath(root))
     try:
@@ -1171,6 +1181,7 @@ def _validate_scanner_stream_artifact_custody(
 
     owner_identities: dict[tuple[int, int], str] = {}
     stream_identities: dict[tuple[int, int], str] = {}
+    replay_authorized_fingerprints: set[str] = set()
     with ExitStack() as observations:
         root_descriptor, _ = observations.enter_context(
             _open_scanner_custody_directory(absolute_root, label="run root")
@@ -1282,6 +1293,13 @@ def _validate_scanner_stream_artifact_custody(
                         and run.execution_evidence is ExecutionEvidenceKind.REAL
                         and run.status is ScannerStatus.SUCCESS
                     ):
+                        if run.scanner not in _CURRENT_SCANNER_REPLAY_AUTHORITY:
+                            if run.findings:
+                                raise ValueError(
+                                    f"REAL scanner {run.scanner!r} findings have no current "
+                                    "trusted stdout normalization authority"
+                                )
+                            continue
                         workspace_path = owner_path / "workspace"
                         _require_exact_scanner_directory_entry(
                             owner_descriptor,
@@ -1295,11 +1313,15 @@ def _validate_scanner_stream_artifact_custody(
                             parent_descriptor=owner_descriptor,
                             component="workspace",
                         ):
-                            validate_real_scanner_normalization_replay(
+                            replayed = validate_real_scanner_normalization_replay(
                                 run=run,
                                 repository_root=workspace_path,
                                 retained_stdout=retained_bytes,
                             )
+                            replay_authorized_fingerprints.update(
+                                finding.fingerprint for finding in replayed
+                            )
+    return frozenset(replay_authorized_fingerprints)
 
 
 def _register_scanner_stream_portable_prefixes(
@@ -1610,6 +1632,7 @@ def _validate_report_artifact_consistency(
     scanner_results = _read_json_artifact(root, "scanner-results.json")
     if scanner_results.get("runs") != [run.model_dump(mode="json") for run in report.scanner_runs]:
         raise ValueError("scanner-results.json differs from the final report")
+    replay_authorized_scanner_fingerprints: frozenset[str] = frozenset()
     if report_bundle_required:
         verification_results = _read_json_artifact(root, "verification-results.json")
         if verification_results.get("decisions") != [
@@ -1621,7 +1644,10 @@ def _validate_report_artifact_consistency(
             decision.model_dump(mode="json") for decision in report.cross_examination_decisions
         ]:
             raise ValueError("cross-examination.json differs from the final report")
-        _validate_scanner_stream_artifact_custody(root, report.scanner_runs)
+        replay_authorized_scanner_fingerprints = _validate_scanner_stream_artifact_custody(
+            root,
+            report.scanner_runs,
+        )
     candidate_artifact = CandidateFindingArtifact.model_validate(
         _read_json_artifact(root, "candidate-findings.json")
     )
@@ -1802,6 +1828,10 @@ def _validate_report_artifact_consistency(
             ):
                 raise ValueError("static-analyzer finding lacks exact scanner provenance")
             if report_bundle_required:
+                if not contributing <= replay_authorized_scanner_fingerprints:
+                    raise ValueError(
+                        "current static-analyzer finding lacks replay-authorized scanner evidence"
+                    )
                 if len(finding.contributing_candidate_ids) != 1:
                     raise ValueError("static-analyzer finding has ambiguous scanner provenance")
                 _validate_static_scanner_finding_projection(
@@ -2699,6 +2729,7 @@ def _validate_scheduler_privacy_custody_and_reconstruct(
     expected_custody = public_artifact.summary.manifest.privacy_evidence_custody
     if expected_custody is None:
         reconstructed = journal.artifact()
+        _validate_scheduler_report_authority(root=root, report=report, journal=journal)
         if require_retained_usage_custody:
             _validate_scheduler_retained_usage_custody(
                 report=report,
@@ -2715,6 +2746,7 @@ def _validate_scheduler_privacy_custody_and_reconstruct(
             custody=observed_custody,
         )
         reconstructed = journal.artifact()
+        _validate_scheduler_report_authority(root=root, report=report, journal=journal)
         if require_retained_usage_custody:
             _validate_scheduler_retained_usage_custody(
                 report=report,
@@ -2766,6 +2798,350 @@ def _validate_scheduler_retained_usage_custody(
                 retained_output.model_dump(mode="json")
             ):
                 raise ValueError("successful scheduler usage lacks exact retained output custody")
+
+
+def _scheduler_pass_result(
+    journal: SchedulerJournal,
+    pass_kind: SchedulerPassKind,
+) -> SchedulerPassResult | None:
+    """Return one exact sealed pass result, rejecting ambiguous private authority."""
+
+    matches = tuple(result for result in journal.pass_results if result.plan.pass_kind is pass_kind)
+    if len(matches) > 1:
+        raise ValueError("scheduler private journal repeats a sealed pass result")
+    return matches[0] if matches else None
+
+
+def _reconstruct_successful_scheduler_output[OutputT: StrictModel](
+    *,
+    journal: SchedulerJournal,
+    pass_result: SchedulerPassResult,
+    task_id: str,
+    output_type: type[OutputT],
+) -> OutputT:
+    """Join a typed private payload to its one credited task result and output record."""
+
+    results = tuple(result for result in pass_result.task_results if result.task_id == task_id)
+    outputs = tuple(output for output in journal.outputs if output.task_id == task_id)
+    if (
+        len(results) != 1
+        or results[0].terminal_status is not SchedulerTerminalStatus.SUCCEEDED
+        or len(outputs) != 1
+    ):
+        raise ValueError("scheduler authority task lacks one successful retained output")
+    result = results[0]
+    output = outputs[0]
+    if (
+        result.output_sha256 != output.output_sha256
+        or result.output_artifact_sha256 != output.output_artifact_sha256
+    ):
+        raise ValueError("scheduler authority task result differs from its retained output")
+    reconstructed = journal.reconstruct_output(task_id, output_type)
+    serialized = reconstructed.model_dump(mode="json")
+    if (
+        serialized != output.payload
+        or scheduler_canonical_sha256(serialized) != output.output_sha256
+    ):
+        raise ValueError("scheduler authority payload differs from its retained output hashes")
+    return reconstructed
+
+
+def _successful_scheduler_host_output[OutputT: StrictModel](
+    *,
+    journal: SchedulerJournal,
+    pass_kind: SchedulerPassKind,
+    role: str,
+    output_type: type[OutputT],
+) -> OutputT | None:
+    """Return a typed host authority only from a fully completed sealed pass."""
+
+    pass_result = _scheduler_pass_result(journal, pass_kind)
+    if pass_result is None or pass_result.status is not SchedulerPassStatus.COMPLETE:
+        return None
+    tasks = tuple(task for task in pass_result.plan.tasks if task.role == role)
+    if len(tasks) != 1 or tasks[0].task_kind is not SchedulerTaskKind.HOST_COMPUTATION:
+        raise ValueError("scheduler completed pass lacks one exact host authority task")
+    return _reconstruct_successful_scheduler_output(
+        journal=journal,
+        pass_result=pass_result,
+        task_id=tasks[0].task_id,
+        output_type=output_type,
+    )
+
+
+def _scheduler_evidence_payload_bindings(
+    kind: Literal[
+        "judge",
+        "verification",
+        "cross_examination",
+        "falsification",
+        "reproduction",
+        "reproduction_resolution",
+    ],
+    records: Iterable[tuple[str, StrictModel]],
+) -> tuple[SchedulerEvidencePayloadBinding, ...]:
+    """Build a lossless canonical binding for every independently retained record."""
+
+    bindings: list[SchedulerEvidencePayloadBinding] = []
+    for subject_id, record in records:
+        payload_sha256 = scheduler_canonical_sha256(record.model_dump(mode="json"))
+        bindings.append(
+            SchedulerEvidencePayloadBinding(
+                record_id=scheduler_canonical_sha256(
+                    {
+                        "kind": kind,
+                        "subject_id": subject_id,
+                        "payload_sha256": payload_sha256,
+                    }
+                ),
+                subject_id=subject_id,
+                payload_sha256=payload_sha256,
+            )
+        )
+    ordered = tuple(sorted(bindings, key=lambda item: (item.subject_id, item.record_id)))
+    identities = tuple((item.subject_id, item.record_id) for item in ordered)
+    if len(identities) != len(set(identities)):
+        raise ValueError(f"scheduler {kind} evidence contains an exact duplicate")
+    return ordered
+
+
+def _scheduler_candidate_payload_sha256s(
+    candidates: Iterable[CandidateFinding],
+) -> dict[str, str]:
+    """Hash complete candidate payloads using the scheduler's canonical encoding."""
+
+    ordered = tuple(sorted(candidates, key=lambda item: item.candidate_id))
+    identifiers = tuple(item.candidate_id for item in ordered)
+    if len(identifiers) != len(set(identifiers)):
+        raise ValueError("scheduler report authority candidate inventory is ambiguous")
+    return {
+        candidate.candidate_id: scheduler_canonical_sha256(candidate.model_dump(mode="json"))
+        for candidate in ordered
+    }
+
+
+def _validate_scheduler_terminal_report_authority(
+    *,
+    report: AuditReport,
+    reproduction_artifact: _ManifestReproductionArtifact,
+    judgment: SchedulerEvidenceCapJudgmentOutput,
+    journal: SchedulerJournal,
+) -> None:
+    """Compare every terminal public decision to the exact private pass-seven authority."""
+
+    if report.metadata.get("severity_threshold") != judgment.severity_threshold.value:
+        raise ValueError("report severity threshold differs from scheduler judgment authority")
+
+    public_partitions = (
+        (
+            SchedulerTerminalFindingState.REPORTED_ACTIVE,
+            report.findings,
+            judgment.final_finding_ids,
+            judgment.final_finding_payload_sha256s,
+        ),
+        (
+            SchedulerTerminalFindingState.REPORTED_REJECTED,
+            report.rejected_findings,
+            judgment.rejected_finding_ids,
+            judgment.rejected_finding_payload_sha256s,
+        ),
+        (
+            SchedulerTerminalFindingState.FILTERED_BELOW_THRESHOLD,
+            report.filtered_findings,
+            judgment.filtered_finding_ids,
+            judgment.filtered_finding_payload_sha256s,
+        ),
+    )
+    findings_by_id: dict[str, tuple[SchedulerTerminalFindingState, Finding]] = {}
+    for state, findings, expected_ids, expected_hashes in public_partitions:
+        observed_ids = tuple(sorted(finding.id for finding in findings))
+        observed_hashes = {
+            finding.id: scheduler_canonical_sha256(finding.model_dump(mode="json"))
+            for finding in sorted(findings, key=lambda item: item.id)
+        }
+        if observed_ids != expected_ids or observed_hashes != expected_hashes:
+            raise ValueError("public finding partition differs from scheduler judgment authority")
+        for finding in findings:
+            if finding.id in findings_by_id:
+                raise ValueError("public terminal finding inventory repeats an identity")
+            findings_by_id[finding.id] = (state, finding)
+
+    for binding in judgment.terminal_findings:
+        public = findings_by_id.get(binding.finding_id)
+        if public is None:
+            raise ValueError("scheduler terminal finding is absent from the public report")
+        state, finding = public
+        if (
+            state is not binding.state
+            or finding.group_id != binding.group_id
+            or tuple(sorted(finding.contributing_candidate_ids)) != binding.candidate_ids
+            or finding.status is not binding.finding_status
+            or finding.severity is not binding.finding_severity
+            or finding.origin_kind is not binding.finding_origin_kind
+            or scheduler_canonical_sha256(finding.model_dump(mode="json"))
+            != binding.finding_payload_sha256
+        ):
+            raise ValueError("public terminal finding differs from its scheduler disposition")
+
+    public_evidence = (
+        (
+            "verification",
+            _scheduler_evidence_payload_bindings(
+                "verification",
+                ((item.candidate_id, item) for item in report.verification_decisions),
+            ),
+            judgment.verification_decisions,
+        ),
+        (
+            "cross-examination",
+            _scheduler_evidence_payload_bindings(
+                "cross_examination",
+                ((item.candidate_id, item) for item in report.cross_examination_decisions),
+            ),
+            judgment.cross_examination_decisions,
+        ),
+        (
+            "falsification",
+            _scheduler_evidence_payload_bindings(
+                "falsification",
+                ((item.candidate_id, item) for item in report.falsification_decisions),
+            ),
+            judgment.falsification_decisions,
+        ),
+        (
+            "reproduction",
+            _scheduler_evidence_payload_bindings(
+                "reproduction",
+                ((item.candidate_id, item) for item in report.reproductions),
+            ),
+            judgment.reproduction_results,
+        ),
+        (
+            "reproduction resolution",
+            _scheduler_evidence_payload_bindings(
+                "reproduction_resolution",
+                ((item.candidate_id, item) for item in reproduction_artifact.candidate_resolutions),
+            ),
+            judgment.reproduction_resolutions,
+        ),
+    )
+    for label, observed, expected in public_evidence:
+        if observed != expected:
+            raise ValueError(f"public {label} evidence differs from scheduler judgment authority")
+
+    pass_result = _scheduler_pass_result(
+        journal,
+        SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT,
+    )
+    if pass_result is None or pass_result.status is not SchedulerPassStatus.COMPLETE:
+        raise ValueError("scheduler judgment authority lacks its completed pass")
+    judge_tasks = tuple(task for task in pass_result.plan.tasks if task.role == "judge")
+    retained_judges = []
+    for task in judge_tasks:
+        if task.task_kind is not SchedulerTaskKind.MODEL_REQUEST:
+            raise ValueError("scheduler judge authority is not a model request")
+        batch = _reconstruct_successful_scheduler_output(
+            journal=journal,
+            pass_result=pass_result,
+            task_id=task.task_id,
+            output_type=JudgeDecisionBatch,
+        )
+        retained_judges.extend(batch.decisions)
+    judge_bindings = _scheduler_evidence_payload_bindings(
+        "judge",
+        ((item.group_id, item) for item in retained_judges),
+    )
+    if judge_bindings != judgment.judge_decisions:
+        raise ValueError("scheduler judgment differs from exact retained judge decisions")
+
+
+def _validate_scheduler_report_authority(
+    *,
+    root: Path,
+    report: AuditReport,
+    journal: SchedulerJournal,
+) -> None:
+    """Join public candidate and finding semantics to successful private host outputs."""
+
+    candidate_artifact = CandidateFindingArtifact.model_validate(
+        _read_json_artifact(root, "candidate-findings.json")
+    )
+    reproduction_artifact = _ManifestReproductionArtifact.model_validate(
+        _read_json_artifact(root, "reproduction-results.json")
+    )
+    candidate_hashes = _scheduler_candidate_payload_sha256s(candidate_artifact.findings)
+
+    reduction = _successful_scheduler_host_output(
+        journal=journal,
+        pass_kind=SchedulerPassKind.FINDING_REDUCTION,
+        role="host:finding_reducer",
+        output_type=SchedulerFindingReductionOutput,
+    )
+    integration = _successful_scheduler_host_output(
+        journal=journal,
+        pass_kind=SchedulerPassKind.CROSS_SHARD_INTEGRATION,
+        role="host:cross_shard_integrator",
+        output_type=SchedulerCrossShardIntegrationOutput,
+    )
+    judgment = _successful_scheduler_host_output(
+        journal=journal,
+        pass_kind=SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT,
+        role="host:evidence_cap_judgment",
+        output_type=SchedulerEvidenceCapJudgmentOutput,
+    )
+
+    if integration is not None:
+        if reduction is None or not set(reduction.candidate_ids) <= set(integration.candidate_ids):
+            raise ValueError("scheduler pass-four candidates lack pass-three authority")
+        if any(
+            integration.candidate_payload_sha256s[candidate_id] != candidate_sha256
+            for candidate_id, candidate_sha256 in reduction.candidate_payload_sha256s.items()
+        ):
+            raise ValueError("scheduler pass-four changed a pass-three candidate payload")
+
+    latest_candidate_authority = (
+        integration.candidate_payload_sha256s
+        if integration is not None
+        else reduction.candidate_payload_sha256s
+        if reduction is not None
+        else {}
+    )
+    if not set(latest_candidate_authority) <= set(candidate_hashes) or any(
+        candidate_hashes[candidate_id] != candidate_sha256
+        for candidate_id, candidate_sha256 in latest_candidate_authority.items()
+    ):
+        raise ValueError("candidate artifact differs from scheduler host authority")
+    authoritative_ids = set(latest_candidate_authority)
+    unauthoritative_candidates = tuple(
+        candidate
+        for candidate in candidate_artifact.findings
+        if candidate.candidate_id not in authoritative_ids
+    )
+    if any(
+        candidate.origin_kind is not CandidateOriginKind.DETERMINISTIC_EXECUTION
+        for candidate in unauthoritative_candidates
+    ):
+        raise ValueError("incomplete scheduler report contains an unauthorized model candidate")
+
+    campaign_complete = journal.summary.status is SchedulerCampaignStatus.COMPLETE
+    if campaign_complete and judgment is None:
+        raise ValueError("complete scheduler report lacks successful pass-seven authority")
+    if judgment is None:
+        return
+    if integration is None or (
+        judgment.candidate_ids != integration.candidate_ids
+        or judgment.candidate_payload_sha256s != integration.candidate_payload_sha256s
+    ):
+        raise ValueError("scheduler pass-seven candidates differ from pass-four authority")
+    if candidate_hashes != judgment.candidate_payload_sha256s:
+        raise ValueError("candidate artifact differs from scheduler judgment authority")
+
+    _validate_scheduler_terminal_report_authority(
+        report=report,
+        reproduction_artifact=reproduction_artifact,
+        judgment=judgment,
+        journal=journal,
+    )
 
 
 def _validate_scheduler_privacy_artifacts(

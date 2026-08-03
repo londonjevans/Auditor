@@ -5100,7 +5100,7 @@ async def test_scanner_only_findings_are_needs_review_and_in_sarif(
         repo=vulnerable_repo,
         output=tmp_path / "output",
         client=client,
-        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+        scanner_runner=SyntheticValidatedScannerRunner(),  # type: ignore[arg-type]
     )
     try:
         result = await pipeline.run(scanner_only=True)
@@ -5138,7 +5138,7 @@ async def test_scanner_excerpt_rejects_coherent_content_and_manifest_reseal(
         config,
         repo=vulnerable_repo,
         output=tmp_path / "scanner-excerpt-output",
-        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+        scanner_runner=SyntheticValidatedScannerRunner(),  # type: ignore[arg-type]
     ).run(scanner_only=True)
     tampered = tmp_path / "scanner-excerpt-tampered"
     shutil.copytree(result.run_dir, tampered)
@@ -5229,7 +5229,7 @@ async def test_scanner_only_prior_match_satisfies_required_missed_finding_gate(
         config,
         repo=vulnerable_repo,
         output=tmp_path / "scanner-prior-output",
-        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+        scanner_runner=SyntheticValidatedScannerRunner(),  # type: ignore[arg-type]
     )
 
     result = await pipeline.run(scanner_only=True)

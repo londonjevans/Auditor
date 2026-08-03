@@ -409,6 +409,126 @@ def test_osv_normalization(vulnerable_repo: Path, tmp_path: Path) -> None:
     assert findings[0].metadata["package"] == "Flask"
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"results": {}},
+        {"results": [{"source": {}, "packages": []}]},
+        {
+            "results": [
+                {
+                    "source": {"path": "requirements.txt"},
+                    "packages": [{"package": {"name": "Flask"}, "vulnerabilities": {}}],
+                }
+            ]
+        },
+        {
+            "results": [
+                {
+                    "source": {"path": "requirements.txt"},
+                    "packages": [
+                        {
+                            "package": {"name": "Flask"},
+                            "vulnerabilities": [{"aliases": []}],
+                        }
+                    ],
+                }
+            ]
+        },
+        {
+            "results": [
+                {
+                    "source": {"path": "requirements.txt"},
+                    "packages": [
+                        {
+                            "package": {"name": "Flask"},
+                            "vulnerabilities": [{"id": "GHSA-SYNTHETIC", "aliases": [1]}],
+                        }
+                    ],
+                }
+            ]
+        },
+    ],
+)
+def test_osv_rejects_vacuous_or_malformed_machine_records(
+    vulnerable_repo: Path,
+    tmp_path: Path,
+    payload: object,
+) -> None:
+    with pytest.raises(ValueError, match="OSV"):
+        OsvScanner().parse(vulnerable_repo, json.dumps(payload), tmp_path)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"Results": {}},
+        {"Results": [{"Target": "requirements.txt", "Vulnerabilities": {}}]},
+        {
+            "Results": [
+                {
+                    "Target": "requirements.txt",
+                    "Vulnerabilities": [{"PkgName": "Flask", "Severity": "HIGH", "CweIDs": []}],
+                }
+            ]
+        },
+        {
+            "Results": [
+                {
+                    "Target": "requirements.txt",
+                    "Vulnerabilities": [
+                        {
+                            "VulnerabilityID": "CVE-SYNTHETIC",
+                            "PkgName": "Flask",
+                            "Severity": "HIGH",
+                            "CweIDs": [1],
+                        }
+                    ],
+                }
+            ]
+        },
+        {
+            "Results": [
+                {
+                    "Target": "config.py",
+                    "Misconfigurations": [
+                        {
+                            "ID": "CFG-SYNTHETIC",
+                            "Severity": "MEDIUM",
+                            "CauseMetadata": "not-an-object",
+                        }
+                    ],
+                }
+            ]
+        },
+        {
+            "Results": [
+                {
+                    "Target": "config.py",
+                    "Secrets": [
+                        {
+                            "RuleID": "secret-rule",
+                            "Severity": "HIGH",
+                            "StartLine": 3,
+                            "EndLine": 2,
+                        }
+                    ],
+                }
+            ]
+        },
+    ],
+)
+def test_trivy_rejects_vacuous_or_malformed_machine_records(
+    vulnerable_repo: Path,
+    tmp_path: Path,
+    payload: object,
+) -> None:
+    with pytest.raises(ValueError, match="Trivy"):
+        TrivyScanner().parse(vulnerable_repo, json.dumps(payload), tmp_path)
+
+
 def test_codeql_sarif_normalization(vulnerable_repo: Path, tmp_path: Path) -> None:
     payload = {
         "runs": [

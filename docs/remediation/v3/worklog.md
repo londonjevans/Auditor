@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Client report and forensic evidence bundle
 CURRENT_TICKET: V3-REPORT-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-FIXTURE-001 (COMPLETE)
-NEXT_ACTION: Resume V3-REPORT-001 from the preserved authority-binding WIP: finish scanner replay authority and scheduler terminal-state custody, harden or exclude permissive OSV/Trivy normalization, synchronize schemas, then rerun the interrupted focused integration and integrated ticket-close matrix.
-LAST_COMMAND: `.venv/bin/pytest -q tests/integration/test_pipeline.py::test_maximum_assurance_e2e_is_evidence_rich_but_never_false_complete`
-LAST_RESULT: INTERRUPTED_BY_OPERATOR_PAUSE after approximately 96 seconds; no result is claimed. SIGINT stopped the process, all delegated agents are interrupted, and process inspection found no remaining pytest, Ruff, mypy, mmaudit, or repository Python validation process.
+NEXT_ACTION: Finish the frozen pass-four candidate projection and scheduler-to-public report authority join without discarding valid partial evidence; add coherent-reseal integration coverage, synchronize the findings schema, then run integrated V3-REPORT-001 gates.
+LAST_COMMAND: `.venv/bin/python -m py_compile src/mmaudit/models/schemas.py src/mmaudit/orchestration/manifest.py src/mmaudit/scanners/osv.py src/mmaudit/scanners/trivy.py`; `.venv/bin/ruff check src/mmaudit/models/schemas.py src/mmaudit/orchestration/manifest.py src/mmaudit/scanners/osv.py src/mmaudit/scanners/trivy.py tests/integration/test_pipeline.py tests/unit/test_manifest.py tests/unit/test_release_artifacts.py tests/unit/test_scanner_normalization_replay.py tests/unit/test_scanner_stream_custody.py tests/unit/test_scanners_reporting.py tests/unit/test_scheduler_host_contracts.py`; `git diff --check`
+LAST_RESULT: PASS: affected production modules compile, affected Ruff checks pass, and the working diff has no whitespace errors. These pause-only checks are not V3-REPORT-001 acceptance evidence.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,31 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
-LAST_CHECKPOINT_COMMIT: acf122066565ad1147fb63ede603a8d1a253fafc
+LAST_CHECKPOINT_COMMIT: 7f278be6c5e7a21bd86d980130e3cd3a1208952f
+
+## 2026-08-03T22:02:03Z — Graceful operator pause
+
+- **State:** `PAUSED_BY_OPERATOR`; `V3-REPORT-001` remains `IN_PROGRESS`. No ticket,
+  release, or scheduler-report-authority completion is claimed.
+- **Preserved validated work:** Strict scanner replay authority, OSV/Trivy envelope hardening,
+  production-shaped scanner report fixtures, the report-status type correction, and the forensic
+  export fixture closure are present. Focused evidence includes `303` scanner/manifest tests,
+  a final `23`-test scanner delta, `251` OSV/Trivy normalization tests, `3` repaired scanner
+  pipeline regressions, `31` forensic-export tests, `38` release-artifact tests, and `8`
+  report-status projection tests passing as recorded above.
+- **Interrupted implementation boundary:** The scheduler-to-public authority validator is saved
+  and syntactically valid, but the pipeline still mutates candidate payloads after pass four.
+  Resume by freezing the pass-four public candidate projection while retaining enriched ephemeral
+  candidates for adjudication, and preserve successful partial-review evidence when later passes
+  do not complete. Do not weaken the private-journal authority join.
+- **Remaining gates:** Add a coherent manifest-reseal candidate-tamper integration regression;
+  regenerate the stale `findings_artifact.schema.json`; rerun the interrupted maximum-assurance
+  integration; then run focused, Ruff, mypy, schema, and broader ticket gates.
+- **Safety/cost:** All delegated work was stopped at saved-file boundaries. Process inspection
+  found no pytest, Ruff, mypy, mmaudit, or schema-generation process. No provider call, public
+  RPC, secret read, target-controlled command, or paid operation occurred.
+- **Pause-only integrity:** Affected production modules compile, affected Ruff checks pass, and
+  `git diff --check` passes. These checks preserve WIP integrity and are not acceptance evidence.
 
 ## 2026-08-03T21:01:54Z — Graceful operator pause
 
@@ -105,6 +129,18 @@ LAST_CHECKPOINT_COMMIT: acf122066565ad1147fb63ede603a8d1a253fafc
   `acf122066565ad1147fb63ede603a8d1a253fafc`. Fast pause-only integrity checks confirmed valid
   runtime JSON, valid Python syntax for all four affected production modules, and a clean
   `git diff --check`; these checks are not ticket acceptance evidence.
+- **Resume (2026-08-03T21:40:23Z):** Persistent-goal continuation resumed from clean,
+  SSH-synchronized pause metadata commit `7f278be6c5e7a21bd86d980130e3cd3a1208952f`.
+  Work remains bounded to V3-REPORT-001 scanner and scheduler authority joins, parser strictness,
+  schema synchronization, and the ticket gates; no provider call is required for this slice.
+- **Scanner authority slice:** Current manifest custody now replays retained stdout through the
+  fixed strict built-in normalizer set and grants report credit only to exact replayed
+  fingerprints. OSV and Trivy now reject vacuous or malformed result envelopes and set strict
+  machine-output validation. Unsupported REAL streams may be retained only without findings and
+  grant no report authority. Focused scanner/manifest validation passed `303` tests before the
+  final unsupported-engine distinction; its final delta passed `23` tests, and the three repaired
+  pipeline report regressions passed in `2.54s`. Scheduler-to-report private authority remains in
+  progress, so no ticket-close claim is made.
 
 ## 2026-08-03 — V3-REPORT-001
 

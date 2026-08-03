@@ -33,7 +33,6 @@ from mmaudit.models.registry import ModelRegistry
 from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.schemas import (
     AuditReport,
-    EvidenceStrength,
     ExecutionEvidenceKind,
     Location,
     ModelRequestValidationStatus,
@@ -42,10 +41,8 @@ from mmaudit.models.schemas import (
     RepositoryForkRpcPrivacyEvidence,
     RepositoryMap,
     RepositorySuiteDifferentialRun,
-    ScannerFinding,
     ScannerRun,
     ScannerStatus,
-    Severity,
     UsageRecord,
 )
 from mmaudit.orchestration.manifest import (
@@ -89,7 +86,7 @@ from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
 from mmaudit.reporting.sarif import generate_report_sarif
 from mmaudit.reporting.status import report_status_metadata
 from mmaudit.repository.locations import validate_location
-from mmaudit.scanners.base import scanner_fingerprint
+from mmaudit.scanners.normalization import reparse_trusted_scanner_stdout
 from mmaudit.scanners.projection import project_scanner_finding
 from tests.identity_fixtures import (
     bind_synthetic_usage_identity,
@@ -1133,33 +1130,74 @@ def test_manifest_rejects_coherently_resealed_scanner_projection_tamper(
     source.write_text(source_content, encoding="utf-8")
     location = Location(path="src/Vault.sol", start_line=1, end_line=1, symbol="guarded")
     validation = validate_location(repository, location)
-    message = "Synthetic deterministic scanner observation."
-    scanner_finding = ScannerFinding(
-        scanner="synthetic",
-        rule_id="synthetic-rule",
-        title="Synthetic scanner finding",
-        severity=Severity.HIGH,
-        message=message,
-        locations=[location],
-        cwe=["CWE-284"],
-        metadata={"location_validation": [validation.model_dump(mode="json")]},
-        evidence_strength=EvidenceStrength.DETERMINISTIC_ANALYZER,
-        fingerprint=scanner_fingerprint(
-            "synthetic",
-            "synthetic-rule",
-            location.path,
-            location.start_line,
-            message,
-        ),
+    run_dir = tmp_path / "run"
+    scanner_root = run_dir / "private" / "scanner-output" / "semgrep"
+    workspace_source = scanner_root / "workspace" / location.path
+    workspace_source.parent.mkdir(parents=True)
+    workspace_source.write_text(source_content, encoding="utf-8")
+    stdout_bytes = json.dumps(
+        {
+            "results": [
+                {
+                    "check_id": "synthetic-rule",
+                    "path": location.path,
+                    "start": {"line": location.start_line, "col": 1},
+                    "end": {"line": location.end_line, "col": 1},
+                    "extra": {
+                        "message": "Synthetic deterministic scanner observation.",
+                        "severity": "ERROR",
+                        "metadata": {"cwe": ["CWE-284"]},
+                    },
+                }
+            ],
+            "errors": [],
+        },
+        separators=(",", ":"),
+    ).encode()
+    (scanner_root / "semgrep.json").write_bytes(stdout_bytes)
+    (scanner_root / "semgrep.stderr.txt").write_bytes(b"")
+    parsed = reparse_trusted_scanner_stdout(
+        scanner="semgrep",
+        repository_root=scanner_root / "workspace",
+        retained_stdout=stdout_bytes,
+    )
+    assert len(parsed) == 1
+    scanner_finding = parsed[0].model_copy(
+        update={
+            "metadata": {
+                **parsed[0].metadata,
+                "location_validation": [validation.model_dump(mode="json")],
+            }
+        }
     )
     now = datetime(2026, 1, 2, tzinfo=UTC)
-    scanner_run = ScannerRun(
-        scanner="synthetic",
+    provisional_scanner_run = ScannerRun(
+        scanner="semgrep",
         status=ScannerStatus.SUCCESS,
+        execution_evidence=ExecutionEvidenceKind.REAL,
+        version="semgrep-1.0",
+        executable_sha256="1" * 64,
+        command=["/trusted/semgrep", "--json"],
         started_at=now,
         finished_at=now,
         duration_seconds=0,
         findings=[scanner_finding],
+        raw_output_path="semgrep/semgrep.json",
+        raw_output_sha256=hashlib.sha256(stdout_bytes).hexdigest(),
+        raw_output_bytes=len(stdout_bytes),
+        private_stderr_path="semgrep/semgrep.stderr.txt",
+        private_stderr_sha256=hashlib.sha256(b"").hexdigest(),
+        process_exit_code=0,
+        isolation_backend="synthetic-rootless",
+        isolation_attestation_sha256="2" * 64,
+        machine_output_validated=True,
+    )
+    scanner_run = provisional_scanner_run.model_copy(
+        update={
+            "execution_observation_sha256": (
+                provisional_scanner_run.expected_execution_observation_sha256()
+            )
+        }
     )
     projected = project_scanner_finding(
         scanner_finding,
@@ -1188,7 +1226,6 @@ def test_manifest_rejects_coherently_resealed_scanner_projection_tamper(
             "findings": [projected],
         }
     )
-    run_dir = tmp_path / "run"
     source_contents = {location.path: source_content}
     _write_required_artifacts(run_dir, report, source_contents=source_contents)
     manifest = build_run_evidence_manifest(run_dir=run_dir, report=report, config=config)
@@ -1207,6 +1244,42 @@ def test_manifest_rejects_coherently_resealed_scanner_projection_tamper(
     resealed = _reseal_current_artifacts(run_dir, manifest)
     with pytest.raises(ValueError, match="authoritative scanner projection"):
         validate_manifest_artifacts(resealed, run_dir)
+
+    unverified_provisional = ScannerRun.model_validate(
+        {
+            **scanner_run.model_dump(mode="json"),
+            "execution_evidence": ExecutionEvidenceKind.UNVERIFIED,
+            "execution_observation_sha256": None,
+        }
+    )
+    unverified_scanner_run = ScannerRun.model_validate(
+        {
+            **unverified_provisional.model_dump(mode="json"),
+            "execution_observation_sha256": (
+                unverified_provisional.expected_execution_observation_sha256()
+            ),
+        }
+    )
+    coherently_resealed_report = report.model_copy(
+        update={"scanner_runs": [unverified_scanner_run]}
+    )
+    _write_required_artifacts(
+        run_dir,
+        coherently_resealed_report,
+        source_contents=source_contents,
+    )
+    coherently_resealed = _reseal_current_artifacts(run_dir, manifest)
+    with pytest.raises(ValueError, match="replay-authorized scanner evidence"):
+        validate_manifest_artifacts(coherently_resealed, run_dir)
+
+    uncredited_raw_report = coherently_resealed_report.model_copy(update={"findings": []})
+    _write_required_artifacts(
+        run_dir,
+        uncredited_raw_report,
+        source_contents=source_contents,
+    )
+    uncredited_raw_resealed = _reseal_current_artifacts(run_dir, manifest)
+    validate_manifest_artifacts(uncredited_raw_resealed, run_dir)
 
     invalid_fingerprint = scanner_finding.model_copy(update={"fingerprint": "f" * 64})
     with pytest.raises(ValueError, match="fingerprint differs from its canonical semantics"):

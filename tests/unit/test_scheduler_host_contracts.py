@@ -756,3 +756,33 @@ def test_evidence_cap_contract_rejects_terminal_partition_and_evidence_drift() -
     )
     with pytest.raises(ValidationError, match="hash or disposition"):
         SchedulerEvidenceCapJudgmentOutput.model_validate(tampered_hash)
+
+
+def test_evidence_cap_contract_retains_execution_origin_below_reporting_threshold() -> None:
+    payload = _judgment_payload(
+        candidate_id="exec-post-judgment",
+        finding_id="finding-execution",
+    )
+    execution_binding = {
+        **payload["terminal_findings"][0],
+        "finding_origin_kind": "deterministic_execution",
+        "finding_severity": "high",
+    }
+    execution_payload = {
+        **payload,
+        "severity_threshold": "critical",
+        "terminal_findings": [execution_binding],
+    }
+    execution_payload["judgment_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in execution_payload.items() if key != "judgment_sha256"}
+    )
+
+    validated = SchedulerEvidenceCapJudgmentOutput.model_validate(execution_payload)
+
+    assert validated.final_finding_ids == ("finding-execution",)
+    assert tuple(item.subject_id for item in validated.reproduction_results) == (
+        "exec-post-judgment",
+    )
+    assert tuple(item.subject_id for item in validated.reproduction_resolutions) == (
+        "exec-post-judgment",
+    )

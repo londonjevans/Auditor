@@ -306,6 +306,90 @@ def test_raw_reparser_rejects_unknown_scanners_and_malformed_machine_output(
         )
 
 
+@pytest.mark.parametrize(
+    ("scanner", "payload"),
+    [
+        ("osv", {}),
+        ("osv", {"results": [None]}),
+        (
+            "osv",
+            {
+                "results": [
+                    {
+                        "source": {"path": "requirements.txt"},
+                        "packages": [None],
+                    }
+                ]
+            },
+        ),
+        (
+            "osv",
+            {
+                "results": [
+                    {
+                        "source": {"path": "requirements.txt"},
+                        "packages": [
+                            {
+                                "package": {"name": "synthetic"},
+                                "vulnerabilities": [None],
+                            }
+                        ],
+                    }
+                ]
+            },
+        ),
+        ("trivy", {}),
+        ("trivy", {"Results": [None]}),
+        (
+            "trivy",
+            {
+                "Results": [
+                    {
+                        "Target": "requirements.txt",
+                        "Vulnerabilities": [None],
+                    }
+                ]
+            },
+        ),
+    ],
+)
+def test_osv_and_trivy_replay_rejects_vacuous_or_skipped_machine_records(
+    scanner: str,
+    payload: object,
+    vulnerable_repo: Path,
+) -> None:
+    with pytest.raises(ScannerNormalizationReplayError, match="failed trusted normalization"):
+        reparse_trusted_scanner_stdout(
+            scanner=scanner,
+            repository_root=vulnerable_repo,
+            retained_stdout=json.dumps(payload).encode(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("scanner", "payload", "adapter"),
+    [
+        ("osv", {"results": []}, OsvScanner()),
+        ("trivy", {"Results": []}, TrivyScanner()),
+    ],
+)
+def test_osv_and_trivy_replay_accepts_only_explicit_empty_result_arrays(
+    scanner: str,
+    payload: object,
+    adapter: ScannerAdapter,
+    vulnerable_repo: Path,
+) -> None:
+    assert adapter.strict_machine_output is True
+    assert (
+        reparse_trusted_scanner_stdout(
+            scanner=scanner,
+            repository_root=vulnerable_repo,
+            retained_stdout=json.dumps(payload).encode(),
+        )
+        == ()
+    )
+
+
 def test_codeql_auxiliary_sarif_remains_explicitly_non_authoritative() -> None:
     requirement = CODEQL_AUXILIARY_SARIF_REPLAY_REQUIREMENT
 

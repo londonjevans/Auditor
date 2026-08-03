@@ -19,6 +19,7 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.orchestration import manifest as manifest_module
 from mmaudit.orchestration.manifest import _validate_scanner_stream_artifact_custody
+from mmaudit.scanners.base import scanner_fingerprint
 from mmaudit.scanners.normalization import (
     reparse_trusted_scanner_stdout,
     validate_real_scanner_normalization_replay,
@@ -30,6 +31,7 @@ _NOW = datetime(2026, 8, 3, tzinfo=UTC)
 def _run(
     scanner: str,
     *,
+    status: ScannerStatus = ScannerStatus.SUCCESS,
     stdout: tuple[str, bytes] | None = None,
     stderr: tuple[str, bytes] | None = None,
     execution_evidence: ExecutionEvidenceKind = ExecutionEvidenceKind.UNVERIFIED,
@@ -41,7 +43,7 @@ def _run(
     stderr_path, stderr_bytes = stderr or (None, b"")
     return ScannerRun(
         scanner=scanner,
-        status=ScannerStatus.SUCCESS,
+        status=status,
         execution_evidence=execution_evidence,
         started_at=_NOW,
         finished_at=_NOW,
@@ -123,7 +125,7 @@ def test_scanner_stream_custody_accepts_exact_nested_unique_artifacts(tmp_path: 
     _write_stream(root, "slither/machine/slither.json", stdout)
     _write_stream(root, "slither/diagnostics/slither.stderr.txt", stderr)
 
-    _validate_scanner_stream_artifact_custody(
+    authorized = _validate_scanner_stream_artifact_custody(
         root,
         [
             _run(
@@ -134,14 +136,18 @@ def test_scanner_stream_custody_accepts_exact_nested_unique_artifacts(tmp_path: 
         ],
     )
 
+    assert authorized == frozenset()
+
 
 def test_scanner_stream_custody_preserves_absent_stream_legacy_behavior(
     tmp_path: Path,
 ) -> None:
-    _validate_scanner_stream_artifact_custody(
+    authorized = _validate_scanner_stream_artifact_custody(
         tmp_path / "absent-run",
         [_run("slither")],
     )
+
+    assert authorized == frozenset()
 
 
 def test_scanner_stream_custody_rejects_non_nfc_claim_before_open(tmp_path: Path) -> None:
@@ -361,7 +367,9 @@ def test_real_success_custody_replays_builtin_output_while_descriptor_is_held(
     monkeypatch.setattr(manifest_module, "_open_scanner_stream_observation", observed)
     monkeypatch.setattr(manifest_module, "validate_real_scanner_normalization_replay", replay)
 
-    _validate_scanner_stream_artifact_custody(root, [run])
+    authorized = _validate_scanner_stream_artifact_custody(root, [run])
+
+    assert authorized == frozenset(finding.fingerprint for finding in run.findings)
 
 
 def test_real_success_custody_rejects_semantically_tampered_findings(tmp_path: Path) -> None:
@@ -379,23 +387,96 @@ def test_real_success_custody_rejects_semantically_tampered_findings(tmp_path: P
         )
 
 
-def test_real_success_custody_rejects_scanner_without_builtin_stdout_replay(
+@pytest.mark.parametrize("scanner", ["codeql", "custom", "foundry_fork"])
+def test_real_success_custody_retains_empty_unsupported_stream_without_authority(
     tmp_path: Path,
+    scanner: str,
 ) -> None:
     root = tmp_path / "run"
     stdout = b"{}"
-    _write_stream(root, "codeql/output.json", stdout)
-    _write_stream(root, "codeql/workspace/app.py", b"def synthetic():\n    return 1\n")
+    _write_stream(root, f"{scanner}/output.json", stdout)
+    _write_stream(root, f"{scanner}/workspace/app.py", b"def synthetic():\n    return 1\n")
     run = _run(
-        "codeql",
-        stdout=("codeql/output.json", stdout),
+        scanner,
+        stdout=(f"{scanner}/output.json", stdout),
         execution_evidence=ExecutionEvidenceKind.REAL,
         process_exit_code=0,
         machine_output_validated=True,
     )
 
-    with pytest.raises(ValueError, match="no trusted built-in stdout normalizer"):
+    assert _validate_scanner_stream_artifact_custody(root, [run]) == frozenset()
+
+
+@pytest.mark.parametrize("scanner", ["codeql", "custom", "foundry_fork"])
+def test_real_success_custody_rejects_unsupported_scanner_findings(
+    tmp_path: Path,
+    scanner: str,
+) -> None:
+    root = tmp_path / "run"
+    stdout = b"{}"
+    _write_stream(root, f"{scanner}/output.json", stdout)
+    semgrep_stdout = _semgrep_stdout()
+    _write_stream(root, "semgrep/workspace/app.py", b"def synthetic():\n    return 1\n")
+    source_finding = _real_semgrep_run(root, semgrep_stdout).findings[0]
+    message = "Typed suite evidence cannot mint scanner normalization authority"
+    finding = source_finding.model_copy(
+        update={
+            "scanner": scanner,
+            "rule_id": "unsupported-normalization",
+            "message": message,
+            "fingerprint": scanner_fingerprint(
+                scanner,
+                "unsupported-normalization",
+                source_finding.locations[0].path,
+                source_finding.locations[0].start_line,
+                message,
+            ),
+        }
+    )
+    run = _run(
+        scanner,
+        stdout=(f"{scanner}/output.json", stdout),
+        execution_evidence=ExecutionEvidenceKind.REAL,
+        findings=[finding],
+        process_exit_code=0,
+        machine_output_validated=True,
+    )
+
+    with pytest.raises(ValueError, match="findings have no current trusted stdout"):
         _validate_scanner_stream_artifact_custody(root, [run])
+
+
+@pytest.mark.parametrize(
+    ("execution_evidence", "status", "process_exit_code", "machine_output_validated"),
+    [
+        (ExecutionEvidenceKind.UNVERIFIED, ScannerStatus.SUCCESS, 0, True),
+        (ExecutionEvidenceKind.MOCK, ScannerStatus.SUCCESS, 0, True),
+        (ExecutionEvidenceKind.REAL, ScannerStatus.FAILED, 1, False),
+    ],
+)
+def test_nonqualifying_scanner_findings_remain_uncredited_raw_evidence(
+    tmp_path: Path,
+    execution_evidence: ExecutionEvidenceKind,
+    status: ScannerStatus,
+    process_exit_code: int,
+    machine_output_validated: bool,
+) -> None:
+    root = tmp_path / "run"
+    stdout = _semgrep_stdout()
+    _write_stream(root, "semgrep/output.json", stdout)
+    _write_stream(root, "semgrep/workspace/app.py", b"def synthetic():\n    return 1\n")
+    replayed = _real_semgrep_run(root, stdout).findings
+    run = _run(
+        "semgrep",
+        status=status,
+        stdout=("semgrep/output.json", stdout),
+        execution_evidence=execution_evidence,
+        findings=replayed,
+        process_exit_code=process_exit_code,
+        machine_output_validated=machine_output_validated,
+    )
+
+    assert _validate_scanner_stream_artifact_custody(root, [run]) == frozenset()
 
 
 def test_real_success_custody_rejects_missing_retained_stdout(tmp_path: Path) -> None:
