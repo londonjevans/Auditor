@@ -991,6 +991,91 @@ are invisible to source review by construction.
 - **Dependencies:** `V3-COVERAGE-001`.
 - **Status:** `QUEUED`
 
+## V3-LEARNING-001 — Cross-audit learning corpus
+
+- **Objective:** Accumulate what each audit established, so the system improves with use instead
+  of starting from zero every time.
+- **Why this is needed.** Neither governing document mentions learning, feedback, accumulation,
+  or cross-audit knowledge; a keyword scan of both returns zero. Every audit therefore begins
+  with no memory of any audit before it. A professional audit firm's durable advantage is
+  institutional knowledge — patterns seen before, false positives already learned, and misses
+  fed back after the fact. This is the largest structural difference between the planned system
+  and a practice that compounds.
+- **Scope is deliberately split, and the first half should land early.** Capture is worthless
+  retroactively: evidence not recorded during an audit cannot be recovered later. Application
+  can wait for measurement.
+  - **Phase 1 — capture.** Record, per completed audit: confirmed findings; rejected candidates
+    with the reason for rejection; per-model and per-specialist attribution of who proposed,
+    who verified, who falsified, and who missed; the surfaces reviewed and their outcomes; and
+    cost and runtime per role. Schedule this as early as the first real audit so nothing is lost.
+  - **Phase 2 — application.** Use the accumulated corpus to prime later reviews and to inform
+    routing, only after a measured baseline exists to judge whether it helps.
+- **Acceptance criteria:**
+  - **Tenant isolation is absolute.** The corpus must never allow one client's source, findings,
+    identifiers, or inferable details to reach another client's audit. Cross-tenant learning is
+    permitted only over abstracted patterns that contain no client source and no attribution to
+    a client, and a regression must prove a stored pattern cannot reconstruct the originating
+    source. If that cannot be proven, the corpus stays strictly tenant-scoped.
+  - **Benchmark contamination is prevented.** The private holdout and the time-split corpus are
+    excluded from learning input by construction, not by convention. A measured recall figure
+    obtained after training on its own test set is worthless, and this is the most likely way to
+    destroy the credibility of every number the benchmark programme produces.
+  - **A prior finding is a lead, never evidence.** Corpus-derived context is subject to the same
+    rule as scanner output: it may direct attention, and it may not support a finding. It cannot
+    raise confidence, satisfy a coverage requirement, or contribute to consensus.
+  - **Anchoring is measured, not assumed.** Priming can reduce recall by narrowing attention, or
+    inflate false positives by suggesting expected patterns. Phase 2 must run as an A/B against
+    the unprimed baseline on the same corpus, and remain disabled unless it measurably improves
+    recall without degrading precision.
+  - **Misses are first-class.** Findings later established by an exploit, another auditor, or
+    client report are recorded against the audit that missed them, with the surface that should
+    have caught them, and become permanent regression cases. A system that only records its
+    successes cannot improve.
+  - Corpus growth is bounded, and its schema is versioned so entries remain interpretable as the
+    finding model evolves.
+- **Files expected to change:** new learning-corpus module and schema, orchestration capture
+  hooks, `src/mmaudit/orchestration/consensus.py`, benchmark exclusion enforcement, regressions.
+- **Dependencies:** `V3-SINGLE-AUDIT-001`. Phase 1, capture, needs only a completed real audit
+  to record and is the portion scheduled in the execution order.
+- **Dependencies for completion:** `V3-TIMESPLIT-001`. Only phase 2, application and priming,
+  requires a measured baseline to A/B against. Expect this ticket to remain `PARTIAL` from its
+  scheduled position until that baseline exists.
+- **Status:** `QUEUED`
+
+## V3-CONVERGENCE-001 — Convergence-based stopping instead of fixed passes
+
+- **Objective:** Continue reviewing until discovery genuinely tails off, rather than stopping at
+  a fixed pass count, so additional compute converts into additional recall.
+- **Why this is needed.** The scheduler runs a fixed seven passes. Nothing anywhere runs until it
+  stops finding things: a keyword scan of both governing documents returns zero for convergence,
+  diminishing returns, and marginal discovery. Fixed structure means a simple contract and a
+  complex protocol receive the same number of attempts, and there is no mechanism by which
+  spending more converts into finding more. This is also what a premium tier actually sells.
+- **Acceptance criteria:**
+  - Review rounds continue while the rate of new, non-duplicate, surviving candidates per round
+    exceeds a configured threshold, and stop when it does not. The measured discovery curve is
+    recorded as run evidence, since it is a coverage claim.
+  - Convergence is evaluated per risk tier or per shard, not globally. A critical surface earns
+    more rounds than a low-risk one, and the allocation is derived from the existing risk tiers
+    rather than spread evenly.
+  - **Terminal states are distinct and never conflated:** `CONVERGED`, `ROUND_CAP_REACHED`,
+    `BUDGET_EXHAUSTED`, `TIME_EXHAUSTED`. **Only `CONVERGED` may support a coverage claim.**
+    Stopping because money ran out is not convergence, and a report must not present it as
+    completeness. This extends `V3-FLOOR-001`, and the same fail-closed discipline applies.
+  - Every round is bounded by hard cost, wall-clock, and round ceilings. Convergence must not be
+    a path to unbounded spend, and preflight reserves the worst case, not the expected case.
+  - Precision does not degrade with additional rounds. Every candidate from every round passes
+    the full verification, falsification, and consensus path unchanged; later rounds receive no
+    weaker treatment because they are late.
+  - Duplicate suppression across rounds uses the existing similarity and location constraints, so
+    a re-proposed candidate does not read as new discovery and cannot keep the loop alive.
+  - Thresholds are derived from measured discovery curves once a baseline exists, not guessed.
+    Until then the feature ships disabled behind explicit configuration.
+- **Files expected to change:** `src/mmaudit/orchestration/` scheduler and round control,
+  budget preflight, run-status and coverage schemas, reporting, regressions.
+- **Dependencies:** `V3-SINGLE-AUDIT-001`.
+- **Status:** `QUEUED`
+
 ## V3-ENSEMBLE-001 — Measure whether the specialist ensemble beats concentrated compute
 
 - **Objective:** Determine empirically whether 25 narrow specialists across several mid-tier
@@ -1954,45 +2039,49 @@ model, no qualification, and no provider spend anywhere in the path.
 14. `V3-QUALIFY-001` — first qualified models.
 15. `V3-SINGLE-AUDIT-001` — **first real audit.** `completed_real_audits` becomes non-zero.
 
+16. `V3-LEARNING-001` phase 1 (capture only) — schedule here so the first real audit is
+   recorded. Capture cannot be done retroactively; evidence not written during a run is
+   gone. Phase 2 waits for a measured baseline.
 ### Phase 4 — orchestration hardening, now provable against real models
 
-16. `V3-TRUNCATION-001`
-17. `V3-COVERAGE-001`
-18. `V3-CONSENSUS-001` — must precede the multi-model audit, since it is what prevents a
+17. `V3-TRUNCATION-001`
+18. `V3-COVERAGE-001`
+19. `V3-CONSENSUS-001` — must precede the multi-model audit, since it is what prevents a
     single verifier suppressing a candidate group.
-19. `V3-MULTI-AUDIT-001`
-20. `V3-ENSEMBLE-001` — settle whether the specialist ensemble beats concentrated compute
+20. `V3-MULTI-AUDIT-001`
+21. `V3-ENSEMBLE-001` — settle whether the specialist ensemble beats concentrated compute
     before committing to its cost and latency.
-21. `V3-TAXONOMY-001`
-22. `V3-RETRIEVAL-001`
-23. `V3-MUTATION-001`
+22. `V3-TAXONOMY-001`
+23. `V3-RETRIEVAL-001`
+24. `V3-MUTATION-001`
 
 ### Phase 5 — evidence and claims
 
-24. `V3-TIMESPLIT-001`
-25. `V3-HUMANCMP-001` — the only ticket that can ever substantiate a superiority claim.
-26. `V3-STABILITY-001`
+25. `V3-TIMESPLIT-001`
+26. `V3-CONVERGENCE-001` — thresholds derived from the measured discovery curve, not guessed.
+27. `V3-HUMANCMP-001` — the only ticket that can ever substantiate a superiority claim.
+28. `V3-STABILITY-001`
 
 ### Phase 6 — release
 
-27. `V3-BYTECODE-001`
-28. `V3-ENGINES-001`
-29. `V3-BENCHMARK-001`
-30. `V3-CERTIFICATE-001`
-31. `V3-ADR-001`
-32. `V3-RELEASE-001`
+29. `V3-BYTECODE-001`
+30. `V3-ENGINES-001`
+31. `V3-BENCHMARK-001`
+32. `V3-CERTIFICATE-001`
+33. `V3-ADR-001`
+34. `V3-RELEASE-001`
 
 ### Phase 7 — operator-prerequisite and product work
 
-33. `V3-QUOTE-001`
-34. `V3-HARDHAT-001` — resumes only when the digest-pinned rootless image exists.
-35. `V3-CI-001`
-36. `V3-LIFECYCLE-001`
-37. `V3-REVERIFY-001`
-38. `V3-INTAKE-001`
-39. `V3-CONSENT-001`
-40. `V3-SERVICE-001`
-41. `V3-AUTONOMY-001`
+35. `V3-QUOTE-001`
+36. `V3-HARDHAT-001` — resumes only when the digest-pinned rootless image exists.
+37. `V3-CI-001`
+38. `V3-LIFECYCLE-001`
+39. `V3-REVERIFY-001`
+40. `V3-INTAKE-001`
+41. `V3-CONSENT-001`
+42. `V3-SERVICE-001`
+43. `V3-AUTONOMY-001`
 
 ### Standing instructions
 
