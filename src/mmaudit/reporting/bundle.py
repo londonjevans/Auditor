@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -33,6 +33,7 @@ from mmaudit.models.schemas import (
     ReproductionResolutionKind,
     ReproductionResult,
     ReproductionState,
+    Severity,
     SolidityCoverage,
     StrictModel,
     UsageRecord,
@@ -56,6 +57,7 @@ _SCHEDULER_REQUEST_PATTERN = r"^scheduler-request-[0-9a-f]{64}$"
 
 MANIFEST_BOUND_REPORT_DELIVERABLES = frozenset(
     {
+        "audit-report.md",
         "client-report.md",
         "forensic-report.md",
         "findings.json",
@@ -118,6 +120,64 @@ class ForensicDisposition(StrEnum):
     DISPUTED = "DISPUTED"
     INCONCLUSIVE = "INCONCLUSIVE"
     REJECTED = "REJECTED"
+
+
+class CandidateTerminalState(StrEnum):
+    """Exact terminal reporting state for one model or execution candidate."""
+
+    REPORTED_ACTIVE = "REPORTED_ACTIVE"
+    REPORTED_REJECTED = "REPORTED_REJECTED"
+    FILTERED_BELOW_THRESHOLD = "FILTERED_BELOW_THRESHOLD"
+
+
+class CandidateTerminalDisposition(StrictModel):
+    """Bind one candidate to its sole terminal finding/group and reporting decision."""
+
+    candidate_id: str = Field(min_length=1, max_length=500)
+    group_id: str = Field(min_length=1, max_length=500)
+    finding_id: str = Field(min_length=1, max_length=500)
+    state: CandidateTerminalState
+    finding_severity: Severity
+    reporting_severity_threshold: Severity
+
+
+def _sorted_verifications(
+    values: Iterable[VerificationDecision],
+) -> list[VerificationDecision]:
+    return sorted(values, key=lambda item: item.candidate_id)
+
+
+def _sorted_cross_examinations(
+    values: Iterable[CandidateCrossExaminationDecision],
+) -> list[CandidateCrossExaminationDecision]:
+    return sorted(
+        values,
+        key=lambda item: (
+            item.candidate_id,
+            item.reviewer_index,
+            item.root_lineage,
+            item.request_id,
+        ),
+    )
+
+
+def _sorted_falsifications(
+    values: Iterable[FalsificationDecision],
+) -> list[FalsificationDecision]:
+    return sorted(values, key=lambda item: (item.candidate_id, item.test_name))
+
+
+def _sorted_reproductions(values: Iterable[ReproductionResult]) -> list[ReproductionResult]:
+    return sorted(
+        values,
+        key=lambda item: (item.candidate_id, item.test_name, item.specification_sha256),
+    )
+
+
+def _sorted_reproduction_resolutions(
+    values: Iterable[CandidateReproductionResolution],
+) -> list[CandidateReproductionResolution]:
+    return sorted(values, key=lambda item: (item.candidate_id, item.kind.value, item.detail))
 
 
 class SourceExcerptEvidence(StrictModel):
@@ -304,39 +364,212 @@ class ForensicFindingRecord(StrictModel):
 class FindingsArtifact(ReportStatusProjection):
     """Complete final/candidate finding history for the forensic bundle."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.1"] = "1.1"
     run_id: str = Field(min_length=1, max_length=160)
+    reporting_severity_threshold: Severity
     findings: list[Finding]
     rejected_findings: list[Finding]
+    filtered_findings: list[Finding]
     records: list[ForensicFindingRecord]
-    candidate_findings: list[CandidateFinding] = Field(default_factory=list)
+    candidate_findings: list[CandidateFinding] = Field(max_length=100_000)
+    terminal_candidate_dispositions: list[CandidateTerminalDisposition] = Field(
+        max_length=100_000
+    )
+    verification_decisions: list[VerificationDecision] = Field(max_length=100_000)
+    cross_examination_decisions: list[CandidateCrossExaminationDecision] = Field(
+        max_length=100_000
+    )
+    falsification_decisions: list[FalsificationDecision] = Field(max_length=100_000)
+    reproductions: list[ReproductionResult] = Field(max_length=100_000)
+    reproduction_resolutions: list[CandidateReproductionResolution] = Field(max_length=100_000)
 
     @model_validator(mode="after")
     def inventory_is_exact_and_unique(self) -> FindingsArtifact:
-        expected_findings = [*self.findings, *self.rejected_findings]
+        expected_findings = [
+            *self.findings,
+            *self.rejected_findings,
+            *self.filtered_findings,
+        ]
         if [record.finding for record in self.records] != expected_findings:
             raise ValueError("forensic records differ from the final finding inventories")
         identifiers = [finding.id for finding in expected_findings]
         if len(identifiers) != len(set(identifiers)):
             raise ValueError("forensic finding IDs must be unique")
         candidate_ids = [candidate.candidate_id for candidate in self.candidate_findings]
-        if len(candidate_ids) != len(set(candidate_ids)):
-            raise ValueError("forensic candidate IDs must be unique")
+        if candidate_ids != sorted(set(candidate_ids)):
+            raise ValueError("forensic candidate IDs must be unique and sorted")
         candidate_id_set = set(candidate_ids)
-        referenced_candidate_ids = {
+        referenced_candidate_ids = [
             candidate_id
             for record in self.records
+            if record.finding.origin_kind is not FindingOriginKind.STATIC_ANALYZER
             for candidate_id in record.finding.contributing_candidate_ids
-        }
-        if not candidate_id_set <= referenced_candidate_ids:
-            raise ValueError("forensic candidate inventory contains an orphan record")
+        ]
+        if sorted(referenced_candidate_ids) != candidate_ids:
+            raise ValueError(
+                "every forensic candidate requires exactly one terminal finding record"
+            )
         for record in self.records:
             expected_candidate_ids = (
                 set(record.finding.contributing_candidate_ids) & candidate_id_set
             )
-            observed = {candidate.candidate_id for candidate in record.candidate_findings}
-            if observed != expected_candidate_ids:
+            observed_candidate_ids = {
+                candidate.candidate_id for candidate in record.candidate_findings
+            }
+            if observed_candidate_ids != expected_candidate_ids:
                 raise ValueError("forensic record omits candidate inventory evidence")
+
+        severity_rank = {
+            Severity.INFORMATIONAL: 0,
+            Severity.LOW: 1,
+            Severity.MEDIUM: 2,
+            Severity.HIGH: 3,
+            Severity.CRITICAL: 4,
+        }
+        if any(
+            finding.status is FindingStatus.REJECTED
+            or finding.origin_kind is FindingOriginKind.DETERMINISTIC_EXECUTION
+            or severity_rank[finding.severity]
+            >= severity_rank[self.reporting_severity_threshold]
+            for finding in self.filtered_findings
+        ):
+            raise ValueError(
+                "reporting-filtered finding conflicts with its exact severity threshold"
+            )
+        if any(
+            finding.origin_kind is not FindingOriginKind.DETERMINISTIC_EXECUTION
+            and severity_rank[finding.severity]
+            < severity_rank[self.reporting_severity_threshold]
+            for finding in self.findings
+        ):
+            raise ValueError("active finding falls below its exact reporting threshold")
+        expected_terminal: list[CandidateTerminalDisposition] = []
+        active_ids = {finding.id for finding in self.findings}
+        rejected_ids = {finding.id for finding in self.rejected_findings}
+        for record in self.records:
+            finding = record.finding
+            if finding.origin_kind is FindingOriginKind.STATIC_ANALYZER:
+                continue
+            if finding.group_id is None:
+                raise ValueError("candidate terminal finding lacks a group ID")
+            state = (
+                CandidateTerminalState.REPORTED_ACTIVE
+                if finding.id in active_ids
+                else (
+                    CandidateTerminalState.REPORTED_REJECTED
+                    if finding.id in rejected_ids
+                    else CandidateTerminalState.FILTERED_BELOW_THRESHOLD
+                )
+            )
+            expected_terminal.extend(
+                CandidateTerminalDisposition(
+                    candidate_id=candidate_id,
+                    group_id=finding.group_id,
+                    finding_id=finding.id,
+                    state=state,
+                    finding_severity=finding.severity,
+                    reporting_severity_threshold=self.reporting_severity_threshold,
+                )
+                for candidate_id in finding.contributing_candidate_ids
+            )
+        expected_terminal.sort(key=lambda item: item.candidate_id)
+        if self.terminal_candidate_dispositions != expected_terminal:
+            raise ValueError("forensic candidate terminal dispositions are incomplete or altered")
+
+        inventories: tuple[
+            tuple[str, list[tuple[str, ...]], list[str]],
+            ...,
+        ] = (
+            (
+                "verification decisions",
+                [(item.candidate_id,) for item in self.verification_decisions],
+                [item.candidate_id for item in self.verification_decisions],
+            ),
+            (
+                "cross-examination decisions",
+                [
+                    (
+                        item.candidate_id,
+                        f"{item.reviewer_index:02d}",
+                        item.root_lineage,
+                        item.request_id,
+                    )
+                    for item in self.cross_examination_decisions
+                ],
+                [item.candidate_id for item in self.cross_examination_decisions],
+            ),
+            (
+                "falsification decisions",
+                [
+                    (item.candidate_id, item.test_name)
+                    for item in self.falsification_decisions
+                ],
+                [item.candidate_id for item in self.falsification_decisions],
+            ),
+            (
+                "reproductions",
+                [
+                    (item.candidate_id, item.test_name, item.specification_sha256)
+                    for item in self.reproductions
+                ],
+                [item.candidate_id for item in self.reproductions],
+            ),
+            (
+                "reproduction resolutions",
+                [(item.candidate_id,) for item in self.reproduction_resolutions],
+                [item.candidate_id for item in self.reproduction_resolutions],
+            ),
+        )
+        for label, keys, referenced_ids in inventories:
+            if keys != sorted(set(keys)):
+                raise ValueError(f"forensic {label} must be unique and sorted")
+            if any(candidate_id not in candidate_id_set for candidate_id in referenced_ids):
+                raise ValueError(f"forensic {label} references an unknown candidate")
+
+        flattened = (
+            (
+                "verification decisions",
+                self.verification_decisions,
+                _sorted_verifications(
+                    [item for record in self.records for item in record.verification_decisions]
+                ),
+            ),
+            (
+                "cross-examination decisions",
+                self.cross_examination_decisions,
+                _sorted_cross_examinations(
+                    [
+                        item
+                        for record in self.records
+                        for item in record.cross_examination_decisions
+                    ]
+                ),
+            ),
+            (
+                "falsification decisions",
+                self.falsification_decisions,
+                _sorted_falsifications(
+                    [item for record in self.records for item in record.falsification_decisions]
+                ),
+            ),
+            (
+                "reproductions",
+                self.reproductions,
+                _sorted_reproductions(
+                    [item for record in self.records for item in record.reproductions]
+                ),
+            ),
+            (
+                "reproduction resolutions",
+                self.reproduction_resolutions,
+                _sorted_reproduction_resolutions(
+                    [item for record in self.records for item in record.reproduction_resolutions]
+                ),
+            ),
+        )
+        for label, inventory, flattened_inventory in flattened:
+            if flattened_inventory != inventory:
+                raise ValueError(f"forensic records omit or duplicate top-level {label}")
         return self
 
 
@@ -860,7 +1093,7 @@ class ModelExecutionArtifact(ReportStatusProjection):
             raise ValueError("model execution reasoning-token total is inconsistent")
         if self.cached_tokens != sum(record.cached_tokens for record in self.usage):
             raise ValueError("model execution cached-token total is inconsistent")
-        if Decimal(self.accounted_cost_usd_exact) != Decimal(str(self.accounted_cost_usd)):
+        if float(Decimal(self.accounted_cost_usd_exact)) != self.accounted_cost_usd:
             raise ValueError("model execution exact cost differs from presentation cost")
         if self.schema_version == "1.0":
             if self.cost_ledger is not None:
@@ -978,10 +1211,19 @@ def build_findings_artifact(
     """Build an exact candidate-linked forensic finding inventory."""
 
     report = AuditReport.model_validate(report.model_dump(mode="python"))
+    raw_threshold = report.metadata.get("severity_threshold", Severity.INFORMATIONAL.value)
+    try:
+        reporting_threshold = Severity(raw_threshold)
+    except (TypeError, ValueError):
+        raise ValueError("report has an invalid reporting severity threshold") from None
     candidate_by_id = {candidate.candidate_id: candidate for candidate in candidates}
     excerpts = source_excerpts or {}
     records: list[ForensicFindingRecord] = []
-    for finding in [*report.findings, *report.rejected_findings]:
+    for finding in [
+        *report.findings,
+        *report.rejected_findings,
+        *report.filtered_findings,
+    ]:
         contributor_ids = set(finding.contributing_candidate_ids)
         linked_candidates = sorted(
             [
@@ -991,42 +1233,26 @@ def build_findings_artifact(
             ],
             key=lambda item: item.candidate_id,
         )
-        linked_verifications = sorted(
-            (
-                item
-                for item in report.verification_decisions
-                if item.candidate_id in contributor_ids
-            ),
-            key=lambda item: item.candidate_id,
+        linked_verifications = _sorted_verifications(
+            item
+            for item in report.verification_decisions
+            if item.candidate_id in contributor_ids
         )
-        linked_cross_examinations = sorted(
-            (
-                item
-                for item in report.cross_examination_decisions
-                if item.candidate_id in contributor_ids
-            ),
-            key=lambda item: (
-                item.candidate_id,
-                item.reviewer_index,
-                item.root_lineage,
-                item.request_id,
-            ),
+        linked_cross_examinations = _sorted_cross_examinations(
+            item
+            for item in report.cross_examination_decisions
+            if item.candidate_id in contributor_ids
         )
-        linked_falsifications = sorted(
-            (
-                item
-                for item in report.falsification_decisions
-                if item.candidate_id in contributor_ids
-            ),
-            key=lambda item: (item.candidate_id, item.test_name),
+        linked_falsifications = _sorted_falsifications(
+            item
+            for item in report.falsification_decisions
+            if item.candidate_id in contributor_ids
         )
-        linked_reproductions = sorted(
-            (item for item in report.reproductions if item.candidate_id in contributor_ids),
-            key=lambda item: (item.candidate_id, item.test_name, item.specification_sha256),
+        linked_reproductions = _sorted_reproductions(
+            item for item in report.reproductions if item.candidate_id in contributor_ids
         )
-        linked_resolutions = sorted(
-            (item for item in reproduction_resolutions if item.candidate_id in contributor_ids),
-            key=lambda item: (item.candidate_id, item.kind.value, item.detail),
+        linked_resolutions = _sorted_reproduction_resolutions(
+            item for item in reproduction_resolutions if item.candidate_id in contributor_ids
         )
         records.append(
             ForensicFindingRecord(
@@ -1049,14 +1275,56 @@ def build_findings_artifact(
                 reproduction_resolutions=linked_resolutions,
             )
         )
+    active_ids = {finding.id for finding in report.findings}
+    rejected_ids = {finding.id for finding in report.rejected_findings}
+    terminal_dispositions: list[CandidateTerminalDisposition] = []
+    for record in records:
+        finding = record.finding
+        if finding.origin_kind is FindingOriginKind.STATIC_ANALYZER:
+            continue
+        if finding.group_id is None:
+            raise ValueError("candidate terminal finding lacks a group ID")
+        state = (
+            CandidateTerminalState.REPORTED_ACTIVE
+            if finding.id in active_ids
+            else (
+                CandidateTerminalState.REPORTED_REJECTED
+                if finding.id in rejected_ids
+                else CandidateTerminalState.FILTERED_BELOW_THRESHOLD
+            )
+        )
+        terminal_dispositions.extend(
+            CandidateTerminalDisposition(
+                candidate_id=candidate_id,
+                group_id=finding.group_id,
+                finding_id=finding.id,
+                state=state,
+                finding_severity=finding.severity,
+                reporting_severity_threshold=reporting_threshold,
+            )
+            for candidate_id in finding.contributing_candidate_ids
+        )
+    terminal_dispositions.sort(key=lambda item: item.candidate_id)
     projection = effective_report_status(report)
     return FindingsArtifact(
         **projection.model_dump(mode="python"),
         run_id=report.run_id,
+        reporting_severity_threshold=reporting_threshold,
         findings=list(report.findings),
         rejected_findings=list(report.rejected_findings),
+        filtered_findings=list(report.filtered_findings),
         records=records,
         candidate_findings=sorted(candidates, key=lambda item: item.candidate_id),
+        terminal_candidate_dispositions=terminal_dispositions,
+        verification_decisions=_sorted_verifications(report.verification_decisions),
+        cross_examination_decisions=_sorted_cross_examinations(
+            report.cross_examination_decisions
+        ),
+        falsification_decisions=_sorted_falsifications(report.falsification_decisions),
+        reproductions=_sorted_reproductions(report.reproductions),
+        reproduction_resolutions=_sorted_reproduction_resolutions(
+            reproduction_resolutions
+        ),
     )
 
 
@@ -1119,7 +1387,7 @@ def build_model_execution_artifact(
         cost_evidence = CostLedgerAbsenceEvidence.build(
             persistent_ledger_configured=persistent_ledger_configured
         )
-    exact_cost = sum(
+    usage_exact_cost = sum(
         (
             Decimal(record.accounted_cost_usd_exact)
             if record.accounted_cost_usd_exact is not None
@@ -1128,12 +1396,21 @@ def build_model_execution_artifact(
         ),
         start=Decimal("0"),
     )
+    report_exact_cost = (
+        Decimal(report.accounted_cost_usd_exact)
+        if report.accounted_cost_usd_exact is not None
+        else Decimal(str(report.accounted_cost_usd))
+    )
+    if float(report_exact_cost) != report.accounted_cost_usd:
+        raise ValueError("final report exact cost differs from its presentation cost")
     if cost_ledger_evidence is not None:
         exact_cost = Decimal(cost_ledger_evidence.run_accounted_cost_usd_exact)
-        if Decimal(str(report.accounted_cost_usd)) != exact_cost:
+        if report_exact_cost != exact_cost:
             raise ValueError("final report cost differs from run-scoped ledger custody")
     elif not usage:
-        exact_cost = Decimal(str(report.accounted_cost_usd))
+        exact_cost = report_exact_cost
+    else:
+        exact_cost = usage_exact_cost
     projection = effective_report_status(report)
     return ModelExecutionArtifact(
         **projection.model_dump(mode="python"),

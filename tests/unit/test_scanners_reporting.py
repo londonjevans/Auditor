@@ -106,6 +106,7 @@ from mmaudit.scanners.base import (
     isolated_executable_version_probe,
     preflight_scanner_executable,
     sanitized_scanner_environment,
+    scanner_fingerprint,
     scanner_trust_pin_error,
     scanner_workspace_sha256,
 )
@@ -973,7 +974,13 @@ def test_real_repository_suite_scanner_strength_survives_report_conversion(
         locations=[Location(path=source.name, start_line=1, end_line=1)],
         metadata={"repository_test_execution_sha256": "a" * 64},
         evidence_strength=EvidenceStrength.DETERMINISTIC_ANALYZER,
-        fingerprint="b" * 64,
+        fingerprint=scanner_fingerprint(
+            "foundry_fork",
+            "repository-fork-test-failure",
+            source.name,
+            1,
+            "A real isolated repository test observed an incorrect state transition.",
+        ),
     )
 
     findings = _scanner_findings_for_report(tmp_path, [scanner])

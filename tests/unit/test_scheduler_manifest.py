@@ -29,6 +29,7 @@ from mmaudit.models.scheduler import (
     SchedulerPassPlan,
     SchedulerPassResult,
     SchedulerPrivacyEvidenceCustody,
+    SchedulerProviderAttemptEvidence,
     SchedulerReportBinding,
     SchedulerScope,
     SchedulerShardInventory,
@@ -58,6 +59,7 @@ from mmaudit.orchestration.manifest import (
     validate_scheduler_artifact,
     write_run_evidence_manifest,
 )
+from mmaudit.orchestration.budgets import AtomicRequestLimitReservationEvidence
 from mmaudit.orchestration.scheduler import (
     SchedulerJournal,
     create_scheduler_journal,
@@ -86,6 +88,8 @@ from tests.scheduler_support import (
     build_scheduler_test_model_payload,
     scheduler_test_response_schema_sha256,
 )
+from mmaudit.models.usage import request_token_plan_from_usage
+from tests.identity_fixtures import synthetic_token_plan_routing
 from tests.unit.test_manifest import _report, _write_required_artifacts
 
 
@@ -200,6 +204,7 @@ def _scheduler_artifact(
     config=None,
     shard_inventory: SchedulerShardInventory | None = None,
     terminal_status: SchedulerTerminalStatus = SchedulerTerminalStatus.SUCCEEDED,
+    retain_provider_attempt: bool = False,
 ) -> tuple[SchedulerArtifact, SchedulerModelRequestEvidence]:
     inventory = shard_inventory or build_scheduler_shard_inventory(report.repository, None)
     prompt_set_sha256 = scheduler_prompt_template_set_sha256()
@@ -308,6 +313,17 @@ def _scheduler_artifact(
         if terminal_status is SchedulerTerminalStatus.SUCCEEDED
         else None
     )
+    provider_attempt = (
+        SchedulerProviderAttemptEvidence.build(
+            task=task,
+            activation=activation,
+            usage_record=usage,
+        )
+        if retain_provider_attempt
+        else None
+    )
+    if provider_attempt is not None and output is not None:
+        raise ValueError("synthetic scheduler fixture cannot retain both provider evidence kinds")
     result = SchedulerTaskResult.build(
         plan=plan,
         task=task,
@@ -373,6 +389,7 @@ def _scheduler_artifact(
         model_requests=model_requests,
         activations=(activation,),
         outputs=(() if output is None else (output,)),
+        provider_attempts=(() if provider_attempt is None else (provider_attempt,)),
         task_results=(result,),
         result_observations=(result,),
         events=events,
@@ -412,7 +429,7 @@ def _provider_usage_material(
         effective_source_byte_ceiling=3,
         rendered_sha256=user_prompt_sha256,
     )
-    return UsageRecord(
+    provisional = UsageRecord(
         request_id=request_id,
         role=role,
         execution_evidence=ExecutionEvidenceKind.MOCK,
@@ -460,6 +477,36 @@ def _provider_usage_material(
         validation_status=ModelRequestValidationStatus.VALID,
         status="success",
         attempts=1,
+    )
+    with_token_plan = provisional.model_copy(
+        update={
+            "routing": synthetic_token_plan_routing(
+                provisional,
+                provisional.routing,
+            )
+        }
+    )
+    token_plan = request_token_plan_from_usage(with_token_plan)
+    assert token_plan is not None
+    request_limit = AtomicRequestLimitReservationEvidence.build(
+        request_id=with_token_plan.request_id,
+        exact_model_id=with_token_plan.requested_model,
+        role=with_token_plan.role,
+        request_token_plan_sha256=token_plan.plan_sha256,
+        request_limit_scope=with_token_plan.request_id,
+        request_limit_count_before=0,
+        request_limit_maximum=10,
+    )
+    return with_token_plan.model_copy(
+        update={
+            "routing": {
+                **with_token_plan.routing,
+                "atomic_request_limit_reservations": [request_limit.model_dump(mode="json")],
+                "atomic_request_limit_reservation_sha256s": [request_limit.evidence_sha256],
+                "atomic_request_limit_reservation": request_limit.model_dump(mode="json"),
+                "atomic_request_limit_reservation_sha256": request_limit.evidence_sha256,
+            }
+        }
     )
 
 
@@ -540,7 +587,11 @@ def _write_privacy_artifacts(run_dir: Path, report) -> None:
 
 
 def _write_scheduler_run(run_dir: Path, report, artifact: SchedulerArtifact) -> None:
-    _write_required_artifacts(run_dir, report)
+    _write_required_artifacts(
+        run_dir,
+        report,
+        legacy_model_execution=bool(report.usage),
+    )
     _write_privacy_artifacts(run_dir, report)
     private = run_dir / "private"
     private.mkdir(exist_ok=True, mode=0o700)
@@ -580,6 +631,21 @@ def _write_scheduler_run(run_dir: Path, report, artifact: SchedulerArtifact) -> 
                         usage_record=_provider_usage(report, request),
                     )
                     assert output.output_artifact_sha256 == result.output_artifact_sha256
+                elif (
+                    artifact.journal_evidence.provider_attempt_count > 0
+                    and request.logical_request_id in {item.request_id for item in report.usage}
+                ):
+                    retained_attempt = journal.persist_provider_attempt(
+                        task.task_id,
+                        usage_record=next(
+                            item
+                            for item in report.usage
+                            if item.request_id == request.logical_request_id
+                        ),
+                    )
+                    assert retained_attempt.attempt_evidence_sha256 in (
+                        artifact.journal_evidence.provider_attempt_evidence_sha256s
+                    )
                 journal.record_terminal(result)
             assert journal.seal_pass_result(plan.pass_kind) == pass_result
         assert journal.artifact() == artifact
@@ -957,6 +1023,51 @@ def test_scheduler_retains_valid_provider_success_followed_by_host_invalid_resul
     assert artifact.summary.status.value == "FAILED"
 
 
+def test_current_custody_closes_failed_usage_against_retained_provider_attempt(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    base_report = _non_solidity_report(config)
+    artifact, request = _scheduler_artifact(
+        base_report,
+        config=config,
+        terminal_status=SchedulerTerminalStatus.INVALID,
+        retain_provider_attempt=True,
+    )
+    usage = _provider_usage(base_report, request)
+    report = _with_scheduler(base_report.model_copy(update={"usage": [usage]}), artifact)
+    run_dir = tmp_path / "retained-provider-attempt"
+    _write_scheduler_run(run_dir, report, artifact)
+
+    assert (
+        validate_scheduler_artifact(
+            run_dir,
+            report,
+            config=config,
+            require_retained_usage_custody=True,
+        )
+        == artifact
+    )
+
+    changed_usage = usage.model_copy(update={"provider": "Coherently Resealed Provider"})
+    resealed_report = report.model_copy(update={"usage": [changed_usage]})
+    with pytest.raises(ValueError, match="exact retained scheduler custody"):
+        validate_scheduler_artifact(
+            run_dir,
+            resealed_report,
+            config=config,
+            require_retained_usage_custody=True,
+        )
+    with pytest.raises(ValueError, match="exact retained scheduler custody"):
+        validate_scheduler_artifact(
+            run_dir,
+            report.model_copy(update={"usage": []}),
+            config=config,
+            require_retained_usage_custody=True,
+        )
+
+
 def test_scheduler_retains_crash_output_as_uncertain_without_provider_credit(
     tmp_path: Path,
     config_factory,
@@ -1019,7 +1130,7 @@ def test_scheduler_retains_crash_output_as_uncertain_without_provider_credit(
     assert binding.uncertain_count == 1
     report = _with_scheduler(base_report.model_copy(update={"usage": [usage]}), artifact)
     run_dir = tmp_path / "run"
-    _write_required_artifacts(run_dir, report)
+    _write_required_artifacts(run_dir, report, legacy_model_execution=True)
     _write_privacy_artifacts(run_dir, report)
     private = run_dir / "private"
     private.mkdir(mode=0o700)

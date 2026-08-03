@@ -163,34 +163,47 @@ def bind_active_finding_source_locations(
     report: AuditReport,
     source_contents: Mapping[str, str],
 ) -> AuditReport:
-    """Bind active final locations to the immutable audited source snapshot.
+    """Bind reportable and threshold-filtered locations to the audited source snapshot.
 
     Candidate and scanner observations remain untouched. Only the canonical final
-    finding projection receives host-observed per-range hashes.
+    finding projections receive host-observed per-range hashes.
     """
 
     report = AuditReport.model_validate(report.model_dump(mode="python"))
-    bound_findings: list[Finding] = []
-    for finding in report.findings:
-        if not finding.location_validation.valid:
-            raise ValueError(f"active finding lacks valid source-location evidence: {finding.id}")
-        if not finding.locations:
-            raise ValueError(f"active finding lacks a source location: {finding.id}")
-        bound_locations: list[Location] = []
-        for location in finding.locations:
-            observed_range_hash, _content, _total_lines = _validated_location_hash(
-                report=report,
-                location=location,
-                source_contents=source_contents,
-            )
-            bound_locations.append(
-                location.model_copy(update={"content_hash": observed_range_hash})
-            )
-        bound_findings.append(finding.model_copy(update={"locations": bound_locations}))
+    def bind(findings: Sequence[Finding], *, label: str) -> list[Finding]:
+        bound: list[Finding] = []
+        for finding in findings:
+            if not finding.location_validation.valid:
+                raise ValueError(
+                    f"{label} finding lacks valid source-location evidence: {finding.id}"
+                )
+            if not finding.locations:
+                raise ValueError(f"{label} finding lacks a source location: {finding.id}")
+            bound_locations: list[Location] = []
+            for location in finding.locations:
+                observed_range_hash, _content, _total_lines = _validated_location_hash(
+                    report=report,
+                    location=location,
+                    source_contents=source_contents,
+                )
+                bound_locations.append(
+                    location.model_copy(update={"content_hash": observed_range_hash})
+                )
+            bound.append(finding.model_copy(update={"locations": bound_locations}))
+        return bound
+
+    bound_findings = bind(report.findings, label="active")
+    bound_filtered_findings = bind(
+        report.filtered_findings,
+        label="reporting-filtered",
+    )
     return AuditReport.model_validate(
         {
             **report.model_dump(mode="python"),
             "findings": [finding.model_dump(mode="python") for finding in bound_findings],
+            "filtered_findings": [
+                finding.model_dump(mode="python") for finding in bound_filtered_findings
+            ],
         }
     )
 
@@ -199,11 +212,11 @@ def build_client_source_excerpts(
     report: AuditReport,
     source_contents: Mapping[str, str],
 ) -> dict[str, SourceExcerptEvidence]:
-    """Build one deterministic excerpt for every valid final finding."""
+    """Build one deterministic excerpt for every valid retained non-rejected finding."""
 
     report = AuditReport.model_validate(report.model_dump(mode="python"))
     excerpts: dict[str, SourceExcerptEvidence] = {}
-    for finding in report.findings:
+    for finding in [*report.findings, *report.filtered_findings]:
         excerpts[finding.id] = _source_excerpt(report, finding, source_contents)
     return excerpts
 
@@ -728,13 +741,10 @@ def render_client_markdown_from_artifact(
         for record in artifact.records
         if record.source_excerpt is not None
     }
-    resolutions = [
-        resolution for record in artifact.records for resolution in record.reproduction_resolutions
-    ]
     expected = build_findings_artifact(
         report,
         candidates=artifact.candidate_findings,
-        reproduction_resolutions=resolutions,
+        reproduction_resolutions=artifact.reproduction_resolutions,
         source_excerpts=excerpts,
     )
     if artifact != expected:

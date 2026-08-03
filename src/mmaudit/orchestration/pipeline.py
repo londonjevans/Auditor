@@ -148,7 +148,6 @@ from mmaudit.models.schemas import (
     EconomicSimulationKind,
     EconomicSimulationPlan,
     Evidence,
-    EvidenceStrength,
     ExecutionEvidenceKind,
     FalsificationBatch,
     FalsificationVerdict,
@@ -327,6 +326,7 @@ from mmaudit.privacy import (
     validate_trusted_privacy_authorization,
 )
 from mmaudit.reporting.bundle import (
+    RunCostLedgerEvidence,
     build_coverage_artifact,
     build_findings_artifact,
     build_model_execution_artifact,
@@ -364,6 +364,7 @@ from mmaudit.scanners.fork_matrix import (
     RepositoryForkMatrixRunner,
     repository_fork_matrix_timeout_budget_seconds,
 )
+from mmaudit.scanners.projection import project_scanner_finding
 from mmaudit.scanners.runner import ScannerRunner
 from mmaudit.scanners.runtime_evidence import (
     validated_scanner_run_location_annotation_preserving_runtime_authority,
@@ -1844,6 +1845,7 @@ class AuditPipeline:
         cross_examinations: list[CandidateCrossExaminationDecision] = []
         final_findings: list[Finding] = []
         rejected_findings: list[Finding] = []
+        filtered_findings: list[Finding] = []
         post_judge_execution_severity_candidates: dict[str, CandidateFinding] = {}
         scanner_runs = []
         threat_model: ThreatModel | None = None
@@ -2653,6 +2655,8 @@ class AuditPipeline:
                     >= SEVERITY_ORDER[severity_threshold.value]
                 ):
                     final_findings.append(finding)
+                else:
+                    filtered_findings.append(finding)
         model_qualification_required = production_model_qualification_required(
             self.config,
             execution_evidence=self._planned_model_execution_evidence(),
@@ -6118,6 +6122,8 @@ class AuditPipeline:
                     >= SEVERITY_ORDER[severity_threshold.value]
                 ):
                     final_findings.append(finding)
+                else:
+                    filtered_findings.append(finding)
 
             if not scheduler_halted:
                 assert judgment_host_task is not None
@@ -6126,6 +6132,9 @@ class AuditPipeline:
                     "judge_decision_ids": sorted(judge_decisions),
                     "final_finding_ids": sorted(finding.id for finding in final_findings),
                     "rejected_finding_ids": sorted(finding.id for finding in rejected_findings),
+                    "filtered_finding_ids": sorted(
+                        finding.id for finding in filtered_findings
+                    ),
                 }
                 if completed_pass_seven is None:
                     scheduler.activate_host(
@@ -6959,6 +6968,37 @@ class AuditPipeline:
                 ),
             }
         audited_source_contents = {item.relative_path: item.content for item in discovery.files}
+        cost_ledger_evidence: RunCostLedgerEvidence | None = None
+        if scheduler_cost_ledger_baseline is not None:
+            if scheduler_artifact is None:
+                raise ValueError("scheduler cost baseline lacks its campaign artifact")
+            if effective_cost_ledger is None:
+                raise ValueError("scheduler cost baseline lacks its live terminal ledger")
+            cost_ledger_evidence = build_run_cost_ledger_evidence(
+                baseline=scheduler_cost_ledger_baseline,
+                final_snapshot=effective_cost_ledger.snapshot(),
+                campaign_logical_request_ids=tuple(
+                    item.logical_request_id for item in scheduler_artifact.model_requests
+                ),
+                usage_records=usage.records,
+            )
+        exact_accounted_cost = (
+            Decimal(cost_ledger_evidence.run_accounted_cost_usd_exact)
+            if cost_ledger_evidence is not None
+            else sum(
+                (
+                    Decimal(record.accounted_cost_usd_exact)
+                    if record.accounted_cost_usd_exact is not None
+                    else Decimal(str(record.accounted_cost_usd))
+                    for record in usage.records
+                ),
+                start=Decimal(0),
+            )
+        )
+        exact_accounted_cost_text = format(exact_accounted_cost, "f")
+        if "." in exact_accounted_cost_text:
+            exact_accounted_cost_text = exact_accounted_cost_text.rstrip("0").rstrip(".")
+        exact_accounted_cost_text = exact_accounted_cost_text or "0"
         report = self._build_report(
             run_id=run_id,
             generated_at=datetime.now(UTC),
@@ -6974,6 +7014,7 @@ class AuditPipeline:
             usage=usage,
             findings=final_findings,
             rejected=rejected_findings,
+            filtered=filtered_findings,
             scanner_only=scanner_only,
             code_egress_enabled=(
                 not scanner_only and (self.config.privacy.allow_code_egress or allow_code_egress)
@@ -7014,6 +7055,7 @@ class AuditPipeline:
             context_manifest=context_manifest,
             ci_metadata=ci_metadata,
             scheduler_report_binding=scheduler_report_binding,
+            accounted_cost_usd_exact=exact_accounted_cost_text,
         )
         report = bind_active_finding_source_locations(report, audited_source_contents)
         ci_state: CIRunState | None = None
@@ -7100,6 +7142,7 @@ class AuditPipeline:
                 self._active_scheduler.journal if self._active_scheduler is not None else None
             ),
             cost_ledger=effective_cost_ledger,
+            cost_ledger_evidence=cost_ledger_evidence,
         )
         self.logger.removeHandler(log_handler)
         log_handler.close()
@@ -7503,6 +7546,7 @@ class AuditPipeline:
         usage: UsageLedger,
         findings: list[Finding],
         rejected: list[Finding],
+        filtered: list[Finding],
         scanner_only: bool,
         code_egress_enabled: bool,
         severity_threshold: Severity,
@@ -7541,6 +7585,7 @@ class AuditPipeline:
         context_manifest: ContextManifest,
         ci_metadata: dict[str, Any] | None,
         scheduler_report_binding: dict[str, Any] | None,
+        accounted_cost_usd_exact: str,
     ) -> AuditReport:
         fork_probing_enabled = self.config.smart_contracts.enabled and (
             self.config.smart_contracts.allow_fork_probing or allow_fork_probing
@@ -7582,9 +7627,11 @@ class AuditPipeline:
             repository_suite_differential=repository_suite_differential,
             usage=sorted(usage.records, key=lambda record: record.request_id),
             budget_usd=self.config.execution.budget_usd,
-            accounted_cost_usd=usage.accounted_cost_usd,
+            accounted_cost_usd=float(Decimal(accounted_cost_usd_exact)),
+            accounted_cost_usd_exact=accounted_cost_usd_exact,
             findings=findings,
             rejected_findings=rejected,
+            filtered_findings=filtered,
             audit_profile=self.config.profile,
             quality_status=quality_status,
             run_status=run_status,
@@ -7839,6 +7886,7 @@ class AuditPipeline:
         scheduler_artifact: SchedulerArtifact | None,
         scheduler_runtime_journal: SchedulerJournal | None,
         cost_ledger: AtomicCostLedger | None,
+        cost_ledger_evidence: RunCostLedgerEvidence | None,
     ) -> None:
         status_metadata = report_status_metadata(report)
         if scheduler_artifact is not None:
@@ -8015,25 +8063,6 @@ class AuditPipeline:
         write_json(run_dir / "final-findings.json", report)
         write_json(run_dir / "findings.json", findings_artifact)
         write_json(run_dir / "coverage.json", build_coverage_artifact(report))
-        scheduler_cost_baseline = (
-            scheduler_artifact.summary.manifest.cost_ledger_baseline
-            if scheduler_artifact is not None
-            else None
-        )
-        cost_ledger_evidence = None
-        if scheduler_cost_baseline is not None:
-            if scheduler_artifact is None:  # pragma: no cover - derived immediately above.
-                raise ValueError("scheduler cost baseline lacks its campaign artifact")
-            if cost_ledger is None:
-                raise ValueError("scheduler cost baseline lacks its live terminal ledger")
-            cost_ledger_evidence = build_run_cost_ledger_evidence(
-                baseline=scheduler_cost_baseline,
-                final_snapshot=cost_ledger.snapshot(),
-                campaign_logical_request_ids=tuple(
-                    item.logical_request_id for item in scheduler_artifact.model_requests
-                ),
-                usage_records=report.usage,
-            )
         write_json(
             run_dir / "model-execution.json",
             build_model_execution_artifact(
@@ -8052,13 +8081,16 @@ class AuditPipeline:
             encoding="utf-8",
         )
         (run_dir / "forensic-report.md").write_text(
-            render_forensic_markdown(report),
+            render_forensic_markdown(report, findings_artifact=findings_artifact),
             encoding="utf-8",
         )
-        (run_dir / "audit-report.md").write_text(render_markdown(report), encoding="utf-8")
+        (run_dir / "audit-report.md").write_text(
+            render_markdown(report, findings_artifact=findings_artifact),
+            encoding="utf-8",
+        )
         write_json(
             run_dir / "audit-results.sarif",
-            generate_report_sarif(report),
+            generate_report_sarif(report, findings_artifact=findings_artifact),
         )
         if ci_state is not None:
             write_json(run_dir / CI_STATE_FILENAME, ci_state)
@@ -8573,115 +8605,14 @@ def _scanner_findings_for_report(
     findings: list[Finding] = []
     for scanner in scanner_findings:
         validation_results = [validate_location(root, location) for location in scanner.locations]
-        errors = [error for result in validation_results for error in result.errors]
-        valid_locations = [
-            location.model_copy(update={"content_hash": result.content_hash})
-            for location, result in zip(scanner.locations, validation_results, strict=True)
-            if result.valid and result.content_hash is not None
-        ]
-        hashes = [
-            result.content_hash
-            for result in validation_results
-            if result.valid and result.content_hash
-        ]
-        aggregate_hash = (
-            hashlib.sha256("".join(sorted(hashes)).encode()).hexdigest() if hashes else None
-        )
-        status = FindingStatus.NEEDS_REVIEW if valid_locations else FindingStatus.REJECTED
         findings.append(
-            Finding(
-                id=_scanner_stable_finding_id(
-                    scanner,
-                    valid_locations or scanner.locations,
-                ),
-                group_id=f"scanner-{scanner.fingerprint[:16]}",
-                origin_kind=FindingOriginKind.STATIC_ANALYZER,
-                title=scanner.title,
-                status=status,
-                severity=scanner.severity,
-                confidence=0.8 if valid_locations else 0.0,
-                cwe=scanner.cwe,
-                owasp=[],
-                summary=scanner.message,
-                impact=(
-                    "The scanner matched a potentially security-relevant pattern; "
-                    "reachability and concrete impact require local review."
-                ),
-                preconditions=["The scanner rule applies to a reachable application path"],
-                locations=valid_locations or scanner.locations,
-                attack_path=[
-                    f"{scanner.scanner} matched rule {scanner.rule_id}",
-                    "A maintainer confirms attacker reachability and impact locally",
-                ],
-                evidence=[
-                    Evidence(
-                        type="scanner",
-                        source=scanner.scanner,
-                        rule_id=scanner.rule_id,
-                        description=scanner.message,
-                        fingerprint=scanner.fingerprint,
-                    )
-                ],
-                false_positive_conditions=[
-                    "The matched path is unreachable or protected by a control the scanner cannot model"
-                ],
-                recommendation=(
-                    "Review the cited location and the scanner rule guidance, then apply "
-                    "the narrowest remediation supported by local verification."
-                ),
-                verification_test=VerificationTest(
-                    description=(
-                        "Reproduce the scanner condition against a synthetic local fixture "
-                        "without contacting external systems"
-                    )
-                ),
-                location_validation=LocationValidation(
-                    valid=bool(valid_locations),
-                    content_hash=aggregate_hash,
-                    errors=errors,
-                    validated_at=datetime.now(UTC),
-                ),
-                disagreement=(
-                    "Scanner-only output has not been accepted by the independent verifier."
-                ),
-                contributing_candidate_ids=[scanner.fingerprint],
-                evidence_strength=(
-                    scanner.evidence_strength
-                    if status is not FindingStatus.REJECTED
-                    else EvidenceStrength.NONE
-                ),
+            project_scanner_finding(
+                scanner,
+                validation_results,
+                validated_at=datetime.now(UTC),
             )
         )
     return findings
-
-
-def _scanner_stable_finding_id(
-    scanner: ScannerFinding,
-    locations: list[Location],
-) -> str:
-    primary = sorted(
-        locations,
-        key=lambda location: (
-            location.path,
-            location.start_line,
-            location.end_line,
-            location.symbol or "",
-        ),
-    )[0]
-    vulnerability_class = (
-        sorted(value.upper() for value in scanner.cwe)[0]
-        if scanner.cwe
-        else f"{scanner.scanner}:{scanner.rule_id}"
-    )
-    payload = "\0".join(
-        (
-            vulnerability_class,
-            primary.path,
-            str(primary.start_line),
-            primary.symbol or "",
-        )
-    )
-    return f"MMA-{hashlib.sha256(payload.encode()).hexdigest()[:12].upper()}"
 
 
 def _attach_verifier_votes(

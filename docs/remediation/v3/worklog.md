@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED_OPERATOR_REQUEST
 CURRENT_MILESTONE: Client report and forensic evidence bundle
 CURRENT_TICKET: V3-REPORT-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-FIXTURE-001 (COMPLETE)
-NEXT_ACTION: Resume V3-REPORT-001 by formatting and running the latest forensic-export directory-inventory regressions, then close the three independently reproduced cost-custody defects (private provider-attempt usage join, exact-versus-presentation cost, and current-manifest legacy downgrade) before integrated schema, static, and ticket-close gates.
-LAST_COMMAND: `pgrep -fl 'pytest|mypy|ruff|generate_release_schemas|mmaudit|python.*Auditor'`.
-LAST_RESULT: PAUSED: no matching validation or mmaudit process was running; all delegated agents stopped at saved filesystem states. The newest forensic directory-inventory tests are explicitly unformatted and unexecuted.
+NEXT_ACTION: Resume V3-REPORT-001 by completing threshold-filtered candidate custody and updating current-artifact fixtures for exact candidate/group and verification/cross-examination closure; then repair the three independently confirmed scanner/usage custody regressions before integrated ticket-close gates.
+LAST_COMMAND: `.venv/bin/pytest -q tests/unit/test_client_forensic_reporting.py tests/unit/test_client_forensic_reporting_adversarial.py tests/unit/test_report_status_projection.py tests/unit/test_manifest.py`.
+LAST_RESULT: PAUSED AT SAFE BOUNDARY: targeted Ruff and strict mypy pass; focused pytest reached `60 passed, 32 failed`. Failures are confined to fixtures/helpers not yet updated for the intentionally stronger current-artifact closure. No provider call or long-running process remains active.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,30 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
-LAST_CHECKPOINT_COMMIT: 524ed4ee1b27db27cbd31efb51c7715314991e98
+LAST_CHECKPOINT_COMMIT: 38bed8d76c72af77c01d6ac20790482348dcbd9b
+
+## 2026-08-03T21:01:54Z — Graceful operator pause
+
+- **State:** `V3-REPORT-001` remains `IN_PROGRESS`; this is a WIP preservation point,
+  not ticket completion or release evidence.
+- **Implementation boundary:** Exact report/ledger costs, current model-execution issuance,
+  retained scheduler usage custody, canonical scanner-to-report projection, artifact-aware
+  Markdown/SARIF, semantic compatibility-report validation, and partial threshold-filtered
+  candidate custody are preserved in the working tree.
+- **Last validation:** Affected Ruff passed. Strict mypy passed for the five affected reporting,
+  pipeline, and manifest modules. The focused report/manifest matrix stopped with `60 passed,
+  32 failed`; the failures are understood fixture-closure work, not a claimed green gate.
+- **Exact resume work:** Finish current FindingsArtifact candidate terminal-state and complete
+  decision inventories; update legacy/current compatibility fixtures without weakening current
+  closure; add the HIGH-candidate/CRITICAL-threshold integration; regenerate schemas; then run
+  the integrated reporting/release matrix.
+- **Independent review blockers:** Bind scanner severity/title/CWE/evidence-strength semantics
+  to authoritative scanner output rather than only to the limited scanner fingerprint; reject
+  case-insensitive/NFC or opened-inode duplicate scanner-stream ownership; restore a real
+  qualification-routing usage-tamper regression instead of the weakened cost-only parameter.
+- **Safety/cost:** No provider call, public RPC, secret read, or target-controlled command was
+  performed. All delegated work is stopped and no pytest, Ruff, mypy, schema, or mmaudit process
+  remains active.
 
 ## 2026-08-03 — V3-REPORT-001
 
@@ -167,6 +190,53 @@ LAST_CHECKPOINT_COMMIT: 524ed4ee1b27db27cbd31efb51c7715314991e98
   `524ed4ee1b27db27cbd31efb51c7715314991e98`. It deliberately includes the latest unformatted,
   unexecuted forensic regressions and the three documented cost-custody defects; it is not a
   ticket-complete, release-candidate, or maximum-assurance claim.
+- **Resume (2026-08-03T20:11:52Z):** Persistent-goal continuation re-read the complete 1,417-line
+  objective and reverified SHA-256
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`. The worktree was clean
+  and SSH-synchronized at `5a7789e364d8cbed852f9238c8da5f6ff7ae2243`. Work remains bounded
+  to V3-REPORT-001, beginning with the explicitly unvalidated forensic regressions and the three
+  independently reproduced cost-custody defects. No provider call is required for this slice.
+- **Complete forensic delivery slice:** The exporter now holds wrapper/descriptor authority before
+  its first read, anchors every primary and retained-journal directory with mode/link/identity
+  reobservation, durably publishes created directories, preserves or restores the incomplete
+  marker transactionally, rejects oversized descriptors before destination creation, inventories
+  bounded empty directories, and rejects byte-identical wrapper, run, and dependency swaps. The
+  literal final gate recorded above passed Ruff, strict mypy, schema synchronization, `113` tests,
+  and diff integrity; the separate full CLI and release/manifest matrices passed `79` and `92`
+  tests. This slice alone was committed and SSH-pushed at
+  `38bed8d76c72af77c01d6ac20790482348dcbd9b`. It closes self-contained export portability but does
+  not close the still-active cost, scanner, or cross-output semantic obligations.
+- **Bounded acceptance audit:** Read-only review of the pre-fix checkpoint confirmed five
+  fail-closed seams that remain within V3-REPORT-001 acceptance: effective dissent disposition
+  differed across client/findings versus forensic/SARIF; a real scanner fingerprint did not bind
+  the full deterministic scanner-to-finding projection; scanner raw stdout/stderr declarations
+  were not joined to manifest-bound private bytes; decision records for absent or unrepresented
+  candidates could disappear from forensic projections; and the emitted compatibility Markdown
+  was hash-bound but not semantically regenerated. The review found no additional export-anchor
+  defect at `38bed8d76c72af77c01d6ac20790482348dcbd9b`. Each confirmed seam requires a coherent-reseal
+  negative regression, not serialization-only evidence.
+- **Cross-output disposition slice:** Artifact-aware compatibility Markdown, forensic Markdown,
+  and SARIF now consume the same typed `ForensicFindingRecord.disposition` authority used by the
+  client and `findings.json`. Focused disposition cases passed `7`; the surrounding reporting
+  matrix passed `53`; scanner reporting passed `181`; targeted Ruff, strict mypy, and diff
+  integrity passed. The renderers fail closed on a mismatched findings artifact, retain raw status
+  only as explicit evidence, map `DISPUTED` to SARIF warning and `INCONCLUSIVE` to note, and
+  continue excluding rejected records from SARIF. Pipeline and manifest call-site integration is
+  still pending and this uncommitted slice does not yet prove cross-artifact closure.
+- **Exact cost, scanner, and report semantic closure:** The pipeline now derives exact report cost
+  from one final atomic-ledger campaign delta, including recovered `UNCERTAIN` spend; displayed
+  floats are canonical projections only. Current manifest issuance requires typed model-execution
+  custody and exact cost while sealed legacy manifests remain readable. Report usage closes against
+  exactly one retained successful-output or provider-attempt record while the private journal is
+  held. A shared canonical scanner projection binds fingerprint and every deterministic finding
+  field; private scanner stdout/stderr are bound to exact owner-scoped bytes. The findings artifact
+  drives client/forensic/compatibility Markdown and SARIF, and compatibility Markdown is now a
+  semantically regenerated current-manifest leaf. Exact focused results: `105` manifest/release/
+  disposition tests, `181` scanner tests, `1` CI pipeline round trip, and `27` cost/scheduler tests
+  passed; affected Ruff, strict mypy across seven production files, schema synchronization, and
+  diff integrity passed. Independent review still proves one legitimate gap: reporting thresholds
+  can filter decision-bearing candidates, so complete forensic terminal dispositions and decision
+  inventories must be added without falsely marking those candidates rejected.
 
 ## 2026-08-03 — V3-FIXTURE-001
 

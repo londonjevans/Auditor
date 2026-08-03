@@ -30,9 +30,14 @@ from tests.unit.test_client_forensic_reporting import _report
 LOGICAL_REQUEST_ID = "scheduler-request-" + "a" * 64
 
 
-def _usage(*, attempts: int = 1, cost: str = "0.1") -> UsageRecord:
+def _usage(
+    *,
+    attempts: int = 1,
+    cost: str = "0.1",
+    request_id: str = LOGICAL_REQUEST_ID,
+) -> UsageRecord:
     return UsageRecord(
-        request_id=LOGICAL_REQUEST_ID,
+        request_id=request_id,
         role="source_audit",
         execution_evidence=ExecutionEvidenceKind.MOCK,
         requested_model="synthetic/model",
@@ -219,7 +224,13 @@ def test_two_charged_attempts_join_one_exact_usage_record(tmp_path: Path) -> Non
         usage_records=(usage,),
     )
     artifact = build_model_execution_artifact(
-        _report().model_copy(update={"usage": [usage], "accounted_cost_usd": 0.3}),
+        _report().model_copy(
+            update={
+                "usage": [usage],
+                "accounted_cost_usd": 0.3,
+                "accounted_cost_usd_exact": "0.3",
+            }
+        ),
         cost_ledger_evidence=evidence,
     )
 
@@ -269,7 +280,12 @@ def test_recovered_uncertain_cost_is_retained_without_usage(tmp_path: Path) -> N
         usage_records=(),
     )
     artifact = build_model_execution_artifact(
-        _report().model_copy(update={"accounted_cost_usd": 0.4}),
+        _report().model_copy(
+            update={
+                "accounted_cost_usd": 0.4,
+                "accounted_cost_usd_exact": "0.4",
+            }
+        ),
         cost_ledger_evidence=evidence,
     )
 
@@ -277,6 +293,66 @@ def test_recovered_uncertain_cost_is_retained_without_usage(tmp_path: Path) -> N
     assert evidence.attempts[0].usage_record_sha256 is None
     assert evidence.run_accounted_cost_usd_exact == "0.4"
     assert artifact.accounted_cost_usd_exact == "0.4"
+
+
+def test_exact_cost_custody_accepts_full_ledger_precision(tmp_path: Path) -> None:
+    exact_cost = "0.123456789012345678"
+    ledger = AtomicCostLedger.initialize(tmp_path / "precise.json", cap_usd=Decimal("250"))
+    baseline = build_scheduler_cost_ledger_baseline(ledger)
+    reservation = ledger.reserve(LOGICAL_REQUEST_ID, Decimal("1"))
+    ledger.reconcile(reservation, Decimal(exact_cost))
+    usage = _usage(cost=exact_cost)
+    evidence = build_run_cost_ledger_evidence(
+        baseline=baseline,
+        final_snapshot=ledger.snapshot(),
+        campaign_logical_request_ids=(LOGICAL_REQUEST_ID,),
+        usage_records=(usage,),
+    )
+    report = _report().model_copy(
+        update={
+            "usage": [usage],
+            "accounted_cost_usd": float(Decimal(exact_cost)),
+            "accounted_cost_usd_exact": exact_cost,
+        }
+    )
+
+    artifact = build_model_execution_artifact(report, cost_ledger_evidence=evidence)
+
+    assert artifact.accounted_cost_usd_exact == exact_cost
+    assert artifact.accounted_cost_usd == float(Decimal(exact_cost))
+
+
+def test_exact_cost_custody_normalizes_binary_float_summation(tmp_path: Path) -> None:
+    second_request_id = "scheduler-request-" + "b" * 64
+    ledger = AtomicCostLedger.initialize(tmp_path / "sum.json", cap_usd=Decimal("250"))
+    baseline = build_scheduler_cost_ledger_baseline(ledger)
+    first_reservation = ledger.reserve(LOGICAL_REQUEST_ID, Decimal("1"))
+    ledger.reconcile(first_reservation, Decimal("0.1"))
+    second_reservation = ledger.reserve(second_request_id, Decimal("1"))
+    ledger.reconcile(second_reservation, Decimal("0.2"))
+    usage = (
+        _usage(cost="0.1"),
+        _usage(cost="0.2", request_id=second_request_id),
+    )
+    evidence = build_run_cost_ledger_evidence(
+        baseline=baseline,
+        final_snapshot=ledger.snapshot(),
+        campaign_logical_request_ids=(LOGICAL_REQUEST_ID, second_request_id),
+        usage_records=usage,
+    )
+    assert sum(item.accounted_cost_usd for item in usage) == 0.30000000000000004
+    report = _report().model_copy(
+        update={
+            "usage": list(usage),
+            "accounted_cost_usd": float(Decimal("0.3")),
+            "accounted_cost_usd_exact": "0.3",
+        }
+    )
+
+    artifact = build_model_execution_artifact(report, cost_ledger_evidence=evidence)
+
+    assert artifact.accounted_cost_usd_exact == "0.3"
+    assert artifact.accounted_cost_usd == 0.3
 
 
 def test_baseline_prefix_rejects_changed_or_reordered_final_entries(tmp_path: Path) -> None:

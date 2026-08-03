@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from mmaudit.models.schemas import (
     AnalysisState,
     AuditQualityStatus,
@@ -8,21 +10,31 @@ from mmaudit.models.schemas import (
     FindingOriginKind,
     FindingStatus,
     QualityGateResult,
+    VerificationVerdict,
 )
 from mmaudit.reporting.bundle import (
+    ForensicDisposition,
     build_coverage_artifact,
     build_findings_artifact,
     build_model_execution_artifact,
 )
 from mmaudit.reporting.client import render_client_markdown
-from mmaudit.reporting.markdown import render_forensic_markdown
-from mmaudit.reporting.sarif import generate_report_sarif
+from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
+from mmaudit.reporting.sarif import generate_report_sarif, generate_sarif
 from mmaudit.reporting.status import (
     LEGACY_MINIMUM_FLOOR_LIMITATION,
     ReportStatusProjection,
     effective_report_status,
 )
-from tests.unit.test_client_forensic_reporting import _finding, _report
+from tests.unit.test_client_forensic_reporting import (
+    SOURCE,
+    SOURCE_PATH,
+    _candidate,
+    _finding,
+    _render_client,
+    _report,
+)
+from tests.unit.test_client_forensic_reporting_adversarial import _verification
 
 
 def test_legacy_no_floor_status_is_identical_across_every_canonical_report_leaf() -> None:
@@ -104,3 +116,78 @@ def test_static_analyzer_fingerprint_does_not_require_a_model_candidate_record()
 
     assert artifact.records[0].candidate_findings == []
     assert artifact.records[0].finding.contributing_candidate_ids == [fingerprint]
+
+
+@pytest.mark.parametrize(
+    ("verdict", "expected_disposition", "expected_level"),
+    [
+        (VerificationVerdict.REJECTED, ForensicDisposition.DISPUTED, "warning"),
+        (
+            VerificationVerdict.INSUFFICIENT_CONTEXT,
+            ForensicDisposition.INCONCLUSIVE,
+            "note",
+        ),
+    ],
+)
+def test_effective_finding_disposition_is_coherent_across_every_rendered_leaf(
+    verdict: VerificationVerdict,
+    expected_disposition: ForensicDisposition,
+    expected_level: str,
+) -> None:
+    finding = _finding(FindingStatus.CONFIRMED)
+    report = _report(findings=[finding]).model_copy(
+        update={"verification_decisions": [_verification(verdict)]}
+    )
+    artifact = build_findings_artifact(report, candidates=[_candidate(finding)])
+
+    client = _render_client(report, {SOURCE_PATH: SOURCE})
+    compatibility = render_markdown(report, findings_artifact=artifact)
+    forensic = render_forensic_markdown(report, findings_artifact=artifact)
+    sarif = generate_report_sarif(report, findings_artifact=artifact)
+    result = sarif["runs"][0]["results"][0]
+    rule = sarif["runs"][0]["tool"]["driver"]["rules"][0]
+
+    assert artifact.records[0].disposition is expected_disposition
+    assert f"> **{expected_disposition.value}**" in client
+    for rendered in (compatibility, forensic):
+        assert f"**{expected_disposition.value.title()} finding" in rendered
+        assert "**Confirmed finding**" not in rendered
+        assert "1 confirmed" not in rendered
+    assert result["level"] == expected_level
+    assert result["properties"]["status"] == expected_disposition.value.lower()
+    assert result["properties"]["effectiveDisposition"] == expected_disposition.value
+    assert result["properties"]["rawFindingStatus"] == FindingStatus.CONFIRMED.value
+    assert result["message"]["text"].startswith(f"[{expected_disposition.value}]")
+    assert rule["properties"]["status"] == expected_disposition.value.lower()
+    assert f"disposition/{expected_disposition.value.lower()}" in rule["properties"]["tags"]
+    assert "status/confirmed" not in rule["properties"]["tags"]
+
+
+def test_artifact_aware_outputs_preserve_rejected_finding_handling() -> None:
+    rejected = _finding(FindingStatus.REJECTED, finding_id="MMA-SYNTHETIC-REJECTED")
+    report = _report(rejected=[rejected])
+    artifact = build_findings_artifact(report, candidates=[_candidate(rejected)])
+
+    compatibility = render_markdown(report, findings_artifact=artifact)
+    forensic = render_forensic_markdown(report, findings_artifact=artifact)
+    sarif = generate_report_sarif(report, findings_artifact=artifact)
+
+    assert "**Rejected finding**" in compatibility
+    assert "**Rejected finding**" in forensic
+    assert sarif["runs"][0]["results"] == []
+
+
+def test_artifact_aware_outputs_reject_a_mismatched_authority() -> None:
+    finding = _finding(FindingStatus.CONFIRMED)
+    report = _report(findings=[finding])
+    artifact = build_findings_artifact(report, candidates=[_candidate(finding)])
+    wrong_run = artifact.model_copy(update={"run_id": "different-run"})
+
+    with pytest.raises(ValueError, match="findings artifact differs from the bound audit report"):
+        render_markdown(report, findings_artifact=wrong_run)
+    with pytest.raises(ValueError, match="findings artifact differs from the bound audit report"):
+        render_forensic_markdown(report, findings_artifact=wrong_run)
+    with pytest.raises(ValueError, match="findings artifact differs from the bound audit report"):
+        generate_report_sarif(report, findings_artifact=wrong_run)
+    with pytest.raises(ValueError, match="differs from the SARIF finding inventory"):
+        generate_sarif([], findings_artifact=artifact)

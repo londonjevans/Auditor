@@ -52,7 +52,7 @@ from mmaudit.reporting.bundle import (
 )
 from mmaudit.reporting.client import render_client_markdown
 from mmaudit.reporting.json_report import write_json
-from mmaudit.reporting.markdown import render_forensic_markdown
+from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
 from mmaudit.reporting.sarif import generate_report_sarif
 from mmaudit.reporting.status import report_status_metadata
 from mmaudit.traceability import (
@@ -244,19 +244,24 @@ def _write_report_artifacts(run_dir: Path, report: AuditReport) -> None:
         + "\n",
         encoding="utf-8",
     )
-    write_json(run_dir / "findings.json", build_findings_artifact(report))
+    findings_artifact = build_findings_artifact(report)
+    write_json(run_dir / "findings.json", findings_artifact)
     write_json(run_dir / "coverage.json", build_coverage_artifact(report))
     write_json(run_dir / "model-execution.json", build_model_execution_artifact(report))
     write_json(
         run_dir / "audit-results.sarif",
-        generate_report_sarif(report),
+        generate_report_sarif(report, findings_artifact=findings_artifact),
     )
     (run_dir / "client-report.md").write_text(
         render_client_markdown(report, {}),
         encoding="utf-8",
     )
     (run_dir / "forensic-report.md").write_text(
-        render_forensic_markdown(report),
+        render_forensic_markdown(report, findings_artifact=findings_artifact),
+        encoding="utf-8",
+    )
+    (run_dir / "audit-report.md").write_text(
+        render_markdown(report, findings_artifact=findings_artifact),
         encoding="utf-8",
     )
 

@@ -254,12 +254,16 @@ class SyntheticValidatedScannerRunner(StaticScannerRunner):
 
     async def run_all(self, *args: Any, **kwargs: Any) -> list[ScannerRun]:
         runs = await super().run_all(*args, **kwargs)
+        private_dir = Path(args[1] if len(args) > 1 else kwargs["private_dir"])
+        raw_output = private_dir / runs[0].scanner / "output.json"
+        raw_output.parent.mkdir(parents=True, exist_ok=True)
+        raw_output.write_bytes(b"{}")
         run = runs[0].model_copy(
             update={
                 "execution_evidence": ExecutionEvidenceKind.REAL,
                 "command": ["/trusted/synthetic-scanner", "--machine-output"],
                 "executable_sha256": "1" * 64,
-                "raw_output_path": "synthetic-scanner/output.json",
+                "raw_output_path": f"{runs[0].scanner}/output.json",
                 "raw_output_sha256": hashlib.sha256(b"{}").hexdigest(),
                 "raw_output_bytes": 2,
                 "process_exit_code": 0,
@@ -283,13 +287,17 @@ class SyntheticTwoValidatedScannerRunner(SyntheticValidatedScannerRunner):
 
     async def run_all(self, *args: Any, **kwargs: Any) -> list[ScannerRun]:
         runs = await super().run_all(*args, **kwargs)
+        private_dir = Path(args[1] if len(args) > 1 else kwargs["private_dir"])
+        raw_output = private_dir / "gitleaks" / "output.json"
+        raw_output.parent.mkdir(parents=True, exist_ok=True)
+        raw_output.write_bytes(b"{}")
         second = runs[0].model_copy(
             update={
                 "scanner": "gitleaks",
                 "findings": [],
                 "command": ["/trusted/synthetic-gitleaks", "--machine-output"],
                 "executable_sha256": "3" * 64,
-                "raw_output_path": "synthetic-gitleaks/output.json",
+                "raw_output_path": "gitleaks/output.json",
                 "execution_observation_sha256": None,
             }
         )

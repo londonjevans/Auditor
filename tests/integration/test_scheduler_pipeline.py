@@ -1065,6 +1065,16 @@ async def test_pipeline_marks_dispatched_crash_uncertain_and_never_retries(
     assert accounted.entries[0].request_id == orientation_request_id
     assert accounted.entries[0].status is CostEntryStatus.UNCERTAIN_ACCOUNTED
     assert accounted.spent_usd == accounted.entries[0].reserved_usd
+    expected_exact_cost = format(accounted.entries[0].accounted_cost_usd, "f")
+    assert resumed.report.accounted_cost_usd_exact == expected_exact_cost
+    assert resumed.report.accounted_cost_usd == float(accounted.entries[0].accounted_cost_usd)
+    model_execution = ModelExecutionArtifact.model_validate_json(
+        (resumed.run_dir / "model-execution.json").read_text(encoding="utf-8")
+    )
+    assert model_execution.accounted_cost_usd_exact == expected_exact_cost
+    assert isinstance(model_execution.cost_ledger, RunCostLedgerEvidence)
+    assert model_execution.cost_ledger.run_accounted_cost_usd_exact == expected_exact_cost
+    assert model_execution.usage == []
 
     second_fake = FakeOpenRouter(extra_model_ids=["golf/gale-secure"])
     second_resume = await _run(

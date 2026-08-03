@@ -33,15 +33,19 @@ from mmaudit.models.registry import ModelRegistry
 from mmaudit.models.runtime import build_reasoning_policy
 from mmaudit.models.schemas import (
     AuditReport,
+    EvidenceStrength,
     ExecutionEvidenceKind,
+    Location,
     ModelRequestValidationStatus,
     RepositoryDifferentialRunStatus,
     RepositoryFile,
     RepositoryForkRpcPrivacyEvidence,
     RepositoryMap,
     RepositorySuiteDifferentialRun,
+    ScannerFinding,
     ScannerRun,
     ScannerStatus,
+    Severity,
     UsageRecord,
 )
 from mmaudit.orchestration.manifest import (
@@ -52,6 +56,7 @@ from mmaudit.orchestration.manifest import (
     RunEvidenceManifest,
     _model_bindings,
     _seed_bindings,
+    _validate_scanner_stream_artifact_custody,
     build_run_evidence_manifest,
     canonical_sha256,
     collect_run_artifacts,
@@ -75,11 +80,17 @@ from mmaudit.reporting.bundle import (
     build_findings_artifact,
     build_model_execution_artifact,
 )
-from mmaudit.reporting.client import render_client_markdown
+from mmaudit.reporting.client import (
+    build_client_source_excerpts,
+    render_client_markdown_from_artifact,
+)
 from mmaudit.reporting.json_report import write_json
-from mmaudit.reporting.markdown import render_forensic_markdown
+from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
 from mmaudit.reporting.sarif import generate_report_sarif
 from mmaudit.reporting.status import report_status_metadata
+from mmaudit.repository.locations import validate_location
+from mmaudit.scanners.base import scanner_fingerprint
+from mmaudit.scanners.projection import project_scanner_finding
 from tests.identity_fixtures import bind_synthetic_usage_identity, synthetic_token_plan_routing
 from tests.output_evidence_fixtures import synthetic_structured_output_routing
 from tests.unit.test_model_registry import _verified_production_config_and_capability
@@ -299,7 +310,13 @@ def _reseal_qualification_validation(payload: dict[str, object]) -> None:
     )
 
 
-def _write_required_artifacts(run_dir: Path, report: AuditReport) -> None:
+def _write_required_artifacts(
+    run_dir: Path,
+    report: AuditReport,
+    *,
+    legacy_model_execution: bool = False,
+    source_contents: dict[str, str] | None = None,
+) -> None:
     payloads = {
         "solidity-compilation.json": {"schema_version": "1.0", "results": []},
         "invariant-harness-plan.json": {
@@ -345,7 +362,7 @@ def _write_required_artifacts(run_dir: Path, report: AuditReport) -> None:
             "findings": [],
         },
     }
-    run_dir.mkdir()
+    run_dir.mkdir(exist_ok=True)
     for name, payload in payloads.items():
         (run_dir / name).write_text(
             json.dumps(payload, indent=2, sort_keys=True) + "\n",
@@ -392,22 +409,37 @@ def _write_required_artifacts(run_dir: Path, report: AuditReport) -> None:
         report.model_dump_json(),
         encoding="utf-8",
     )
-    write_json(run_dir / "findings.json", build_findings_artifact(report))
+    findings_artifact = build_findings_artifact(
+        report,
+        source_excerpts=(
+            build_client_source_excerpts(report, source_contents)
+            if source_contents is not None
+            else None
+        ),
+    )
+    write_json(run_dir / "findings.json", findings_artifact)
     write_json(run_dir / "coverage.json", build_coverage_artifact(report))
     write_json(
         run_dir / "model-execution.json",
         build_model_execution_artifact(
             report,
-            legacy_schema_1_0=report.schema_version != "1.2",
+            legacy_schema_1_0=legacy_model_execution,
         ),
     )
-    write_json(run_dir / "audit-results.sarif", generate_report_sarif(report))
+    write_json(
+        run_dir / "audit-results.sarif",
+        generate_report_sarif(report, findings_artifact=findings_artifact),
+    )
     (run_dir / "client-report.md").write_text(
-        render_client_markdown(report, {}),
+        render_client_markdown_from_artifact(report, findings_artifact),
         encoding="utf-8",
     )
     (run_dir / "forensic-report.md").write_text(
-        render_forensic_markdown(report),
+        render_forensic_markdown(report, findings_artifact=findings_artifact),
+        encoding="utf-8",
+    )
+    (run_dir / "audit-report.md").write_text(
+        render_markdown(report, findings_artifact=findings_artifact),
         encoding="utf-8",
     )
 
@@ -485,14 +517,38 @@ def _write_verifiable_run(
     return repository, run_dir, manifest, report
 
 
+def _reseal_current_artifacts(
+    run_dir: Path,
+    manifest: RunEvidenceManifest,
+) -> RunEvidenceManifest:
+    assert manifest.run_configuration is not None
+    resealed = seal_run_evidence_manifest(
+        run_id=manifest.run_id,
+        repository_root_name=manifest.repository_root_name,
+        git_commit=manifest.git_commit,
+        sources=manifest.sources,
+        run_configuration=manifest.run_configuration,
+        bindings=manifest.bindings,
+        artifacts=collect_run_artifacts(run_dir),
+        tool_version=manifest.tool_version,
+    )
+    write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", resealed)
+    return resealed
+
+
 def _rewrite_as_sealed_schema_1_1(
     run_dir: Path,
     current: RunEvidenceManifest,
     report: AuditReport,
+    *,
+    retain_model_execution: bool = False,
 ) -> RunEvidenceManifest:
     """Project an already-sealed pre-report-bundle manifest for compatibility tests."""
 
-    for artifact_name in MANIFEST_BOUND_REPORT_DELIVERABLES - {"audit-results.sarif"}:
+    retained = {"audit-results.sarif"}
+    if retain_model_execution:
+        retained.add("model-execution.json")
+    for artifact_name in MANIFEST_BOUND_REPORT_DELIVERABLES - retained:
         (run_dir / artifact_name).unlink()
     metadata_path = run_dir / "metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -579,13 +635,6 @@ def _write_qualified_verifiable_run(
                     ],
                 }
             ),
-            "usage": [
-                _qualified_reasoning_usage(
-                    config,
-                    qualification,
-                    observed_at=observed_at,
-                )
-            ],
         }
     )
     run_dir = root / "run"
@@ -758,6 +807,42 @@ def test_public_manifest_sealer_cannot_issue_a_new_schema_1_1_manifest(
             schema_version="1.1",
             tool_version=current.tool_version,
         )
+
+
+def test_new_manifest_issuance_rejects_legacy_model_execution_custody(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    run_dir = tmp_path / "legacy-model-execution"
+    report = _report(config)
+    _write_required_artifacts(run_dir, report, legacy_model_execution=True)
+
+    with pytest.raises(ValueError, match="current typed model-execution custody"):
+        build_run_evidence_manifest(run_dir=run_dir, report=report, config=config)
+
+
+def test_sealed_legacy_manifest_accepts_legacy_model_execution_custody(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    run_dir = tmp_path / "sealed-legacy-model-execution"
+    report = _report(config)
+    _write_required_artifacts(run_dir, report)
+    current = build_run_evidence_manifest(run_dir=run_dir, report=report, config=config)
+    write_json(
+        run_dir / "model-execution.json",
+        build_model_execution_artifact(report, legacy_schema_1_0=True),
+    )
+    legacy = _rewrite_as_sealed_schema_1_1(
+        run_dir,
+        current,
+        report,
+        retain_model_execution=True,
+    )
+
+    validate_manifest_artifacts(legacy, run_dir)
 
 
 def test_manifest_seed_bindings_include_repository_suite_fuzz_seed() -> None:
@@ -953,6 +1038,163 @@ def test_manifest_rejects_scanner_results_that_differ_from_report(
         )
 
 
+def test_current_scanner_stream_custody_binds_production_shaped_bytes_and_owner(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    run_dir = tmp_path / "run"
+    scanner_root = run_dir / "private" / "scanner-output"
+    tool_root = scanner_root / "synthetic"
+    tool_root.mkdir(parents=True)
+    stdout = tool_root / "synthetic.json"
+    stderr = tool_root / "synthetic.stderr.txt"
+    stdout.write_bytes(b"{}")
+    stderr.write_bytes(b"")
+    now = datetime(2026, 1, 2, tzinfo=UTC)
+    provisional = ScannerRun(
+        scanner="synthetic",
+        status=ScannerStatus.SUCCESS,
+        execution_evidence=ExecutionEvidenceKind.REAL,
+        version="synthetic-1.0",
+        executable_sha256="1" * 64,
+        command=["/trusted/synthetic", "--machine-output"],
+        started_at=now,
+        finished_at=now,
+        duration_seconds=0,
+        raw_output_path="synthetic/synthetic.json",
+        raw_output_sha256=hashlib.sha256(b"{}").hexdigest(),
+        raw_output_bytes=2,
+        private_stderr_path="synthetic/synthetic.stderr.txt",
+        private_stderr_sha256=hashlib.sha256(b"").hexdigest(),
+        private_stderr_bytes=0,
+        process_exit_code=0,
+        isolation_backend="synthetic-rootless",
+        isolation_attestation_sha256="2" * 64,
+        machine_output_validated=True,
+    )
+    scanner_run = ScannerRun.model_validate(
+        {
+            **provisional.model_dump(mode="json"),
+            "execution_observation_sha256": provisional.expected_execution_observation_sha256(),
+        }
+    )
+    report = _report(config).model_copy(update={"scanner_runs": [scanner_run]})
+    _write_required_artifacts(run_dir, report)
+
+    _validate_scanner_stream_artifact_custody(run_dir, report.scanner_runs)
+    build_run_evidence_manifest(run_dir=run_dir, report=report, config=config)
+
+    stdout.write_bytes(b'{"changed":true}')
+    with pytest.raises(ValueError, match="differs from its exact byte custody"):
+        _validate_scanner_stream_artifact_custody(run_dir, report.scanner_runs)
+    stdout.write_bytes(b"{}")
+
+    other_root = scanner_root / "other"
+    other_root.mkdir()
+    other = other_root / "synthetic.json"
+    other.write_bytes(b"{}")
+    swapped = scanner_run.model_copy(update={"raw_output_path": "other/synthetic.json"})
+    with pytest.raises(ValueError, match="path is unsafe or repeated"):
+        _validate_scanner_stream_artifact_custody(run_dir, [swapped])
+
+
+def test_manifest_rejects_coherently_resealed_scanner_projection_tamper(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    repository = tmp_path / "repository"
+    source = repository / "src" / "Vault.sol"
+    source.parent.mkdir(parents=True)
+    source_content = "contract Vault { function guarded() external {} }\n"
+    source.write_text(source_content, encoding="utf-8")
+    location = Location(path="src/Vault.sol", start_line=1, end_line=1, symbol="guarded")
+    validation = validate_location(repository, location)
+    message = "Synthetic deterministic scanner observation."
+    scanner_finding = ScannerFinding(
+        scanner="synthetic",
+        rule_id="synthetic-rule",
+        title="Synthetic scanner finding",
+        severity=Severity.HIGH,
+        message=message,
+        locations=[location],
+        cwe=["CWE-284"],
+        metadata={"location_validation": [validation.model_dump(mode="json")]},
+        evidence_strength=EvidenceStrength.DETERMINISTIC_ANALYZER,
+        fingerprint=scanner_fingerprint(
+            "synthetic",
+            "synthetic-rule",
+            location.path,
+            location.start_line,
+            message,
+        ),
+    )
+    now = datetime(2026, 1, 2, tzinfo=UTC)
+    scanner_run = ScannerRun(
+        scanner="synthetic",
+        status=ScannerStatus.SUCCESS,
+        started_at=now,
+        finished_at=now,
+        duration_seconds=0,
+        findings=[scanner_finding],
+    )
+    projected = project_scanner_finding(
+        scanner_finding,
+        [validation],
+        validated_at=validation.validated_at,
+    )
+    base_report = _report(config)
+    repository_map = base_report.repository.model_copy(
+        update={
+            "root_name": repository.name,
+            "files": [
+                RepositoryFile(
+                    path=location.path,
+                    size=len(source_content.encode()),
+                    lines=1,
+                    sha256=hashlib.sha256(source_content.encode()).hexdigest(),
+                    language="Solidity",
+                )
+            ],
+        }
+    )
+    report = base_report.model_copy(
+        update={
+            "repository": repository_map,
+            "scanner_runs": [scanner_run],
+            "findings": [projected],
+        }
+    )
+    run_dir = tmp_path / "run"
+    source_contents = {location.path: source_content}
+    _write_required_artifacts(run_dir, report, source_contents=source_contents)
+    manifest = build_run_evidence_manifest(run_dir=run_dir, report=report, config=config)
+    write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", manifest)
+    validate_manifest_artifacts(manifest, run_dir)
+
+    tampered_finding = projected.model_copy(
+        update={"impact": "A contradictory narrative not emitted by the scanner projection."}
+    )
+    tampered_report = report.model_copy(update={"findings": [tampered_finding]})
+    _write_required_artifacts(
+        run_dir,
+        tampered_report,
+        source_contents=source_contents,
+    )
+    resealed = _reseal_current_artifacts(run_dir, manifest)
+    with pytest.raises(ValueError, match="authoritative scanner projection"):
+        validate_manifest_artifacts(resealed, run_dir)
+
+    invalid_fingerprint = scanner_finding.model_copy(update={"fingerprint": "f" * 64})
+    with pytest.raises(ValueError, match="fingerprint differs from its canonical semantics"):
+        project_scanner_finding(
+            invalid_fingerprint,
+            [validation],
+            validated_at=validation.validated_at,
+        )
+
+
 def test_manifest_binds_differential_and_fork_rpc_privacy_artifacts(
     tmp_path: Path,
     config_factory,
@@ -1060,6 +1302,22 @@ def test_manifest_self_hash_and_artifact_hashes_reject_tampering(
     )
     with pytest.raises(ValueError, match="artifact hash mismatch"):
         validate_manifest_artifacts(manifest, run_dir)
+
+
+def test_manifest_rejects_coherently_resealed_compatibility_markdown(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    _repository, run_dir, manifest, _report_value = _write_verifiable_run(tmp_path, config)
+    (run_dir / "audit-report.md").write_text(
+        "# Corrovera Security Assurance Report\n\nContradictory replacement.\n",
+        encoding="utf-8",
+    )
+    resealed = _reseal_current_artifacts(run_dir, manifest)
+
+    with pytest.raises(ValueError, match=r"audit-report\.md differs"):
+        validate_manifest_artifacts(resealed, run_dir)
 
 
 def test_manifest_rejects_resealed_metadata_privacy_disagreement(
@@ -1831,7 +2089,7 @@ def test_verify_run_rejects_resealed_qualified_evidence_tamper(
     if tamper == "usage_projection":
         report_path = run_dir / "final-findings.json"
         report_payload = json.loads(report_path.read_text(encoding="utf-8"))
-        report_payload["usage"][0]["routing"]["qualified_provider_name"] = "Changed Provider"
+        report_payload["accounted_cost_usd"] = 1
         report_path.write_text(
             json.dumps(report_payload, sort_keys=True, separators=(",", ":")),
             encoding="utf-8",

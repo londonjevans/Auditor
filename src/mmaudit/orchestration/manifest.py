@@ -51,12 +51,14 @@ from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     ExecutionOriginDispositionKind,
     FalsificationDecision,
+    Finding,
     FindingOriginKind,
     FindingStatus,
     FoundryInvariantHarnessSpec,
     GeneratedFoundryTestSpec,
     InvariantExecutionOriginDispositionArtifact,
     InvariantExecutionResult,
+    LocationValidation,
     MaximumAssuranceStatus,
     ModelIdentityStrength,
     ModelRequestValidationStatus,
@@ -65,6 +67,8 @@ from mmaudit.models.schemas import (
     ReproductionResolutionKind,
     ReproductionResult,
     ReproductionState,
+    ScannerFinding,
+    ScannerRun,
     Severity,
     StrictModel,
 )
@@ -104,11 +108,12 @@ from mmaudit.reporting.bundle import (
 )
 from mmaudit.reporting.client import render_client_markdown_from_artifact
 from mmaudit.reporting.json_report import write_json
-from mmaudit.reporting.markdown import render_forensic_markdown
+from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
 from mmaudit.reporting.sarif import generate_report_sarif
 from mmaudit.reporting.status import effective_report_status, report_status_metadata
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_name, is_sensitive_workspace_path
+from mmaudit.scanners.projection import project_scanner_finding
 from mmaudit.solidity.sharding import (
     verify_solidity_shard_projection,
     verify_solidity_shard_repository_projection,
@@ -603,9 +608,15 @@ def _build_run_evidence_manifest(
         config=effective_config,
         qualification_runtime=qualification_runtime,
         scheduler_runtime_journal=scheduler_runtime_journal,
+        require_retained_usage_custody=report_bundle_required,
     )
     if report.schema_version == "1.2" or report_bundle_required:
-        _validate_model_execution_cost_ledger_custody(root, report, scheduler_artifact)
+        _validate_model_execution_cost_ledger_custody(
+            root,
+            report,
+            scheduler_artifact,
+            current_model_execution_required=report_bundle_required,
+        )
 
     bindings = ManifestBindingSet(
         configuration=_configuration_bindings(effective_config),
@@ -881,6 +892,7 @@ def _validate_report_bundle_artifacts(
     *,
     candidates: list[CandidateFinding],
     reproduction_resolutions: list[CandidateReproductionResolution],
+    current_model_execution_required: bool,
 ) -> None:
     """Cross-check every canonical client/forensic leaf against the final report."""
 
@@ -893,24 +905,24 @@ def _validate_report_bundle_artifacts(
         missing = sorted(MANIFEST_BOUND_REPORT_DELIVERABLES - present)
         raise ValueError("client/forensic report bundle is incomplete: " + ", ".join(missing))
 
-    findings = FindingsArtifact.model_validate(_read_json_artifact(root, "findings.json"))
+    raw_findings = _read_json_artifact(root, "findings.json")
+    if current_model_execution_required and raw_findings.get("schema_version") != "1.1":
+        raise ValueError("current manifest requires current typed findings custody")
+    findings = FindingsArtifact.model_validate(raw_findings)
     expected_findings = build_findings_artifact(
         report,
         candidates=candidates,
         reproduction_resolutions=reproduction_resolutions,
     )
-    if (
-        findings.run_id != expected_findings.run_id
-        or findings.run_status is not expected_findings.run_status
-        or findings.quality_status is not expected_findings.quality_status
-        or findings.completed != expected_findings.completed
-        or findings.quality_gates != expected_findings.quality_gates
-        or findings.limitations != expected_findings.limitations
-        or findings.findings != expected_findings.findings
-        or findings.rejected_findings != expected_findings.rejected_findings
-        or findings.candidate_findings != expected_findings.candidate_findings
-        or len(findings.records) != len(expected_findings.records)
-    ):
+    findings_without_excerpts = findings.model_copy(
+        update={
+            "records": [
+                record.model_copy(update={"source_excerpt": None})
+                for record in findings.records
+            ]
+        }
+    )
+    if findings_without_excerpts != expected_findings:
         raise ValueError("findings.json differs from the final report")
     repository_sources = {item.path: item.sha256 for item in report.repository.files}
     for observed, expected in zip(findings.records, expected_findings.records, strict=True):
@@ -943,6 +955,14 @@ def _validate_report_bundle_artifacts(
     model_execution = ModelExecutionArtifact.model_validate(
         _read_json_artifact(root, "model-execution.json")
     )
+    if current_model_execution_required and model_execution.schema_version != "1.1":
+        raise ValueError("current manifest requires current typed model-execution custody")
+    if (
+        current_model_execution_required
+        and report.schema_version == "1.2"
+        and report.accounted_cost_usd_exact is None
+    ):
+        raise ValueError("current report lacks exact accounted-cost evidence")
     expected_model_execution = build_model_execution_artifact(
         report,
         cost_ledger_evidence=(
@@ -969,7 +989,10 @@ def _validate_report_bundle_artifacts(
         or client_sha256 != hashlib.sha256(expected_client).hexdigest()
     ):
         raise ValueError("client-report.md differs from the final report")
-    expected_forensic = render_forensic_markdown(report).encode("utf-8")
+    expected_forensic = render_forensic_markdown(
+        report,
+        findings_artifact=findings,
+    ).encode("utf-8")
     forensic_sha256, forensic_size = _file_sha256(
         root / "forensic-report.md",
         max_bytes=_MAX_JSON_ARTIFACT_BYTES,
@@ -979,7 +1002,20 @@ def _validate_report_bundle_artifacts(
         or forensic_sha256 != hashlib.sha256(expected_forensic).hexdigest()
     ):
         raise ValueError("forensic-report.md differs from the final report")
-    expected_sarif = generate_report_sarif(report)
+    expected_compatibility = render_markdown(
+        report,
+        findings_artifact=findings,
+    ).encode("utf-8")
+    compatibility_sha256, compatibility_size = _file_sha256(
+        root / "audit-report.md",
+        max_bytes=_MAX_JSON_ARTIFACT_BYTES,
+    )
+    if (
+        compatibility_size != len(expected_compatibility)
+        or compatibility_sha256 != hashlib.sha256(expected_compatibility).hexdigest()
+    ):
+        raise ValueError("audit-report.md differs from the final report")
+    expected_sarif = generate_report_sarif(report, findings_artifact=findings)
     if _read_json_artifact(root, "audit-results.sarif") != expected_sarif:
         raise ValueError("audit-results.sarif differs from the final report")
 
@@ -988,14 +1024,16 @@ def _validate_model_execution_cost_ledger_custody(
     root: Path,
     report: AuditReport,
     scheduler_artifact: SchedulerArtifact | None,
+    *,
+    current_model_execution_required: bool,
 ) -> None:
     """Bind current forensic cost custody to the exact scheduler campaign baseline."""
 
     model_execution = ModelExecutionArtifact.model_validate(
         _read_json_artifact(root, "model-execution.json")
     )
-    if report.schema_version == "1.2" and model_execution.schema_version != "1.1":
-        raise ValueError("current report requires current forensic cost-ledger custody")
+    if current_model_execution_required and model_execution.schema_version != "1.1":
+        raise ValueError("current manifest requires current typed model-execution custody")
     evidence = model_execution.cost_ledger
     baseline = (
         scheduler_artifact.summary.manifest.cost_ledger_baseline
@@ -1007,7 +1045,7 @@ def _validate_model_execution_cost_ledger_custody(
             raise ValueError("scheduler cost baseline lacks terminal run-scoped custody")
         return
     if not isinstance(evidence, RunCostLedgerEvidence):
-        if report.schema_version == "1.2":
+        if current_model_execution_required:
             raise ValueError("current report lacks typed forensic cost-ledger custody")
         return
     if scheduler_artifact is None or baseline is None:
@@ -1043,6 +1081,86 @@ def _validate_model_execution_cost_ledger_custody(
             and usage_hashes.get(request.logical_request_id) != request.usage_record_sha256
         ):
             raise ValueError("scheduler terminal usage is absent from forensic cost custody")
+
+
+def _validate_scanner_stream_artifact_custody(
+    root: Path,
+    scanner_runs: list[ScannerRun],
+) -> None:
+    """Join scanner stdout/stderr claims to exact manifest-bound local bytes."""
+
+    claimed_paths: set[str] = set()
+    for run in scanner_runs:
+        streams = (
+            ("stdout", run.raw_output_path, run.raw_output_sha256, run.raw_output_bytes),
+            (
+                "stderr",
+                run.private_stderr_path,
+                run.private_stderr_sha256,
+                run.private_stderr_bytes,
+            ),
+        )
+        for stream_name, claimed_path, claimed_sha256, claimed_size in streams:
+            if claimed_path is None:
+                if claimed_sha256 is not None or claimed_size != 0:
+                    raise ValueError(
+                        f"scanner {stream_name} evidence lacks its exact artifact path"
+                    )
+                continue
+            if claimed_sha256 is None:
+                raise ValueError(f"scanner {stream_name} artifact lacks a SHA-256 binding")
+            normalized = normalize_relative_path(claimed_path)
+            path_parts = PurePosixPath(normalized).parts
+            if (
+                normalized != claimed_path
+                or not path_parts
+                or path_parts[0] != run.scanner
+                or normalized in claimed_paths
+                or is_sensitive_workspace_path(normalized)
+            ):
+                raise ValueError(f"scanner {stream_name} artifact path is unsafe or repeated")
+            claimed_paths.add(normalized)
+            scanner_output_root = root / "private" / "scanner-output"
+            path = scanner_output_root.joinpath(*PurePosixPath(normalized).parts)
+            cursor = root
+            for part in ("private", "scanner-output", *PurePosixPath(normalized).parts):
+                cursor /= part
+                if cursor.is_symlink() or cursor.is_junction():
+                    raise ValueError(f"scanner {stream_name} artifact may not traverse a link")
+            try:
+                path.resolve(strict=True).relative_to(scanner_output_root.resolve(strict=True))
+            except (OSError, ValueError) as exc:
+                raise ValueError(
+                    f"scanner {stream_name} artifact escaped or is unavailable"
+                ) from exc
+            observed_sha256, observed_size = _file_sha256(
+                path,
+                max_bytes=_MAX_JSON_ARTIFACT_BYTES,
+            )
+            if observed_sha256 != claimed_sha256 or observed_size != claimed_size:
+                raise ValueError(
+                    f"scanner {stream_name} artifact differs from its exact byte custody"
+                )
+
+
+def _validate_static_scanner_finding_projection(
+    finding: Finding,
+    scanner: ScannerFinding,
+) -> None:
+    """Require a report finding to preserve deterministic scanner semantics exactly."""
+
+    raw_validations = scanner.metadata.get("location_validation")
+    if not isinstance(raw_validations, list) or len(raw_validations) != len(scanner.locations):
+        raise ValueError("current scanner finding lacks exact host location validation")
+    expected = project_scanner_finding(
+        scanner,
+        [LocationValidation.model_validate(item) for item in raw_validations],
+        validated_at=finding.location_validation.validated_at,
+    )
+    if finding != expected:
+        raise ValueError(
+            "static-analyzer finding differs from its authoritative scanner projection"
+        )
 
 
 def _validate_report_artifact_consistency(
@@ -1090,6 +1208,18 @@ def _validate_report_artifact_consistency(
     scanner_results = _read_json_artifact(root, "scanner-results.json")
     if scanner_results.get("runs") != [run.model_dump(mode="json") for run in report.scanner_runs]:
         raise ValueError("scanner-results.json differs from the final report")
+    verification_results = _read_json_artifact(root, "verification-results.json")
+    if verification_results.get("decisions") != [
+        decision.model_dump(mode="json") for decision in report.verification_decisions
+    ]:
+        raise ValueError("verification-results.json differs from the final report")
+    cross_examination_results = _read_json_artifact(root, "cross-examination.json")
+    if cross_examination_results.get("decisions") != [
+        decision.model_dump(mode="json") for decision in report.cross_examination_decisions
+    ]:
+        raise ValueError("cross-examination.json differs from the final report")
+    if report_bundle_required:
+        _validate_scanner_stream_artifact_custody(root, report.scanner_runs)
     candidate_artifact = CandidateFindingArtifact.model_validate(
         _read_json_artifact(root, "candidate-findings.json")
     )
@@ -1109,6 +1239,7 @@ def _validate_report_artifact_consistency(
                 if reproduction_artifact is not None
                 else []
             ),
+            current_model_execution_required=report_bundle_required,
         )
     disposition_path = root / "execution-origin-dispositions.json"
     disposition_artifact_present = (
@@ -1242,11 +1373,17 @@ def _validate_report_artifact_consistency(
                 raise ValueError(
                     "execution-origin candidate differs from its emitted runtime artifacts"
                 ) from exc
-    scanner_fingerprints = {
-        finding.fingerprint for run in report.scanner_runs for finding in run.findings
-    }
+    scanner_findings = [finding for run in report.scanner_runs for finding in run.findings]
+    scanner_findings_by_fingerprint = {finding.fingerprint: finding for finding in scanner_findings}
+    if report_bundle_required and len(scanner_findings_by_fingerprint) != len(scanner_findings):
+        raise ValueError("current scanner finding fingerprints must be unique")
+    scanner_fingerprints = set(scanner_findings_by_fingerprint)
     reported_execution_ids: set[str] = set()
-    for finding in [*report.findings, *report.rejected_findings]:
+    for finding in [
+        *report.findings,
+        *report.rejected_findings,
+        *report.filtered_findings,
+    ]:
         contributing = set(finding.contributing_candidate_ids)
         if len(contributing) != len(finding.contributing_candidate_ids):
             raise ValueError("final finding contains duplicate contributing evidence IDs")
@@ -1262,6 +1399,13 @@ def _validate_report_artifact_consistency(
                 or not contributing <= scanner_fingerprints
             ):
                 raise ValueError("static-analyzer finding lacks exact scanner provenance")
+            if report_bundle_required:
+                if len(finding.contributing_candidate_ids) != 1:
+                    raise ValueError("static-analyzer finding has ambiguous scanner provenance")
+                _validate_static_scanner_finding_projection(
+                    finding,
+                    scanner_findings_by_fingerprint[finding.contributing_candidate_ids[0]],
+                )
             continue
         unknown_contributors = contributing - set(candidates_by_id)
         if unknown_contributors:
@@ -1830,6 +1974,7 @@ def validate_scheduler_artifact(
     qualification_runtime: dict[str, Any] | None = None,
     scheduler_runtime_journal: SchedulerJournal | None = None,
     scheduler_reference_binding: ManifestFileBinding | None = None,
+    require_retained_usage_custody: bool = False,
 ) -> SchedulerArtifact | None:
     """Cross-check the durable seven-pass summary against report and provider evidence."""
 
@@ -1945,6 +2090,7 @@ def validate_scheduler_artifact(
         expected_shard_inventory=expected_shard_inventory,
         runtime_journal=scheduler_runtime_journal,
         reference_binding=scheduler_reference_binding,
+        require_retained_usage_custody=require_retained_usage_custody,
     )
 
     model_task_records = {
@@ -2080,6 +2226,7 @@ def _require_scheduler_journal_authority(
     expected_shard_inventory: SchedulerShardInventory,
     runtime_journal: SchedulerJournal | None,
     reference_binding: ManifestFileBinding | None,
+    require_retained_usage_custody: bool,
 ) -> None:
     """Compare public state to owner-held runtime or descriptor-reopened private evidence."""
 
@@ -2106,6 +2253,7 @@ def _require_scheduler_journal_authority(
                 report=report,
                 public_artifact=public_artifact,
                 journal=runtime_journal,
+                require_retained_usage_custody=require_retained_usage_custody,
             )
             if reconstructed != public_artifact:
                 raise ValueError("scheduler public artifact differs from live runtime authority")
@@ -2128,6 +2276,7 @@ def _require_scheduler_journal_authority(
                 report=report,
                 public_artifact=public_artifact,
                 journal=journal,
+                require_retained_usage_custody=require_retained_usage_custody,
             )
         finally:
             journal.close()
@@ -2141,12 +2290,20 @@ def _validate_scheduler_privacy_custody_and_reconstruct(
     report: AuditReport,
     public_artifact: SchedulerArtifact,
     journal: SchedulerJournal,
+    require_retained_usage_custody: bool,
 ) -> SchedulerArtifact:
     """Join exact privacy bytes to a descriptor-held scheduler manifest and report."""
 
     expected_custody = public_artifact.summary.manifest.privacy_evidence_custody
     if expected_custody is None:
-        return journal.artifact()
+        reconstructed = journal.artifact()
+        if require_retained_usage_custody:
+            _validate_scheduler_retained_usage_custody(
+                report=report,
+                public_artifact=public_artifact,
+                journal=journal,
+            )
+        return reconstructed
     with journal.open_privacy_evidence_custody() as observed_custody:
         if observed_custody != expected_custody:
             raise ValueError("scheduler privacy custody differs from its private authority")
@@ -2155,7 +2312,58 @@ def _validate_scheduler_privacy_custody_and_reconstruct(
             report=report,
             custody=observed_custody,
         )
-        return journal.artifact()
+        reconstructed = journal.artifact()
+        if require_retained_usage_custody:
+            _validate_scheduler_retained_usage_custody(
+                report=report,
+                public_artifact=public_artifact,
+                journal=journal,
+            )
+        return reconstructed
+
+
+def _validate_scheduler_retained_usage_custody(
+    *,
+    report: AuditReport,
+    public_artifact: SchedulerArtifact,
+    journal: SchedulerJournal,
+) -> None:
+    """Close report usage against one exact private scheduler evidence class."""
+
+    output_records = {
+        output.model_completion_evidence.usage_record.request_id: (
+            output.model_completion_evidence.usage_record
+        )
+        for output in journal.outputs
+        if output.model_completion_evidence is not None
+    }
+    provider_attempt_records = {
+        attempt.usage_record.request_id: attempt.usage_record
+        for attempt in journal.provider_attempts
+    }
+    if set(output_records).intersection(provider_attempt_records):
+        raise ValueError("scheduler usage has contradictory retained evidence classes")
+    retained_records = {**output_records, **provider_attempt_records}
+    if len(retained_records) != len(output_records) + len(provider_attempt_records):
+        raise ValueError("scheduler retained usage inventory repeats a request identity")
+    report_records = {record.request_id: record for record in report.usage}
+    if len(report_records) != len(report.usage):
+        raise ValueError("final report repeats a retained scheduler usage identity")
+    if report_records != retained_records:
+        raise ValueError("final report usage differs from exact retained scheduler custody")
+
+    public_requests = {
+        request.logical_request_id: request for request in public_artifact.model_requests
+    }
+    if not set(retained_records) <= set(public_requests):
+        raise ValueError("retained scheduler usage is absent from the public request inventory")
+    for logical_request_id, request in public_requests.items():
+        if request.terminal_status is SchedulerTerminalStatus.SUCCEEDED:
+            retained_output = output_records.get(logical_request_id)
+            if retained_output is None or request.usage_record_sha256 != scheduler_canonical_sha256(
+                retained_output.model_dump(mode="json")
+            ):
+                raise ValueError("successful scheduler usage lacks exact retained output custody")
 
 
 def _validate_scheduler_privacy_artifacts(
@@ -2586,6 +2794,7 @@ def validate_manifest_artifacts(
                 qualification_runtime=qualification_runtime,
                 scheduler_runtime_journal=scheduler_runtime_journal,
                 scheduler_reference_binding=scheduler_reference_binding,
+                require_retained_usage_custody=manifest.schema_version == "1.2",
             )
             _validate_repository_differential_configuration(report, effective_config)
             _validate_context_manifest_configuration(
@@ -2598,12 +2807,14 @@ def validate_manifest_artifacts(
                 report,
                 scheduler_runtime_journal=scheduler_runtime_journal,
                 scheduler_reference_binding=scheduler_reference_binding,
+                require_retained_usage_custody=manifest.schema_version == "1.2",
             )
         if report.schema_version == "1.2" or manifest.schema_version == "1.2":
             _validate_model_execution_cost_ledger_custody(
                 root,
                 report,
                 scheduler_artifact,
+                current_model_execution_required=manifest.schema_version == "1.2",
             )
         expected_classification = (
             manifest.run_configuration.run_options.privacy_source_classification

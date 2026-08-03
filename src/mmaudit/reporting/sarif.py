@@ -20,6 +20,11 @@ from mmaudit.models.schemas import (
     ScannerStatus,
     Severity,
 )
+from mmaudit.reporting.bundle import (
+    FindingsArtifact,
+    ForensicDisposition,
+    ForensicFindingRecord,
+)
 from mmaudit.reporting.status import effective_report_status, quality_status_for_run_status
 
 _LEVEL = {
@@ -29,6 +34,49 @@ _LEVEL = {
     Severity.LOW: "note",
     Severity.INFORMATIONAL: "note",
 }
+
+
+def _validated_artifact_for_findings(
+    findings: list[Finding],
+    artifact: FindingsArtifact | None,
+) -> FindingsArtifact | None:
+    if artifact is None:
+        return None
+    artifact = FindingsArtifact.model_validate(artifact.model_dump(mode="python"))
+    if artifact.findings != findings:
+        raise ValueError("findings artifact differs from the SARIF finding inventory")
+    return artifact
+
+
+def _record_map(
+    artifact: FindingsArtifact | None,
+) -> dict[str, ForensicFindingRecord]:
+    if artifact is None:
+        return {}
+    return {record.finding_id: record for record in artifact.records[: len(artifact.findings)]}
+
+
+def _effective_status(
+    finding: Finding,
+    record: ForensicFindingRecord | None,
+) -> str:
+    if record is None:
+        return finding.status.value
+    return record.disposition.value.lower()
+
+
+def _result_level(
+    finding: Finding,
+    record: ForensicFindingRecord | None,
+) -> str:
+    if record is not None:
+        if record.disposition is ForensicDisposition.INCONCLUSIVE:
+            return "note"
+        if record.disposition is ForensicDisposition.DISPUTED:
+            return "warning"
+    if finding.status is FindingStatus.NEEDS_REVIEW:
+        return "note"
+    return _LEVEL[finding.severity]
 
 
 def _execution_provenance_sha256s(finding: Finding) -> list[str]:
@@ -116,6 +164,7 @@ def _scanner_execution_notification(run: ScannerRun) -> dict[str, Any] | None:
 def generate_sarif(
     findings: list[Finding],
     *,
+    findings_artifact: FindingsArtifact | None = None,
     scanner_runs: Sequence[ScannerRun] = (),
     maximum_assurance: MaximumAssuranceAssessment | None = None,
     run_status: AuditRunStatus | None = None,
@@ -124,6 +173,24 @@ def generate_sarif(
     incomplete_reasons: Sequence[str] = (),
     quality_gates: Sequence[QualityGateResult] = (),
 ) -> dict[str, Any]:
+    findings_artifact = _validated_artifact_for_findings(findings, findings_artifact)
+    artifact_records = _record_map(findings_artifact)
+    if findings_artifact is not None:
+        if run_status is not None and run_status is not findings_artifact.run_status:
+            raise ValueError("SARIF run status conflicts with the findings artifact")
+        if quality_status is not None and quality_status is not findings_artifact.quality_status:
+            raise ValueError("SARIF quality status conflicts with the findings artifact")
+        if completed is not None and completed is not findings_artifact.completed:
+            raise ValueError("SARIF completion conflicts with the findings artifact")
+        if incomplete_reasons and list(incomplete_reasons) != findings_artifact.limitations:
+            raise ValueError("SARIF limitations conflict with the findings artifact")
+        if quality_gates and list(quality_gates) != findings_artifact.quality_gates:
+            raise ValueError("SARIF quality gates conflict with the findings artifact")
+        run_status = findings_artifact.run_status
+        quality_status = findings_artifact.quality_status
+        completed = findings_artifact.completed
+        incomplete_reasons = findings_artifact.limitations
+        quality_gates = findings_artifact.quality_gates
     if run_status is not None:
         expected_completed = run_status is AuditRunStatus.COMPLETE
         expected_quality = quality_status_for_run_status(run_status)
@@ -138,21 +205,43 @@ def generate_sarif(
         if completed != completed_quality:
             raise ValueError("SARIF completion conflicts with the quality status")
 
-    included = [
-        finding
-        for finding in findings
-        if finding.status is not FindingStatus.REJECTED and finding.location_validation.valid
-    ]
+    included = []
+    for finding in findings:
+        record = artifact_records.get(finding.id)
+        retained = (
+            record.disposition is not ForensicDisposition.REJECTED
+            if record is not None
+            else finding.status is not FindingStatus.REJECTED
+        )
+        if retained and finding.location_validation.valid:
+            included.append(finding)
     rules = []
     results = []
     for finding in included:
+        record = artifact_records.get(finding.id)
+        effective_status = _effective_status(finding, record)
         tags = [
             *finding.cwe,
             *finding.owasp,
-            f"status/{finding.status.value}",
+            f"status/{effective_status}",
             f"origin/{finding.origin_kind.value}",
         ]
+        if record is not None:
+            tags.extend(
+                (
+                    f"disposition/{record.disposition.value.lower()}",
+                    f"raw-status/{finding.status.value}",
+                )
+            )
         origin_properties = _origin_properties(finding)
+        disposition_properties: dict[str, Any] = (
+            {
+                "effectiveDisposition": record.disposition.value,
+                "rawFindingStatus": finding.status.value,
+            }
+            if record is not None
+            else {}
+        )
         rules.append(
             {
                 "id": finding.id,
@@ -166,7 +255,8 @@ def generate_sarif(
                     "tags": tags,
                     "security-severity": f"{_security_score(finding):.1f}",
                     "confidence": finding.confidence,
-                    "status": finding.status.value,
+                    "status": effective_status,
+                    **disposition_properties,
                     **origin_properties,
                 },
             }
@@ -193,22 +283,20 @@ def generate_sarif(
         ]
         result_properties: dict[str, Any] = {
             "confidence": finding.confidence,
-            "status": finding.status.value,
+            "status": effective_status,
             "cwe": finding.cwe,
             "owasp": finding.owasp,
+            **disposition_properties,
             **origin_properties,
         }
         results.append(
             {
                 "ruleId": finding.id,
-                "level": (
-                    "note"
-                    if finding.status is FindingStatus.NEEDS_REVIEW
-                    else _LEVEL[finding.severity]
-                ),
+                "level": _result_level(finding, record),
                 "message": {
                     "text": (
-                        f"[{finding.status.value}] [{finding.origin_kind.value}] "
+                        f"[{record.disposition.value if record is not None else finding.status.value}] "
+                        f"[{finding.origin_kind.value}] "
                         f"{finding.summary} "
                         f"Remediation: {finding.recommendation}"
                     )
@@ -344,13 +432,28 @@ def generate_sarif(
     }
 
 
-def generate_report_sarif(report: AuditReport) -> dict[str, Any]:
+def generate_report_sarif(
+    report: AuditReport,
+    *,
+    findings_artifact: FindingsArtifact | None = None,
+) -> dict[str, Any]:
     """Generate SARIF from the same effective status projection as every report leaf."""
 
     report = AuditReport.model_validate(report.model_dump(mode="python"))
     projection = effective_report_status(report)
+    if findings_artifact is not None:
+        findings_artifact = FindingsArtifact.model_validate(
+            findings_artifact.model_dump(mode="python")
+        )
+        if (
+            findings_artifact.run_id != report.run_id
+            or findings_artifact.rejected_findings != report.rejected_findings
+            or findings_artifact.filtered_findings != report.filtered_findings
+        ):
+            raise ValueError("findings artifact differs from the bound audit report")
     return generate_sarif(
         report.findings,
+        findings_artifact=findings_artifact,
         scanner_runs=report.scanner_runs,
         maximum_assurance=report.maximum_assurance,
         run_status=projection.run_status,

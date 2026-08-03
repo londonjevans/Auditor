@@ -152,6 +152,20 @@
                 "contains": {
                   "properties": {
                     "path": {
+                      "const": "audit-report.md"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "path": {
                       "const": "audit-results.sarif"
                     }
                   },

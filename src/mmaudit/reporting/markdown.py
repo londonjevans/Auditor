@@ -20,11 +20,17 @@ from mmaudit.models.schemas import (
     ScannerStatus,
     Severity,
 )
+from mmaudit.reporting.bundle import (
+    FindingsArtifact,
+    ForensicDisposition,
+    ForensicFindingRecord,
+)
 from mmaudit.reporting.status import effective_report_status
 from mmaudit.solidity.formal import compare_dynamic_engine_outcomes
 
 _MAX_EXECUTION_ORIGIN_DISPOSITION_ROWS = 20
 _MAX_AUDITED_SUITE_COVERAGE_GAP_ROWS = 20
+_MAX_FILTERED_FINDING_ROWS = 50
 
 
 def _clean(value: str) -> str:
@@ -134,6 +140,95 @@ def _status_qualification(status: FindingStatus) -> str:
         FindingStatus.UNSUPPORTED: "**Unsupported by the current engine**",
         FindingStatus.REJECTED: "**Rejected finding**",
     }[status]
+
+
+_DISPOSITION_QUALIFICATIONS = {
+    ForensicDisposition.CONFIRMED: "**Confirmed finding**",
+    ForensicDisposition.SUPPORTED: "**Supported finding**",
+    ForensicDisposition.DISPUTED: "**Disputed finding — not established as confirmed**",
+    ForensicDisposition.INCONCLUSIVE: "**Inconclusive finding — not established as confirmed**",
+    ForensicDisposition.REJECTED: "**Rejected finding**",
+}
+
+
+def _finding_qualification(
+    finding: Finding,
+    record: ForensicFindingRecord | None,
+) -> str:
+    if record is None:
+        return _status_qualification(finding.status)
+    return _DISPOSITION_QUALIFICATIONS[record.disposition]
+
+
+def _artifact_records_for_report(
+    report: AuditReport,
+    artifact: FindingsArtifact | None,
+) -> dict[str, ForensicFindingRecord]:
+    """Validate and index the optional authoritative finding-disposition artifact."""
+
+    if artifact is None:
+        return {}
+    artifact = FindingsArtifact.model_validate(artifact.model_dump(mode="python"))
+    projection = effective_report_status(report)
+    if (
+        artifact.run_id != report.run_id
+        or artifact.findings != report.findings
+        or artifact.rejected_findings != report.rejected_findings
+        or artifact.filtered_findings != report.filtered_findings
+        or artifact.run_status is not projection.run_status
+        or artifact.quality_status is not projection.quality_status
+        or artifact.completed is not projection.completed
+        or artifact.quality_gates != projection.quality_gates
+        or artifact.limitations != projection.limitations
+    ):
+        raise ValueError("findings artifact differs from the bound audit report")
+    return {record.finding_id: record for record in artifact.records}
+
+
+def _filtered_finding_lines(
+    report: AuditReport,
+    artifact_records: dict[str, ForensicFindingRecord],
+) -> list[str]:
+    """Render a bounded index while retaining full filtered evidence in typed JSON."""
+
+    if not report.filtered_findings:
+        return []
+    threshold = str(report.metadata.get("severity_threshold", "unavailable"))
+    ordered = sorted(
+        report.filtered_findings,
+        key=lambda finding: (finding.severity.value, finding.id),
+    )
+    lines = [
+        "## Findings filtered below the client reporting threshold",
+        "",
+        f"{len(ordered)} accepted candidate group(s) were excluded only because their severity "
+        f"fell below the configured {_inline(threshold)} threshold. They are not rejected. "
+        "Their complete finding, candidate, verifier, cross-examination, falsifier, "
+        "reproduction, resolution, and terminal-disposition evidence remains in "
+        "`findings.json`.",
+        "",
+        "| Finding | Severity | Consensus status | Effective disposition | Candidates | Title |",
+        "| --- | --- | --- | --- | ---: | --- |",
+    ]
+    for finding in ordered[:_MAX_FILTERED_FINDING_ROWS]:
+        record = artifact_records.get(finding.id)
+        disposition = record.disposition.value if record is not None else "UNAVAILABLE"
+        lines.append(
+            f"| {_inline(finding.id)} | {_inline(finding.severity.value)} | "
+            f"{_inline(finding.status.value)} | {_inline(disposition)} | "
+            f"{len(finding.contributing_candidate_ids)} | {_text(finding.title)} |"
+        )
+    omitted = len(ordered) - _MAX_FILTERED_FINDING_ROWS
+    if omitted > 0:
+        lines.extend(
+            [
+                "",
+                f"{omitted} additional reporting-filtered finding record(s) remain in the "
+                "complete typed JSON inventory.",
+            ]
+        )
+    lines.append("")
+    return lines
 
 
 _ORIGIN_LABELS = {
@@ -330,8 +425,12 @@ def _audited_suite_coverage_gap_lines(coverage: dict[str, object]) -> list[str]:
     return lines
 
 
-def _finding(finding: Finding, report: AuditReport) -> list[str]:
-    qualification = _status_qualification(finding.status)
+def _finding(
+    finding: Finding,
+    report: AuditReport,
+    record: ForensicFindingRecord | None = None,
+) -> list[str]:
+    qualification = _finding_qualification(finding, record)
     lines = [
         f"### {_text(finding.title)} ({_inline(finding.id)})",
         "",
@@ -515,11 +614,21 @@ def _finding(finding: Finding, report: AuditReport) -> list[str]:
     return lines
 
 
-def render_markdown(report: AuditReport) -> str:
+def render_markdown(
+    report: AuditReport,
+    *,
+    findings_artifact: FindingsArtifact | None = None,
+) -> str:
     report = AuditReport.model_validate(report.model_dump(mode="python"))
     projection = effective_report_status(report)
+    artifact_records = _artifact_records_for_report(report, findings_artifact)
     counts = Counter(finding.severity.value for finding in report.findings)
     status_counts = Counter(finding.status.value for finding in report.findings)
+    disposition_counts = (
+        Counter(artifact_records[finding.id].disposition.value for finding in report.findings)
+        if artifact_records
+        else Counter()
+    )
     origin_counts = Counter(finding.origin_kind.value for finding in report.findings)
     scanner_failures = [run for run in report.scanner_runs if run.status.is_failure]
     scanner_not_applicable = [
@@ -542,18 +651,29 @@ def render_markdown(report: AuditReport) -> str:
         AuditRunStatus.INCOMPLETE,
         AuditRunStatus.FAILED,
     }
-    executive_summary = (
-        "No reportable findings were identified by the analyses that completed. "
-        "This run is incomplete and does not support a conclusion about repository safety."
-        if incomplete_empty_run
-        else (
+    if incomplete_empty_run:
+        executive_summary = (
+            "No reportable findings were identified by the analyses that completed. "
+            "This run is incomplete and does not support a conclusion about repository safety."
+        )
+    elif artifact_records:
+        executive_summary = (
+            f"The audit produced **{len(report.findings)} surviving finding(s)** with effective "
+            f"dispositions: {disposition_counts[ForensicDisposition.CONFIRMED.value]} confirmed, "
+            f"{disposition_counts[ForensicDisposition.SUPPORTED.value]} supported, "
+            f"{disposition_counts[ForensicDisposition.DISPUTED.value]} disputed, and "
+            f"{disposition_counts[ForensicDisposition.INCONCLUSIVE.value]} inconclusive. "
+            f"An additional {len(report.filtered_findings)} accepted finding(s) were retained "
+            "forensically below the client reporting threshold."
+        )
+    else:
+        executive_summary = (
             f"The audit produced **{len(report.findings)} surviving finding(s)**: "
             f"{status_counts[FindingStatus.CONFIRMED.value]} confirmed, "
             f"{status_counts[FindingStatus.STRONGLY_SUPPORTED.value]} strongly supported, "
             f"{status_counts[FindingStatus.HIGH_CONFIDENCE.value]} high-confidence, and "
             f"{status_counts[FindingStatus.NEEDS_REVIEW.value]} needing human review."
         )
-    )
     lines = [
         "# Corrovera Security Assurance Report",
         "",
@@ -1579,7 +1699,8 @@ def render_markdown(report: AuditReport) -> str:
             ]
         )
     for finding in ordered:
-        lines.extend(_finding(finding, report))
+        lines.extend(_finding(finding, report, artifact_records.get(finding.id)))
+    lines.extend(_filtered_finding_lines(report, artifact_records))
     lines.extend(
         [
             "## Rejected and disputed proposals",
@@ -1591,7 +1712,7 @@ def render_markdown(report: AuditReport) -> str:
     )
     for finding in report.rejected_findings:
         lines.extend([f"Rejected candidate origin: [{_text(_origin_label(finding))}]", ""])
-        lines.extend(_finding(finding, report))
+        lines.extend(_finding(finding, report, artifact_records.get(finding.id)))
     lines.extend(
         [
             "",
@@ -1616,10 +1737,14 @@ def render_markdown(report: AuditReport) -> str:
     return "\n".join(lines)
 
 
-def render_forensic_markdown(report: AuditReport) -> str:
+def render_forensic_markdown(
+    report: AuditReport,
+    *,
+    findings_artifact: FindingsArtifact | None = None,
+) -> str:
     """Render the exhaustive evidence-oriented report separately from the client summary."""
 
-    rendered = render_markdown(report)
+    rendered = render_markdown(report, findings_artifact=findings_artifact)
     title = "# Corrovera Security Assurance Report"
     if not rendered.startswith(title):
         raise ValueError("forensic report source has an unexpected title")

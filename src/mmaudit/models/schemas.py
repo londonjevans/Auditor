@@ -11396,8 +11396,13 @@ class AuditReport(StrictModel):
     usage: list[UsageRecord]
     budget_usd: float
     accounted_cost_usd: float
+    accounted_cost_usd_exact: str | None = Field(
+        default=None,
+        pattern=r"^(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,36})?$",
+    )
     findings: list[Finding]
     rejected_findings: list[Finding]
+    filtered_findings: list[Finding] = Field(default_factory=list)
     audit_profile: AuditProfile = AuditProfile.STANDARD
     quality_status: AuditQualityStatus = AuditQualityStatus.COMPLETED
     run_status: AuditRunStatus | None = None
@@ -11428,6 +11433,13 @@ class AuditReport(StrictModel):
 
     @model_validator(mode="after")
     def run_status_matches_minimum_analysis_floor(self) -> AuditReport:
+        exact_cost = (
+            Decimal(self.accounted_cost_usd_exact)
+            if self.accounted_cost_usd_exact is not None
+            else None
+        )
+        if exact_cost is not None and float(exact_cost) != self.accounted_cost_usd:
+            raise ValueError("report exact cost differs from presentation cost")
         self._validate_current_finding_inventories()
         self._validate_execution_origin_bindings()
         if self.schema_version != "1.2":
@@ -11484,9 +11496,11 @@ class AuditReport(StrictModel):
         return self
 
     def _validate_current_finding_inventories(self) -> None:
-        """Keep current active and rejected inventories semantically disjoint."""
+        """Keep current active, rejected, and reporting-filtered inventories disjoint."""
 
         if self.schema_version != "1.2":
+            if self.filtered_findings:
+                raise ValueError("reporting-filtered findings require report schema 1.2")
             return
         if any(finding.status is FindingStatus.REJECTED for finding in self.findings):
             raise ValueError("current report findings inventory cannot contain rejected findings")
@@ -11494,6 +11508,46 @@ class AuditReport(StrictModel):
             raise ValueError(
                 "current report rejected-findings inventory may contain only rejected findings"
             )
+        if any(finding.status is FindingStatus.REJECTED for finding in self.filtered_findings):
+            raise ValueError("reporting-filtered findings cannot contain rejected findings")
+        if any(
+            finding.origin_kind is FindingOriginKind.DETERMINISTIC_EXECUTION
+            for finding in self.filtered_findings
+        ):
+            raise ValueError("deterministic execution findings cannot be reporting-filtered")
+
+        all_findings = [*self.findings, *self.rejected_findings, *self.filtered_findings]
+        finding_ids = [finding.id for finding in all_findings]
+        if len(finding_ids) != len(set(finding_ids)):
+            raise ValueError("current report finding inventories must be disjoint")
+        filtered_group_ids = [finding.group_id for finding in self.filtered_findings]
+        if any(group_id is None for group_id in filtered_group_ids) or len(
+            filtered_group_ids
+        ) != len(set(filtered_group_ids)):
+            raise ValueError("reporting-filtered findings require unique candidate group IDs")
+
+        if self.filtered_findings:
+            raw_threshold = self.metadata.get("severity_threshold")
+            try:
+                threshold = Severity(raw_threshold)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    "reporting-filtered findings require a typed severity threshold"
+                ) from None
+            severity_rank = {
+                Severity.INFORMATIONAL: 0,
+                Severity.LOW: 1,
+                Severity.MEDIUM: 2,
+                Severity.HIGH: 3,
+                Severity.CRITICAL: 4,
+            }
+            if any(
+                severity_rank[finding.severity] >= severity_rank[threshold]
+                for finding in self.filtered_findings
+            ):
+                raise ValueError(
+                    "reporting-filtered finding does not fall below the recorded threshold"
+                )
 
         rejected_execution_findings = [
             finding
@@ -11514,7 +11568,7 @@ class AuditReport(StrictModel):
 
         execution_findings = [
             finding
-            for finding in [*self.findings, *self.rejected_findings]
+            for finding in [*self.findings, *self.rejected_findings, *self.filtered_findings]
             if finding.origin_kind is FindingOriginKind.DETERMINISTIC_EXECUTION
         ]
         execution_keys = [
