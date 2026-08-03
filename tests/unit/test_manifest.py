@@ -357,6 +357,22 @@ def _write_required_artifacts(
             "schema_version": "1.0",
             "runs": [run.model_dump(mode="json") for run in report.scanner_runs],
         },
+        "verification-results.json": {
+            "schema_version": "1.2",
+            "decisions": [
+                decision.model_dump(mode="json")
+                for decision in report.verification_decisions
+            ],
+            "threat_model": None,
+            "threat_model_location_rejections": [],
+        },
+        "cross-examination.json": {
+            "schema_version": "1.2",
+            "decisions": [
+                decision.model_dump(mode="json")
+                for decision in report.cross_examination_decisions
+            ],
+        },
         "candidate-findings.json": {
             "schema_version": "1.1",
             "findings": [],

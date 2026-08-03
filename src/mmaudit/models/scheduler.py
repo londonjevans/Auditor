@@ -2672,6 +2672,7 @@ class SchedulerEvidenceCapJudgmentOutput(StrictModel):
     judge_decision_ids: tuple[str, ...] = Field(max_length=100_000)
     final_finding_ids: tuple[str, ...] = Field(max_length=100_000)
     rejected_finding_ids: tuple[str, ...] = Field(max_length=100_000)
+    filtered_finding_ids: tuple[str, ...] = Field(default=(), max_length=100_000)
 
     @model_validator(mode="after")
     def inventories_are_canonical_and_disjoint(self) -> Self:
@@ -2679,7 +2680,18 @@ class SchedulerEvidenceCapJudgmentOutput(StrictModel):
         judges = _canonical_string_inventory(self.judge_decision_ids, "judge decision")
         final = _canonical_string_inventory(self.final_finding_ids, "final finding")
         rejected = _canonical_string_inventory(self.rejected_finding_ids, "rejected finding")
-        if judges != groups or set(final) & set(rejected):
+        filtered = _canonical_string_inventory(self.filtered_finding_ids, "filtered finding")
+        partitions = (set(final), set(rejected), set(filtered))
+        overlapping = (
+            partitions[0] & partitions[1]
+            or partitions[0] & partitions[2]
+            or partitions[1] & partitions[2]
+        )
+        if (
+            judges != groups
+            or overlapping
+            or sum(len(partition) for partition in partitions) != len(groups)
+        ):
             raise ValueError("scheduler evidence-cap judgment partitions are inconsistent")
         return self
 

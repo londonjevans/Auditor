@@ -1177,6 +1177,7 @@ async def _run(
     cost_ledger: AtomicCostLedger | None = None,
     resume_run_dir: Path | None = None,
     output: Path | None = None,
+    severity_threshold: Severity = Severity.INFORMATIONAL,
 ):
     if cost_ledger is None:
         ledger_index = sum(1 for path in tmp_path.glob("test-cost-ledger-*.json") if path.is_file())
@@ -1202,6 +1203,7 @@ async def _run(
             resume_run_dir=resume_run_dir,
             allow_code_egress=True,
             allow_fork_probing=allow_fork_probing,
+            severity_threshold=severity_threshold,
         )
     finally:
         await http_client.aclose()
@@ -4676,6 +4678,52 @@ async def test_duplicate_candidates_merge_and_ids_are_deterministic(
     assert first_ids == second_ids
     sql = next(finding for finding in first.report.findings if "SQL" in finding.title)
     assert len(sql.contributing_candidate_ids) == 2
+
+
+@pytest.mark.asyncio
+async def test_high_candidate_below_critical_threshold_remains_in_forensic_custody(
+    config_factory, vulnerable_repo: Path, tmp_path: Path
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    result = await _run(
+        config,
+        vulnerable_repo,
+        tmp_path,
+        FakeOpenRouter(),
+        severity_threshold=Severity.CRITICAL,
+    )
+
+    assert result.report.metadata["severity_threshold"] == Severity.CRITICAL.value
+    assert result.report.filtered_findings
+    assert all(
+        finding.severity is not Severity.CRITICAL
+        for finding in result.report.filtered_findings
+    )
+    artifact = FindingsArtifact.model_validate_json(
+        (result.run_dir / "findings.json").read_text(encoding="utf-8")
+    )
+    assert artifact.filtered_findings == result.report.filtered_findings
+    filtered_candidate_ids = {
+        candidate_id
+        for finding in result.report.filtered_findings
+        for candidate_id in finding.contributing_candidate_ids
+    }
+    assert filtered_candidate_ids
+    assert {
+        item.candidate_id
+        for item in artifact.terminal_candidate_dispositions
+        if item.state.value == "FILTERED_BELOW_THRESHOLD"
+    } == filtered_candidate_ids
+    client = (result.run_dir / "client-report.md").read_text(encoding="utf-8")
+    forensic = (result.run_dir / "forensic-report.md").read_text(encoding="utf-8")
+    for finding in result.report.filtered_findings:
+        assert finding.title not in client
+        assert finding.id in forensic
+        assert finding.title in forensic
+    manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    validate_manifest_artifacts(manifest, result.run_dir)
 
 
 @pytest.mark.asyncio

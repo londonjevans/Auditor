@@ -522,28 +522,29 @@ def test_completed_analysis_credits_only_structurally_qualifying_real_evidence()
     ]
     reproductions = [
         ReproductionResult(
-            candidate_id="claimed-real-reproduction",
+            candidate_id="candidate-synthetic-001",
             test_name="testClaimedReal",
             state=ReproductionState.REPRODUCED,
             execution_evidence=ExecutionEvidenceKind.REAL,
             specification_sha256="1" * 64,
         ),
         ReproductionResult(
-            candidate_id="mock-reproduction",
+            candidate_id="candidate-synthetic-001",
             test_name="testMock",
             state=ReproductionState.REPRODUCED,
             execution_evidence=ExecutionEvidenceKind.MOCK,
             specification_sha256="2" * 64,
         ),
         ReproductionResult(
-            candidate_id="failed-reproduction",
+            candidate_id="candidate-synthetic-001",
             test_name="testFailed",
             state=ReproductionState.NOT_REPRODUCED,
             execution_evidence=ExecutionEvidenceKind.REAL,
             specification_sha256="3" * 64,
         ),
     ]
-    report = _report().model_copy(
+    finding = _finding(FindingStatus.STRONGLY_SUPPORTED)
+    report = _report(findings=[finding]).model_copy(
         update={
             "scanner_runs": scanner_runs,
             "usage": usage,
@@ -553,7 +554,7 @@ def test_completed_analysis_credits_only_structurally_qualifying_real_evidence()
         }
     )
 
-    rendered = _render_client(report, {})
+    rendered = _render_client(report, {SOURCE_PATH: SOURCE})
 
     assert "Qualifying REAL static analyzers: slither" in rendered
     assert "Creditable REAL completed model requests: 1" in rendered
@@ -728,6 +729,7 @@ def test_incomplete_rejected_finding_requires_complete_contributor_closure() -> 
     ]
     rejected = Finding(
         id="MMA-SYNTHETIC-INCOMPLETE-REJECTED",
+        group_id="group-synthetic-incomplete-rejected",
         title="Rejected synthetic proposal",
         status=FindingStatus.REJECTED,
         severity=evidence_source.severity,

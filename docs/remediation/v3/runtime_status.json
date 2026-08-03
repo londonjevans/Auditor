@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-03T21:03:17Z",
-  "candidate_commit": "dada6ac2ab521f521ab186c8797505ec9bfef597",
+  "updated_at": "2026-08-03T21:19:02Z",
+  "candidate_commit": "8125ee36a506d2467817bba6423d509ff854768d",
   "autorun_status": "PAUSED_OPERATOR_REQUEST",
   "current_milestone": "client_report_and_forensic_bundle",
   "current_ticket": "V3-REPORT-001 (IN_PROGRESS)",
-  "last_checkpoint_commit": "dada6ac2ab521f521ab186c8797505ec9bfef597",
+  "last_checkpoint_commit": "8125ee36a506d2467817bba6423d509ff854768d",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,
@@ -23,14 +23,15 @@
     "V3-FORKSUITE-001.hardhat": "Real Hardhat execution requires the process-attested digest-pinned rootless single-loopback runtime and trusted image-baked reporter specified by V3-HARDHAT-001."
   },
   "last_validation": {
-    "command": ".venv/bin/pytest -q tests/unit/test_client_forensic_reporting.py tests/unit/test_client_forensic_reporting_adversarial.py tests/unit/test_report_status_projection.py tests/unit/test_manifest.py",
-    "result": "PAUSED AT SAFE BOUNDARY: affected Ruff and targeted strict mypy passed; focused pytest reached 60 passed and 32 failed. Failures are isolated to not-yet-updated candidate/group and verification/cross-examination fixture closure. No completion claim."
+    "command": ".venv/bin/pytest -q tests/unit/test_client_forensic_reporting.py tests/unit/test_client_forensic_reporting_adversarial.py tests/unit/test_report_status_projection.py tests/unit/test_manifest.py tests/unit/test_scheduler_host_contracts.py tests/unit/test_scheduler_models.py tests/integration/test_pipeline.py::test_high_candidate_below_critical_threshold_remains_in_forensic_custody --tb=short",
+    "result": "PASS: 150 passed in 13.32s; affected Ruff and strict mypy passed. Ticket remains IN_PROGRESS pending scanner and scheduler authority bindings."
   },
   "pause_state": {
     "requested_at": "2026-08-03T20:08:17Z",
     "resumed_at": "2026-08-03T20:11:52Z",
-    "result": "Operator requested another graceful pause at 2026-08-03T21:01:54Z. All delegated work stopped at a compile/test boundary; no validation or provider process remains active.",
-    "requested_at_latest": "2026-08-03T21:01:54Z",
+    "result": "Operator requested a graceful pause at 2026-08-03T21:17:45Z. All delegated work stopped; the partial threshold-filtered custody slice is preserved and no validation/provider process remains active.",
+    "requested_at_latest": "2026-08-03T21:17:45Z",
+    "resumed_at_latest": "2026-08-03T21:05:26Z",
     "resume_action": "Complete threshold-filtered candidate and decision custody, update current-artifact fixtures, repair the three recorded scanner/usage custody regressions, then run integrated V3-REPORT-001 gates."
   },
   "scheduler_assurance_validation": {

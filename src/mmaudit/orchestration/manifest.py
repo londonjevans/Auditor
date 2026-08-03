@@ -1208,17 +1208,17 @@ def _validate_report_artifact_consistency(
     scanner_results = _read_json_artifact(root, "scanner-results.json")
     if scanner_results.get("runs") != [run.model_dump(mode="json") for run in report.scanner_runs]:
         raise ValueError("scanner-results.json differs from the final report")
-    verification_results = _read_json_artifact(root, "verification-results.json")
-    if verification_results.get("decisions") != [
-        decision.model_dump(mode="json") for decision in report.verification_decisions
-    ]:
-        raise ValueError("verification-results.json differs from the final report")
-    cross_examination_results = _read_json_artifact(root, "cross-examination.json")
-    if cross_examination_results.get("decisions") != [
-        decision.model_dump(mode="json") for decision in report.cross_examination_decisions
-    ]:
-        raise ValueError("cross-examination.json differs from the final report")
     if report_bundle_required:
+        verification_results = _read_json_artifact(root, "verification-results.json")
+        if verification_results.get("decisions") != [
+            decision.model_dump(mode="json") for decision in report.verification_decisions
+        ]:
+            raise ValueError("verification-results.json differs from the final report")
+        cross_examination_results = _read_json_artifact(root, "cross-examination.json")
+        if cross_examination_results.get("decisions") != [
+            decision.model_dump(mode="json") for decision in report.cross_examination_decisions
+        ]:
+            raise ValueError("cross-examination.json differs from the final report")
         _validate_scanner_stream_artifact_custody(root, report.scanner_runs)
     candidate_artifact = CandidateFindingArtifact.model_validate(
         _read_json_artifact(root, "candidate-findings.json")

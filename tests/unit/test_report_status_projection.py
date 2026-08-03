@@ -2,17 +2,22 @@ from __future__ import annotations
 
 import pytest
 
+from mmaudit.constants import ANALYSIS_ROLES
 from mmaudit.models.schemas import (
     AnalysisState,
     AuditQualityStatus,
+    AuditReport,
     AuditRunStatus,
     Evidence,
     FindingOriginKind,
     FindingStatus,
     QualityGateResult,
+    Severity,
     VerificationVerdict,
 )
 from mmaudit.reporting.bundle import (
+    CandidateTerminalState,
+    FindingsArtifact,
     ForensicDisposition,
     build_coverage_artifact,
     build_findings_artifact,
@@ -35,6 +40,11 @@ from tests.unit.test_client_forensic_reporting import (
     _report,
 )
 from tests.unit.test_client_forensic_reporting_adversarial import _verification
+from tests.unit.test_run_status import (
+    _assessment,
+    _coverage,
+    _typed_report_payload,
+)
 
 
 def test_legacy_no_floor_status_is_identical_across_every_canonical_report_leaf() -> None:
@@ -191,3 +201,58 @@ def test_artifact_aware_outputs_reject_a_mismatched_authority() -> None:
         generate_report_sarif(report, findings_artifact=wrong_run)
     with pytest.raises(ValueError, match="differs from the SARIF finding inventory"):
         generate_sarif([], findings_artifact=artifact)
+
+
+def test_current_filtered_candidate_is_forensic_only_and_has_one_terminal_state() -> None:
+    coverage = _coverage()
+    floor = _assessment(coverage=coverage, required_model_roles=ANALYSIS_ROLES)
+    finding = _finding(FindingStatus.STRONGLY_SUPPORTED).model_copy(
+        update={"severity": Severity.HIGH}
+    )
+    payload = _typed_report_payload(
+        floor=floor,
+        scanner_runs=[],
+        usage=[],
+        coverage=coverage,
+    )
+    metadata = dict(payload["metadata"])
+    metadata["severity_threshold"] = Severity.CRITICAL.value
+    payload.update(
+        {
+            "repository": _report().repository,
+            "findings": [],
+            "filtered_findings": [finding],
+            "verification_decisions": [_verification(VerificationVerdict.PLAUSIBLE)],
+            "metadata": metadata,
+        }
+    )
+    report = AuditReport.model_validate(payload)
+    candidate = _candidate(finding)
+    artifact = build_findings_artifact(report, candidates=[candidate])
+
+    assert artifact.findings == []
+    assert artifact.filtered_findings == [finding]
+    assert artifact.candidate_findings == [candidate]
+    assert artifact.verification_decisions == report.verification_decisions
+    assert len(artifact.terminal_candidate_dispositions) == 1
+    terminal = artifact.terminal_candidate_dispositions[0]
+    assert terminal.candidate_id == candidate.candidate_id
+    assert terminal.finding_id == finding.id
+    assert terminal.group_id == finding.group_id
+    assert terminal.state is CandidateTerminalState.FILTERED_BELOW_THRESHOLD
+    assert terminal.reporting_severity_threshold is Severity.CRITICAL
+
+    client = render_client_markdown(report, {SOURCE_PATH: SOURCE}, candidates=[candidate])
+    forensic = render_forensic_markdown(report, findings_artifact=artifact)
+    sarif = generate_report_sarif(report, findings_artifact=artifact)
+
+    assert finding.title not in client
+    assert "Findings filtered below the client reporting threshold" in forensic
+    assert finding.id in forensic
+    assert finding.title in forensic
+    assert sarif["runs"][0]["results"] == []
+
+    with pytest.raises(ValueError, match="terminal dispositions"):
+        tampered = artifact.model_dump(mode="python")
+        tampered["terminal_candidate_dispositions"] = []
+        FindingsArtifact.model_validate(tampered)

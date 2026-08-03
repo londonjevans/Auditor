@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED_OPERATOR_REQUEST
 CURRENT_MILESTONE: Client report and forensic evidence bundle
 CURRENT_TICKET: V3-REPORT-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-FIXTURE-001 (COMPLETE)
-NEXT_ACTION: Resume V3-REPORT-001 by completing threshold-filtered candidate custody and updating current-artifact fixtures for exact candidate/group and verification/cross-examination closure; then repair the three independently confirmed scanner/usage custody regressions before integrated ticket-close gates.
-LAST_COMMAND: `.venv/bin/pytest -q tests/unit/test_client_forensic_reporting.py tests/unit/test_client_forensic_reporting_adversarial.py tests/unit/test_report_status_projection.py tests/unit/test_manifest.py`.
-LAST_RESULT: PAUSED AT SAFE BOUNDARY: targeted Ruff and strict mypy pass; focused pytest reached `60 passed, 32 failed`. Failures are confined to fixtures/helpers not yet updated for the intentionally stronger current-artifact closure. No provider call or long-running process remains active.
+NEXT_ACTION: Resume V3-REPORT-001 at the scanner semantic/stream-ownership and scheduler-to-report authority bindings; restore the qualified-routing usage-tamper regression, regenerate schemas, then run integrated ticket-close gates.
+LAST_COMMAND: `.venv/bin/pytest -q tests/unit/test_client_forensic_reporting.py tests/unit/test_client_forensic_reporting_adversarial.py tests/unit/test_report_status_projection.py tests/unit/test_manifest.py tests/unit/test_scheduler_host_contracts.py tests/unit/test_scheduler_models.py tests/integration/test_pipeline.py::test_high_candidate_below_critical_threshold_remains_in_forensic_custody --tb=short`.
+LAST_RESULT: PASS: `150 passed in 13.32s`; affected Ruff and strict mypy also passed. The ticket remains IN_PROGRESS because scanner and scheduler authority bindings are not implemented.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
-LAST_CHECKPOINT_COMMIT: dada6ac2ab521f521ab186c8797505ec9bfef597
+LAST_CHECKPOINT_COMMIT: 8125ee36a506d2467817bba6423d509ff854768d
 
 ## 2026-08-03T21:01:54Z — Graceful operator pause
 
@@ -46,6 +46,32 @@ LAST_CHECKPOINT_COMMIT: dada6ac2ab521f521ab186c8797505ec9bfef597
 - **WIP checkpoint:** The exact partial implementation and pause record are preserved at
   `dada6ac2ab521f521ab186c8797505ec9bfef597`. This commit intentionally retains the `32`
   focused fixture/helper failures and is not ticket-complete evidence.
+- **Resume (2026-08-03T21:05:26Z):** Persistent-goal continuation resumed from clean,
+  SSH-synchronized pause metadata commit `8125ee36a506d2467817bba6423d509ff854768d`.
+  Work remains bounded to the recorded threshold-retention and scanner/usage custody defects;
+  no provider call is required for this slice.
+
+## 2026-08-03T21:17:45Z — Graceful operator pause
+
+- **State:** `V3-REPORT-001` remains `IN_PROGRESS`; no completion or release claim is made.
+- **Preserved slice:** Current-artifact fixtures now close verification and cross-examination
+  inventories; threshold-filtered candidates have deterministic terminal custody, client/SARIF
+  exclusion, forensic retention, and an end-to-end regression; pass-seven output accounts for
+  filtered finding IDs; sealed manifest `1.1` compatibility remains intact.
+- **Validation:** The combined report, manifest, scheduler-contract, scheduler-model, and
+  filtered pipeline integration checkpoint passed `150` tests in `13.32s`. Ruff passed for all
+  six affected Python test/source files, and strict mypy passed for both affected source modules.
+  The inherited pytest temporary-directory cleanup emitted two permission warnings after the
+  passing result; no repository process remained active.
+- **Unfinished authority work:** Bind report/candidate semantics to retained scheduler pass-three
+  and pass-seven outputs; replay trusted scanner outputs instead of trusting mutable projected
+  findings; reject NFC/case-insensitive and inode-duplicate scanner stream ownership; restore the
+  qualification-routing usage-tamper assay; regenerate the findings schema.
+- **Safety/cost:** All delegated agents were stopped. No provider call, public RPC, secret read,
+  target-controlled command, or paid operation occurred. Process inspection found no matching
+  pytest, Ruff, mypy, mmaudit, or repository validation process.
+- **Resume boundary:** Start with the recorded scanner and scheduler authority designs. Do not
+  weaken current manifest issuance or count a self-consistent reseal as independent authority.
 
 ## 2026-08-03 — V3-REPORT-001
 
