@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED
 CURRENT_MILESTONE: Client report and forensic evidence bundle
 CURRENT_TICKET: V3-REPORT-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-FIXTURE-001 (COMPLETE)
-NEXT_ACTION: Resume V3-REPORT-001 by fixing the two exposed adversarial gaps: strict structural qualification for REAL invariant/formal/reproduction credit and exact contributing-candidate closure; rerun the adversarial and pipeline suites, then complete ticket-close gates and traceability.
-LAST_COMMAND: `.venv/bin/pytest -q tests/unit/test_client_forensic_reporting_adversarial.py`.
-LAST_RESULT: DIAGNOSTIC FAIL: `19 passed, 2 failed`; the failures precisely retain the two unfinished report-evidence defects and received no completion credit.
+NEXT_ACTION: Resume V3-REPORT-001 from the WIP checkpoint; finish authoritative per-range source binding and typed static-analyzer custody, run the focused red regressions, then run the complete ticket-close matrix before granting completion credit.
+LAST_COMMAND: `git diff --check`.
+LAST_RESULT: PASS with no whitespace errors; this is a pause-integrity check, not ticket acceptance evidence.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -83,6 +83,25 @@ LAST_CHECKPOINT_COMMIT: 9c14487ed1587d384f12ca4d99f790b99565b442
 - **WIP checkpoint:** The preserved report, manifest, CI, schema, documentation, and adversarial
   regression slice is committed at `9c14487ed1587d384f12ca4d99f790b99565b442`.
   It deliberately retains the two documented red tests and makes no completion or release claim.
+- **Resume (2026-08-03T18:26:08Z):** Persistent-goal continuation resumed from clean,
+  SSH-synchronized pause metadata commit `71074a1623bd1abab52fbab1bc55a04bd1fcd0f2`.
+  Work remains bounded to the two documented report-evidence defects before broader validation;
+  no provider call is required or authorized for this slice.
+- **Independent acceptance review:** The two paused red regressions are now repaired locally and
+  focused checks pass, but the ticket remains open. Read-only review found five additional proof
+  obligations: one effective legacy/no-floor status across every deliverable; no schema-`1.1`
+  downgrade during new issuance when canonical report leaves are absent or partial; an
+  authoritative cited-range join for scanner-origin excerpts; a self-contained downloadable
+  forensic bundle; and a representative client section/size bound. Traceability row `P` is now
+  honestly `IN_PROGRESS`. No paid call, provider access, or public network was used.
+- **Graceful pause (2026-08-03T18:48:33Z):** The operator requested a laptop-safe pause. All
+  delegated workers are stopped, and `pgrep` found no pytest, mypy, Ruff, mmaudit, provider, or
+  schema-generation process. The shared worktree retains the report-status, evidence-credit,
+  manifest-issuance, CI public-subset, size-bound, and new red-regression slices. `git diff
+  --check` passed. These changes remain explicitly WIP: authoritative per-range source binding,
+  typed static-analyzer custody, focused regressions, schema verification, strict static checks,
+  and the broader acceptance matrix are still required. No paid provider call or public-network
+  operation occurred during this slice.
 
 ## 2026-08-03 — V3-FIXTURE-001
 

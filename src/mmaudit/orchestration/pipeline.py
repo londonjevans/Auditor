@@ -334,7 +334,7 @@ from mmaudit.reporting.bundle import (
 from mmaudit.reporting.client import build_client_source_excerpts, render_client_markdown
 from mmaudit.reporting.json_report import stable_json, write_json
 from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
-from mmaudit.reporting.sarif import generate_sarif
+from mmaudit.reporting.sarif import generate_report_sarif
 from mmaudit.repository.discovery import (
     DiscoveryResult,
     discover_repository,
@@ -8008,15 +8008,7 @@ class AuditPipeline:
         (run_dir / "audit-report.md").write_text(render_markdown(report), encoding="utf-8")
         write_json(
             run_dir / "audit-results.sarif",
-            generate_sarif(
-                report.findings,
-                scanner_runs=report.scanner_runs,
-                maximum_assurance=report.maximum_assurance,
-                run_status=report.run_status,
-                quality_status=report.quality_status,
-                completed=report.completed,
-                incomplete_reasons=report.incomplete_reasons,
-            ),
+            generate_report_sarif(report),
         )
         if ci_state is not None:
             write_json(run_dir / CI_STATE_FILENAME, ci_state)

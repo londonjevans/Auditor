@@ -103,7 +103,8 @@ from mmaudit.reporting.bundle import (
 from mmaudit.reporting.client import render_client_markdown_from_artifact
 from mmaudit.reporting.json_report import write_json
 from mmaudit.reporting.markdown import render_forensic_markdown
-from mmaudit.reporting.sarif import generate_sarif
+from mmaudit.reporting.sarif import generate_report_sarif
+from mmaudit.reporting.status import effective_report_status
 from mmaudit.repository.ignore import normalize_relative_path
 from mmaudit.repository.secrets import is_sensitive_workspace_name, is_sensitive_workspace_path
 from mmaudit.solidity.sharding import (
@@ -272,7 +273,7 @@ class RunConfigurationBinding(StrictModel):
 class RunEvidenceManifest(StrictModel):
     """Self-hashed manifest over source, run evidence projections, and artifacts."""
 
-    schema_version: Literal["1.0", "1.1", "1.2"] = "1.1"
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.2"
     generated_by: Literal["mmaudit"] = "mmaudit"
     tool_version: str = Field(min_length=1, max_length=100)
     run_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -373,10 +374,39 @@ def seal_run_evidence_manifest(
     run_configuration: RunConfigurationBinding,
     bindings: ManifestBindingSet,
     artifacts: list[ManifestFileBinding],
-    schema_version: Literal["1.1", "1.2"] = "1.1",
+    schema_version: Literal["1.1", "1.2"] = "1.2",
     tool_version: str = VERSION,
 ) -> RunEvidenceManifest:
-    """Sort and self-hash an otherwise complete manifest payload."""
+    """Issue a new complete report-bundle manifest using the current schema only."""
+
+    if schema_version != "1.2":
+        raise ValueError("new manifest issuance requires schema 1.2 and all report leaves")
+    return _seal_run_evidence_manifest(
+        run_id=run_id,
+        repository_root_name=repository_root_name,
+        git_commit=git_commit,
+        sources=sources,
+        run_configuration=run_configuration,
+        bindings=bindings,
+        artifacts=artifacts,
+        schema_version=schema_version,
+        tool_version=tool_version,
+    )
+
+
+def _seal_run_evidence_manifest(
+    *,
+    run_id: str,
+    repository_root_name: str,
+    git_commit: str | None,
+    sources: list[ManifestFileBinding],
+    run_configuration: RunConfigurationBinding,
+    bindings: ManifestBindingSet,
+    artifacts: list[ManifestFileBinding],
+    schema_version: Literal["1.1", "1.2"],
+    tool_version: str,
+) -> RunEvidenceManifest:
+    """Reconstruct a current or already-sealed legacy manifest deterministically."""
 
     ordered_sources = sorted(sources, key=lambda item: item.path)
     ordered_artifacts = sorted(artifacts, key=lambda item: item.path)
@@ -505,9 +535,8 @@ def _build_run_evidence_manifest(
         source_tree_sha256=source_tree_sha256,
         expected_source_classification=run_configuration.run_options.privacy_source_classification,
     )
-    report_bundle_required = all(
-        (root / name).exists() or (root / name).is_symlink() or (root / name).is_junction()
-        for name in MANIFEST_BOUND_REPORT_DELIVERABLES
+    report_bundle_required = (
+        sealed_verification_manifest is None or sealed_verification_manifest.schema_version == "1.2"
     )
     _validate_report_artifact_consistency(
         root,
@@ -595,12 +624,20 @@ def _build_run_evidence_manifest(
             scope_assessment,
             context_manifest,
             scheduler_artifact,
+            legacy_schema_1_1=(
+                sealed_verification_manifest is not None
+                and sealed_verification_manifest.schema_version == "1.1"
+            ),
         ),
     )
     artifacts = _collect_artifacts(root)
-    artifact_names = {artifact.path for artifact in artifacts}
-    report_bundle_present = artifact_names >= MANIFEST_BOUND_REPORT_DELIVERABLES
-    return seal_run_evidence_manifest(
+    manifest_schema: Literal["1.1", "1.2"] = (
+        "1.1"
+        if sealed_verification_manifest is not None
+        and sealed_verification_manifest.schema_version == "1.1"
+        else "1.2"
+    )
+    return _seal_run_evidence_manifest(
         run_id=report.run_id,
         repository_root_name=report.repository.root_name,
         git_commit=report.repository.git_commit,
@@ -608,7 +645,8 @@ def _build_run_evidence_manifest(
         run_configuration=run_configuration,
         bindings=bindings,
         artifacts=artifacts,
-        schema_version="1.2" if report_bundle_present else "1.1",
+        schema_version=manifest_schema,
+        tool_version=VERSION,
     )
 
 
@@ -833,8 +871,6 @@ def _validate_report_bundle_artifacts(
         for name in MANIFEST_BOUND_REPORT_DELIVERABLES
         if (root / name).exists() or (root / name).is_symlink() or (root / name).is_junction()
     }
-    if not present:
-        return
     if present != MANIFEST_BOUND_REPORT_DELIVERABLES:
         missing = sorted(MANIFEST_BOUND_REPORT_DELIVERABLES - present)
         raise ValueError("client/forensic report bundle is incomplete: " + ", ".join(missing))
@@ -850,6 +886,8 @@ def _validate_report_bundle_artifacts(
         or findings.run_status is not expected_findings.run_status
         or findings.quality_status is not expected_findings.quality_status
         or findings.completed != expected_findings.completed
+        or findings.quality_gates != expected_findings.quality_gates
+        or findings.limitations != expected_findings.limitations
         or findings.findings != expected_findings.findings
         or findings.rejected_findings != expected_findings.rejected_findings
         or findings.candidate_findings != expected_findings.candidate_findings
@@ -911,15 +949,7 @@ def _validate_report_bundle_artifacts(
         or forensic_sha256 != hashlib.sha256(expected_forensic).hexdigest()
     ):
         raise ValueError("forensic-report.md differs from the final report")
-    expected_sarif = generate_sarif(
-        report.findings,
-        scanner_runs=report.scanner_runs,
-        maximum_assurance=report.maximum_assurance,
-        run_status=report.run_status,
-        quality_status=report.quality_status,
-        completed=report.completed,
-        incomplete_reasons=report.incomplete_reasons,
-    )
+    expected_sarif = generate_report_sarif(report)
     if _read_json_artifact(root, "audit-results.sarif") != expected_sarif:
         raise ValueError("audit-results.sarif differs from the final report")
 
@@ -1117,7 +1147,16 @@ def _validate_report_artifact_consistency(
         if len(contributing) != len(finding.contributing_candidate_ids):
             raise ValueError("final finding contains duplicate contributing evidence IDs")
         if finding.origin_kind is FindingOriginKind.STATIC_ANALYZER:
-            if not contributing or not contributing <= scanner_fingerprints:
+            scanner_evidence_fingerprints = {
+                evidence.fingerprint
+                for evidence in finding.evidence
+                if evidence.type == "scanner" and evidence.fingerprint is not None
+            }
+            if (
+                not contributing
+                or contributing != scanner_evidence_fingerprints
+                or not contributing <= scanner_fingerprints
+            ):
                 raise ValueError("static-analyzer finding lacks exact scanner provenance")
             continue
         unknown_contributors = contributing - set(candidates_by_id)
@@ -3579,7 +3618,15 @@ def _coverage_bindings(
     scope_assessment: dict[str, Any],
     context_manifest: ContextManifest | None,
     scheduler_artifact: SchedulerArtifact | None,
+    *,
+    legacy_schema_1_1: bool = False,
 ) -> list[ManifestHashBinding]:
+    status_projection = effective_report_status(report)
+    projected_quality_gates = (
+        list(report.quality_gates)
+        if legacy_schema_1_1
+        else status_projection.quality_gates
+    )
     bindings = [
         _binding(
             "model-review/artifact",
@@ -3588,8 +3635,8 @@ def _coverage_bindings(
         ),
         _binding(
             "quality-gates/report",
-            [gate.model_dump(mode="json") for gate in report.quality_gates],
-            {"gates": str(len(report.quality_gates))},
+            [gate.model_dump(mode="json") for gate in projected_quality_gates],
+            {"gates": str(len(projected_quality_gates))},
         ),
         _binding(
             "scope/artifact",
@@ -3602,6 +3649,17 @@ def _coverage_bindings(
             {"artifact": "solidity-coverage.json"},
         ),
     ]
+    if not legacy_schema_1_1:
+        bindings.append(
+            _binding(
+                "report-status/projection",
+                status_projection.model_dump(mode="json"),
+                {
+                    "run_status": status_projection.run_status.value,
+                    "quality_status": status_projection.quality_status.value,
+                },
+            )
+        )
     if context_manifest is None:
         bindings.append(
             _binding(

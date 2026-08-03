@@ -215,10 +215,14 @@
       "id": "P",
       "title": "Client-ready report and forensic bundle",
       "tickets": ["V3-REPORT-001"],
-      "status": "QUEUED",
+      "status": "IN_PROGRESS",
       "current_evidence_class": "LOCAL_IMPLEMENTATION",
-      "evidence": ["Current report is monolithic and coverage-heavy; release artifact validation is reusable."],
-      "remaining_proof": "Concise branded client report, inline excerpts, complete rejected evidence, and seven hash-bound forensic artifacts."
+      "evidence": [
+        "Typed Corrovera client and forensic projections, six manifest-bound report leaves, manifest schema 1.2 requirements, release observation, CI staging, published schemas, and deterministic report-quality regressions are implemented at checkpoint 9c14487ed1587d384f12ca4d99f790b99565b442.",
+        "The broader reporting/release matrix passed 306 tests with one explicit hardened-isolation skip; strict mypy passed 168 source files.",
+        "Independent adversarial and acceptance review identified unfinished evidence-credit, candidate-closure, cross-artifact status, current-manifest issuance, source-excerpt binding, and complete delivery-scope obligations."
+      ],
+      "remaining_proof": "Make all adversarial cases green; prove one effective run status across every deliverable; reject absent or partial current report bundles without schema downgrade; reject coherently resealed scanner-origin excerpts; make the delivered forensic bundle self-contained; enforce a representative client size/section budget; then run focused, schema, integration, Ruff, mypy, and full-suite gates."
     },
     {
       "id": "Q",

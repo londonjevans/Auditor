@@ -147,6 +147,26 @@ def _candidate(candidate_id: str, finding: Finding) -> CandidateFinding:
     )
 
 
+def _render_client(
+    report: AuditReport,
+    source_contents: dict[str, str],
+    *,
+    candidates: Sequence[CandidateFinding] | None = None,
+) -> str:
+    """Render with an exact, explicit synthetic candidate evidence inventory."""
+
+    resolved_candidates = (
+        list(candidates)
+        if candidates is not None
+        else [
+            _candidate(candidate_id, finding)
+            for finding in [*report.findings, *report.rejected_findings]
+            for candidate_id in finding.contributing_candidate_ids
+        ]
+    )
+    return render_client_markdown(report, source_contents, candidates=resolved_candidates)
+
+
 def _report_for_source(
     source: str,
     *,
@@ -240,7 +260,7 @@ def _unverified_usage() -> UsageRecord:
 def test_legacy_zero_evidence_report_cannot_render_complete() -> None:
     report = AuditReport.model_validate(_report_payload())
 
-    rendered = render_client_markdown(report, {})
+    rendered = _render_client(report, {})
 
     assert "> **RUN STATUS: INCOMPLETE**" in rendered
     assert "> **RUN STATUS: COMPLETE**" not in rendered
@@ -269,7 +289,7 @@ def test_typed_complete_floor_can_render_calibrated_complete_no_findings() -> No
         )
     )
 
-    rendered = render_client_markdown(report, {})
+    rendered = _render_client(report, {})
 
     assert "> **RUN STATUS: COMPLETE**" in rendered
     assert "No reportable findings were identified within the analyses that completed" in rendered
@@ -304,7 +324,7 @@ def test_verifier_dissent_limits_strong_or_confirmed_projection(
         verifications=[decision],
     )
 
-    rendered = render_client_markdown(report, {SOURCE_PATH: SOURCE})
+    rendered = _render_client(report, {SOURCE_PATH: SOURCE})
 
     assert f"> **{expected_disposition}**" in rendered
     for retained in (
@@ -333,7 +353,7 @@ def test_cross_examination_inconclusive_retains_complete_dissent(
         cross_examinations=[decision],
     )
 
-    rendered = render_client_markdown(report, {SOURCE_PATH: SOURCE})
+    rendered = _render_client(report, {SOURCE_PATH: SOURCE})
 
     assert "> **INCONCLUSIVE**" in rendered
     assert decision.rationale in rendered
@@ -363,7 +383,7 @@ def test_falsifier_outcome_limits_authority_and_retains_boolean_evidence(
         falsifications=[decision],
     )
 
-    rendered = render_client_markdown(report, {SOURCE_PATH: SOURCE})
+    rendered = _render_client(report, {SOURCE_PATH: SOURCE})
 
     assert f"> **{expected_disposition}**" in rendered
     assert decision.rationale in rendered
@@ -378,7 +398,7 @@ def test_narrative_summary_is_not_relabelled_as_a_violated_property() -> None:
         update={"summary": narrative, "execution_provenance": ()}
     )
 
-    rendered = render_client_markdown(
+    rendered = _render_client(
         _report(findings=[finding]),
         {SOURCE_PATH: SOURCE},
     )
@@ -498,7 +518,7 @@ def test_completed_analysis_credits_only_structurally_qualifying_real_evidence()
         }
     )
 
-    rendered = render_client_markdown(report, {})
+    rendered = _render_client(report, {})
 
     assert "Qualifying REAL static analyzers: slither" in rendered
     assert "Creditable REAL completed model requests: 1" in rendered
@@ -519,7 +539,19 @@ def test_near_match_symbol_does_not_validate_against_a_different_identifier() ->
     finding = finding.model_copy(update={"locations": [near_match]})
 
     with pytest.raises(ValueError, match="symbol"):
-        render_client_markdown(
+        _render_client(
+            _report(findings=[finding]),
+            {SOURCE_PATH: SOURCE},
+        )
+
+
+def test_active_finding_requires_an_authoritative_per_range_source_hash() -> None:
+    finding = _finding(FindingStatus.STRONGLY_SUPPORTED)
+    unhashed = finding.locations[0].model_copy(update={"content_hash": None})
+    finding = finding.model_copy(update={"locations": [unhashed]})
+
+    with pytest.raises(ValueError, match=r"source range.*hash|hash.*source range"):
+        _render_client(
             _report(findings=[finding]),
             {SOURCE_PATH: SOURCE},
         )
@@ -538,7 +570,7 @@ def test_large_cited_range_renders_a_bounded_line_window() -> None:
     )
     report = _report_for_source(source, start_line=4, end_line=43, symbol="withdraw")
 
-    rendered = render_client_markdown(report, {SOURCE_PATH: source})
+    rendered = _render_client(report, {SOURCE_PATH: source})
     code_lines = [line for line in rendered.splitlines() if re.match(r"^    \d{4} \|", line)]
 
     assert f"{SOURCE_PATH}:4-43" in rendered
@@ -558,7 +590,7 @@ def test_oversized_source_line_renders_a_bounded_inert_excerpt() -> None:
     )
     report = _report_for_source(source, start_line=4, end_line=4, symbol="withdraw")
 
-    rendered = render_client_markdown(report, {SOURCE_PATH: source})
+    rendered = _render_client(report, {SOURCE_PATH: source})
     code_lines = [line for line in rendered.splitlines() if re.match(r"^    \d{4} \|", line)]
 
     assert 1 <= len(code_lines) <= 24
@@ -582,12 +614,12 @@ def test_permuted_candidate_and_decision_inputs_render_identically() -> None:
     first = _report_with_decisions(finding, cross_examinations=decisions)
     second = _report_with_decisions(finding, cross_examinations=list(reversed(decisions)))
 
-    first_render = render_client_markdown(
+    first_render = _render_client(
         first,
         {SOURCE_PATH: SOURCE},
         candidates=candidates,
     )
-    second_render = render_client_markdown(
+    second_render = _render_client(
         second,
         {SOURCE_PATH: SOURCE},
         candidates=list(reversed(candidates)),

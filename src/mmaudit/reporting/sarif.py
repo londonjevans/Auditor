@@ -10,14 +10,17 @@ from urllib.parse import quote
 
 from mmaudit.models.schemas import (
     AuditQualityStatus,
+    AuditReport,
     AuditRunStatus,
     Finding,
     FindingStatus,
     MaximumAssuranceAssessment,
+    QualityGateResult,
     ScannerRun,
     ScannerStatus,
     Severity,
 )
+from mmaudit.reporting.status import effective_report_status, quality_status_for_run_status
 
 _LEVEL = {
     Severity.CRITICAL: "error",
@@ -119,15 +122,11 @@ def generate_sarif(
     quality_status: AuditQualityStatus | None = None,
     completed: bool | None = None,
     incomplete_reasons: Sequence[str] = (),
+    quality_gates: Sequence[QualityGateResult] = (),
 ) -> dict[str, Any]:
     if run_status is not None:
         expected_completed = run_status is AuditRunStatus.COMPLETE
-        expected_quality = {
-            AuditRunStatus.COMPLETE: AuditQualityStatus.COMPLETED,
-            AuditRunStatus.DEGRADED: AuditQualityStatus.COMPLETED_WITH_LIMITATIONS,
-            AuditRunStatus.INCOMPLETE: AuditQualityStatus.INCOMPLETE,
-            AuditRunStatus.FAILED: AuditQualityStatus.FAILED,
-        }[run_status]
+        expected_quality = quality_status_for_run_status(run_status)
         if completed is not None and completed != expected_completed:
             raise ValueError("SARIF completion conflicts with the typed run status")
         if quality_status is not None and quality_status is not expected_quality:
@@ -238,6 +237,10 @@ def generate_sarif(
         run_properties["qualityStatus"] = quality_status.value
     if completed is not None:
         run_properties["completed"] = completed
+    if run_status is not None or incomplete_reasons:
+        run_properties["limitations"] = list(incomplete_reasons)
+    if run_status is not None or quality_gates:
+        run_properties["qualityGates"] = [gate.model_dump(mode="json") for gate in quality_gates]
 
     invocation: dict[str, Any] | None = None
     run_evidence_supplied = any(
@@ -246,6 +249,7 @@ def generate_sarif(
             quality_status is not None,
             completed is not None,
             bool(incomplete_reasons),
+            bool(quality_gates),
             bool(scanner_runs),
         )
     )
@@ -338,6 +342,23 @@ def generate_sarif(
             }
         ],
     }
+
+
+def generate_report_sarif(report: AuditReport) -> dict[str, Any]:
+    """Generate SARIF from the same effective status projection as every report leaf."""
+
+    report = AuditReport.model_validate(report.model_dump(mode="python"))
+    projection = effective_report_status(report)
+    return generate_sarif(
+        report.findings,
+        scanner_runs=report.scanner_runs,
+        maximum_assurance=report.maximum_assurance,
+        run_status=projection.run_status,
+        quality_status=projection.quality_status,
+        completed=projection.completed,
+        incomplete_reasons=projection.limitations,
+        quality_gates=projection.quality_gates,
+    )
 
 
 def _security_score(finding: Finding) -> float:

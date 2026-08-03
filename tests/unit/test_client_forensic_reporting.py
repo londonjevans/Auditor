@@ -11,6 +11,7 @@ from mmaudit.models.schemas import (
     AuditReport,
     CandidateCrossExaminationDecision,
     CandidateCrossExaminationVerdict,
+    CandidateFinding,
     CandidateReproductionResolution,
     CoverageMetric,
     CoverageProvenance,
@@ -36,6 +37,7 @@ from mmaudit.reporting.bundle import (
 )
 from mmaudit.reporting.client import render_client_markdown
 from mmaudit.reporting.markdown import render_forensic_markdown
+from mmaudit.reporting.status import effective_report_status
 from mmaudit.repository.chunking import line_range_hash
 
 NOW = datetime(2026, 8, 3, 12, 0, tzinfo=UTC)
@@ -124,6 +126,35 @@ def _finding(
     )
 
 
+def _candidate(finding: Finding, candidate_id: str | None = None) -> CandidateFinding:
+    """Build explicit retained candidate evidence for a synthetic final finding."""
+
+    assert finding.verification_test is not None
+    resolved_candidate_id = candidate_id or finding.contributing_candidate_ids[0]
+    return CandidateFinding(
+        candidate_id=resolved_candidate_id,
+        title=finding.title,
+        severity=finding.severity,
+        confidence=finding.confidence,
+        cwe=list(finding.cwe),
+        owasp=list(finding.owasp),
+        summary=finding.summary,
+        impact=finding.impact,
+        preconditions=list(finding.preconditions),
+        locations=list(finding.locations),
+        source=finding.source,
+        sink=finding.sink,
+        attack_path=list(finding.attack_path),
+        evidence=list(finding.evidence),
+        compensating_controls=list(finding.compensating_controls),
+        false_positive_conditions=list(finding.false_positive_conditions),
+        recommendation=finding.recommendation,
+        verification_test=finding.verification_test,
+        role="source_audit",
+        model_family=f"synthetic-{resolved_candidate_id}",
+    )
+
+
 def _repository() -> RepositoryMap:
     encoded = SOURCE.encode()
     return RepositoryMap(
@@ -193,6 +224,28 @@ def _report(
     )
 
 
+def _render_client(
+    report: AuditReport,
+    source_contents: dict[str, str],
+    *,
+    reproduction_resolutions: list[CandidateReproductionResolution] | None = None,
+) -> str:
+    """Render with the complete explicit candidate inventory retained by the fixture."""
+
+    findings = [*report.findings, *report.rejected_findings]
+    candidates = [
+        _candidate(finding, candidate_id)
+        for finding in findings
+        for candidate_id in finding.contributing_candidate_ids
+    ]
+    return render_client_markdown(
+        report,
+        source_contents,
+        candidates=candidates,
+        reproduction_resolutions=reproduction_resolutions or [],
+    )
+
+
 @pytest.mark.parametrize(
     ("status", "expected_label"),
     [
@@ -206,7 +259,7 @@ def test_client_report_contains_complete_source_bound_finding_detail(
 ) -> None:
     report = _report(findings=[_finding(status)])
 
-    rendered = render_client_markdown(report, {SOURCE_PATH: SOURCE})
+    rendered = _render_client(report, {SOURCE_PATH: SOURCE})
 
     assert "# Corrovera Security Assurance Report" in rendered
     assert "Prepared by Corrovera Security · corrovera.com" in rendered
@@ -227,7 +280,7 @@ def test_client_report_contains_complete_source_bound_finding_detail(
     assert "<script>fixture()" not in rendered
     assert "&lt;script&gt;fixture()&lt;/script&gt;" in rendered
     assert "Complete surface review table" not in rendered
-    assert rendered == render_client_markdown(report, {SOURCE_PATH: SOURCE})
+    assert rendered == _render_client(report, {SOURCE_PATH: SOURCE})
 
 
 def test_client_report_makes_cross_examination_dispute_prominent() -> None:
@@ -245,7 +298,7 @@ def test_client_report_makes_cross_examination_dispute_prominent() -> None:
     )
     report = _report(findings=[finding], cross_examinations=[dispute])
 
-    rendered = render_client_markdown(report, {SOURCE_PATH: SOURCE})
+    rendered = _render_client(report, {SOURCE_PATH: SOURCE})
 
     assert "DISPUTED" in rendered
     assert "The guard may prevent the claimed incorrect transition" in rendered
@@ -261,7 +314,7 @@ def test_client_report_retains_inconclusive_candidate_resolution() -> None:
     )
     report = _report(findings=[finding])
 
-    rendered = render_client_markdown(
+    rendered = _render_client(
         report,
         {SOURCE_PATH: SOURCE},
         reproduction_resolutions=[resolution],
@@ -291,7 +344,7 @@ def test_forensic_report_retains_complete_rejected_finding_evidence() -> None:
 
 
 def test_legacy_completed_flag_cannot_project_a_complete_no_findings_run() -> None:
-    rendered = render_client_markdown(_report(), {SOURCE_PATH: SOURCE})
+    rendered = _render_client(_report(), {SOURCE_PATH: SOURCE})
 
     assert "No reportable findings were identified by the analyses that completed" in rendered
     assert "This run is incomplete and does not support a conclusion" in rendered
@@ -300,7 +353,7 @@ def test_legacy_completed_flag_cannot_project_a_complete_no_findings_run() -> No
 
 
 def test_incomplete_no_findings_report_uses_required_warning_on_first_screen() -> None:
-    rendered = render_client_markdown(_report(completed=False), {SOURCE_PATH: SOURCE})
+    rendered = _render_client(_report(completed=False), {SOURCE_PATH: SOURCE})
 
     required = (
         "No reportable findings were identified by the analyses that completed. "
@@ -316,13 +369,14 @@ def test_client_excerpt_fails_closed_when_source_identity_changed() -> None:
     report = _report(findings=[_finding(FindingStatus.CONFIRMED)])
 
     with pytest.raises(ValueError, match=r"source.*hash|hash.*source"):
-        render_client_markdown(report, {SOURCE_PATH: SOURCE + "// changed\n"})
+        _render_client(report, {SOURCE_PATH: SOURCE + "// changed\n"})
 
 
 def test_typed_forensic_projections_are_exact_and_secret_free() -> None:
     report = _report(findings=[_finding(FindingStatus.CONFIRMED)])
+    projection = effective_report_status(report)
 
-    findings = build_findings_artifact(report)
+    findings = build_findings_artifact(report, candidates=[_candidate(report.findings[0])])
     coverage = build_coverage_artifact(report)
     model_execution = build_model_execution_artifact(report)
 
@@ -330,10 +384,15 @@ def test_typed_forensic_projections_are_exact_and_secret_free() -> None:
     assert findings.findings == report.findings
     assert findings.rejected_findings == report.rejected_findings
     assert coverage.run_id == report.run_id
-    assert coverage.quality_gates == report.quality_gates
     assert model_execution.run_id == report.run_id
     assert model_execution.usage == report.usage
     assert model_execution.accounted_cost_usd == report.accounted_cost_usd
+    for artifact in (findings, coverage, model_execution):
+        assert artifact.run_status is projection.run_status
+        assert artifact.quality_status is projection.quality_status
+        assert artifact.completed is projection.completed
+        assert artifact.quality_gates == projection.quality_gates
+        assert artifact.limitations == projection.limitations
     serialized = "\n".join(
         artifact.model_dump_json() for artifact in (findings, coverage, model_execution)
     )
@@ -357,7 +416,7 @@ def _coverage_metric(*, denominator: int) -> CoverageMetric:
     )
 
 
-def test_large_surface_table_stays_in_forensic_report_only() -> None:
+def _large_model_coverage() -> ModelReviewCoverage:
     surfaces = sorted(
         [
             ModelReviewSurface(
@@ -377,7 +436,7 @@ def test_large_surface_table_stays_in_forensic_report_only() -> None:
         )
         for kind in ModelReviewSurfaceKind
     }
-    model_coverage = ModelReviewCoverage(
+    return ModelReviewCoverage(
         applicable=True,
         critical_classification_complete=True,
         surfaces=surfaces,
@@ -387,12 +446,51 @@ def test_large_surface_table_stays_in_forensic_report_only() -> None:
         critical_gate_passed=False,
         limitations=["Synthetic surface inventory is intentionally unreviewed."],
     )
-    report = _report().model_copy(update={"model_review_coverage": model_coverage})
 
-    client = render_client_markdown(report, {SOURCE_PATH: SOURCE})
+
+def test_large_surface_table_stays_in_forensic_report_only() -> None:
+    report = _report().model_copy(update={"model_review_coverage": _large_model_coverage()})
+
+    client = _render_client(report, {SOURCE_PATH: SOURCE})
     forensic = render_forensic_markdown(report)
 
     assert "FORENSIC-ONLY-SURFACE-0000" not in client
     assert "FORENSIC-ONLY-SURFACE-0999" not in client
     assert "FORENSIC-ONLY-SURFACE-0000" in forensic
     assert "FORENSIC-ONLY-SURFACE-0999" in forensic
+
+
+def test_representative_client_report_stays_within_page_equivalent_budget() -> None:
+    findings = [
+        _finding(
+            FindingStatus.STRONGLY_SUPPORTED,
+            finding_id=f"MMA-SYNTHETIC-{index:03d}",
+        ).model_copy(update={"contributing_candidate_ids": [f"candidate-synthetic-{index:03d}"]})
+        for index in range(8)
+    ]
+    report = _report(findings=findings).model_copy(
+        update={"model_review_coverage": _large_model_coverage()}
+    )
+
+    client = _render_client(report, {SOURCE_PATH: SOURCE})
+    client_lines = client.splitlines()
+    required_sections = [
+        "# Corrovera Security Assurance Report",
+        "## Executive risk narrative",
+        "## Scope and source identity",
+        "## Methodology summary",
+        "## Analysis actually completed",
+        "## Finding summary",
+        "## Priority remediation roadmap",
+        "## Detailed findings",
+        "## Residual risk and limitations",
+        "## Conclusion",
+    ]
+
+    assert [client_lines.index(section) for section in required_sections] == sorted(
+        client_lines.index(section) for section in required_sections
+    )
+    assert 10 * 45 <= len(client_lines) <= 20 * 45
+    assert len(client.encode()) <= 64_000
+    assert "FORENSIC-ONLY-SURFACE-0000" not in client
+    assert "FORENSIC-ONLY-SURFACE-0999" not in client

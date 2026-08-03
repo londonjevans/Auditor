@@ -70,6 +70,15 @@ from mmaudit.orchestration.verification import (
     verify_run_evidence,
 )
 from mmaudit.reporting.bundle import MANIFEST_BOUND_REPORT_DELIVERABLES
+from mmaudit.reporting.bundle import (
+    build_coverage_artifact,
+    build_findings_artifact,
+    build_model_execution_artifact,
+)
+from mmaudit.reporting.client import render_client_markdown
+from mmaudit.reporting.json_report import write_json
+from mmaudit.reporting.markdown import render_forensic_markdown
+from mmaudit.reporting.sarif import generate_report_sarif
 from tests.identity_fixtures import bind_synthetic_usage_identity, synthetic_token_plan_routing
 from tests.output_evidence_fixtures import synthetic_structured_output_routing
 from tests.unit.test_model_registry import _verified_production_config_and_capability
@@ -378,6 +387,18 @@ def _write_required_artifacts(run_dir: Path, report: AuditReport) -> None:
         report.model_dump_json(),
         encoding="utf-8",
     )
+    write_json(run_dir / "findings.json", build_findings_artifact(report))
+    write_json(run_dir / "coverage.json", build_coverage_artifact(report))
+    write_json(run_dir / "model-execution.json", build_model_execution_artifact(report))
+    write_json(run_dir / "audit-results.sarif", generate_report_sarif(report))
+    (run_dir / "client-report.md").write_text(
+        render_client_markdown(report, {}),
+        encoding="utf-8",
+    )
+    (run_dir / "forensic-report.md").write_text(
+        render_forensic_markdown(report),
+        encoding="utf-8",
+    )
 
 
 def _write_verifiable_run(
@@ -447,6 +468,46 @@ def _write_verifiable_run(
         manifest,
     )
     return repository, run_dir, manifest, report
+
+
+def _rewrite_as_sealed_schema_1_1(
+    run_dir: Path,
+    current: RunEvidenceManifest,
+    report: AuditReport,
+) -> RunEvidenceManifest:
+    """Project an already-sealed pre-report-bundle manifest for compatibility tests."""
+
+    for artifact_name in MANIFEST_BOUND_REPORT_DELIVERABLES - {"audit-results.sarif"}:
+        (run_dir / artifact_name).unlink()
+    payload = current.model_dump(mode="json")
+    payload["schema_version"] = "1.1"
+    legacy_coverage = [
+        binding
+        for binding in payload["bindings"]["coverage"]
+        if binding["identifier"] not in {"quality-gates/report", "report-status/projection"}
+    ]
+    legacy_coverage.append(
+        ManifestHashBinding(
+            identifier="quality-gates/report",
+            sha256=canonical_sha256(
+                [gate.model_dump(mode="json") for gate in report.quality_gates]
+            ),
+            details={"gates": str(len(report.quality_gates))},
+        ).model_dump(mode="json")
+    )
+    payload["bindings"]["coverage"] = sorted(
+        legacy_coverage,
+        key=lambda item: item["identifier"],
+    )
+    payload["artifacts"] = [
+        artifact.model_dump(mode="json") for artifact in collect_run_artifacts(run_dir)
+    ]
+    payload["manifest_sha256"] = canonical_sha256(
+        {key: value for key, value in payload.items() if key != "manifest_sha256"}
+    )
+    legacy = RunEvidenceManifest.model_validate(payload)
+    write_run_evidence_manifest(run_dir / "run-evidence-manifest.json", legacy)
+    return legacy
 
 
 def _write_qualified_verifiable_run(
@@ -537,7 +598,7 @@ def test_manifest_serialization_and_all_required_bindings_are_stable(
     assert first.model_dump_json() == second.model_dump_json()
     assert first.manifest_sha256 == second.manifest_sha256
     assert first.source_tree_sha256
-    assert first.schema_version == "1.1"
+    assert first.schema_version == "1.2"
     assert first.run_configuration is not None
     assert first.run_configuration.requested_profile.value == "standard"
     assert first.run_configuration.achieved_profile is not None
@@ -550,6 +611,56 @@ def test_manifest_serialization_and_all_required_bindings_are_stable(
     assert {binding.path for binding in first.artifacts} == {
         path.name for path in first_run.iterdir()
     }
+
+
+@pytest.mark.parametrize("retained_report_leaves", [set(), {"audit-results.sarif"}])
+def test_new_manifest_issuance_rejects_zero_or_partial_report_bundle(
+    tmp_path: Path,
+    config_factory,
+    retained_report_leaves: set[str],
+) -> None:
+    config = config_factory()
+    run_dir = tmp_path / "run"
+    report = _report(config)
+    _write_required_artifacts(run_dir, report)
+    for artifact_name in MANIFEST_BOUND_REPORT_DELIVERABLES - retained_report_leaves:
+        (run_dir / artifact_name).unlink()
+
+    with pytest.raises(ValueError, match="client/forensic report bundle is incomplete"):
+        build_run_evidence_manifest(
+            run_dir=run_dir,
+            report=report,
+            config=config,
+        )
+
+
+def test_public_manifest_sealer_cannot_issue_a_new_schema_1_1_manifest(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    run_dir = tmp_path / "run"
+    report = _report(config)
+    _write_required_artifacts(run_dir, report)
+    current = build_run_evidence_manifest(
+        run_dir=run_dir,
+        report=report,
+        config=config,
+    )
+    assert current.run_configuration is not None
+
+    with pytest.raises(ValueError, match="new manifest issuance requires schema 1.2"):
+        seal_run_evidence_manifest(
+            run_id=current.run_id,
+            repository_root_name=current.repository_root_name,
+            git_commit=current.git_commit,
+            sources=current.sources,
+            run_configuration=current.run_configuration,
+            bindings=current.bindings,
+            artifacts=current.artifacts,
+            schema_version="1.1",
+            tool_version=current.tool_version,
+        )
 
 
 def test_manifest_seed_bindings_include_repository_suite_fuzz_seed() -> None:
@@ -1486,6 +1597,26 @@ def test_verify_run_is_current_and_serializes_deterministically(
         RunVerification.model_validate(tampered)
 
 
+def test_verify_run_reconstructs_an_already_sealed_schema_1_1_manifest(
+    tmp_path: Path,
+    config_factory,
+) -> None:
+    config = config_factory()
+    repository, run_dir, current, report = _write_verifiable_run(tmp_path, config)
+    legacy = _rewrite_as_sealed_schema_1_1(run_dir, current, report)
+
+    verification = verify_run_evidence(
+        manifest_path=run_dir / "run-evidence-manifest.json",
+        run_dir=run_dir,
+        repository_root=repository,
+        config=config,
+    )
+
+    assert legacy.schema_version == "1.1"
+    assert verification.status is RunVerificationStatus.CURRENT
+    assert not verification.mismatches
+
+
 def test_verify_run_checks_sealed_qualified_evidence_without_recreating_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1675,7 +1806,8 @@ def test_verify_run_detects_every_security_relevant_drift_category(
     monkeypatch,
 ) -> None:
     config = config_factory()
-    repository, run_dir, _, _ = _write_verifiable_run(tmp_path, config)
+    repository, run_dir, current, report = _write_verifiable_run(tmp_path, config)
+    _rewrite_as_sealed_schema_1_1(run_dir, current, report)
     (repository / "src" / "Vault.sol").write_text(
         "contract Vault { function changed() external {} }\n",
         encoding="utf-8",
@@ -1723,6 +1855,20 @@ def test_verify_run_detects_every_security_relevant_drift_category(
             )
         ],
     )
+    original_rebuild = rebuild_run_evidence_manifest_for_verification
+    rebuild_errors: list[Exception] = []
+
+    def capture_rebuild_error(**kwargs):
+        try:
+            return original_rebuild(**kwargs)
+        except Exception as exc:
+            rebuild_errors.append(exc)
+            raise
+
+    monkeypatch.setattr(
+        "mmaudit.orchestration.verification.rebuild_run_evidence_manifest_for_verification",
+        capture_rebuild_error,
+    )
 
     verification = verify_run_evidence(
         manifest_path=run_dir / "run-evidence-manifest.json",
@@ -1732,6 +1878,7 @@ def test_verify_run_detects_every_security_relevant_drift_category(
     )
 
     assert verification.status is RunVerificationStatus.STALE
+    assert not rebuild_errors, rebuild_errors
     categories = {mismatch.category for mismatch in verification.mismatches}
     assert categories >= {
         RunVerificationCategory.SOURCE,

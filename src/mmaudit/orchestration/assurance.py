@@ -2360,6 +2360,12 @@ def _is_real_formal_run(run: FormalToolRun) -> bool:
     )
 
 
+def is_structurally_qualifying_real_formal_run(run: FormalToolRun) -> bool:
+    """Return whether retained formal evidence satisfies the REAL execution contract."""
+
+    return _is_real_formal_run(run)
+
+
 def _is_real_property_engine_run(run: FormalToolRun) -> bool:
     configured_campaign = run.configured_campaign
     observed_campaign = run.observed_campaign
@@ -2481,10 +2487,11 @@ def _is_real_formal_proof_run(run: FormalToolRun) -> bool:
     )
 
 
-def _is_real_invariant_execution(
+def is_structurally_qualifying_real_invariant_execution(
     result: InvariantExecutionResult,
-    config: AuditConfig,
 ) -> bool:
+    """Validate self-contained REAL invariant execution evidence without configuration pins."""
+
     completed = {
         InvariantExecutionStatus.PASSED,
         InvariantExecutionStatus.COUNTEREXAMPLE,
@@ -2494,18 +2501,9 @@ def _is_real_invariant_execution(
         result.status in completed
         and result.execution_evidence is ExecutionEvidenceKind.REAL
         and _is_sha256(result.executable_sha256)
-        and result.executable_sha256 == config.scanners.foundry_fork.sha256
         and _is_sha256(result.source_sha256)
-        and config.smart_contracts.solc_version is not None
-        and config.smart_contracts.solc_sha256 is not None
         and result.compiler_version is not None
-        and re.search(
-            rf"(?<![0-9.]){re.escape(config.smart_contracts.solc_version)}(?![0-9.])",
-            result.compiler_version,
-        )
-        is not None
         and _is_sha256(result.compiler_sha256)
-        and result.compiler_sha256 == config.smart_contracts.solc_sha256
         and _is_sha256(result.isolation_attestation_sha256)
         and _is_sha256(result.execution_observation_sha256)
         and result.execution_observation_sha256 == result.expected_execution_observation_sha256()
@@ -2548,6 +2546,78 @@ def _is_real_invariant_execution(
         and bool(result.stdout_path)
         and bool(result.stderr_path)
         and result.isolation_backend in CERTIFIED_ISOLATION_BACKENDS
+    )
+
+
+def _is_real_invariant_execution(
+    result: InvariantExecutionResult,
+    config: AuditConfig,
+) -> bool:
+    return (
+        is_structurally_qualifying_real_invariant_execution(result)
+        and result.executable_sha256 == config.scanners.foundry_fork.sha256
+        and config.smart_contracts.solc_version is not None
+        and config.smart_contracts.solc_sha256 is not None
+        and result.compiler_version is not None
+        and re.search(
+            rf"(?<![0-9.]){re.escape(config.smart_contracts.solc_version)}(?![0-9.])",
+            result.compiler_version,
+        )
+        is not None
+        and result.compiler_sha256 == config.smart_contracts.solc_sha256
+    )
+
+
+def is_structurally_qualifying_real_reproduction(result: ReproductionResult) -> bool:
+    """Validate a retained isolated replay as substantive REAL reproduction evidence."""
+
+    positive_states = {
+        ReproductionState.REPRODUCED,
+        ReproductionState.REPRODUCED_AND_MINIMIZED,
+    }
+    completed_states = {*positive_states, ReproductionState.NOT_REPRODUCED}
+    if result.state not in completed_states:
+        return False
+    expected_attempt_state = (
+        ReproductionState.REPRODUCED
+        if result.state in positive_states
+        else ReproductionState.NOT_REPRODUCED
+    )
+    expected_successful_attempts = result.attempts if result.state in positive_states else 0
+    integrity = result.integrity
+    return (
+        result.execution_evidence is ExecutionEvidenceKind.REAL
+        and _is_sha256(result.executable_sha256)
+        and _is_sha256(result.specification_sha256)
+        and _is_sha256(result.generated_test_sha256)
+        and bool(result.generated_test_path)
+        and bool(result.regression_test_path)
+        and bool(result.command)
+        and result.attempts > 0
+        and result.successful_attempts == expected_successful_attempts
+        and len(result.attempt_evidence) == result.attempts
+        and bool(result.stdout_path)
+        and bool(result.stderr_path)
+        and result.isolation_backend in CERTIFIED_ISOLATION_BACKENDS
+        and _is_sha256(result.isolation_attestation_sha256)
+        and _is_sha256(result.repository_sha256)
+        and integrity is not None
+        and integrity.status is ReproductionIntegrityStatus.VERIFIED
+        and integrity.repository_sha256 == result.repository_sha256
+        and bool(integrity.targets)
+        and bool(integrity.reachability)
+        and integrity.settlement.verified_attempts == result.attempts
+        and all(check.passed for check in integrity.checks)
+        and all(
+            attempt.attempt == index
+            and attempt.state is expected_attempt_state
+            and attempt.fresh_workspace
+            and attempt.repository_sha256 == result.repository_sha256
+            and attempt.generated_test_sha256 == result.generated_test_sha256
+            and _is_sha256(attempt.stdout_sha256)
+            and _is_sha256(attempt.stderr_sha256)
+            for index, attempt in enumerate(result.attempt_evidence, start=1)
+        )
     )
 
 

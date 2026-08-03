@@ -12,7 +12,6 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from mmaudit.models.schemas import (
-    AuditQualityStatus,
     AuditReport,
     AuditRunStatus,
     AuditScopeAssessment,
@@ -23,9 +22,9 @@ from mmaudit.models.schemas import (
     FalsificationDecision,
     FalsificationVerdict,
     Finding,
+    FindingOriginKind,
     FindingStatus,
     ModelReviewCoverage,
-    QualityGateResult,
     ReproductionResolutionKind,
     ReproductionResult,
     ReproductionState,
@@ -35,6 +34,7 @@ from mmaudit.models.schemas import (
     VerificationDecision,
     VerificationVerdict,
 )
+from mmaudit.reporting.status import ReportStatusProjection, effective_report_status
 from mmaudit.repository.chunking import line_range_hash
 
 _MAX_SOURCE_EXCERPT_EVIDENCE_BYTES = 1_000_000
@@ -148,7 +148,10 @@ class ForensicFindingRecord(StrictModel):
         candidate_ids = [candidate.candidate_id for candidate in self.candidate_findings]
         if len(candidate_ids) != len(set(candidate_ids)):
             raise ValueError("forensic candidate evidence must be unique")
-        if candidate_ids and set(candidate_ids) != contributor_ids:
+        if self.finding.origin_kind is FindingOriginKind.STATIC_ANALYZER:
+            if candidate_ids:
+                raise ValueError("static-analyzer finding cannot claim model candidate evidence")
+        elif set(candidate_ids) != contributor_ids:
             raise ValueError("forensic candidate evidence does not close the contributor set")
         unique_keys: tuple[tuple[str, list[object]], ...] = (
             (
@@ -224,14 +227,11 @@ class ForensicFindingRecord(StrictModel):
         return self
 
 
-class FindingsArtifact(StrictModel):
+class FindingsArtifact(ReportStatusProjection):
     """Complete final/candidate finding history for the forensic bundle."""
 
     schema_version: Literal["1.0"] = "1.0"
     run_id: str = Field(min_length=1, max_length=160)
-    run_status: AuditRunStatus
-    quality_status: AuditQualityStatus
-    completed: bool
     findings: list[Finding]
     rejected_findings: list[Finding]
     records: list[ForensicFindingRecord]
@@ -266,27 +266,21 @@ class FindingsArtifact(StrictModel):
         return self
 
 
-class CoverageArtifact(StrictModel):
+class CoverageArtifact(ReportStatusProjection):
     """Compact typed coverage projection with full typed coverage bodies retained."""
 
     schema_version: Literal["1.0"] = "1.0"
     run_id: str = Field(min_length=1, max_length=160)
-    run_status: AuditRunStatus
-    completed: bool
     scope_assessment: AuditScopeAssessment | None
     solidity_coverage: SolidityCoverage | None
     model_review_coverage: ModelReviewCoverage | None
-    quality_gates: list[QualityGateResult]
-    limitations: list[str]
 
 
-class ModelExecutionArtifact(StrictModel):
+class ModelExecutionArtifact(ReportStatusProjection):
     """Non-secret model execution and cost evidence for the forensic bundle."""
 
     schema_version: Literal["1.0"] = "1.0"
     run_id: str = Field(min_length=1, max_length=160)
-    run_status: AuditRunStatus
-    completed: bool
     configured_models: dict[str, str]
     configured_fallbacks: dict[str, list[str]]
     requested_models: list[str]
@@ -323,18 +317,7 @@ class ModelExecutionArtifact(StrictModel):
 def effective_run_status(report: AuditReport) -> AuditRunStatus:
     """Return the typed status, or a calibrated projection for legacy reports."""
 
-    if report.run_status is not None:
-        return report.run_status
-    if report.quality_status in {
-        AuditQualityStatus.FAILED,
-        AuditQualityStatus.ENVIRONMENT_UNSAFE,
-        AuditQualityStatus.TARGET_UNSUPPORTED,
-    }:
-        return AuditRunStatus.FAILED
-    # Legacy reports cannot carry the typed minimum-analysis-floor evidence that
-    # current reports require. They remain readable, but a new client deliverable
-    # must never project their historical ``completed`` flag as evidence of COMPLETE.
-    return AuditRunStatus.INCOMPLETE
+    return effective_report_status(report).run_status
 
 
 def _disposition(
@@ -497,12 +480,10 @@ def build_findings_artifact(
                 reproduction_resolutions=linked_resolutions,
             )
         )
-    run_status = effective_run_status(report)
+    projection = effective_report_status(report)
     return FindingsArtifact(
+        **projection.model_dump(mode="python"),
         run_id=report.run_id,
-        run_status=run_status,
-        quality_status=report.quality_status,
-        completed=run_status is AuditRunStatus.COMPLETE,
         findings=list(report.findings),
         rejected_findings=list(report.rejected_findings),
         records=records,
@@ -514,16 +495,13 @@ def build_coverage_artifact(report: AuditReport) -> CoverageArtifact:
     """Build the canonical forensic coverage projection."""
 
     report = AuditReport.model_validate(report.model_dump(mode="python"))
-    run_status = effective_run_status(report)
+    projection = effective_report_status(report)
     return CoverageArtifact(
+        **projection.model_dump(mode="python"),
         run_id=report.run_id,
-        run_status=run_status,
-        completed=run_status is AuditRunStatus.COMPLETE,
         scope_assessment=report.scope_assessment,
         solidity_coverage=report.effective_solidity_coverage(),
         model_review_coverage=report.model_review_coverage,
-        quality_gates=list(report.quality_gates),
-        limitations=list(report.incomplete_reasons),
     )
 
 
@@ -563,11 +541,10 @@ def build_model_execution_artifact(report: AuditReport) -> ModelExecutionArtifac
     )
     if not usage:
         exact_cost = Decimal(str(report.accounted_cost_usd))
-    run_status = effective_run_status(report)
+    projection = effective_report_status(report)
     return ModelExecutionArtifact(
+        **projection.model_dump(mode="python"),
         run_id=report.run_id,
-        run_status=run_status,
-        completed=run_status is AuditRunStatus.COMPLETE,
         configured_models=_string_mapping(report.metadata.get("configured_models")),
         configured_fallbacks=_fallback_mapping(report.metadata.get("configured_fallbacks")),
         requested_models=sorted({record.requested_model for record in usage}),

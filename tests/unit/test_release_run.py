@@ -46,7 +46,7 @@ from mmaudit.reporting.bundle import (
 from mmaudit.reporting.client import render_client_markdown
 from mmaudit.reporting.json_report import write_json
 from mmaudit.reporting.markdown import render_forensic_markdown
-from mmaudit.reporting.sarif import generate_sarif
+from mmaudit.reporting.sarif import generate_report_sarif
 from mmaudit.traceability import (
     ImplementationStatus,
     build_traceability_matrix,
@@ -214,15 +214,7 @@ def _write_report_artifacts(run_dir: Path, report: AuditReport) -> None:
     write_json(run_dir / "model-execution.json", build_model_execution_artifact(report))
     write_json(
         run_dir / "audit-results.sarif",
-        generate_sarif(
-            report.findings,
-            scanner_runs=report.scanner_runs,
-            maximum_assurance=report.maximum_assurance,
-            run_status=report.run_status,
-            quality_status=report.quality_status,
-            completed=report.completed,
-            incomplete_reasons=report.incomplete_reasons,
-        ),
+        generate_report_sarif(report),
     )
     (run_dir / "client-report.md").write_text(
         render_client_markdown(report, {}),

@@ -15,6 +15,18 @@
       "title": "AnalysisState",
       "type": "string"
     },
+    "AuditQualityStatus": {
+      "enum": [
+        "completed",
+        "completed_with_limitations",
+        "incomplete",
+        "failed",
+        "environment_unsafe",
+        "target_unsupported"
+      ],
+      "title": "AuditQualityStatus",
+      "type": "string"
+    },
     "AuditRunStatus": {
       "description": "Evidence-derived terminal state for an audit run.",
       "enum": [
@@ -1512,6 +1524,9 @@
       "title": "Quality Gates",
       "type": "array"
     },
+    "quality_status": {
+      "$ref": "#/$defs/AuditQualityStatus"
+    },
     "run_id": {
       "maxLength": 160,
       "minLength": 1,
@@ -1549,14 +1564,15 @@
     }
   },
   "required": [
-    "run_id",
     "run_status",
+    "quality_status",
     "completed",
+    "quality_gates",
+    "limitations",
+    "run_id",
     "scope_assessment",
     "solidity_coverage",
-    "model_review_coverage",
-    "quality_gates",
-    "limitations"
+    "model_review_coverage"
   ],
   "title": "mmaudit forensic coverage artifact",
   "type": "object"

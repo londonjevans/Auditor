@@ -136,6 +136,7 @@ from mmaudit.privacy import (
 )
 from mmaudit.reporting.bundle import CoverageArtifact, FindingsArtifact, ModelExecutionArtifact
 from mmaudit.reporting.json_report import write_json
+from mmaudit.repository.chunking import line_range_hash
 from mmaudit.scanners.base import (
     ScannerSourceIntegrityError,
     scanner_fingerprint,
@@ -4932,8 +4933,76 @@ async def test_scanner_only_findings_are_needs_review_and_in_sarif(
     assert result.exit_for_findings(Severity.HIGH) is ExitCode.INCOMPLETE
     assert not result.report.completed
     assert result.report.run_status is AuditRunStatus.INCOMPLETE
+    finding = result.report.findings[0]
+    assert finding.origin_kind is FindingOriginKind.STATIC_ANALYZER
+    assert len(finding.locations) == 1
+    assert finding.locations[0].content_hash is not None
+    findings_payload = json.loads((result.run_dir / "findings.json").read_text(encoding="utf-8"))
+    assert findings_payload["candidate_findings"] == []
+    record = findings_payload["records"][0]
+    assert record["candidate_findings"] == []
+    assert record["source_excerpt"]["cited_content_sha256"] == finding.locations[0].content_hash
     sarif = json.loads((result.run_dir / "audit-results.sarif").read_text(encoding="utf-8"))
     assert len(sarif["runs"][0]["results"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_scanner_excerpt_rejects_coherent_content_and_manifest_reseal(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = config_factory()
+    result = await AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=tmp_path / "scanner-excerpt-output",
+        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+    ).run(scanner_only=True)
+    tampered = tmp_path / "scanner-excerpt-tampered"
+    shutil.copytree(result.run_dir, tampered)
+    findings_path = tampered / "findings.json"
+    findings_payload = json.loads(findings_path.read_text(encoding="utf-8"))
+    excerpt = findings_payload["records"][0]["source_excerpt"]
+    excerpt_lines = excerpt["content"].splitlines(keepends=True)
+    cited_index = excerpt["cited_start_line"] - excerpt["excerpt_start_line"]
+    line = excerpt_lines[cited_index]
+    newline = "\n" if line.endswith("\n") else ""
+    excerpt_lines[cited_index] = line.rstrip("\r\n") + " # coherently changed" + newline
+    excerpt["content"] = "".join(excerpt_lines)
+    excerpt["content_sha256"] = hashlib.sha256(excerpt["content"].encode()).hexdigest()
+    relative_start = excerpt["cited_start_line"] - excerpt["excerpt_start_line"] + 1
+    relative_end = excerpt["cited_end_line"] - excerpt["excerpt_start_line"] + 1
+    excerpt["cited_content_sha256"] = line_range_hash(
+        excerpt["content"],
+        relative_start,
+        relative_end,
+    )
+    write_json(findings_path, findings_payload)
+
+    manifest_path = tampered / "run-evidence-manifest.json"
+    manifest = RunEvidenceManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+    manifest_payload = manifest.model_dump(mode="json")
+    findings_bytes = findings_path.read_bytes()
+    findings_binding = next(
+        binding
+        for binding in manifest_payload["artifacts"]
+        if binding["path"] == "findings.json"
+    )
+    findings_binding["sha256"] = hashlib.sha256(findings_bytes).hexdigest()
+    findings_binding["size"] = len(findings_bytes)
+    manifest_payload["manifest_sha256"] = canonical_sha256(
+        {
+            key: value
+            for key, value in manifest_payload.items()
+            if key != "manifest_sha256"
+        }
+    )
+    resealed = RunEvidenceManifest.model_validate(manifest_payload)
+    write_run_evidence_manifest(manifest_path, resealed)
+
+    with pytest.raises(ValueError, match=r"source excerpt|source evidence|source range"):
+        validate_manifest_artifacts(resealed, tampered)
 
 
 @pytest.mark.asyncio

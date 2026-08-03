@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-03T18:22:02Z",
+  "updated_at": "2026-08-03T18:48:33Z",
   "candidate_commit": "9c14487ed1587d384f12ca4d99f790b99565b442",
   "autorun_status": "PAUSED",
   "current_milestone": "client_report_and_forensic_bundle",
@@ -23,13 +23,12 @@
     "V3-FORKSUITE-001.hardhat": "Real Hardhat execution requires the process-attested digest-pinned rootless single-loopback runtime and trusted image-baked reporter specified by V3-HARDHAT-001."
   },
   "last_validation": {
-    "command": ".venv/bin/pytest -q tests/unit/test_client_forensic_reporting_adversarial.py",
-    "result": "DIAGNOSTIC FAIL: 19 passed, 2 failed; strict REAL engine-evidence credit and complete contributing-candidate closure remain unfinished"
+    "command": "git diff --check",
+    "result": "PASS with no whitespace errors; pause-integrity check only, not V3-REPORT-001 acceptance evidence"
   },
   "pause_state": {
-    "requested_at": "2026-08-03T18:22:02Z",
-    "resumed_at": null,
-    "result": "V3-REPORT-001 is paused with two exact adversarial regressions intentionally red; all agents and validation processes are stopped, and no provider call is active."
+    "requested_at": "2026-08-03T18:48:33Z",
+    "result": "Graceful pause requested; all workers and validation processes stopped, WIP worktree preserved for an SSH checkpoint."
   },
   "scheduler_assurance_validation": {
     "status": "PASS_COMPONENT_FULL_ASSURANCE",

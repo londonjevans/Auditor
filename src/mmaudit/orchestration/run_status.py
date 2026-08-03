@@ -20,6 +20,7 @@ from mmaudit.models.schemas import (
 )
 from mmaudit.models.usage import is_creditable_usage_record
 from mmaudit.orchestration.assurance import is_qualifying_real_scanner_run
+from mmaudit.reporting.status import quality_status_for_run_status
 
 DEFAULT_STATIC_SCANNER_NAMES: frozenset[str] = frozenset(
     {
@@ -246,12 +247,7 @@ def minimum_analysis_floor_quality_gate(
 def audit_quality_status_for_run_status(status: AuditRunStatus) -> AuditQualityStatus:
     """Return the only compatible legacy quality status for a typed run state."""
 
-    return {
-        AuditRunStatus.COMPLETE: AuditQualityStatus.COMPLETED,
-        AuditRunStatus.DEGRADED: AuditQualityStatus.COMPLETED_WITH_LIMITATIONS,
-        AuditRunStatus.INCOMPLETE: AuditQualityStatus.INCOMPLETE,
-        AuditRunStatus.FAILED: AuditQualityStatus.FAILED,
-    }[status]
+    return quality_status_for_run_status(status)
 
 
 def _is_applicable_source_file(path: str, language: str, solidity_applicable: bool) -> bool:

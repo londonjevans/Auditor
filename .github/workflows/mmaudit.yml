@@ -297,7 +297,7 @@ jobs:
 
           source_root = Path(sys.argv[1]).resolve(strict=True)
           destination_root = Path(sys.argv[2])
-          required_public_names = (
+          required_public_names = frozenset({
               "audit-results.sarif",
               "client-report.md",
               "coverage.json",
@@ -307,15 +307,61 @@ jobs:
               "forensic-report.md",
               "maximum_assurance_traceability.json",
               "model-execution.json",
-              "run-evidence-manifest.json",
               "scanner-results.json",
-          )
-          optional_legacy_public_names = (
+          })
+          public_artifact_allowlist = frozenset({
               "audit-report.md",
+              "audit-results.sarif",
+              "benchmark-certificate-verification.json",
+              "candidate-findings.json",
+              "ci-state.json",
+              "client-report.md",
+              "context-manifest.json",
+              "coverage.json",
+              "cross-examination.json",
+              "dependency-preparation.json",
+              "dependency-sbom.json",
+              "economic-simulation-plan.json",
+              "execution-origin-dispositions.json",
+              "final-findings.json",
+              "findings.json",
+              "forensic-report.md",
+              "formal-results.json",
+              "invariant-execution-results.json",
+              "invariant-harness-plan.json",
+              "invariant-review.json",
+              "maximum_assurance_traceability.json",
+              "metadata.json",
+              "model-execution.json",
+              "model-qualification-runtime.json",
+              "model-review-coverage.json",
+              "model-validation.json",
+              "privacy-fork-rpc-egress.json",
+              "privacy-policy.json",
+              "privacy-source-provenance.json",
+              "prior-audit-comparison.json",
+              "property-corpus.json",
+              "repository-map.json",
+              "repository-suite-differential.json",
+              "reproduction-results.json",
+              "scanner-results.json",
+              "scheduler-state.json",
+              "scope-assessment.json",
+              "solidity-compilation.json",
               "solidity-coverage.json",
-          )
+              "solidity-graphs.json",
+              "solidity-index.json",
+              "solidity-invariants.json",
+              "solidity-projects.json",
+              "solidity-shards.json",
+              "specialist-execution.json",
+              "verification-results.json",
+          })
+          prohibited_artifact_prefixes = ("logs/", "private/")
+          source_manifest_name = "run-evidence-manifest.json"
+          subset_manifest_name = "public-evidence-subset-manifest.json"
           manifest = load_run_evidence_manifest(
-              source_root / "run-evidence-manifest.json"
+              source_root / source_manifest_name
           )
           bindings = {binding.path: binding for binding in manifest.artifacts}
           if destination_root.exists() or destination_root.is_symlink():
@@ -325,7 +371,7 @@ jobs:
 
           def read_exact_bound_file(name: str) -> bytes:
               source = source_root / name
-              if name == "run-evidence-manifest.json":
+              if name == source_manifest_name:
                   if source.is_symlink() or not source.is_file():
                       raise ValueError("manifest is not a regular non-link file")
                   data = source.read_bytes()
@@ -349,21 +395,122 @@ jobs:
                   raise ValueError(f"public artifact differs from its manifest: {name}")
               return data
 
-          copied: dict[str, str] = {}
-          for name in required_public_names:
+          omitted_prohibited = sorted(
+              name
+              for name in bindings
+              if name.startswith(prohibited_artifact_prefixes)
+          )
+          unexpected_nested = sorted(
+              name
+              for name in bindings
+              if "/" in name and not name.startswith(prohibited_artifact_prefixes)
+          )
+          if unexpected_nested:
+              raise ValueError(
+                  "manifest contains unclassified nested public artifacts: "
+                  + ", ".join(unexpected_nested)
+              )
+          unclassified_public = sorted(
+              name
+              for name in bindings
+              if "/" not in name and name not in public_artifact_allowlist
+          )
+          if unclassified_public:
+              raise ValueError(
+                  "manifest contains non-allowlisted public artifacts: "
+                  + ", ".join(unclassified_public)
+              )
+          public_names = set(bindings) & public_artifact_allowlist
+          missing_required = sorted(required_public_names - public_names)
+          if missing_required:
+              raise ValueError(
+                  "manifest omits required public artifacts: " + ", ".join(missing_required)
+              )
+
+          copied: dict[str, dict[str, object]] = {}
+          for name in sorted(public_names):
               data = read_exact_bound_file(name)
               destination = run_destination / name
               destination.write_bytes(data)
               destination.chmod(0o600)
-              copied[name] = hashlib.sha256(data).hexdigest()
-          for name in optional_legacy_public_names:
-              if name not in bindings:
-                  continue
-              data = read_exact_bound_file(name)
-              destination = run_destination / name
-              destination.write_bytes(data)
-              destination.chmod(0o600)
-              copied[name] = hashlib.sha256(data).hexdigest()
+              copied[name] = {
+                  "path": name,
+                  "sha256": hashlib.sha256(data).hexdigest(),
+                  "size": len(data),
+              }
+          source_manifest_data = read_exact_bound_file(source_manifest_name)
+          source_manifest_destination = run_destination / source_manifest_name
+          source_manifest_destination.write_bytes(source_manifest_data)
+          source_manifest_destination.chmod(0o600)
+          copied[source_manifest_name] = {
+              "path": source_manifest_name,
+              "sha256": hashlib.sha256(source_manifest_data).hexdigest(),
+              "size": len(source_manifest_data),
+          }
+
+          def canonical_sha256(value: object) -> str:
+              encoded = json.dumps(
+                  value,
+                  sort_keys=True,
+                  separators=(",", ":"),
+                  ensure_ascii=False,
+                  allow_nan=False,
+              ).encode()
+              return hashlib.sha256(encoded).hexdigest()
+
+          artifact_inventory = [copied[name] for name in sorted(copied)]
+          subset_payload = {
+              "schema_version": "1.0",
+              "bundle_kind": "NON_FORENSIC_PUBLIC_SUBSET",
+              "forensic_bundle_complete": False,
+              "run_id": manifest.run_id,
+              "source_manifest_path": source_manifest_name,
+              "source_manifest_file_sha256": copied[source_manifest_name]["sha256"],
+              "source_manifest_sha256": manifest.manifest_sha256,
+              "artifact_inventory_sha256": canonical_sha256(artifact_inventory),
+              "artifacts": artifact_inventory,
+              "omitted_artifact_classes": ["logs/**", "private/**"],
+              "omitted_prohibited_artifact_count": len(omitted_prohibited),
+          }
+          subset_manifest = {
+              **subset_payload,
+              "subset_manifest_sha256": canonical_sha256(subset_payload),
+          }
+          subset_path = run_destination / subset_manifest_name
+          subset_path.write_text(
+              json.dumps(subset_manifest, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+          subset_path.chmod(0o600)
+
+          # Verify the exact downloadable directory rather than trusting successful copies.
+          reloaded_subset = json.loads(subset_path.read_text(encoding="utf-8"))
+          observed_subset_hash = reloaded_subset.pop("subset_manifest_sha256", None)
+          if observed_subset_hash != canonical_sha256(reloaded_subset):
+              raise ValueError("public subset manifest self-hash is invalid")
+          if (
+              reloaded_subset.get("bundle_kind") != "NON_FORENSIC_PUBLIC_SUBSET"
+              or reloaded_subset.get("forensic_bundle_complete") is not False
+          ):
+              raise ValueError("public subset manifest overstates forensic completeness")
+          expected_files = {entry["path"] for entry in artifact_inventory} | {
+              subset_manifest_name
+          }
+          observed_files = {
+              path.name for path in run_destination.iterdir() if path.is_file()
+          }
+          if observed_files != expected_files:
+              raise ValueError("downloadable public artifact inventory is incomplete")
+          for entry in artifact_inventory:
+              name = str(entry["path"])
+              if name.startswith(prohibited_artifact_prefixes) or "/" in name:
+                  raise ValueError("public subset contains a prohibited artifact")
+              data = (run_destination / name).read_bytes()
+              if (
+                  len(data) != entry["size"]
+                  or hashlib.sha256(data).hexdigest() != entry["sha256"]
+              ):
+                  raise ValueError("public subset artifact failed verification")
 
           sarif = json.loads(
               (run_destination / "audit-results.sarif").read_text(encoding="utf-8")
@@ -378,7 +525,8 @@ jobs:
               "schema_version": "1.0",
               "run_id": manifest.run_id,
               "manifest_sha256": manifest.manifest_sha256,
-              "sarif_sha256": copied["audit-results.sarif"],
+              "public_subset_manifest_sha256": subset_manifest["subset_manifest_sha256"],
+              "sarif_sha256": copied["audit-results.sarif"]["sha256"],
           }
           marker_path = destination_root / "validated-sarif.json"
           marker_path.write_text(

@@ -1,5 +1,20 @@
 {
   "$defs": {
+    "AnalysisState": {
+      "description": "Evidence-aware state used by engines and coverage reports.",
+      "enum": [
+        "not_analyzed",
+        "attempted_but_failed",
+        "analyzed_with_fallback_parser",
+        "model_only",
+        "scanner_supported",
+        "deterministic",
+        "reproduced",
+        "formally_proven"
+      ],
+      "title": "AnalysisState",
+      "type": "string"
+    },
     "AuditQualityStatus": {
       "enum": [
         "completed",
@@ -1210,6 +1225,46 @@
       "title": "ModelVote",
       "type": "object"
     },
+    "QualityGateResult": {
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Artifacts",
+          "type": "array"
+        },
+        "detail": {
+          "title": "Detail",
+          "type": "string"
+        },
+        "gate": {
+          "title": "Gate",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        },
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/$defs/AnalysisState",
+          "default": "not_analyzed"
+        }
+      },
+      "required": [
+        "gate",
+        "required",
+        "passed",
+        "detail"
+      ],
+      "title": "QualityGateResult",
+      "type": "object"
+    },
     "ReproductionAttemptEvidence": {
       "additionalProperties": false,
       "description": "Deterministic evidence for one isolated execution from a fresh copy.",
@@ -2188,6 +2243,20 @@
       "title": "Findings",
       "type": "array"
     },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "quality_gates": {
+      "items": {
+        "$ref": "#/$defs/QualityGateResult"
+      },
+      "title": "Quality Gates",
+      "type": "array"
+    },
     "quality_status": {
       "$ref": "#/$defs/AuditQualityStatus"
     },
@@ -2222,10 +2291,12 @@
     }
   },
   "required": [
-    "run_id",
     "run_status",
     "quality_status",
     "completed",
+    "quality_gates",
+    "limitations",
+    "run_id",
     "findings",
     "rejected_findings",
     "records"

@@ -406,9 +406,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   dissent and limitations are prominent; large coverage tables stay forensic.
 - **Dependencies:** `V3-FLOOR-001`.
 - **Status:** `IN_PROGRESS`
-- **Current action:** `PAUSED` with the implementation preserved. Resume by fixing strict REAL
-  invariant/formal/reproduction evidence credit and exact contributing-candidate closure, rerun
-  the adversarial and pipeline suites, then finish quality gates and traceability review.
+- **Current action:** Complete the remaining acceptance-review obligations: cross-artifact status
+  coherence, fail-closed current manifest issuance, authoritative scanner-origin excerpt binding,
+  self-contained forensic delivery, and representative client size bounds; then run all ticket
+  quality gates and close traceability only from actual evidence.
 
 ## V3-SCOPE-001 — Honest Solidity/EVM product profile
 

@@ -53,7 +53,7 @@ from mmaudit.reporting.bundle import (
 from mmaudit.reporting.client import render_client_markdown
 from mmaudit.reporting.json_report import write_json
 from mmaudit.reporting.markdown import render_forensic_markdown
-from mmaudit.reporting.sarif import generate_sarif
+from mmaudit.reporting.sarif import generate_report_sarif
 from mmaudit.traceability import (
     ImplementationStatus,
     build_traceability_matrix,
@@ -244,15 +244,7 @@ def _write_report_artifacts(run_dir: Path, report: AuditReport) -> None:
     write_json(run_dir / "model-execution.json", build_model_execution_artifact(report))
     write_json(
         run_dir / "audit-results.sarif",
-        generate_sarif(
-            report.findings,
-            scanner_runs=report.scanner_runs,
-            maximum_assurance=report.maximum_assurance,
-            run_status=report.run_status,
-            quality_status=report.quality_status,
-            completed=report.completed,
-            incomplete_reasons=report.incomplete_reasons,
-        ),
+        generate_report_sarif(report),
     )
     (run_dir / "client-report.md").write_text(
         render_client_markdown(report, {}),
@@ -356,17 +348,15 @@ def test_manifest_schema_1_1_retains_legacy_sarif_only_compatibility(
     for artifact_name in MANIFEST_BOUND_REPORT_DELIVERABLES - {"audit-results.sarif"}:
         (run_dir / artifact_name).unlink()
     assert current.run_configuration is not None
-    legacy = seal_run_evidence_manifest(
-        run_id=current.run_id,
-        repository_root_name=current.repository_root_name,
-        git_commit=current.git_commit,
-        sources=current.sources,
-        run_configuration=current.run_configuration,
-        bindings=current.bindings,
-        artifacts=collect_run_artifacts(run_dir),
-        schema_version="1.1",
-        tool_version=current.tool_version,
+    legacy_payload = current.model_dump(mode="json")
+    legacy_payload["schema_version"] = "1.1"
+    legacy_payload["artifacts"] = [
+        artifact.model_dump(mode="json") for artifact in collect_run_artifacts(run_dir)
+    ]
+    legacy_payload["manifest_sha256"] = canonical_sha256(
+        {key: value for key, value in legacy_payload.items() if key != "manifest_sha256"}
     )
+    legacy = RunEvidenceManifest.model_validate(legacy_payload)
 
     validate_manifest_artifacts(legacy, run_dir)
 
@@ -387,6 +377,31 @@ def test_observer_rejects_coherently_resealed_markdown_report_tamper(
     _seal_manifest(run_dir, config)
 
     with pytest.raises(ValueError, match=rf"{re.escape(artifact_name)} differs"):
+        observe_release_artifacts(run_dir, ROOT)
+
+
+@pytest.mark.parametrize("tamper", ["quality_gates", "limitations"])
+def test_observer_rejects_coherently_resealed_findings_status_evidence_tamper(
+    tmp_path: Path,
+    config_factory,
+    tamper: str,
+) -> None:
+    run_dir = tmp_path / "run"
+    config = config_factory()
+    _write_run(run_dir, config)
+    findings_path = run_dir / "findings.json"
+    payload = json.loads(findings_path.read_text(encoding="utf-8"))
+    if tamper == "quality_gates":
+        payload["quality_gates"][0]["detail"] = "coherently replaced quality evidence"
+    else:
+        payload["limitations"] = ["coherently replaced limitation evidence"]
+    findings_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    _seal_manifest(run_dir, config)
+
+    with pytest.raises(ValueError, match=r"findings\.json differs"):
         observe_release_artifacts(run_dir, ROOT)
 
 

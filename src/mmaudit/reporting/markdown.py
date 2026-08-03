@@ -9,7 +9,6 @@ from collections import Counter
 from mmaudit.constants import ALL_MODEL_ROLES
 from mmaudit.models.schemas import (
     AttackerCapabilityPolicy,
-    AuditQualityStatus,
     AuditReport,
     AuditRunStatus,
     EconomicMetrics,
@@ -21,6 +20,7 @@ from mmaudit.models.schemas import (
     ScannerStatus,
     Severity,
 )
+from mmaudit.reporting.status import effective_report_status
 from mmaudit.solidity.formal import compare_dynamic_engine_outcomes
 
 _MAX_EXECUTION_ORIGIN_DISPOSITION_ROWS = 20
@@ -330,22 +330,6 @@ def _audited_suite_coverage_gap_lines(coverage: dict[str, object]) -> list[str]:
     return lines
 
 
-def _effective_run_status(report: AuditReport) -> AuditRunStatus:
-    if report.run_status is not None:
-        return report.run_status
-    if report.quality_status in {
-        AuditQualityStatus.FAILED,
-        AuditQualityStatus.ENVIRONMENT_UNSAFE,
-        AuditQualityStatus.TARGET_UNSUPPORTED,
-    }:
-        return AuditRunStatus.FAILED
-    if not report.completed or report.quality_status is AuditQualityStatus.INCOMPLETE:
-        return AuditRunStatus.INCOMPLETE
-    if report.quality_status is AuditQualityStatus.COMPLETED_WITH_LIMITATIONS:
-        return AuditRunStatus.DEGRADED
-    return AuditRunStatus.COMPLETE
-
-
 def _finding(finding: Finding, report: AuditReport) -> list[str]:
     qualification = _status_qualification(finding.status)
     lines = [
@@ -533,6 +517,7 @@ def _finding(finding: Finding, report: AuditReport) -> list[str]:
 
 def render_markdown(report: AuditReport) -> str:
     report = AuditReport.model_validate(report.model_dump(mode="python"))
+    projection = effective_report_status(report)
     counts = Counter(finding.severity.value for finding in report.findings)
     status_counts = Counter(finding.status.value for finding in report.findings)
     origin_counts = Counter(finding.origin_kind.value for finding in report.findings)
@@ -551,7 +536,7 @@ def render_markdown(report: AuditReport) -> str:
         else {}
     )
     solidity_compilation = solidity.get("compilation", []) if isinstance(solidity, dict) else []
-    run_status = _effective_run_status(report)
+    run_status = projection.run_status
     incomplete_empty_run = not report.findings and run_status in {
         AuditRunStatus.DEGRADED,
         AuditRunStatus.INCOMPLETE,
@@ -583,7 +568,7 @@ def render_markdown(report: AuditReport) -> str:
         f"> **RUN STATUS: {_text(run_status.value)}**",
         "",
         f"Audit profile: **{_text(report.audit_profile.value)}**. "
-        f"Quality status: **{_text(report.quality_status.value)}**.",
+        f"Quality status: **{_text(projection.quality_status.value)}**.",
         "",
         "Finding discovery origins: "
         f"deterministic execution={origin_counts['deterministic_execution']}, "
@@ -609,7 +594,7 @@ def render_markdown(report: AuditReport) -> str:
                     "",
                 ]
             )
-    if not report.completed:
+    if not projection.completed:
         lines.extend(
             [
                 "> **Incomplete audit:** completed work is preserved, but the result must not be "
@@ -617,7 +602,7 @@ def render_markdown(report: AuditReport) -> str:
                 "",
             ]
         )
-        lines.extend(f"- {_text(reason)}" for reason in report.incomplete_reasons)
+        lines.extend(f"- {_text(reason)}" for reason in projection.limitations)
         lines.append("")
     lines.extend(
         [
@@ -658,7 +643,7 @@ def render_markdown(report: AuditReport) -> str:
             "- Reporting severity threshold: "
             f"{_inline(str(report.metadata.get('severity_threshold', 'informational')))}",
             f"- Audit profile: {_inline(report.audit_profile.value)}",
-            f"- Quality status: {_inline(report.quality_status.value)}",
+            f"- Quality status: {_inline(projection.quality_status.value)}",
             f"- Languages: {_text(', '.join(report.repository.languages) or 'none detected')}",
             f"- Frameworks: {_text(', '.join(report.repository.frameworks) or 'none detected')}",
             "",
@@ -988,7 +973,7 @@ def render_markdown(report: AuditReport) -> str:
                 f"{_text(', '.join(surface.root_lineages) or 'none')} |"
             )
         lines.append("")
-    if report.quality_gates:
+    if projection.quality_gates:
         lines.extend(
             [
                 "## Quality gates",
@@ -997,7 +982,7 @@ def render_markdown(report: AuditReport) -> str:
                 "| --- | --- | --- | --- |",
             ]
         )
-        for gate in report.quality_gates:
+        for gate in projection.quality_gates:
             lines.append(
                 f"| {_text(gate.gate)} | {gate.required} | {gate.passed} | {_text(gate.detail)} |"
             )
@@ -1617,6 +1602,7 @@ def render_markdown(report: AuditReport) -> str:
             "- Unavailable scanners, omitted files, framework behavior, runtime configuration, and "
             "external controls can materially change conclusions.",
             "- `needs_review` items are hypotheses and must not be represented as established vulnerabilities.",
+            *[f"- {_text(reason)}" for reason in projection.limitations],
             "",
             "## Recommended next actions",
             "",

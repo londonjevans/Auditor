@@ -1,12 +1,33 @@
 """Static regressions for provider-free CI and fail-closed baseline admission."""
 
+import hashlib
+import json
 import re
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "mmaudit.yml"
 PROVIDER_WORKFLOW = ROOT / ".github" / "workflows" / "mmaudit-model.yml"
 README = ROOT / "README.md"
+PUBLIC_REQUIRED_NAMES = frozenset(
+    {
+        "audit-results.sarif",
+        "client-report.md",
+        "coverage.json",
+        "ci-state.json",
+        "final-findings.json",
+        "findings.json",
+        "forensic-report.md",
+        "maximum_assurance_traceability.json",
+        "model-execution.json",
+        "scanner-results.json",
+    }
+)
 
 
 def _read(path: Path) -> str:
@@ -27,6 +48,102 @@ def _step_block(job: str, name: str) -> str:
     assert separator, f"missing workflow step {name!r}"
     next_step = re.search(r"(?m)^      - (?:name|uses):", remainder)
     return remainder if next_step is None else remainder[: next_step.start()]
+
+
+def _public_staging_python() -> str:
+    workflow = _read(CI_WORKFLOW)
+    scanner_job = _job_block(workflow, "scanner-only")
+    step = _step_block(scanner_job, "Stage exact manifest-bound public evidence")
+    marker = "python - \"$MMAUDIT_RUN_DIR\" \"$public_root\" <<'PY'\n"
+    _, separator, remainder = step.partition(marker)
+    assert separator
+    script, terminator, _ = remainder.partition("\n          PY")
+    assert terminator
+    return textwrap.dedent(script)
+
+
+def _canonical_sha256(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _run_public_staging(
+    tmp_path: Path,
+    *,
+    omitted: frozenset[str] = frozenset(),
+    extra_public: frozenset[str] = frozenset(),
+    prohibited: frozenset[str] = frozenset(),
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    source = tmp_path / "source"
+    source.mkdir()
+    names = sorted((PUBLIC_REQUIRED_NAMES - omitted) | extra_public | prohibited)
+    bindings: list[dict[str, object]] = []
+    for name in names:
+        path = source / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = (
+            b'{"runs":[],"version":"2.1.0"}\n'
+            if name == "audit-results.sarif"
+            else f"artifact:{name}\n".encode()
+        )
+        path.write_bytes(data)
+        bindings.append(
+            {
+                "path": name,
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "size": len(data),
+            }
+        )
+    source_manifest = {
+        "run_id": "synthetic-ci-run",
+        "manifest_sha256": "a" * 64,
+        "artifacts": bindings,
+    }
+    (source / "run-evidence-manifest.json").write_text(
+        json.dumps(source_manifest, sort_keys=True),
+        encoding="utf-8",
+    )
+
+    stub_root = tmp_path / "stub"
+    package = stub_root / "mmaudit" / "orchestration"
+    package.mkdir(parents=True)
+    (stub_root / "mmaudit" / "__init__.py").write_text("", encoding="utf-8")
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "manifest.py").write_text(
+        """
+import json
+from types import SimpleNamespace
+
+def load_run_evidence_manifest(path):
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return SimpleNamespace(
+        run_id=payload["run_id"],
+        manifest_sha256=payload["manifest_sha256"],
+        artifacts=[SimpleNamespace(**item) for item in payload["artifacts"]],
+    )
+""".lstrip(),
+        encoding="utf-8",
+    )
+    destination = tmp_path / "public"
+    environment = {
+        "PYTHONPATH": str(stub_root),
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    completed = subprocess.run(
+        [sys.executable, "-c", _public_staging_python(), str(source), str(destination)],
+        cwd=tmp_path,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return completed, destination
 
 
 def test_pull_request_workflow_is_provider_and_model_free() -> None:
@@ -242,39 +359,104 @@ def test_ci_output_and_public_artifacts_never_use_checkout_wildcards() -> None:
     assert '"$MMAUDIT_OUTPUT_ROOT/runs"' in locate_step
     assert "find .mmaudit" not in locate_step
     assert 'public_root="$RUNNER_TEMP/mmaudit-public-evidence"' in public_stage
-    assert "required_public_names = (" in public_stage
-    assert "optional_legacy_public_names = (" in public_stage
+    assert "required_public_names = frozenset({" in public_stage
+    assert "public_artifact_allowlist = frozenset({" in public_stage
     assert "bindings.get(name)" in public_stage
     assert "hashlib.sha256(data).hexdigest() != binding.sha256" in public_stage
-    assert "private" not in public_stage
+    assert 'prohibited_artifact_prefixes = ("logs/", "private/")' in public_stage
+    assert 'bundle_kind": "NON_FORENSIC_PUBLIC_SUBSET"' in public_stage
+    assert '"forensic_bundle_complete": False' in public_stage
     assert ".mmaudit/runs/*" not in workflow
 
 
-def test_public_staging_requires_canonical_bundle_and_tolerates_absent_legacy_outputs() -> None:
+def test_public_staging_requires_canonical_bundle_and_copies_all_allowlisted_leaves() -> None:
     workflow = _read(CI_WORKFLOW)
     scanner_job = _job_block(workflow, "scanner-only")
     public_stage = _step_block(scanner_job, "Stage exact manifest-bound public evidence")
 
-    required_block, separator, optional_block = public_stage.partition(
-        "optional_legacy_public_names = ("
+    required_block, separator, allowlist_block = public_stage.partition(
+        "public_artifact_allowlist = frozenset({"
     )
     assert separator
-    for artifact_name in (
-        "audit-results.sarif",
-        "client-report.md",
-        "coverage.json",
-        "findings.json",
-        "forensic-report.md",
-        "model-execution.json",
-    ):
+    for artifact_name in PUBLIC_REQUIRED_NAMES:
         assert f'"{artifact_name}"' in required_block
-    for artifact_name in ("audit-report.md", "solidity-coverage.json"):
-        assert f'"{artifact_name}"' not in required_block
-        assert f'"{artifact_name}"' in optional_block
-    assert "for name in required_public_names:" in public_stage
-    assert "for name in optional_legacy_public_names:" in public_stage
-    assert "if name not in bindings:" in public_stage
-    assert "continue" in public_stage
+    for artifact_name in (
+        "audit-report.md",
+        "solidity-coverage.json",
+        "solidity-graphs.json",
+        "model-review-coverage.json",
+        "reproduction-results.json",
+    ):
+        assert f'"{artifact_name}"' in allowlist_block
+    assert "public_names = set(bindings) & public_artifact_allowlist" in public_stage
+    assert "missing_required = sorted(required_public_names - public_names)" in public_stage
+    assert "for name in sorted(public_names):" in public_stage
+
+
+def test_public_staging_emits_a_self_contained_non_forensic_subset(tmp_path: Path) -> None:
+    completed, destination = _run_public_staging(
+        tmp_path,
+        extra_public=frozenset({"solidity-graphs.json", "reproduction-results.json"}),
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    run = destination / "run"
+    subset_path = run / "public-evidence-subset-manifest.json"
+    subset = json.loads(subset_path.read_text(encoding="utf-8"))
+    subset_hash = subset.pop("subset_manifest_sha256")
+    assert subset_hash == _canonical_sha256(subset)
+    assert subset["bundle_kind"] == "NON_FORENSIC_PUBLIC_SUBSET"
+    assert subset["forensic_bundle_complete"] is False
+    assert subset["omitted_artifact_classes"] == ["logs/**", "private/**"]
+    inventory = subset["artifacts"]
+    assert subset["artifact_inventory_sha256"] == _canonical_sha256(inventory)
+    expected = {
+        *PUBLIC_REQUIRED_NAMES,
+        "reproduction-results.json",
+        "run-evidence-manifest.json",
+        "solidity-graphs.json",
+    }
+    assert {entry["path"] for entry in inventory} == expected
+    assert {path.name for path in run.iterdir()} == {
+        *expected,
+        "public-evidence-subset-manifest.json",
+    }
+    for entry in inventory:
+        data = (run / entry["path"]).read_bytes()
+        assert len(data) == entry["size"]
+        assert hashlib.sha256(data).hexdigest() == entry["sha256"]
+
+
+def test_public_staging_fails_when_a_required_manifest_leaf_is_omitted(tmp_path: Path) -> None:
+    completed, destination = _run_public_staging(
+        tmp_path,
+        omitted=frozenset({"coverage.json"}),
+    )
+
+    assert completed.returncode != 0
+    assert "manifest omits required public artifacts: coverage.json" in completed.stderr
+    assert not (destination / "run" / "public-evidence-subset-manifest.json").exists()
+
+
+@pytest.mark.parametrize("prefix", ["private", "logs"])
+def test_public_staging_excludes_prohibited_manifest_artifacts(
+    tmp_path: Path,
+    prefix: str,
+) -> None:
+    prohibited_name = f"{prefix}/synthetic-custody.json"
+    completed, destination = _run_public_staging(
+        tmp_path,
+        prohibited=frozenset({prohibited_name}),
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    run = destination / "run"
+    assert not (run / prefix).exists()
+    subset = json.loads(
+        (run / "public-evidence-subset-manifest.json").read_text(encoding="utf-8")
+    )
+    assert prohibited_name not in {entry["path"] for entry in subset["artifacts"]}
+    assert subset["omitted_prohibited_artifact_count"] == 1
 
 
 def test_provider_workflow_is_separate_and_never_runs_on_pull_requests() -> None:

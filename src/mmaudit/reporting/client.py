@@ -11,13 +11,9 @@ from mmaudit.models.schemas import (
     AuditRunStatus,
     CandidateFinding,
     CandidateReproductionResolution,
-    ExecutionEvidenceKind,
     Finding,
     FindingStatus,
-    FormalToolStatus,
-    InvariantExecutionStatus,
     Location,
-    ReproductionState,
     Severity,
 )
 from mmaudit.models.usage import is_structurally_creditable_usage_record
@@ -27,10 +23,10 @@ from mmaudit.reporting.bundle import (
     ForensicFindingRecord,
     SourceExcerptEvidence,
     build_findings_artifact,
-    effective_run_status,
     source_symbol_is_present,
 )
 from mmaudit.reporting.markdown import _inline, _text
+from mmaudit.reporting.status import effective_report_status
 from mmaudit.repository.chunking import line_range_hash
 
 _MAX_RENDERED_EXCERPT_LINES = 24
@@ -451,7 +447,12 @@ def _executive_summary(report: AuditReport, status: AuditRunStatus) -> str:
 def _completed_analysis_summary(report: AuditReport) -> list[str]:
     # Imported lazily because the assurance module imports the manifest layer,
     # which in turn needs this deterministic report regenerator.
-    from mmaudit.orchestration.assurance import is_qualifying_real_scanner_run
+    from mmaudit.orchestration.assurance import (
+        is_qualifying_real_scanner_run,
+        is_structurally_qualifying_real_formal_run,
+        is_structurally_qualifying_real_invariant_execution,
+        is_structurally_qualifying_real_reproduction,
+    )
 
     real_scanners = sorted(
         run.scanner for run in report.scanner_runs if is_qualifying_real_scanner_run(run)
@@ -464,27 +465,13 @@ def _completed_analysis_summary(report: AuditReport) -> list[str]:
     real_invariants = [
         item
         for item in report.invariant_executions
-        if item.execution_evidence is ExecutionEvidenceKind.REAL
-        and item.status
-        in {InvariantExecutionStatus.PASSED, InvariantExecutionStatus.COUNTEREXAMPLE}
+        if is_structurally_qualifying_real_invariant_execution(item)
     ]
     real_formal = [
-        item
-        for item in report.formal_runs
-        if item.execution_evidence is ExecutionEvidenceKind.REAL
-        and item.status is FormalToolStatus.SUCCESS
+        item for item in report.formal_runs if is_structurally_qualifying_real_formal_run(item)
     ]
     real_reproductions = [
-        item
-        for item in report.reproductions
-        if item.execution_evidence is ExecutionEvidenceKind.REAL
-        and item.state
-        in {
-            ReproductionState.REPRODUCED,
-            ReproductionState.REPRODUCED_AND_MINIMIZED,
-            ReproductionState.FORMALLY_PROVEN,
-            ReproductionState.DISPROVEN,
-        }
+        item for item in report.reproductions if is_structurally_qualifying_real_reproduction(item)
     ]
     retained_total = (
         len(report.scanner_runs)
@@ -521,7 +508,8 @@ def _render_client_markdown_from_artifact(
 ) -> str:
     report = AuditReport.model_validate(report.model_dump(mode="python"))
     artifact = FindingsArtifact.model_validate(artifact.model_dump(mode="python"))
-    status = effective_run_status(report)
+    projection = effective_report_status(report)
+    status = projection.run_status
     active_records = artifact.records[: len(report.findings)]
     ordered_records = sorted(
         active_records,
@@ -538,6 +526,8 @@ def _render_client_markdown_from_artifact(
         "",
         f"> **RUN STATUS: {status.value}**",
         "",
+        f"Quality status: **{projection.quality_status.value}**.",
+        "",
         _executive_summary(report, status),
         "",
         "## Executive risk narrative",
@@ -553,7 +543,7 @@ def _render_client_markdown_from_artifact(
                 "> **PROMINENT LIMITATION:** the run did not complete every required analysis. "
                 "Do not interpret missing findings as evidence of safety.",
                 "",
-                *[f"- {_text(reason)}" for reason in report.incomplete_reasons],
+                *[f"- {_text(reason)}" for reason in projection.limitations],
                 "",
             ]
         )
@@ -628,7 +618,7 @@ def _render_client_markdown_from_artifact(
             "materially change risk.",
             "- Disputed and inconclusive matters require maintainers to resolve the recorded "
             "assumptions and controls.",
-            *[f"- {_text(reason)}" for reason in report.incomplete_reasons],
+            *[f"- {_text(reason)}" for reason in projection.limitations],
             "",
             "## Conclusion",
             "",

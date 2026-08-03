@@ -654,7 +654,13 @@ and raw model material are never included in that artifact. Each audit writes to
 the workflow copies a fixed allowlist of manifest-bound public files into a separate fresh staging
 directory. Artifact upload addresses only that directory, never a checkout glob. SARIF upload
 addresses one exact manifest-bound `audit-results.sarif`; a companion validation marker binds its
-hash to the run ID and manifest. This staging remains independent of the finding severity exit, so
+hash to the run ID and manifest. Because the original run manifest also binds prohibited
+`private/**` and `logs/**` custody, CI does not mislabel the downloadable artifact as the complete
+forensic bundle. Instead, `public-evidence-subset-manifest.json` identifies it as a
+`NON_FORENSIC_PUBLIC_SUBSET`, hash-binds every copied public leaf (including the original manifest),
+and records the excluded artifact classes. Staging fails on an omitted required leaf, an unknown
+top-level artifact, or an unclassified nested artifact. The complete forensic bundle remains the
+verified original run directory. This staging remains independent of the finding severity exit, so
 valid evidence is retained when the audit gate fails because it found an unsafe condition.
 
 Provider access is isolated in `.github/workflows/mmaudit-model.yml`. It has no pull-request trigger,
