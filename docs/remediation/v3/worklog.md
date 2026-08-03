@@ -5,12 +5,12 @@ The objective source has SHA-256
 Do not record credentials, raw private prompts, or raw provider completions here.
 
 AUTORUN_STATUS: RUNNING
-CURRENT_MILESTONE: Resumable seven-pass map-reduce scheduler
-CURRENT_TICKET: V3-SCHEDULER-001 (COMPLETE; CHECKPOINT_PENDING)
+CURRENT_MILESTONE: Pinned repository-suite execution
+CURRENT_TICKET: V3-FORKSUITE-001 (PARTIAL; TERMINAL_RECONCILIATION_PENDING)
 LAST_COMPLETED_TICKET: V3-SCHEDULER-001
-NEXT_ACTION: Create and push the isolated V3-SCHEDULER-001 checkpoint, then begin authoritative execution-order ticket V3-FORKSUITE-001 without pausing.
-LAST_COMMAND: `.venv/bin/pytest -q --cache-clear`
-LAST_RESULT: PASS: the exact normalized candidate tree passed 4401 tests with 11 explicit external-prerequisite skips in 1299.53s (21m39s) under the required local loopback/Unix-socket mode. The prior one-off execution-origin failure did not recur after isolated and two predecessor-sequence passes. No production change was made for that transient observation. Ruff format/check, strict mypy, release schemas, focused scheduler integration, CLI, staged diff, secret, and artifact gates are green.
+NEXT_ACTION: Commit and push the reconciled V3-FORKSUITE-001 terminal status, then inspect authoritative execution-order ticket V3-OBJECTIVE-001 without pausing.
+LAST_COMMAND: `git push origin main`
+LAST_RESULT: PASS: scheduler checkpoint `136f8322aee78f53812461f20c4987fc6b6b1918` and separate operator-authored Corrovera product-vision commit `3d97425d5db42bbbda776dfc3abe27270670b127` were pushed to the configured GitHub SSH remote. The current tree is clean. V3-FORKSUITE-001's safe Foundry scope was already fully validated; only the real Hardhat runtime integration remains BLOCKED_TECHNICAL, so its persisted status is being reconciled to PARTIAL before continuing.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,7 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: Exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 8c84013869473635c28193d552498db20ccd4d80
+LAST_CHECKPOINT_COMMIT: 136f8322aee78f53812461f20c4987fc6b6b1918
 
 ## 2026-08-02 — V3-SCHEDULER-001
 
@@ -222,6 +222,11 @@ LAST_CHECKPOINT_COMMIT: 8c84013869473635c28193d552498db20ccd4d80
   recur. The external-prerequisite skips remain unchanged and receive no passing credit. No
   provider, public network, live target, external engine, or secret was used. This supersedes the
   earlier pre-normalization full-suite evidence as the ticket's final complete-tree gate.
+- **Checkpoint:** V3-SCHEDULER-001 was committed as
+  `136f8322aee78f53812461f20c4987fc6b6b1918` (`Add resumable seven-pass audit scheduler`) and
+  pushed to `origin/main` over SSH. The operator-authored Corrovera product vision was kept out of
+  that isolated checkpoint, committed separately as
+  `3d97425d5db42bbbda776dfc3abe27270670b127`, and pushed over the same SSH remote.
 - **Typed response and surface-custody closure:** Every model pass now uses its exact canonical
   response-schema digest and a strict typed payload. Candidate-review tasks retain a nonempty,
   deterministic requested-surface manifest and response artifact joined to the scheduled request,
@@ -3597,7 +3602,15 @@ LAST_CHECKPOINT_COMMIT: 8c84013869473635c28193d552498db20ccd4d80
 
 ## 2026-07-29 — V3-FORKSUITE-001
 
-- **Status:** `IN_PROGRESS`.
+- **Status:** `PARTIAL`; safe Foundry scope complete, real Hardhat integration
+  `BLOCKED_TECHNICAL`.
+- **2026-08-03 terminal reconciliation:** The authoritative execution order returned to this
+  already validated ticket after scheduler completion. The complete current suite again includes
+  all Foundry/Hardhat refusal regressions and passed `4401` tests with `11` explicit prerequisite
+  skips. No safe Foundry or adapter portion remains open. Real Hardhat execution still lacks the
+  documented process-attested digest-pinned rootless single-loopback runtime and trusted
+  image-baked reporter; no mock can substitute. The correct mixed disposition remains `PARTIAL`,
+  with only that real integration subtask `BLOCKED_TECHNICAL`.
 - **Defensive objective:** Execute an explicitly selected, bounded subset of an
   audited repository's existing Foundry suite against operator-pinned local fork
   state, with typed deterministic finding evidence and fail-closed hardened

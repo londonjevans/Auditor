@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-03T01:02:48Z",
-  "candidate_commit": "8c84013869473635c28193d552498db20ccd4d80",
+  "updated_at": "2026-08-03T01:07:31Z",
+  "candidate_commit": "3d97425d5db42bbbda776dfc3abe27270670b127",
   "autorun_status": "RUNNING",
-  "current_milestone": "resumable_seven_pass_map_reduce_scheduler",
-  "current_ticket": "V3-SCHEDULER-001 (COMPLETE; CHECKPOINT_PENDING)",
-  "last_checkpoint_commit": "8c84013869473635c28193d552498db20ccd4d80",
+  "current_milestone": "pinned_repository_suite_execution",
+  "current_ticket": "V3-FORKSUITE-001 (PARTIAL; TERMINAL_RECONCILIATION_PENDING)",
+  "last_checkpoint_commit": "136f8322aee78f53812461f20c4987fc6b6b1918",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,
