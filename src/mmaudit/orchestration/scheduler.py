@@ -53,6 +53,7 @@ from mmaudit.models.scheduler import (
     SchedulerTaskOutput,
     SchedulerTaskPlan,
     SchedulerTaskResult,
+    SchedulerTerminalReportAuthority,
     SchedulerTerminalStatus,
     build_scheduler_model_request_evidence,
     scheduler_canonical_sha256,
@@ -60,8 +61,11 @@ from mmaudit.models.scheduler import (
 from mmaudit.models.schemas import (
     CandidateFinding,
     ContextRequestEvidence,
+    Finding,
     ModelSurfaceReviewArtifact,
     ModelSurfaceReviewRequest,
+    ReportQualityReview,
+    Severity,
     SpecialistAcceptedOutcome,
     StrictModel,
     UsageRecord,
@@ -87,6 +91,7 @@ from mmaudit.reporting.json_report import stable_json
 _LOCK_FILENAME = ".scheduler.lock"
 _MANIFEST_FILENAME = "manifest.json"
 _ANALYSIS_INPUT_INVENTORY_FILENAME = "analysis-input-inventory.json"
+_TERMINAL_REPORT_AUTHORITY_FILENAME = "terminal-report-authority.json"
 _ACTIVATIONS_DIRECTORY = "activations"
 _EVENTS_DIRECTORY = "events"
 _PASS_PLANS_DIRECTORY = "pass-plans"
@@ -376,6 +381,7 @@ class SchedulerJournal:
         provider_attempts: tuple[SchedulerProviderAttemptEvidence, ...],
         result_observations: tuple[SchedulerTaskResult, ...],
         pass_results: tuple[SchedulerPassResult, ...],
+        terminal_report_authority: SchedulerTerminalReportAuthority | None = None,
         read_only: bool = False,
     ) -> None:
         self.path = path
@@ -396,6 +402,7 @@ class SchedulerJournal:
         self._provider_attempts = list(provider_attempts)
         self._result_observations = list(result_observations)
         self._pass_results = list(pass_results)
+        self._terminal_report_authority = terminal_report_authority
         self._indexes = _derive_scheduler_journal_indexes(
             plans=self._plans,
             activations=self._activations,
@@ -454,6 +461,13 @@ class SchedulerJournal:
         return tuple(self._pass_results)
 
     @property
+    def terminal_report_authority(self) -> SchedulerTerminalReportAuthority | None:
+        """Return the validated private terminal report projection, when sealed."""
+
+        self._assert_live_custody()
+        return self._terminal_report_authority
+
+    @property
     def next_dependencies(self) -> tuple[SchedulerPassDependency, ...]:
         """Return all exact prior results required by the next pass plan."""
 
@@ -499,6 +513,7 @@ class SchedulerJournal:
             task_results=self.task_results,
             result_observations=self.result_observations,
             events=self.events,
+            terminal_report_authority=self._terminal_report_authority,
         )
 
     @property
@@ -576,7 +591,7 @@ class SchedulerJournal:
     def claim_restorable_usage_records(self) -> tuple[UsageRecord, ...]:
         """Re-attest exact retained REAL usage once under validated resume custody."""
 
-        self._assert_writable_custody()
+        self._assert_recovery_custody()
         if self._usage_recovery_scope is None:
             raise ValueError("scheduler journal lacks usage recovery authority")
         recovered = _recover_trusted_usage_records(
@@ -617,7 +632,7 @@ class SchedulerJournal:
         charge is conservatively accounted at the full reservation.
         """
 
-        self._assert_writable_custody()
+        self._assert_recovery_custody()
         tasks_by_request = {
             task.logical_request_id: task
             for plan in self.plans
@@ -758,6 +773,73 @@ class SchedulerJournal:
         if len(request_ids) != len(set(request_ids)):
             raise ValueError("scheduler retained context repeats a logical request identity")
         return tuple(sorted(evidence, key=lambda item: item.request_id))
+
+    def seal_terminal_report_authority(
+        self,
+        *,
+        severity_threshold: Severity,
+        candidates: Iterable[CandidateFinding],
+        final_findings: Iterable[Finding],
+        rejected_findings: Iterable[Finding],
+        filtered_findings: Iterable[Finding],
+        report_quality_review: ReportQualityReview | None,
+    ) -> SchedulerTerminalReportAuthority:
+        """Persist the exact terminal report projection once, or verify an exact resume.
+
+        This is intentionally the last writable scheduler transition.  A matching call
+        after resume is idempotent; any changed candidate, finding, disposition, quality
+        review, or campaign prefix fails before public artifact construction.
+        """
+
+        self._assert_live_custody()
+        threshold = Severity(severity_threshold)
+        authority = SchedulerTerminalReportAuthority.build(
+            manifest=self.manifest,
+            summary=self.summary,
+            severity_threshold=threshold,
+            candidates=candidates,
+            final_findings=final_findings,
+            rejected_findings=rejected_findings,
+            filtered_findings=filtered_findings,
+            report_quality_review=report_quality_review,
+        )
+        if self._terminal_report_authority is not None:
+            if authority != self._terminal_report_authority:
+                raise ValueError(
+                    "resumed scheduler terminal report authority differs from durable evidence"
+                )
+            return self._terminal_report_authority
+        if self._read_only:
+            raise ValueError("scheduler verification journal is read-only")
+        if not self.manifest.terminal_report_authority_required:
+            raise ValueError("legacy scheduler campaign cannot seal current report authority")
+
+        # Build the complete projected evidence before the fresh-file commit.  This
+        # checks pass-seven judgment/report-quality custody and requires every planned
+        # task in the (possibly incomplete) pass prefix to have a terminal result.
+        SchedulerJournalEvidence.build(
+            manifest=self.manifest,
+            analysis_input_inventory=self.analysis_input_inventory,
+            summary=self.summary,
+            plans=self.plans,
+            model_requests=self.model_requests,
+            activations=self.activations,
+            outputs=self.outputs,
+            provider_attempts=self.provider_attempts,
+            task_results=self.task_results,
+            result_observations=self.result_observations,
+            events=self.events,
+            terminal_report_authority=authority,
+        )
+        _write_model(
+            self._root_descriptor,
+            self._directory_descriptors,
+            _TERMINAL_REPORT_AUTHORITY_FILENAME,
+            authority,
+        )
+        self._terminal_report_authority = authority
+        self._validate_state()
+        return authority
 
     def artifact(self) -> SchedulerArtifact:
         """Build the public scheduler artifact from complete journal evidence."""
@@ -1461,6 +1543,15 @@ class SchedulerJournal:
         self._assert_live_custody()
         if self._read_only:
             raise ValueError("scheduler verification journal is read-only")
+        if self._terminal_report_authority is not None:
+            raise ValueError("scheduler journal is frozen by its terminal report authority")
+
+    def _assert_recovery_custody(self) -> None:
+        """Allow one-shot process/accounting recovery without changing sealed journal bytes."""
+
+        self._assert_live_custody()
+        if self._read_only:
+            raise ValueError("scheduler verification journal is read-only")
 
     def _validate_incremental_state(self, *, task_id: str | None = None) -> None:
         """Validate exact append-local joins; open/final validation still reconstructs all state."""
@@ -1587,6 +1678,11 @@ class SchedulerJournal:
             relative_paths=(
                 _MANIFEST_FILENAME,
                 _ANALYSIS_INPUT_INVENTORY_FILENAME,
+                *(
+                    (_TERMINAL_REPORT_AUTHORITY_FILENAME,)
+                    if self._terminal_report_authority is not None
+                    else ()
+                ),
                 *retained_child_paths,
             ),
         )
@@ -1637,6 +1733,7 @@ class SchedulerJournal:
             self.provider_attempts,
             self.result_observations,
             self.pass_results,
+            self._terminal_report_authority,
         )
         if durable_state != retained_state:
             raise ValueError("scheduler retained state differs from durable journal evidence")
@@ -1653,6 +1750,11 @@ class SchedulerJournal:
         )
         if self._indexes != expected_indexes:
             raise ValueError("scheduler in-memory indexes differ from full reconstruction")
+        if self._terminal_report_authority is not None:
+            self._build_journal_evidence(
+                summary=self.summary,
+                model_requests=self.model_requests,
+            )
         self._assert_live_custody()
         return after_reconstruction
 
@@ -1665,6 +1767,7 @@ def create_scheduler_journal(
     shard_inventory: SchedulerShardInventory,
     cost_ledger_baseline: SchedulerCostLedgerBaseline | None = None,
     privacy_evidence_custody: SchedulerPrivacyEvidenceCustody | None = None,
+    require_terminal_report_authority: bool = False,
 ) -> SchedulerJournal:
     """Create one fresh private journal and persist its manifest before work."""
 
@@ -1678,6 +1781,7 @@ def create_scheduler_journal(
         shard_inventory=shard_inventory,
         cost_ledger_baseline=cost_ledger_baseline,
         privacy_evidence_custody=privacy_evidence_custody,
+        require_terminal_report_authority=require_terminal_report_authority,
     )
     absolute = Path(os.path.abspath(path))
     _create_private_root(absolute)
@@ -1725,6 +1829,7 @@ def create_scheduler_journal(
             provider_attempts=(),
             result_observations=(),
             pass_results=(),
+            terminal_report_authority=None,
         )
         journal._validate_state()
         if manifest.cost_ledger_baseline is not None:
@@ -1749,6 +1854,7 @@ def resume_scheduler_journal(
     expected_shard_inventory: SchedulerShardInventory,
     expected_cost_ledger_baseline: SchedulerCostLedgerBaseline | None = None,
     atomic_ledger: AtomicCostLedger | None = None,
+    expected_terminal_report_authority_required: bool = False,
 ) -> SchedulerJournal:
     """Resume only an exact-bound campaign, classifying interrupted dispatches."""
 
@@ -1810,6 +1916,8 @@ def resume_scheduler_journal(
             != manifest.bindings.analysis_input_sha256
             or _bindings_without_cost_baseline(manifest.bindings)
             != _bindings_without_cost_baseline(validated_expected_bindings)
+            or manifest.terminal_report_authority_required
+            is not expected_terminal_report_authority_required
             or (
                 validated_expected_bindings.cost_ledger_baseline_sha256
                 not in {
@@ -1825,6 +1933,7 @@ def resume_scheduler_journal(
                 shard_inventory=validated_expected_inventory,
                 cost_ledger_baseline=expected_cost_ledger_baseline,
                 privacy_evidence_custody=manifest.privacy_evidence_custody,
+                require_terminal_report_authority=(expected_terminal_report_authority_required),
             )
             if manifest != expected_manifest:
                 raise ValueError("scheduler resume cost-ledger baseline does not match")
@@ -1843,7 +1952,12 @@ def resume_scheduler_journal(
             provider_attempts,
             result_observations,
             pass_results,
-        ) = _load_state(root_descriptor, directory_descriptors, manifest)
+            terminal_report_authority,
+        ) = _load_state(
+            root_descriptor,
+            directory_descriptors,
+            manifest,
+        )
         journal = SchedulerJournal(
             path=absolute,
             root_descriptor=root_descriptor,
@@ -1860,6 +1974,7 @@ def resume_scheduler_journal(
             provider_attempts=provider_attempts,
             result_observations=result_observations,
             pass_results=pass_results,
+            terminal_report_authority=terminal_report_authority,
         )
         journal._validate_state()
         _recover_interrupted_state(journal)
@@ -1953,6 +2068,7 @@ def open_scheduler_journal_for_verification(
     expected_analysis_input_inventory: SchedulerAnalysisInputInventory | None = None,
     expected_cost_ledger_baseline: SchedulerCostLedgerBaseline | None = None,
     expected_privacy_evidence_custody: SchedulerPrivacyEvidenceCustody | None = None,
+    expected_terminal_report_authority_required: bool = False,
 ) -> SchedulerJournal:
     """Open and validate exact journal bytes without performing crash recovery."""
 
@@ -1969,6 +2085,7 @@ def open_scheduler_journal_for_verification(
             shard_inventory=expected_shard_inventory,
             cost_ledger_baseline=expected_cost_ledger_baseline,
             privacy_evidence_custody=expected_privacy_evidence_custody,
+            require_terminal_report_authority=(expected_terminal_report_authority_required),
         )
     except ValueError:
         raise ValueError(
@@ -2024,7 +2141,12 @@ def open_scheduler_journal_for_verification(
             provider_attempts,
             result_observations,
             pass_results,
-        ) = _load_state(root_descriptor, directory_descriptors, manifest)
+            terminal_report_authority,
+        ) = _load_state(
+            root_descriptor,
+            directory_descriptors,
+            manifest,
+        )
         journal = SchedulerJournal(
             path=absolute,
             root_descriptor=root_descriptor,
@@ -2041,6 +2163,7 @@ def open_scheduler_journal_for_verification(
             provider_attempts=provider_attempts,
             result_observations=result_observations,
             pass_results=pass_results,
+            terminal_report_authority=terminal_report_authority,
             read_only=True,
         )
         journal._validate_state()
@@ -2190,7 +2313,18 @@ def _load_state(
     tuple[SchedulerProviderAttemptEvidence, ...],
     tuple[SchedulerTaskResult, ...],
     tuple[SchedulerPassResult, ...],
+    SchedulerTerminalReportAuthority | None,
 ]:
+    terminal_report_authority = (
+        _read_model(
+            root_descriptor,
+            directory_descriptors,
+            _TERMINAL_REPORT_AUTHORITY_FILENAME,
+            SchedulerTerminalReportAuthority,
+        )
+        if _TERMINAL_REPORT_AUTHORITY_FILENAME in set(os.listdir(root_descriptor))
+        else None
+    )
     plans = _load_contiguous_pass_artifacts(
         root_descriptor,
         directory_descriptors,
@@ -2261,6 +2395,7 @@ def _load_state(
             )
         ),
         tuple(pass_results),
+        terminal_report_authority,
     )
     _validate_loaded_state(
         manifest=manifest,
@@ -2271,6 +2406,7 @@ def _load_state(
         provider_attempts=loaded[4],
         result_observations=loaded[5],
         pass_results=loaded[6],
+        terminal_report_authority=loaded[7],
     )
     _validate_artifact_inventory(
         root_descriptor=root_descriptor,
@@ -2286,6 +2422,7 @@ def _load_state(
         provider_attempts=loaded[4],
         result_observations=loaded[5],
         pass_results=loaded[6],
+        terminal_report_authority=loaded[7],
     )
     return loaded
 
@@ -2346,6 +2483,7 @@ def _validate_loaded_state(
     provider_attempts: tuple[SchedulerProviderAttemptEvidence, ...],
     result_observations: tuple[SchedulerTaskResult, ...],
     pass_results: tuple[SchedulerPassResult, ...],
+    terminal_report_authority: SchedulerTerminalReportAuthority | None,
 ) -> None:
     if len(pass_results) > len(plans) or len(pass_results) < max(0, len(plans) - 1):
         raise ValueError("scheduler pass plan/result prefixes are inconsistent")
@@ -2757,6 +2895,7 @@ def _validate_artifact_inventory(
     provider_attempts: tuple[SchedulerProviderAttemptEvidence, ...],
     result_observations: tuple[SchedulerTaskResult, ...],
     pass_results: tuple[SchedulerPassResult, ...],
+    terminal_report_authority: SchedulerTerminalReportAuthority | None,
 ) -> None:
     _validate_control_layout(
         root_descriptor,
@@ -2801,6 +2940,8 @@ def _validate_artifact_inventory(
             relative,
         )
         _require_private_file(parent_descriptor, leaf)
+    if terminal_report_authority is not None:
+        _require_private_file(root_descriptor, _TERMINAL_REPORT_AUTHORITY_FILENAME)
 
 
 def _retained_child_artifact_paths(
@@ -2864,7 +3005,10 @@ def _validate_control_layout(
         _ANALYSIS_INPUT_INVENTORY_FILENAME,
         *_CONTROL_DIRECTORIES,
     }
-    if set(os.listdir(root_descriptor)) != expected_root:
+    observed_root = set(os.listdir(root_descriptor))
+    if _TERMINAL_REPORT_AUTHORITY_FILENAME in observed_root:
+        expected_root.add(_TERMINAL_REPORT_AUTHORITY_FILENAME)
+    if observed_root != expected_root:
         raise ValueError("scheduler journal contains an unmanifested root artifact")
     root_metadata = os.fstat(root_descriptor)
     if not stat.S_ISDIR(root_metadata.st_mode) or stat.S_IMODE(root_metadata.st_mode) != 0o700:
@@ -2887,6 +3031,8 @@ def _validate_control_layout(
     _require_private_file(root_descriptor, _LOCK_FILENAME)
     _require_private_file(root_descriptor, _MANIFEST_FILENAME)
     _require_private_file(root_descriptor, _ANALYSIS_INPUT_INVENTORY_FILENAME)
+    if _TERMINAL_REPORT_AUTHORITY_FILENAME in observed_root:
+        _require_private_file(root_descriptor, _TERMINAL_REPORT_AUTHORITY_FILENAME)
 
 
 def _require_private_file(parent_descriptor: int, leaf: str) -> None:

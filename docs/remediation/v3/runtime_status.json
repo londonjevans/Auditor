@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-03T22:30:44Z",
+  "updated_at": "2026-08-03T22:55:05Z",
   "candidate_commit": "d01490bac1f11956c58f2c4a619ec5129e49d46d",
   "autorun_status": "PAUSED_BY_OPERATOR",
   "current_milestone": "client_report_and_forensic_bundle",
@@ -23,8 +23,8 @@
     "V3-FORKSUITE-001.hardhat": "Real Hardhat execution requires the process-attested digest-pinned rootless single-loopback runtime and trusted image-baked reporter specified by V3-HARDHAT-001."
   },
   "last_validation": {
-    "command": ".venv/bin/python -m py_compile src/mmaudit/models/scheduler.py src/mmaudit/orchestration/manifest.py src/mmaudit/orchestration/pipeline.py src/mmaudit/orchestration/scheduler.py src/mmaudit/orchestration/scheduler_runtime.py; .venv/bin/ruff check {5 affected production files plus 2 affected tests}; git diff --check",
-    "result": "PASS: affected production modules compile, affected Ruff checks pass, and the working diff has no whitespace errors. These pause-only checks are not ticket acceptance evidence."
+    "command": ".venv/bin/pytest -q tests/integration/test_scheduler_pipeline.py --tb=short",
+    "result": "FAIL: 30 passed, 2 failed in 88.77s. One synthetic test omits its required operator-ledger parent directory; one valid formal-counterexample enrichment exposes a detached accepted-candidate authority join that must replay the deterministic enrichment before hash comparison."
   },
   "pause_state": {
     "requested_at": "2026-08-03T20:08:17Z",
@@ -35,7 +35,11 @@
     "requested_at_current": "2026-08-03T22:02:03Z",
     "resume_action": "Complete private terminal-finding authority for incomplete campaigns, add coherent-reseal regressions for terminal and report-quality evidence, synchronize generated schemas, then run integrated V3-REPORT-001 gates.",
     "requested_at_new": "2026-08-03T22:29:27Z",
-    "result_new": "Paused at a validated WIP boundary after freezing public candidate projections and preserving partial accepted-candidate authority. V3-REPORT-001 remains IN_PROGRESS; no provider call or release claim occurred."
+    "result_new": "Paused at a validated WIP boundary after freezing public candidate projections and preserving partial accepted-candidate authority. V3-REPORT-001 remains IN_PROGRESS; no provider call or release claim occurred.",
+    "resumed_at_new": "2026-08-03T22:32:17Z",
+    "requested_at_final": "2026-08-03T22:55:05Z",
+    "result_final": "Paused with V3-REPORT-001 still IN_PROGRESS. The shared deterministic candidate-enrichment helper is present but detached manifest verification is not yet wired to replay it. No provider call or release claim occurred.",
+    "resume_action_final": "Finish the exact formal-enrichment authority join in manifest verification, create the synthetic ledger parent in the affected integration fixture, rerun the two failures and full scheduler integration file, then continue V3-REPORT-001 gates."
   },
   "scheduler_assurance_validation": {
     "status": "PASS_COMPONENT_FULL_ASSURANCE",

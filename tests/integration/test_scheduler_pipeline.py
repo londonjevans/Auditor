@@ -100,6 +100,8 @@ from tests.integration.test_pipeline import StaticScannerRunner, _maximum_specia
 from tests.qualification_support import synthetic_production_qualification
 from tests.unit.test_semantic_sharding import _inventory, _shard_inputs
 
+_REPORT_QUALITY_MODEL_ID = "hotel/harbor-secure"
+
 
 class _SyntheticSchedulerCrash(BaseException):
     """Represent an abrupt local process loss outside ordinary exception handling."""
@@ -216,6 +218,26 @@ def _deep_scheduler_config(config_factory: Any) -> AuditConfig:
     ).effective()
 
 
+def _deep_scheduler_report_quality_config(config_factory: Any) -> AuditConfig:
+    payload = _deep_scheduler_config(config_factory).model_dump(mode="python")
+    report_quality_entry = model_registry_entry(_REPORT_QUALITY_MODEL_ID)
+    payload["models"]["registry"] = [
+        *payload["models"]["registry"],
+        report_quality_entry,
+    ]
+    payload["privacy"]["approved_model_lineages"] = sorted(
+        {
+            *payload["privacy"]["approved_model_lineages"],
+            str(report_quality_entry["root_lineage"]),
+        }
+    )
+    report_quality = dict(payload["models"]["specialists"]["falsifier"])
+    report_quality["primary"] = _REPORT_QUALITY_MODEL_ID
+    payload["models"]["specialists"]["report_quality"] = report_quality
+    configured = AuditConfig.model_validate(payload)
+    return AuditConfig.model_validate(configured.effective().model_dump(mode="python"))
+
+
 def _semantic_scheduler_config(config_factory: Any) -> AuditConfig:
     payload = _deep_scheduler_config(config_factory).model_dump(mode="python")
     payload["execution"]["budget_usd"] = 100
@@ -283,6 +305,66 @@ def _scheduler_outputs(run_dir: Path) -> dict[str, SchedulerTaskOutput]:
         for path in sorted(output_dir.glob("*.json"))
     )
     return {output.task_id: output for output in outputs}
+
+
+def _rewrite_public_report_bundle(run_dir: Path, report: AuditReport) -> None:
+    """Rewrite every report derivative for a coherent public-artifact tamper assay."""
+
+    retained_findings = FindingsArtifact.model_validate_json(
+        (run_dir / "findings.json").read_text(encoding="utf-8")
+    )
+    candidate_payload = json.loads(
+        (run_dir / "candidate-findings.json").read_text(encoding="utf-8")
+    )
+    candidates = tuple(
+        CandidateFinding.model_validate(item) for item in candidate_payload["findings"]
+    )
+    source_excerpts = {
+        record.finding_id: record.source_excerpt
+        for record in retained_findings.records
+        if record.source_excerpt is not None
+    }
+    findings_artifact = build_findings_artifact(
+        report,
+        candidates=candidates,
+        reproduction_resolutions=retained_findings.reproduction_resolutions,
+        source_excerpts=source_excerpts,
+    )
+    write_json(run_dir / "final-findings.json", report)
+    write_json(run_dir / "findings.json", findings_artifact)
+    (run_dir / "client-report.md").write_text(
+        render_client_markdown_from_artifact(report, findings_artifact),
+        encoding="utf-8",
+    )
+    (run_dir / "forensic-report.md").write_text(
+        render_forensic_markdown(report, findings_artifact=findings_artifact),
+        encoding="utf-8",
+    )
+    (run_dir / "audit-report.md").write_text(
+        render_markdown(report, findings_artifact=findings_artifact),
+        encoding="utf-8",
+    )
+    write_json(
+        run_dir / "audit-results.sarif",
+        generate_report_sarif(report, findings_artifact=findings_artifact),
+    )
+
+
+def _reseal_scheduler_run(
+    run_dir: Path,
+    manifest: RunEvidenceManifest,
+) -> RunEvidenceManifest:
+    assert manifest.run_configuration is not None
+    return seal_run_evidence_manifest(
+        run_id=manifest.run_id,
+        repository_root_name=manifest.repository_root_name,
+        git_commit=manifest.git_commit,
+        sources=manifest.sources,
+        run_configuration=manifest.run_configuration,
+        bindings=manifest.bindings,
+        artifacts=collect_run_artifacts(run_dir),
+        tool_version=manifest.tool_version,
+    )
 
 
 def _maximum_protocol_overlap_context(
@@ -669,6 +751,90 @@ async def test_pipeline_persists_exact_seven_pass_scheduler_evidence(
     )
     with pytest.raises(ValueError, match="scheduler baseline"):
         validate_manifest_artifacts(tampered_manifest, result.run_dir)
+
+
+@pytest.mark.asyncio
+async def test_manifest_rejects_incomplete_terminal_finding_coherent_reseal(
+    config_factory: Any,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = _deep_scheduler_config(config_factory)
+    fake = FakeOpenRouter(
+        mode="judge_omission",
+        extra_model_ids=["golf/gale-secure"],
+    )
+
+    result = await _run(config, vulnerable_repo, tmp_path, fake)
+
+    scheduler_artifact = SchedulerArtifact.model_validate_json(
+        (result.run_dir / "scheduler-state.json").read_text(encoding="utf-8")
+    )
+    assert scheduler_artifact.schema_version == "1.1"
+    assert scheduler_artifact.summary.status is SchedulerCampaignStatus.FAILED
+    assert result.report.findings
+    assert not result.report.completed
+    manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    validate_manifest_artifacts(manifest, result.run_dir)
+
+    authority_path = (
+        result.run_dir / "private" / "scheduler-journal" / "terminal-report-authority.json"
+    )
+    authority_bytes = authority_path.read_bytes()
+    authority_path.unlink()
+    missing_authority_manifest = _reseal_scheduler_run(result.run_dir, manifest)
+    with pytest.raises(ValueError, match=r"terminal.*authority"):
+        validate_manifest_artifacts(missing_authority_manifest, result.run_dir)
+    authority_path.write_bytes(authority_bytes)
+    authority_path.chmod(0o600)
+    validate_manifest_artifacts(manifest, result.run_dir)
+
+    first = result.report.findings[0]
+    tampered = first.model_copy(update={"title": "Coherently resealed terminal tamper"})
+    tampered_report = result.report.model_copy(
+        update={"findings": [tampered, *result.report.findings[1:]]}
+    )
+    _rewrite_public_report_bundle(result.run_dir, tampered_report)
+    resealed = _reseal_scheduler_run(result.run_dir, manifest)
+
+    with pytest.raises(
+        ValueError,
+        match="public finding partition differs from scheduler terminal authority",
+    ):
+        validate_manifest_artifacts(resealed, result.run_dir)
+
+
+@pytest.mark.asyncio
+async def test_manifest_rejects_non_null_report_quality_coherent_reseal(
+    config_factory: Any,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = _deep_scheduler_report_quality_config(config_factory)
+    fake = FakeOpenRouter(extra_model_ids=["golf/gale-secure", _REPORT_QUALITY_MODEL_ID])
+
+    result = await _run(config, vulnerable_repo, tmp_path, fake)
+
+    review = result.report.report_quality_review
+    assert review is not None
+    manifest = RunEvidenceManifest.model_validate_json(
+        (result.run_dir / "run-evidence-manifest.json").read_text(encoding="utf-8")
+    )
+    validate_manifest_artifacts(manifest, result.run_dir)
+    tampered_review = review.model_copy(
+        update={"rationale": "Coherently resealed report-quality tamper."}
+    )
+    tampered_report = result.report.model_copy(update={"report_quality_review": tampered_review})
+    _rewrite_public_report_bundle(result.run_dir, tampered_report)
+    resealed = _reseal_scheduler_run(result.run_dir, manifest)
+
+    with pytest.raises(
+        ValueError,
+        match="public report quality differs from scheduler terminal authority",
+    ):
+        validate_manifest_artifacts(resealed, result.run_dir)
 
 
 @pytest.mark.asyncio

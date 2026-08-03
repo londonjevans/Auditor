@@ -57,6 +57,7 @@ from mmaudit.models.scheduler import (
     SchedulerTaskKind,
     SchedulerTaskPlan,
     SchedulerTaskResult,
+    SchedulerTerminalReportAuthority,
     SchedulerTerminalStatus,
     scheduler_canonical_sha256,
     scheduler_response_schema_model_registry,
@@ -65,6 +66,7 @@ from mmaudit.models.schemas import (
     AuditScopeAssessment,
     CandidateFinding,
     EconomicSimulationPlan,
+    Finding,
     FormalToolRun,
     FoundryInvariantHarnessSpec,
     InvariantExecutionResult,
@@ -73,9 +75,11 @@ from mmaudit.models.schemas import (
     ModelSurfaceReviewArtifact,
     ModelSurfaceReviewRequest,
     PropertyCorpus,
+    ReportQualityReview,
     RepositoryMap,
     RepositorySuiteDifferentialRun,
     ScannerRun,
+    Severity,
     SolidityCompilationResult,
     SolidityCoverage,
     SolidityGraphSet,
@@ -1048,6 +1052,7 @@ class PipelineScheduler:
                 shard_inventory=shard_inventory,
                 cost_ledger_baseline=cost_ledger_baseline,
                 privacy_evidence_custody=privacy_evidence_custody,
+                require_terminal_report_authority=True,
             )
         )
 
@@ -1072,6 +1077,7 @@ class PipelineScheduler:
                 expected_shard_inventory=shard_inventory,
                 expected_cost_ledger_baseline=cost_ledger_baseline,
                 atomic_ledger=atomic_ledger,
+                expected_terminal_report_authority_required=True,
             )
         )
 
@@ -1729,7 +1735,32 @@ class PipelineScheduler:
         self._active_plan = None
         return result
 
+    def seal_terminal_report_authority(
+        self,
+        *,
+        severity_threshold: Severity,
+        candidates: Iterable[CandidateFinding],
+        final_findings: Iterable[Finding],
+        rejected_findings: Iterable[Finding],
+        filtered_findings: Iterable[Finding],
+        report_quality_review: ReportQualityReview | None,
+    ) -> SchedulerTerminalReportAuthority:
+        """Seal or exactly revalidate the terminal report projection before issuance."""
+
+        if self._active_plan is not None:
+            raise ValueError("scheduler cannot seal report authority with an active pass")
+        return self.journal.seal_terminal_report_authority(
+            severity_threshold=severity_threshold,
+            candidates=candidates,
+            final_findings=final_findings,
+            rejected_findings=rejected_findings,
+            filtered_findings=filtered_findings,
+            report_quality_review=report_quality_review,
+        )
+
     def artifact(self) -> SchedulerArtifact:
+        if self.journal.terminal_report_authority is None:
+            raise ValueError("pipeline scheduler artifact lacks terminal report authority")
         return self.journal.artifact()
 
     def report_binding(self) -> SchedulerReportBinding:

@@ -48,6 +48,7 @@ from mmaudit.models.schemas import (
     ExecutionEvidenceKind,
     ModelIdentityStrength,
     ModelRequestValidationStatus,
+    Severity,
     ThreatModel,
     UsageRecord,
 )
@@ -644,6 +645,111 @@ def test_all_seven_exact_passes_derive_complete_campaign(tmp_path: Path) -> None
         mode = stat.S_IMODE(candidate.lstat().st_mode)
         assert mode == (0o700 if candidate.is_dir() else 0o600)
     journal.close()
+
+
+def test_current_terminal_authority_is_write_once_resume_exact_and_downgrade_resistant(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "current-terminal-authority"
+    journal = create_scheduler_journal(
+        path,
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+        require_terminal_report_authority=True,
+    )
+    assert journal.manifest.schema_version == "1.1"
+    assert journal.manifest.terminal_report_authority_required
+    _seal_failed_preflight_pass(
+        journal,
+        _plan(journal, SchedulerPassKind.ORIENTATION),
+    )
+    authority = journal.seal_terminal_report_authority(
+        severity_threshold=Severity.MEDIUM,
+        candidates=(),
+        final_findings=(),
+        rejected_findings=(),
+        filtered_findings=(),
+        report_quality_review=None,
+    )
+    assert (
+        journal.seal_terminal_report_authority(
+            severity_threshold=Severity.MEDIUM,
+            candidates=(),
+            final_findings=(),
+            rejected_findings=(),
+            filtered_findings=(),
+            report_quality_review=None,
+        )
+        == authority
+    )
+    evidence = journal.journal_evidence
+    artifact = journal.artifact()
+    assert evidence.schema_version == "1.1"
+    assert artifact.schema_version == "1.1"
+    assert evidence.terminal_report_authority_sha256 == authority.authority_sha256
+    with pytest.raises(ValueError, match="differs from durable evidence"):
+        journal.seal_terminal_report_authority(
+            severity_threshold=Severity.HIGH,
+            candidates=(),
+            final_findings=(),
+            rejected_findings=(),
+            filtered_findings=(),
+            report_quality_review=None,
+        )
+    journal.close()
+
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_terminal_report_authority_required=True,
+    )
+    assert resumed.terminal_report_authority == authority
+    assert (
+        resumed.seal_terminal_report_authority(
+            severity_threshold=Severity.MEDIUM,
+            candidates=(),
+            final_findings=(),
+            rejected_findings=(),
+            filtered_findings=(),
+            report_quality_review=None,
+        )
+        == authority
+    )
+    resumed.close()
+
+    (path / "terminal-report-authority.json").unlink()
+    missing = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_terminal_report_authority_required=True,
+    )
+    with pytest.raises(ValueError, match="terminal-authority mode"):
+        missing.artifact()
+    missing.close()
+
+
+def test_current_unsealed_crash_window_remains_resumable(tmp_path: Path) -> None:
+    path = tmp_path / "current-unsealed-resume"
+    journal = create_scheduler_journal(
+        path,
+        bindings=_bindings(),
+        shard_inventory=_inventory(),
+        require_terminal_report_authority=True,
+    )
+    plan = journal.seal_pass_plan(_plan(journal, SchedulerPassKind.ORIENTATION))
+    journal.close()
+
+    resumed = resume_scheduler_journal(
+        path,
+        expected_bindings=_bindings(),
+        expected_shard_inventory=_inventory(),
+        expected_terminal_report_authority_required=True,
+    )
+    assert resumed.terminal_report_authority is None
+    assert resumed.resumable_task_ids == tuple(task.task_id for task in plan.tasks)
+    resumed.close()
 
 
 def test_large_indexed_journal_matches_full_readback_reconstruction(tmp_path: Path) -> None:

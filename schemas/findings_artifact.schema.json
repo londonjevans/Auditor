@@ -361,6 +361,59 @@
       "title": "CandidateReproductionResolution",
       "type": "object"
     },
+    "CandidateTerminalDisposition": {
+      "additionalProperties": false,
+      "description": "Bind one candidate to its sole terminal finding/group and reporting decision.",
+      "properties": {
+        "candidate_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "finding_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Finding Id",
+          "type": "string"
+        },
+        "finding_severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "group_id": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Group Id",
+          "type": "string"
+        },
+        "reporting_severity_threshold": {
+          "$ref": "#/$defs/Severity"
+        },
+        "state": {
+          "$ref": "#/$defs/CandidateTerminalState"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "group_id",
+        "finding_id",
+        "state",
+        "finding_severity",
+        "reporting_severity_threshold"
+      ],
+      "title": "CandidateTerminalDisposition",
+      "type": "object"
+    },
+    "CandidateTerminalState": {
+      "description": "Exact terminal reporting state for one model or execution candidate.",
+      "enum": [
+        "REPORTED_ACTIVE",
+        "REPORTED_REJECTED",
+        "FILTERED_BELOW_THRESHOLD"
+      ],
+      "title": "CandidateTerminalState",
+      "type": "string"
+    },
     "Evidence": {
       "additionalProperties": false,
       "properties": {
@@ -2229,12 +2282,36 @@
       "items": {
         "$ref": "#/$defs/CandidateFinding"
       },
+      "maxItems": 100000,
       "title": "Candidate Findings",
       "type": "array"
     },
     "completed": {
       "title": "Completed",
       "type": "boolean"
+    },
+    "cross_examination_decisions": {
+      "items": {
+        "$ref": "#/$defs/CandidateCrossExaminationDecision"
+      },
+      "maxItems": 100000,
+      "title": "Cross Examination Decisions",
+      "type": "array"
+    },
+    "falsification_decisions": {
+      "items": {
+        "$ref": "#/$defs/FalsificationDecision"
+      },
+      "maxItems": 100000,
+      "title": "Falsification Decisions",
+      "type": "array"
+    },
+    "filtered_findings": {
+      "items": {
+        "$ref": "#/$defs/Finding"
+      },
+      "title": "Filtered Findings",
+      "type": "array"
     },
     "findings": {
       "items": {
@@ -2274,6 +2351,25 @@
       "title": "Rejected Findings",
       "type": "array"
     },
+    "reporting_severity_threshold": {
+      "$ref": "#/$defs/Severity"
+    },
+    "reproduction_resolutions": {
+      "items": {
+        "$ref": "#/$defs/CandidateReproductionResolution"
+      },
+      "maxItems": 100000,
+      "title": "Reproduction Resolutions",
+      "type": "array"
+    },
+    "reproductions": {
+      "items": {
+        "$ref": "#/$defs/ReproductionResult"
+      },
+      "maxItems": 100000,
+      "title": "Reproductions",
+      "type": "array"
+    },
     "run_id": {
       "maxLength": 160,
       "minLength": 1,
@@ -2284,10 +2380,26 @@
       "$ref": "#/$defs/AuditRunStatus"
     },
     "schema_version": {
-      "const": "1.0",
-      "default": "1.0",
+      "const": "1.1",
+      "default": "1.1",
       "title": "Schema Version",
       "type": "string"
+    },
+    "terminal_candidate_dispositions": {
+      "items": {
+        "$ref": "#/$defs/CandidateTerminalDisposition"
+      },
+      "maxItems": 100000,
+      "title": "Terminal Candidate Dispositions",
+      "type": "array"
+    },
+    "verification_decisions": {
+      "items": {
+        "$ref": "#/$defs/VerificationDecision"
+      },
+      "maxItems": 100000,
+      "title": "Verification Decisions",
+      "type": "array"
     }
   },
   "required": [
@@ -2297,9 +2409,18 @@
     "quality_gates",
     "limitations",
     "run_id",
+    "reporting_severity_threshold",
     "findings",
     "rejected_findings",
-    "records"
+    "filtered_findings",
+    "records",
+    "candidate_findings",
+    "terminal_candidate_dispositions",
+    "verification_decisions",
+    "cross_examination_decisions",
+    "falsification_decisions",
+    "reproductions",
+    "reproduction_resolutions"
   ],
   "title": "mmaudit forensic findings artifact",
   "type": "object"

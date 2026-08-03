@@ -154,7 +154,6 @@ from mmaudit.models.schemas import (
     Finding,
     FindingOriginKind,
     FindingStatus,
-    FormalResultKind,
     FormalToolRun,
     FoundryInvariantHarnessSpec,
     GeneratedFoundryTestSpec,
@@ -228,6 +227,9 @@ from mmaudit.orchestration.assurance import (
     is_qualifying_real_foundry_portfolio,
 )
 from mmaudit.orchestration.budgets import BudgetExhaustedError, BudgetManager
+from mmaudit.orchestration.candidate_enrichment import (
+    attach_formal_counterexamples as _attach_formal_counterexamples,
+)
 from mmaudit.orchestration.ci import (
     CI_STATE_FILENAME,
     CIJobStatus,
@@ -6734,7 +6736,32 @@ class AuditPipeline:
                 conclude_scheduler_pass()
             else:
                 conclude_scheduler_result(completed_pass_seven)
+        terminal_source_contents = {item.relative_path: item.content for item in discovery.files}
+        final_findings = _bind_terminal_finding_source_ranges(
+            final_findings,
+            source_contents=terminal_source_contents,
+            label="active",
+        )
+        filtered_findings = _bind_terminal_finding_source_ranges(
+            filtered_findings,
+            source_contents=terminal_source_contents,
+            label="reporting-filtered",
+        )
+        public_candidate_projection = [
+            CandidateFinding.model_validate(candidate.model_dump(mode="python"))
+            for candidate in (
+                pass_four_candidates if pass_four_candidate_projection_frozen else candidates
+            )
+        ]
         if self._active_scheduler is not None:
+            scheduler.seal_terminal_report_authority(
+                severity_threshold=severity_threshold,
+                candidates=public_candidate_projection,
+                final_findings=final_findings,
+                rejected_findings=rejected_findings,
+                filtered_findings=filtered_findings,
+                report_quality_review=report_quality_review,
+            )
             scheduler_artifact = scheduler.artifact()
             scheduler_report_binding = scheduler.report_binding().model_dump(mode="json")
             if resume_scheduler_journal is not None:
@@ -7364,12 +7391,6 @@ class AuditPipeline:
                     "metadata": report_metadata,
                 }
             )
-        public_candidate_projection = [
-            CandidateFinding.model_validate(candidate.model_dump(mode="python"))
-            for candidate in (
-                pass_four_candidates if pass_four_candidate_projection_frozen else candidates
-            )
-        ]
         log_handler.flush()
         self._write_artifacts(
             run_dir=run_dir,
@@ -8943,68 +8964,6 @@ def _attach_cross_examination_votes(
             candidate.model_copy(update={"model_votes": [*candidate.model_votes, *votes]})
         )
     return result
-
-
-def _attach_formal_counterexamples(
-    candidates: list[CandidateFinding],
-    formal_runs: list[FormalToolRun],
-) -> list[CandidateFinding]:
-    """Attach only source-overlapping formal counterexamples to candidates.
-
-    A proof about an unrelated property is deliberately not used to suppress a
-    finding. Counterexamples without a validated indexed location also remain
-    run-level evidence rather than candidate evidence.
-    """
-
-    result: list[CandidateFinding] = []
-    for candidate in candidates:
-        evidence = list(candidate.evidence)
-        for run in formal_runs:
-            for formal in run.evidence:
-                if (
-                    formal.result_kind is not FormalResultKind.COUNTEREXAMPLE
-                    or not formal.locations
-                    or not any(
-                        candidate_location.path == formal_location.path
-                        and candidate_location.start_line <= formal_location.end_line
-                        and formal_location.start_line <= candidate_location.end_line
-                        for candidate_location in candidate.locations
-                        for formal_location in formal.locations
-                    )
-                ):
-                    continue
-                fingerprint = hashlib.sha256(
-                    json.dumps(
-                        {
-                            "tool": formal.tool,
-                            "property": formal.property_id,
-                            "counterexample": formal.counterexample,
-                        },
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ).encode()
-                ).hexdigest()
-                evidence.append(
-                    Evidence(
-                        type="formal",
-                        source=formal.tool,
-                        rule_id=FormalResultKind.COUNTEREXAMPLE.value,
-                        description=(
-                            f"Source-overlapping formal counterexample for "
-                            f"{formal.property_id}: {formal.property_description}"
-                        ),
-                        fingerprint=fingerprint,
-                    )
-                )
-        result.append(candidate.model_copy(update={"evidence": _deduplicate_evidence(evidence)}))
-    return result
-
-
-def _deduplicate_evidence(evidence: list[Evidence]) -> list[Evidence]:
-    by_key: dict[tuple[str, str, str | None, str | None], Evidence] = {}
-    for item in evidence:
-        by_key[(item.type, item.source, item.rule_id, item.fingerprint)] = item
-    return list(by_key.values())
 
 
 def _judge_vote(

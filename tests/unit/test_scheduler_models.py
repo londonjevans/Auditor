@@ -46,6 +46,7 @@ from mmaudit.models.scheduler import (
     SchedulerTaskOutput,
     SchedulerTaskPlan,
     SchedulerTaskResult,
+    SchedulerTerminalReportAuthority,
     SchedulerTerminalStatus,
     build_scheduler_model_request_evidence,
     repository_pseudo_shard_id,
@@ -58,6 +59,8 @@ from mmaudit.models.schemas import (
     ModelReviewSurfaceKind,
     ModelSurfaceReviewRequest,
     ModelSurfaceReviewStatus,
+    ReportQualityReview,
+    Severity,
 )
 from tests.scheduler_support import (
     SchedulerFixtureModelTask,
@@ -620,6 +623,42 @@ def test_closed_pass_order_and_absent_commitments_are_stable() -> None:
         )
         == ABSENT_QUALIFICATION_SHA256
     )
+
+
+@pytest.mark.parametrize(
+    "identifier_field",
+    (
+        "candidate_ids",
+        "final_finding_ids",
+        "rejected_finding_ids",
+        "filtered_finding_ids",
+    ),
+)
+def test_terminal_report_authority_rejects_each_mismatched_hash_inventory(
+    identifier_field: str,
+) -> None:
+    manifest = _manifest()
+    summary = SchedulerCampaignSummary.build(manifest=manifest, pass_results=())
+    authority = SchedulerTerminalReportAuthority.build(
+        manifest=manifest,
+        summary=summary,
+        severity_threshold=Severity.MEDIUM,
+        candidates=(),
+        final_findings=(),
+        rejected_findings=(),
+        filtered_findings=(),
+        report_quality_review=ReportQualityReview(
+            passed=True,
+            rationale="Synthetic report-quality authority binding.",
+        ),
+    )
+    payload = authority.model_dump(mode="json")
+    payload[identifier_field] = [f"mismatched-{identifier_field}"]
+    payload["authority_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in payload.items() if key != "authority_sha256"}
+    )
+    with pytest.raises(ValidationError, match="payload inventory is not canonical"):
+        SchedulerTerminalReportAuthority.model_validate(payload)
 
 
 def test_inventory_binds_every_mixed_source_and_campaign_uses_exact_descriptors() -> None:

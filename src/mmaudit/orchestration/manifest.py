@@ -47,6 +47,7 @@ from mmaudit.models.scheduler import (
     SchedulerTaskKind,
     SchedulerTaskOutput,
     SchedulerTerminalFindingState,
+    SchedulerTerminalReportAuthority,
     SchedulerTerminalStatus,
     scheduler_canonical_sha256,
 )
@@ -2703,6 +2704,9 @@ def _require_scheduler_journal_authority(
             expected_privacy_evidence_custody=(
                 public_artifact.summary.manifest.privacy_evidence_custody
             ),
+            expected_terminal_report_authority_required=(
+                public_artifact.summary.manifest.terminal_report_authority_required
+            ),
         )
         try:
             reconstructed = _validate_scheduler_privacy_custody_and_reconstruct(
@@ -2862,9 +2866,7 @@ def _scheduler_accepted_candidate_authority(
                 pass_result=pass_result,
                 task_id=result.task_id,
             )
-            for candidate_id, payload_sha256 in (
-                output.accepted_candidate_payload_sha256s.items()
-            ):
+            for candidate_id, payload_sha256 in output.accepted_candidate_payload_sha256s.items():
                 if candidate_id in accepted:
                     raise ValueError("scheduler accepted candidate authority repeats an identity")
                 accepted[candidate_id] = payload_sha256
@@ -2995,9 +2997,7 @@ def _validate_scheduler_report_quality_authority(
             raise ValueError("public report quality lacks a scheduled review")
         return
     task = tasks[0]
-    results = tuple(
-        result for result in pass_result.task_results if result.task_id == task.task_id
-    )
+    results = tuple(result for result in pass_result.task_results if result.task_id == task.task_id)
     if len(results) != 1:
         raise ValueError("scheduler report-quality task lacks one terminal result")
     if results[0].terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
@@ -3012,6 +3012,115 @@ def _validate_scheduler_report_quality_authority(
     )
     if report.report_quality_review != retained:
         raise ValueError("public report quality differs from scheduler authority")
+
+
+def _scheduler_finding_payload_sha256s(
+    findings: Iterable[Finding],
+) -> tuple[tuple[str, ...], dict[str, str]]:
+    """Return one canonical, non-overlapping public finding projection."""
+
+    ordered = tuple(sorted(findings, key=lambda item: item.id))
+    finding_ids = tuple(item.id for item in ordered)
+    if len(finding_ids) != len(set(finding_ids)):
+        raise ValueError("public terminal finding partition repeats an identity")
+    return finding_ids, {
+        finding.id: scheduler_canonical_sha256(finding.model_dump(mode="json"))
+        for finding in ordered
+    }
+
+
+def _validate_scheduler_terminal_projection_authority(
+    *,
+    report: AuditReport,
+    candidate_hashes: dict[str, str],
+    authority: SchedulerTerminalReportAuthority,
+) -> None:
+    """Compare every public terminal projection to the private write-once authority."""
+
+    if (
+        tuple(candidate_hashes) != authority.candidate_ids
+        or candidate_hashes != authority.candidate_payload_sha256s
+    ):
+        raise ValueError("candidate artifact differs from scheduler terminal authority")
+    if report.metadata.get("severity_threshold") != authority.severity_threshold.value:
+        raise ValueError("report severity threshold differs from scheduler terminal authority")
+
+    public_partitions = (
+        (
+            report.findings,
+            authority.final_finding_ids,
+            authority.final_finding_payload_sha256s,
+        ),
+        (
+            report.rejected_findings,
+            authority.rejected_finding_ids,
+            authority.rejected_finding_payload_sha256s,
+        ),
+        (
+            report.filtered_findings,
+            authority.filtered_finding_ids,
+            authority.filtered_finding_payload_sha256s,
+        ),
+    )
+    public_finding_ids: list[str] = []
+    for findings, expected_ids, expected_hashes in public_partitions:
+        observed_ids, observed_hashes = _scheduler_finding_payload_sha256s(findings)
+        if observed_ids != expected_ids or observed_hashes != expected_hashes:
+            raise ValueError("public finding partition differs from scheduler terminal authority")
+        public_finding_ids.extend(observed_ids)
+    if len(public_finding_ids) != len(set(public_finding_ids)):
+        raise ValueError("public terminal finding partitions overlap")
+
+    report_quality_payload_sha256 = (
+        scheduler_canonical_sha256(report.report_quality_review.model_dump(mode="json"))
+        if report.report_quality_review is not None
+        else None
+    )
+    if report_quality_payload_sha256 != authority.report_quality_payload_sha256:
+        raise ValueError("public report quality differs from scheduler terminal authority")
+
+
+def _validate_scheduler_terminal_authority_against_judgment(
+    *,
+    authority: SchedulerTerminalReportAuthority,
+    judgment: SchedulerEvidenceCapJudgmentOutput,
+) -> None:
+    """Require a successful pass-seven host result to equal terminal report authority."""
+
+    try:
+        authority.require_exact_judgment(judgment)
+    except ValueError as exc:
+        raise ValueError("scheduler terminal authority differs from pass-seven judgment") from exc
+
+
+def _successful_scheduler_partial_host_output[OutputT: StrictModel](
+    *,
+    journal: SchedulerJournal,
+    pass_kind: SchedulerPassKind,
+    role: str,
+    output_type: type[OutputT],
+) -> OutputT | None:
+    """Return a successful host output even when a later task failed the sealed pass."""
+
+    pass_result = _scheduler_pass_result(journal, pass_kind)
+    if pass_result is None:
+        return None
+    tasks = tuple(task for task in pass_result.plan.tasks if task.role == role)
+    if len(tasks) != 1 or tasks[0].task_kind is not SchedulerTaskKind.HOST_COMPUTATION:
+        raise ValueError("scheduler pass lacks one exact host authority task")
+    task_results = tuple(
+        result for result in pass_result.task_results if result.task_id == tasks[0].task_id
+    )
+    if len(task_results) != 1:
+        raise ValueError("scheduler host authority task lacks one terminal result")
+    if task_results[0].terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
+        return None
+    return _reconstruct_successful_scheduler_output(
+        journal=journal,
+        pass_result=pass_result,
+        task_id=tasks[0].task_id,
+        output_type=output_type,
+    )
 
 
 def _validate_scheduler_terminal_report_authority(
@@ -3186,6 +3295,12 @@ def _validate_scheduler_report_authority(
         role="host:evidence_cap_judgment",
         output_type=SchedulerEvidenceCapJudgmentOutput,
     )
+    retained_judgment = _successful_scheduler_partial_host_output(
+        journal=journal,
+        pass_kind=SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT,
+        role="host:evidence_cap_judgment",
+        output_type=SchedulerEvidenceCapJudgmentOutput,
+    )
 
     if reduction is None:
         if cross_shard_authority:
@@ -3228,6 +3343,24 @@ def _validate_scheduler_report_authority(
             latest_candidate_authority = integration.candidate_payload_sha256s
         if candidate_hashes != latest_candidate_authority:
             raise ValueError("candidate artifact differs from scheduler host authority")
+
+    terminal_authority = journal.terminal_report_authority
+    terminal_authority_required = journal.manifest.terminal_report_authority_required
+    if terminal_authority_required and terminal_authority is None:
+        raise ValueError("current scheduler journal lacks terminal report authority")
+    if not terminal_authority_required and terminal_authority is not None:
+        raise ValueError("legacy scheduler journal unexpectedly contains terminal authority")
+    if terminal_authority is not None:
+        _validate_scheduler_terminal_projection_authority(
+            report=report,
+            candidate_hashes=candidate_hashes,
+            authority=terminal_authority,
+        )
+        if retained_judgment is not None:
+            _validate_scheduler_terminal_authority_against_judgment(
+                authority=terminal_authority,
+                judgment=retained_judgment,
+            )
 
     campaign_complete = journal.summary.status is SchedulerCampaignStatus.COMPLETE
     _validate_scheduler_report_quality_authority(report=report, journal=journal)

@@ -33,6 +33,7 @@ from mmaudit.models.schemas import (
     ContextRequestEvidence,
     ExecutionEvidenceKind,
     FalsificationBatch,
+    Finding,
     FindingOriginKind,
     FindingStatus,
     GeneratedFoundryTestBatch,
@@ -1225,7 +1226,7 @@ class SchedulerCampaignManifest(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     algorithm_version: Literal["mmaudit.seven-pass-scheduler.v1"] = (
         "mmaudit.seven-pass-scheduler.v1"
     )
@@ -1234,6 +1235,10 @@ class SchedulerCampaignManifest(StrictModel):
     shard_inventory: SchedulerShardInventory
     cost_ledger_baseline: SchedulerCostLedgerBaseline | None = None
     privacy_evidence_custody: SchedulerPrivacyEvidenceCustody | None = None
+    terminal_report_authority_required: bool = Field(
+        default=False,
+        exclude_if=lambda value: not value,
+    )
     shard_ids: tuple[str, ...] = Field(min_length=1, max_length=100_000)
     mandatory_passes: tuple[SchedulerPassKind, ...]
     campaign_id: str = Field(pattern=r"^scheduler-campaign-[0-9a-f]{64}$")
@@ -1247,6 +1252,7 @@ class SchedulerCampaignManifest(StrictModel):
         shard_inventory: SchedulerShardInventory,
         cost_ledger_baseline: SchedulerCostLedgerBaseline | None = None,
         privacy_evidence_custody: SchedulerPrivacyEvidenceCustody | None = None,
+        require_terminal_report_authority: bool = False,
     ) -> SchedulerCampaignManifest:
         validated_bindings = SchedulerBindings.model_validate(bindings.model_dump(mode="python"))
         validated_inventory = SchedulerShardInventory.model_validate(
@@ -1267,13 +1273,18 @@ class SchedulerCampaignManifest(StrictModel):
             else None
         )
         values: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": "1.1" if require_terminal_report_authority else "1.0",
             "algorithm_version": SCHEDULER_ALGORITHM_VERSION,
             "evidence_authority": "comparison_required",
             "bindings": validated_bindings,
             "shard_inventory": validated_inventory,
             "cost_ledger_baseline": validated_baseline,
             "privacy_evidence_custody": validated_privacy,
+            **(
+                {"terminal_report_authority_required": True}
+                if require_terminal_report_authority
+                else {}
+            ),
             "shard_ids": validated_inventory.shard_ids,
             "mandatory_passes": SCHEDULER_PASS_ORDER,
         }
@@ -1303,6 +1314,8 @@ class SchedulerCampaignManifest(StrictModel):
 
     @model_validator(mode="after")
     def campaign_identity_is_exact(self) -> Self:
+        if (self.schema_version == "1.1") != self.terminal_report_authority_required:
+            raise ValueError("scheduler campaign terminal-report authority mode is inconsistent")
         if self.mandatory_passes != SCHEDULER_PASS_ORDER:
             raise ValueError("scheduler campaign must retain all seven ordered mandatory passes")
         if self.shard_ids != self.shard_inventory.shard_ids:
@@ -3382,9 +3395,7 @@ class SchedulerTaskOutput(StrictModel):
         elif canonical_accepted_candidates:
             raise ValueError("non-candidate scheduler output cannot accept candidate payloads")
         accepted_candidate_payload_sha256s = {
-            candidate.candidate_id: scheduler_canonical_sha256(
-                candidate.model_dump(mode="json")
-            )
+            candidate.candidate_id: scheduler_canonical_sha256(candidate.model_dump(mode="json"))
             for candidate in canonical_accepted_candidates
         }
         output_id = "scheduler-output-" + scheduler_canonical_sha256(
@@ -3464,9 +3475,7 @@ class SchedulerTaskOutput(StrictModel):
         if accepted_candidate_ids != tuple(sorted(set(accepted_candidate_ids))):
             raise ValueError("scheduler accepted candidate projection is not canonical")
         observed_accepted_hashes = {
-            candidate.candidate_id: scheduler_canonical_sha256(
-                candidate.model_dump(mode="json")
-            )
+            candidate.candidate_id: scheduler_canonical_sha256(candidate.model_dump(mode="json"))
             for candidate in self.accepted_candidates
         }
         if self.accepted_candidate_payload_sha256s != observed_accepted_hashes:
@@ -3538,9 +3547,7 @@ class SchedulerTaskOutput(StrictModel):
             raise ValueError("scheduler output ID is inconsistent")
         hash_exclusions = {"output_artifact_sha256"}
         if self.schema_version == "1.0":
-            hash_exclusions.update(
-                {"accepted_candidate_payload_sha256s", "accepted_candidates"}
-            )
+            hash_exclusions.update({"accepted_candidate_payload_sha256s", "accepted_candidates"})
         if self.output_artifact_sha256 != _model_sha256(self, exclude=hash_exclusions):
             raise ValueError("scheduler output artifact hash is inconsistent")
         return self
@@ -4478,12 +4485,230 @@ class SchedulerCampaignSummary(StrictModel):
         return self
 
 
+class SchedulerTerminalReportAuthority(StrictModel):
+    """Private write-once authority for the report's terminal evidence projection.
+
+    The scheduler stores only canonical payload hashes here.  Source-rich findings and
+    model output remain in their existing private/public artifacts, while this record
+    prevents a later report-manifest reseal from changing terminal dispositions or the
+    accepted candidate inventory.  The campaign summary binds the authority to the exact
+    completed or incomplete pass prefix that produced it.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["1.0"] = "1.0"
+    evidence_authority: Literal["comparison_required"] = "comparison_required"
+    algorithm: Literal["mmaudit.scheduler-terminal-report-authority.v1"] = (
+        "mmaudit.scheduler-terminal-report-authority.v1"
+    )
+    campaign_id: str = Field(pattern=r"^scheduler-campaign-[0-9a-f]{64}$")
+    manifest_sha256: str = Field(pattern=_SHA256_PATTERN)
+    summary_sha256: str = Field(pattern=_SHA256_PATTERN)
+    campaign_status: SchedulerCampaignStatus
+    severity_threshold: Severity
+    candidate_ids: tuple[str, ...] = Field(max_length=100_000)
+    candidate_payload_sha256s: dict[str, str] = Field(max_length=100_000)
+    final_finding_ids: tuple[str, ...] = Field(max_length=100_000)
+    rejected_finding_ids: tuple[str, ...] = Field(max_length=100_000)
+    filtered_finding_ids: tuple[str, ...] = Field(max_length=100_000)
+    final_finding_payload_sha256s: dict[str, str] = Field(max_length=100_000)
+    rejected_finding_payload_sha256s: dict[str, str] = Field(max_length=100_000)
+    filtered_finding_payload_sha256s: dict[str, str] = Field(max_length=100_000)
+    report_quality_payload_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+    authority_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        manifest: SchedulerCampaignManifest,
+        summary: SchedulerCampaignSummary,
+        severity_threshold: Severity,
+        candidates: Iterable[CandidateFinding],
+        final_findings: Iterable[Finding],
+        rejected_findings: Iterable[Finding],
+        filtered_findings: Iterable[Finding],
+        report_quality_review: ReportQualityReview | None,
+    ) -> SchedulerTerminalReportAuthority:
+        validated_manifest = SchedulerCampaignManifest.model_validate(
+            manifest.model_dump(mode="python")
+        )
+        validated_summary = SchedulerCampaignSummary.model_validate(
+            summary.model_dump(mode="python")
+        )
+        if validated_summary.manifest != validated_manifest:
+            raise ValueError("scheduler terminal authority belongs to a different manifest")
+
+        canonical_candidates = tuple(
+            sorted(
+                (
+                    CandidateFinding.model_validate(item.model_dump(mode="python"))
+                    for item in candidates
+                ),
+                key=lambda item: item.candidate_id,
+            )
+        )
+        canonical_final = cls._canonical_findings(final_findings)
+        canonical_rejected = cls._canonical_findings(rejected_findings)
+        canonical_filtered = cls._canonical_findings(filtered_findings)
+        candidate_ids = tuple(item.candidate_id for item in canonical_candidates)
+        if candidate_ids != tuple(sorted(set(candidate_ids))):
+            raise ValueError("scheduler terminal authority repeats a candidate identity")
+        cls._require_valid_finding_partitions(
+            severity_threshold=severity_threshold,
+            final_findings=canonical_final,
+            rejected_findings=canonical_rejected,
+            filtered_findings=canonical_filtered,
+        )
+        report_quality = (
+            ReportQualityReview.model_validate(report_quality_review.model_dump(mode="python"))
+            if report_quality_review is not None
+            else None
+        )
+        values: dict[str, Any] = {
+            "schema_version": "1.0",
+            "evidence_authority": "comparison_required",
+            "algorithm": "mmaudit.scheduler-terminal-report-authority.v1",
+            "campaign_id": validated_manifest.campaign_id,
+            "manifest_sha256": validated_manifest.manifest_sha256,
+            "summary_sha256": validated_summary.summary_sha256,
+            "campaign_status": validated_summary.status,
+            "severity_threshold": severity_threshold,
+            "candidate_ids": candidate_ids,
+            "candidate_payload_sha256s": {
+                item.candidate_id: scheduler_canonical_sha256(item.model_dump(mode="json"))
+                for item in canonical_candidates
+            },
+            "final_finding_ids": tuple(item.id for item in canonical_final),
+            "rejected_finding_ids": tuple(item.id for item in canonical_rejected),
+            "filtered_finding_ids": tuple(item.id for item in canonical_filtered),
+            "final_finding_payload_sha256s": cls._finding_payload_hashes(canonical_final),
+            "rejected_finding_payload_sha256s": cls._finding_payload_hashes(canonical_rejected),
+            "filtered_finding_payload_sha256s": cls._finding_payload_hashes(canonical_filtered),
+            "report_quality_payload_sha256": (
+                scheduler_canonical_sha256(report_quality.model_dump(mode="json"))
+                if report_quality is not None
+                else None
+            ),
+        }
+        return cls(**values, authority_sha256=scheduler_canonical_sha256(values))
+
+    @staticmethod
+    def _canonical_findings(findings: Iterable[Finding]) -> tuple[Finding, ...]:
+        return tuple(
+            sorted(
+                (Finding.model_validate(item.model_dump(mode="python")) for item in findings),
+                key=lambda item: item.id,
+            )
+        )
+
+    @staticmethod
+    def _finding_payload_hashes(findings: tuple[Finding, ...]) -> dict[str, str]:
+        return {
+            item.id: scheduler_canonical_sha256(item.model_dump(mode="json")) for item in findings
+        }
+
+    @staticmethod
+    def _require_valid_finding_partitions(
+        *,
+        severity_threshold: Severity,
+        final_findings: tuple[Finding, ...],
+        rejected_findings: tuple[Finding, ...],
+        filtered_findings: tuple[Finding, ...],
+    ) -> None:
+        inventories = (final_findings, rejected_findings, filtered_findings)
+        identifiers = tuple(item.id for inventory in inventories for item in inventory)
+        if identifiers and len(identifiers) != len(set(identifiers)):
+            raise ValueError("scheduler terminal finding partitions overlap")
+        if any(item.status is FindingStatus.REJECTED for item in final_findings):
+            raise ValueError("scheduler final finding partition contains a rejection")
+        if any(item.status is not FindingStatus.REJECTED for item in rejected_findings):
+            raise ValueError("scheduler rejected finding partition contains an active finding")
+        if any(item.status is FindingStatus.REJECTED for item in filtered_findings):
+            raise ValueError("scheduler filtered finding partition contains a rejection")
+        threshold_rank = SEVERITY_ORDER[severity_threshold.value]
+        if any(
+            item.origin_kind is not FindingOriginKind.DETERMINISTIC_EXECUTION
+            and SEVERITY_ORDER[item.severity.value] < threshold_rank
+            for item in final_findings
+        ):
+            raise ValueError("scheduler final finding partition violates its severity threshold")
+        if any(
+            item.origin_kind is FindingOriginKind.DETERMINISTIC_EXECUTION
+            or SEVERITY_ORDER[item.severity.value] >= threshold_rank
+            for item in filtered_findings
+        ):
+            raise ValueError("scheduler filtered finding partition violates its severity threshold")
+
+    def require_exact_judgment(self, judgment: SchedulerEvidenceCapJudgmentOutput) -> None:
+        """Require exact pass-seven terminal/candidate authority when that pass succeeded."""
+
+        if (
+            self.severity_threshold != judgment.severity_threshold
+            or self.candidate_ids != judgment.candidate_ids
+            or self.candidate_payload_sha256s != judgment.candidate_payload_sha256s
+            or self.final_finding_ids != judgment.final_finding_ids
+            or self.rejected_finding_ids != judgment.rejected_finding_ids
+            or self.filtered_finding_ids != judgment.filtered_finding_ids
+            or self.final_finding_payload_sha256s != judgment.final_finding_payload_sha256s
+            or self.rejected_finding_payload_sha256s != judgment.rejected_finding_payload_sha256s
+            or self.filtered_finding_payload_sha256s != judgment.filtered_finding_payload_sha256s
+        ):
+            raise ValueError("scheduler terminal report authority differs from pass-seven judgment")
+
+    @model_validator(mode="after")
+    def inventories_bind_the_exact_authority_hash(self) -> Self:
+        inventories = (
+            (
+                self.candidate_ids,
+                self.candidate_payload_sha256s,
+                "candidate",
+            ),
+            (
+                self.final_finding_ids,
+                self.final_finding_payload_sha256s,
+                "final finding",
+            ),
+            (
+                self.rejected_finding_ids,
+                self.rejected_finding_payload_sha256s,
+                "rejected finding",
+            ),
+            (
+                self.filtered_finding_ids,
+                self.filtered_finding_payload_sha256s,
+                "filtered finding",
+            ),
+        )
+        for identifiers, payload_hashes, label in inventories:
+            if (
+                identifiers != tuple(sorted(set(identifiers)))
+                or tuple(payload_hashes) != identifiers
+                or any(
+                    re.fullmatch(_SHA256_PATTERN, value) is None
+                    for value in payload_hashes.values()
+                )
+            ):
+                raise ValueError(f"scheduler terminal {label} payload inventory is not canonical")
+        finding_ids = (
+            *self.final_finding_ids,
+            *self.rejected_finding_ids,
+            *self.filtered_finding_ids,
+        )
+        if len(finding_ids) != len(set(finding_ids)):
+            raise ValueError("scheduler terminal finding partitions overlap")
+        if self.authority_sha256 != _model_sha256(self, exclude={"authority_sha256"}):
+            raise ValueError("scheduler terminal report authority hash is inconsistent")
+        return self
+
+
 class SchedulerJournalEvidence(StrictModel):
     """Public exact hash-and-count projection of controller-owned journal state."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     campaign_id: str = Field(pattern=r"^scheduler-campaign-[0-9a-f]{64}$")
     manifest_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -4509,6 +4734,11 @@ class SchedulerJournalEvidence(StrictModel):
     pass_result_sha256s: tuple[str, ...] = Field(max_length=7)
     event_sha256s: tuple[str, ...] = Field(max_length=2_800_000)
     terminal_event_chain_head_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+    terminal_report_authority_sha256: str | None = Field(
+        default=None,
+        pattern=_SHA256_PATTERN,
+        exclude_if=lambda value: value is None,
+    )
     pass_plan_count: int = Field(ge=0, le=7)
     task_plan_count: int = Field(ge=0, le=700_000)
     model_request_count: int = Field(ge=0, le=700_000)
@@ -4566,6 +4796,7 @@ class SchedulerJournalEvidence(StrictModel):
         task_results: Iterable[SchedulerTaskResult],
         result_observations: Iterable[SchedulerTaskResult],
         events: Iterable[SchedulerTaskEvent],
+        terminal_report_authority: SchedulerTerminalReportAuthority | None = None,
     ) -> SchedulerJournalEvidence:
         validated_manifest = SchedulerCampaignManifest.model_validate(
             manifest.model_dump(mode="python")
@@ -4653,6 +4884,19 @@ class SchedulerJournalEvidence(StrictModel):
                 key=lambda item: item.event_index,
             )
         )
+        canonical_terminal_authority = (
+            SchedulerTerminalReportAuthority.model_validate(
+                terminal_report_authority.model_dump(mode="python")
+            )
+            if terminal_report_authority is not None
+            else None
+        )
+        if validated_manifest.terminal_report_authority_required != (
+            canonical_terminal_authority is not None
+        ):
+            raise ValueError(
+                "scheduler journal evidence differs from campaign terminal-authority mode"
+            )
         _validate_scheduler_journal_evidence(
             manifest=validated_manifest,
             summary=validated_summary,
@@ -4663,6 +4907,7 @@ class SchedulerJournalEvidence(StrictModel):
             task_results=canonical_results,
             result_observations=canonical_observations,
             events=canonical_events,
+            terminal_report_authority=canonical_terminal_authority,
         )
         if canonical_model_requests != build_scheduler_model_request_evidence(
             plans=canonical_plans,
@@ -4676,7 +4921,7 @@ class SchedulerJournalEvidence(StrictModel):
             for status in SchedulerTerminalStatus
         }
         values: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": "1.1" if canonical_terminal_authority is not None else "1.0",
             "evidence_authority": "comparison_required",
             "campaign_id": validated_manifest.campaign_id,
             "manifest_sha256": validated_manifest.manifest_sha256,
@@ -4712,6 +4957,15 @@ class SchedulerJournalEvidence(StrictModel):
             "terminal_event_chain_head_sha256": (
                 canonical_events[-1].event_sha256 if canonical_events else None
             ),
+            **(
+                {
+                    "terminal_report_authority_sha256": (
+                        canonical_terminal_authority.authority_sha256
+                    )
+                }
+                if canonical_terminal_authority is not None
+                else {}
+            ),
             "pass_plan_count": len(canonical_plans),
             "task_plan_count": len(tasks),
             "model_request_count": len(canonical_model_requests),
@@ -4739,6 +4993,10 @@ class SchedulerJournalEvidence(StrictModel):
 
     @model_validator(mode="after")
     def evidence_counts_chain_and_hash_are_consistent(self) -> Self:
+        if (self.schema_version == "1.1") != (self.terminal_report_authority_sha256 is not None):
+            raise ValueError(
+                "scheduler journal evidence terminal-report authority mode is inconsistent"
+            )
         pairs = (
             (
                 self.analysis_input_descriptor_count,
@@ -4802,7 +5060,7 @@ class SchedulerArtifact(StrictModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     summary: SchedulerCampaignSummary
     journal_evidence: SchedulerJournalEvidence
@@ -4833,7 +5091,7 @@ class SchedulerArtifact(StrictModel):
             )
         )
         values: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": validated_evidence.schema_version,
             "evidence_authority": "comparison_required",
             "summary": validated_summary,
             "journal_evidence": validated_evidence,
@@ -4846,7 +5104,10 @@ class SchedulerArtifact(StrictModel):
         evidence = self.journal_evidence
         request_ids = tuple(item.task_id for item in self.model_requests)
         if (
-            evidence.campaign_id != self.summary.manifest.campaign_id
+            self.schema_version != evidence.schema_version
+            or (self.schema_version == "1.1")
+            != self.summary.manifest.terminal_report_authority_required
+            or evidence.campaign_id != self.summary.manifest.campaign_id
             or evidence.manifest_sha256 != self.summary.manifest.manifest_sha256
             or evidence.summary_sha256 != self.summary.summary_sha256
             or evidence.analysis_input_sha256
@@ -5378,11 +5639,26 @@ def _validate_scheduler_journal_evidence(
     task_results: tuple[SchedulerTaskResult, ...],
     result_observations: tuple[SchedulerTaskResult, ...],
     events: tuple[SchedulerTaskEvent, ...],
+    terminal_report_authority: SchedulerTerminalReportAuthority | None,
 ) -> None:
     """Validate full private objects before publishing their detached projection."""
 
     if summary.manifest != manifest:
         raise ValueError("scheduler journal summary belongs to a different manifest")
+    if terminal_report_authority is not None:
+        if not manifest.terminal_report_authority_required:
+            raise ValueError(
+                "legacy scheduler campaign cannot claim current terminal-report authority"
+            )
+        if (
+            terminal_report_authority.campaign_id != manifest.campaign_id
+            or terminal_report_authority.manifest_sha256 != manifest.manifest_sha256
+            or terminal_report_authority.summary_sha256 != summary.summary_sha256
+            or terminal_report_authority.campaign_status is not summary.status
+        ):
+            raise ValueError(
+                "scheduler terminal report authority differs from its campaign summary"
+            )
     observed_passes = tuple(plan.pass_kind for plan in plans)
     if observed_passes != SCHEDULER_PASS_ORDER[: len(plans)]:
         raise ValueError("scheduler journal plans must be an exact contiguous pass prefix")
@@ -5422,6 +5698,49 @@ def _validate_scheduler_journal_evidence(
         raise ValueError("scheduler journal contains duplicate or unknown result observations")
     if not {item.result_sha256 for item in task_results} <= set(observation_hashes):
         raise ValueError("credited scheduler results must be retained as exact observations")
+
+    if terminal_report_authority is not None:
+        if len(task_results) != len(task_pairs) or len(summary.pass_results) != len(plans):
+            raise ValueError(
+                "scheduler terminal report authority requires a terminal planned pass prefix"
+            )
+        successful_outputs = {
+            task_id: output_by_task[task_id]
+            for task_id, result in result_by_task.items()
+            if result.terminal_status is SchedulerTerminalStatus.SUCCEEDED
+            and task_id in output_by_task
+        }
+        judgment_outputs = tuple(
+            SchedulerEvidenceCapJudgmentOutput.model_validate(
+                successful_outputs[task.task_id].payload
+            )
+            for plan, task in task_pairs
+            if plan.pass_kind is SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT
+            and task.role == "host:evidence_cap_judgment"
+            and task.task_id in successful_outputs
+        )
+        if len(judgment_outputs) > 1:
+            raise ValueError("scheduler terminal authority has ambiguous pass-seven judgment")
+        if judgment_outputs:
+            terminal_report_authority.require_exact_judgment(judgment_outputs[0])
+        report_quality_outputs = tuple(
+            ReportQualityReview.model_validate(successful_outputs[task.task_id].payload)
+            for plan, task in task_pairs
+            if plan.pass_kind is SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT
+            and task.role == "specialist:report_quality"
+            and task.task_id in successful_outputs
+        )
+        if len(report_quality_outputs) > 1:
+            raise ValueError("scheduler terminal authority has ambiguous report-quality review")
+        expected_quality_sha256 = (
+            scheduler_canonical_sha256(report_quality_outputs[0].model_dump(mode="json"))
+            if report_quality_outputs
+            else None
+        )
+        if terminal_report_authority.report_quality_payload_sha256 != expected_quality_sha256:
+            raise ValueError(
+                "scheduler terminal authority differs from retained report-quality review"
+            )
 
     for task_id, exact_activation in activation_by_task.items():
         plan, task = task_by_id[task_id]

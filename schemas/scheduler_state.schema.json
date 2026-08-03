@@ -178,8 +178,11 @@
           "default": null
         },
         "schema_version": {
-          "const": "1.0",
           "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
           "title": "Schema Version",
           "type": "string"
         },
@@ -194,6 +197,11 @@
         },
         "shard_inventory": {
           "$ref": "#/$defs/SchedulerShardInventory"
+        },
+        "terminal_report_authority_required": {
+          "default": false,
+          "title": "Terminal Report Authority Required",
+          "type": "boolean"
         }
       },
       "required": [
@@ -703,8 +711,11 @@
           "type": "array"
         },
         "schema_version": {
-          "const": "1.0",
           "default": "1.0",
+          "enum": [
+            "1.0",
+            "1.1"
+          ],
           "title": "Schema Version",
           "type": "string"
         },
@@ -792,6 +803,19 @@
           ],
           "default": null,
           "title": "Terminal Event Chain Head Sha256"
+        },
+        "terminal_report_authority_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Terminal Report Authority Sha256"
         },
         "truncated_count": {
           "maximum": 700000,
@@ -2291,8 +2315,11 @@
       "type": "array"
     },
     "schema_version": {
-      "const": "1.0",
       "default": "1.0",
+      "enum": [
+        "1.0",
+        "1.1"
+      ],
       "title": "Schema Version",
       "type": "string"
     },

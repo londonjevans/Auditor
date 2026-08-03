@@ -8,9 +8,9 @@ AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Client report and forensic evidence bundle
 CURRENT_TICKET: V3-REPORT-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-FIXTURE-001 (COMPLETE)
-NEXT_ACTION: Complete private terminal-finding authority for incomplete campaigns, add coherent-reseal regressions for terminal and report-quality evidence, synchronize generated schemas, then run integrated V3-REPORT-001 gates.
-LAST_COMMAND: `.venv/bin/python -m py_compile src/mmaudit/models/scheduler.py src/mmaudit/orchestration/manifest.py src/mmaudit/orchestration/pipeline.py src/mmaudit/orchestration/scheduler.py src/mmaudit/orchestration/scheduler_runtime.py`; `.venv/bin/ruff check src/mmaudit/models/scheduler.py src/mmaudit/orchestration/manifest.py src/mmaudit/orchestration/pipeline.py src/mmaudit/orchestration/scheduler.py src/mmaudit/orchestration/scheduler_runtime.py tests/integration/test_scheduler_pipeline.py tests/unit/test_client_forensic_reporting.py`; `git diff --check`
-LAST_RESULT: PASS: affected production modules compile, affected Ruff checks pass, and the working diff has no whitespace errors. These pause-only checks are not V3-REPORT-001 acceptance evidence.
+NEXT_ACTION: Finish the exact formal-enrichment authority join in detached manifest verification, create the required operator-ledger parent in the affected synthetic integration fixture, rerun both failures and the full scheduler integration file, then continue V3-REPORT-001 gates.
+LAST_COMMAND: `.venv/bin/pytest -q tests/integration/test_scheduler_pipeline.py --tb=short`
+LAST_RESULT: FAIL: 30 passed, 2 failed in 88.77s. One synthetic test omits its required operator-ledger parent directory; one valid formal-counterexample enrichment exposes a detached accepted-candidate authority join that must replay deterministic enrichment before hash comparison.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -20,6 +20,26 @@ OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
 LAST_CHECKPOINT_COMMIT: d01490bac1f11956c58f2c4a619ec5129e49d46d
+
+## 2026-08-03T22:55:05Z — Graceful operator pause
+
+- **State:** `PAUSED_BY_OPERATOR`; `V3-REPORT-001` remains `IN_PROGRESS`. No ticket,
+  release, or maximum-assurance completion is claimed.
+- **Validated work preserved:** The integrated report/scheduler/release unit matrix passed `313`
+  tests in `36.29s`; focused complete, incomplete, completed-resume, and pre-dispatch-resume
+  scheduler integrations passed; generated release schemas were synchronized and their three
+  checks passed.
+- **Exact unfinished join:** Pipeline execution now uses the shared pure
+  `candidate_enrichment.attach_formal_counterexamples` projection. Detached manifest validation
+  still compares pre-enrichment accepted-candidate hashes directly with post-enrichment reduction
+  hashes. It must replay that projection from retained accepted candidates plus manifest-bound
+  formal runs before requiring exact equality.
+- **Latest full scheduler integration:** `30 passed, 2 failed in 88.77s`. The second failure is
+  the unfinished join above. The first is isolated to a synthetic test that passes a nonexistent
+  operator-ledger parent; the fixture must create its private run directory without weakening the
+  ledger's fail-closed parent validation.
+- **Safety and external state:** No model/provider call, network target, public RPC, credential,
+  or release operation occurred. The read-only reviewer was stopped before the pause.
 
 ## 2026-08-03T22:02:03Z — Graceful operator pause
 
@@ -81,6 +101,23 @@ LAST_CHECKPOINT_COMMIT: d01490bac1f11956c58f2c4a619ec5129e49d46d
 - **WIP checkpoint:** The exact interrupted implementation state is committed at
   `d01490bac1f11956c58f2c4a619ec5129e49d46d`. This is intentionally not ticket-complete or
   release evidence. The pause-metadata commit records the SSH synchronization separately.
+- **Resume (2026-08-03T22:32:17Z):** Persistent-goal continuation resumed from clean,
+  SSH-synchronized pause metadata commit `daba053188f5beb58dfd056e0ef996377db15f4a`.
+  Work remains bounded to the retained terminal-finding authority, coherent-reseal regressions,
+  schema synchronization, and V3-REPORT-001 acceptance gates; no provider call is needed.
+- **Release-observer fixture closure:** The combined release-artifact/run/verification matrix
+  exposed `12` current-manifest fixtures missing required `verification-results.json` before
+  semantic validation. The synthetic run helper now emits exact empty verification and
+  cross-examination projections; all `12` release-run cases pass. The validator remained
+  fail-closed, and the separate current schema verifier still correctly reports only the known
+  stale `findings_artifact.schema.json` pending final regeneration.
+- **Terminal-authority integration slice:** Pipeline-owned scheduler campaigns now precommit to
+  a current terminal-report authority and seal the exact public candidate, final, rejected,
+  filtered, and report-quality payload hashes before emitting scheduler evidence. Final and
+  filtered source ranges are idempotently host-bound on every complete or incomplete path before
+  the seal. Focused complete issuance, terminal incomplete reporting, exact completed resume,
+  and pre-dispatch crash-resume cases each pass; pipeline Ruff and strict mypy pass. Private
+  deletion/downgrade and coherent public reseal regressions remain in progress before acceptance.
 
 ## 2026-08-03T21:01:54Z — Graceful operator pause
 
