@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: RUNNING
-CURRENT_MILESTONE: Realistic-scale fixture close-out
-CURRENT_TICKET: V3-FIXTURE-001 (COMPLETE; CHECKPOINT_PENDING)
+AUTORUN_STATUS: PAUSED_OPERATOR
+CURRENT_MILESTONE: Client report and forensic evidence bundle
+CURRENT_TICKET: V3-REPORT-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-FIXTURE-001 (COMPLETE)
-NEXT_ACTION: Validate the documentation-only close-out, create and SSH-push its isolated checkpoint, then begin V3-REPORT-001.
-LAST_COMMAND: `.venv/bin/ruff format --check .`; `.venv/bin/ruff check .`; `.venv/bin/mypy`
-LAST_RESULT: PASS: 423 files formatted, Ruff clean, and strict mypy passed 166 source files after the fixture close-out; focused validation passed 8 generator, 8 scale, 57 shard, and 1 real compiler-backed tests.
+NEXT_ACTION: Resume V3-REPORT-001 from the completed read-only report-gap inventory; inspect the exact evidence model fields, then add the first failing client/forensic report-quality regression before production changes.
+LAST_COMMAND: Graceful pause requested at `2026-08-03T17:23:41Z`; active delegated read-only audit interrupted.
+LAST_RESULT: PAUSED: no production implementation or tests were started for V3-REPORT-001; no provider call was made; exact resume point recorded below.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -19,7 +19,24 @@ OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
 BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
-LAST_CHECKPOINT_COMMIT: 13d46b79b46766ed03843afd879f771a569eec06
+LAST_CHECKPOINT_COMMIT: 9bdee9ad1b708a3c4d2cc8eccd5ff572fbc93973
+
+## 2026-08-03 — V3-REPORT-001
+
+- **Status:** `IN_PROGRESS`.
+- **Defensive objective:** Produce a concise Corrovera-branded client report with prominent
+  status, limitations, evidence-capped finding detail, and inline source excerpts, while moving
+  exhaustive coverage and execution custody into a separately hash-bound forensic bundle.
+- **Starting evidence:** The current pipeline emits one branded Markdown report plus JSON, SARIF,
+  coverage, model-use, and manifest artifacts. Traceability still records no concise client split,
+  no complete seven-artifact forensic contract, and incomplete rejected-finding evidence.
+- **Next action:** Map existing writers and artifact bindings, then add failing report-quality
+  regressions for all required finding states and complete/incomplete no-findings outcomes.
+- **Pause:** At `2026-08-03T17:23:41Z`, the operator requested a graceful laptop-safe pause.
+  The remaining delegated read-only audit was interrupted. No provider request, test command, or
+  implementation edit was started for this ticket. Resume by inspecting the exact verification,
+  falsification, and reproduction evidence fields, then add the first failing report-quality
+  regression for the typed client/forensic split.
 
 ## 2026-08-03 — V3-FIXTURE-001
 

@@ -405,7 +405,10 @@ Statuses: `QUEUED`, `IN_PROGRESS`, `COMPLETE`, `PARTIAL`,
   complete-no-findings, and incomplete-no-findings report-quality cases pass;
   dissent and limitations are prominent; large coverage tables stay forensic.
 - **Dependencies:** `V3-FLOOR-001`.
-- **Status:** `QUEUED`
+- **Status:** `IN_PROGRESS`
+- **Current action:** Audit the existing Markdown/JSON/SARIF/run-manifest pipeline against every
+  client and forensic deliverable requirement, reproduce the current report-quality failures,
+  and add the smallest cohesive typed split that preserves existing evidence controls.
 
 ## V3-SCOPE-001 — Honest Solidity/EVM product profile
 
