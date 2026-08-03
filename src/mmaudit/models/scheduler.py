@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
@@ -27,6 +27,8 @@ from mmaudit.constants import SEVERITY_ORDER, SPECIALIST_INVESTIGATOR_ROLES
 from mmaudit.models.openrouter import strict_json_schema_sha256
 from mmaudit.models.schemas import (
     CandidateCrossExaminationResponse,
+    CandidateFinding,
+    CandidateOriginKind,
     CandidateReviewBatch,
     ContextRequestEvidence,
     ExecutionEvidenceKind,
@@ -3098,12 +3100,114 @@ def _review_projection(
     return (), ()
 
 
+def _model_review_origin_candidate_id(
+    *,
+    request_role: str,
+    request_id: str,
+    candidate: CandidateFinding,
+) -> str:
+    """Recompute the trusted host identity for one raw model candidate."""
+
+    raw_candidate = candidate.model_dump(
+        mode="json",
+        exclude={
+            "execution_provenance",
+            "model_family",
+            "model_votes",
+            "origin_kind",
+            "role",
+        },
+    )
+    digest = scheduler_canonical_sha256(
+        {
+            "domain": "mmaudit.model-review-origin-candidate.v1",
+            "request_id": request_id,
+            "request_role": request_role,
+            "raw_candidate": raw_candidate,
+        }
+    )
+    return f"cand-{digest[:24]}"
+
+
+def _accepted_candidate_projection_is_exact(
+    *,
+    batch: CandidateReviewBatch,
+    candidates: Sequence[CandidateFinding],
+    usage_record: UsageRecord,
+) -> bool:
+    """Verify the complete deterministic host stamping of one candidate batch."""
+
+    expected_by_id = {
+        _model_review_origin_candidate_id(
+            request_role=usage_record.role,
+            request_id=usage_record.request_id,
+            candidate=raw,
+        ): raw
+        for raw in batch.findings
+    }
+    if len(expected_by_id) != len(batch.findings) or {
+        candidate.candidate_id for candidate in candidates
+    } != set(expected_by_id):
+        return False
+    unchanged_fields = {
+        "candidate_id",
+        "evidence",
+        "execution_provenance",
+        "model_family",
+        "model_votes",
+        "origin_kind",
+        "role",
+    }
+    for candidate in candidates:
+        raw = expected_by_id[candidate.candidate_id]
+        if (
+            candidate.origin_kind is not CandidateOriginKind.MODEL_REVIEW
+            or candidate.execution_provenance is not None
+            or candidate.role != usage_record.role
+            or candidate.model_dump(mode="json", exclude=unchanged_fields)
+            != raw.model_dump(mode="json", exclude=unchanged_fields)
+            or len(candidate.model_votes) != 1
+        ):
+            return False
+        vote = candidate.model_votes[0]
+        if (
+            vote.role != usage_record.role
+            or vote.requested_model != usage_record.requested_model
+            or vote.returned_model != usage_record.returned_model
+            or vote.family != candidate.model_family
+            or vote.verdict != "proposed"
+            or vote.rationale != raw.summary
+            or len(candidate.evidence) != len(raw.evidence)
+        ):
+            return False
+        for raw_evidence, accepted_evidence in zip(
+            raw.evidence,
+            candidate.evidence,
+            strict=True,
+        ):
+            retained_scanner = (
+                raw_evidence.type == "scanner"
+                and raw_evidence.fingerprint is not None
+                and accepted_evidence == raw_evidence
+            )
+            normalized_model = (
+                accepted_evidence.type == "model"
+                and accepted_evidence.source == usage_record.role
+                and accepted_evidence.description == raw_evidence.description
+                and accepted_evidence.rule_id is None
+                and accepted_evidence.fingerprint is None
+            )
+            if not (retained_scanner or normalized_model):
+                return False
+    return True
+
+
 class SchedulerTaskOutput(StrictModel):
     """Private normalized JSON output required for deterministic result recovery."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.1"
     evidence_authority: Literal["comparison_required"] = "comparison_required"
     campaign_id: str = Field(pattern=r"^scheduler-campaign-[0-9a-f]{64}$")
     pass_plan_id: str = Field(pattern=r"^scheduler-plan-[0-9a-f]{64}$")
@@ -3117,6 +3221,14 @@ class SchedulerTaskOutput(StrictModel):
     model_surface_review_artifact: ModelSurfaceReviewArtifact | None = None
     reviewed_source_descriptor_sha256s: tuple[str, ...] = Field(max_length=100_000)
     reviewed_candidate_ids: tuple[str, ...] = Field(max_length=100_000)
+    accepted_candidate_payload_sha256s: dict[str, str] = Field(
+        default_factory=dict,
+        max_length=100_000,
+    )
+    accepted_candidates: tuple[CandidateFinding, ...] = Field(
+        default=(),
+        max_length=100_000,
+    )
     payload: Any
     payload_utf8_bytes: int = Field(ge=1, le=_MAX_TASK_OUTPUT_BYTES)
     output_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -3135,7 +3247,9 @@ class SchedulerTaskOutput(StrictModel):
         specialist_accepted_outcome: SpecialistAcceptedOutcome | None = None,
         model_surface_review_requests: Iterable[ModelSurfaceReviewRequest] = (),
         model_surface_review_artifact: ModelSurfaceReviewArtifact | None = None,
+        accepted_candidates: Iterable[CandidateFinding] = (),
         normalizer_sha256: str | None = None,
+        schema_version: Literal["1.0", "1.1"] = "1.1",
     ) -> SchedulerTaskOutput:
         activation.require_exact_task(plan=plan, task=task)
         encoded = json.dumps(
@@ -3245,6 +3359,34 @@ class SchedulerTaskOutput(StrictModel):
             payload=normalized,
             completion=completion,
         )
+        canonical_accepted_candidates = tuple(
+            sorted(accepted_candidates, key=lambda item: item.candidate_id)
+        )
+        accepted_candidate_ids = tuple(
+            candidate.candidate_id for candidate in canonical_accepted_candidates
+        )
+        if len(accepted_candidate_ids) != len(set(accepted_candidate_ids)):
+            raise ValueError("scheduler accepted candidate projection repeats an identity")
+        if isinstance(parsed_payload, CandidateReviewBatch):
+            if schema_version == "1.0":
+                if canonical_accepted_candidates:
+                    raise ValueError("scheduler task output 1.0 cannot bind accepted candidates")
+            elif completion is None or not _accepted_candidate_projection_is_exact(
+                batch=parsed_payload,
+                candidates=canonical_accepted_candidates,
+                usage_record=completion.usage_record,
+            ):
+                raise ValueError(
+                    "scheduler accepted candidate projection differs from the review batch"
+                )
+        elif canonical_accepted_candidates:
+            raise ValueError("non-candidate scheduler output cannot accept candidate payloads")
+        accepted_candidate_payload_sha256s = {
+            candidate.candidate_id: scheduler_canonical_sha256(
+                candidate.model_dump(mode="json")
+            )
+            for candidate in canonical_accepted_candidates
+        }
         output_id = "scheduler-output-" + scheduler_canonical_sha256(
             {
                 "domain": "mmaudit.scheduler.task-output-identity.v1",
@@ -3253,7 +3395,7 @@ class SchedulerTaskOutput(StrictModel):
             }
         )
         values: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": schema_version,
             "evidence_authority": "comparison_required",
             "campaign_id": plan.manifest.campaign_id,
             "pass_plan_id": plan.pass_plan_id,
@@ -3267,12 +3409,30 @@ class SchedulerTaskOutput(StrictModel):
             "model_surface_review_artifact": frozen_surface_artifact,
             "reviewed_source_descriptor_sha256s": reviewed_sources,
             "reviewed_candidate_ids": reviewed_candidates,
+            "accepted_candidate_payload_sha256s": accepted_candidate_payload_sha256s,
+            "accepted_candidates": canonical_accepted_candidates,
             "payload": normalized,
             "payload_utf8_bytes": len(encoded),
             "output_sha256": output_sha256,
             "output_id": output_id,
         }
-        return cls(**values, output_artifact_sha256=scheduler_canonical_sha256(values))
+        hash_values = (
+            values
+            if schema_version == "1.1"
+            else {
+                key: value
+                for key, value in values.items()
+                if key
+                not in {
+                    "accepted_candidate_payload_sha256s",
+                    "accepted_candidates",
+                }
+            }
+        )
+        return cls(
+            **values,
+            output_artifact_sha256=scheduler_canonical_sha256(hash_values),
+        )
 
     @model_validator(mode="after")
     def output_identity_payload_and_hash_are_exact(self) -> Self:
@@ -3292,6 +3452,43 @@ class SchedulerTaskOutput(StrictModel):
         ):
             raise ValueError("scheduler reviewed source identities must be unique and sorted")
         _candidate_id_inventory(self.reviewed_candidate_ids, "reviewed candidate")
+        accepted_ids = tuple(self.accepted_candidate_payload_sha256s)
+        if accepted_ids != tuple(sorted(set(accepted_ids))) or any(
+            re.fullmatch(_SHA256_PATTERN, value) is None
+            for value in self.accepted_candidate_payload_sha256s.values()
+        ):
+            raise ValueError("scheduler accepted candidate payload hashes are not canonical")
+        accepted_candidate_ids = tuple(
+            candidate.candidate_id for candidate in self.accepted_candidates
+        )
+        if accepted_candidate_ids != tuple(sorted(set(accepted_candidate_ids))):
+            raise ValueError("scheduler accepted candidate projection is not canonical")
+        observed_accepted_hashes = {
+            candidate.candidate_id: scheduler_canonical_sha256(
+                candidate.model_dump(mode="json")
+            )
+            for candidate in self.accepted_candidates
+        }
+        if self.accepted_candidate_payload_sha256s != observed_accepted_hashes:
+            raise ValueError("scheduler accepted candidate payload hashes are inconsistent")
+        try:
+            candidate_batch = CandidateReviewBatch.model_validate(self.payload)
+        except ValueError:
+            candidate_batch = None
+        if self.schema_version == "1.0":
+            if self.accepted_candidates or self.accepted_candidate_payload_sha256s:
+                raise ValueError("scheduler task output 1.0 cannot bind accepted candidates")
+        elif candidate_batch is None:
+            if self.accepted_candidates:
+                raise ValueError("non-candidate scheduler output claims accepted candidates")
+        elif self.model_completion_evidence is None or not _accepted_candidate_projection_is_exact(
+            batch=candidate_batch,
+            candidates=self.accepted_candidates,
+            usage_record=self.model_completion_evidence.usage_record,
+        ):
+            raise ValueError(
+                "scheduler accepted candidate projection differs from retained provider evidence"
+            )
         if self.model_completion_evidence is not None and (
             self.model_completion_evidence.task_id != self.task_id
             or self.model_completion_evidence.logical_request_id != self.logical_request_id
@@ -3339,7 +3536,12 @@ class SchedulerTaskOutput(StrictModel):
         )
         if self.output_id != expected_id:
             raise ValueError("scheduler output ID is inconsistent")
-        if self.output_artifact_sha256 != _model_sha256(self, exclude={"output_artifact_sha256"}):
+        hash_exclusions = {"output_artifact_sha256"}
+        if self.schema_version == "1.0":
+            hash_exclusions.update(
+                {"accepted_candidate_payload_sha256s", "accepted_candidates"}
+            )
+        if self.output_artifact_sha256 != _model_sha256(self, exclude=hash_exclusions):
             raise ValueError("scheduler output artifact hash is inconsistent")
         return self
 

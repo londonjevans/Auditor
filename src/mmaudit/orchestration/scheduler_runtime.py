@@ -63,6 +63,7 @@ from mmaudit.models.scheduler import (
 )
 from mmaudit.models.schemas import (
     AuditScopeAssessment,
+    CandidateFinding,
     EconomicSimulationPlan,
     FormalToolRun,
     FoundryInvariantHarnessSpec,
@@ -1565,6 +1566,7 @@ class PipelineScheduler:
         specialist_accepted_outcome: SpecialistAcceptedOutcome | None = None,
         model_surface_review_requests: Iterable[ModelSurfaceReviewRequest] = (),
         model_surface_review_artifact: ModelSurfaceReviewArtifact | None = None,
+        accepted_candidates: Iterable[CandidateFinding] = (),
     ) -> SchedulerTaskResult:
         self._require_active_task(task)
         activation = self._activation(task)
@@ -1620,6 +1622,7 @@ class PipelineScheduler:
                 specialist_accepted_outcome=specialist_accepted_outcome,
                 model_surface_review_requests=model_surface_review_requests,
                 model_surface_review_artifact=model_surface_review_artifact,
+                accepted_candidates=accepted_candidates,
             )
         except ValueError:
             attempt = self._persist_accountable_provider_attempt(task, (usage,))
@@ -1749,6 +1752,7 @@ class PipelineScheduler:
         specialist_accepted_outcome: SpecialistAcceptedOutcome | None = None,
         model_surface_review_requests: Iterable[ModelSurfaceReviewRequest] = (),
         model_surface_review_artifact: ModelSurfaceReviewArtifact | None = None,
+        accepted_candidates: Iterable[CandidateFinding] = (),
     ) -> SchedulerTaskResult:
         output = (
             self.journal.persist_output(
@@ -1758,6 +1762,7 @@ class PipelineScheduler:
                 specialist_accepted_outcome=specialist_accepted_outcome,
                 model_surface_review_requests=model_surface_review_requests,
                 model_surface_review_artifact=model_surface_review_artifact,
+                accepted_candidates=accepted_candidates,
             )
             if terminal_status is SchedulerTerminalStatus.SUCCEEDED
             else None

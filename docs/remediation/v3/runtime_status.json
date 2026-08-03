@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-03T22:02:03Z",
-  "candidate_commit": "ed068207093cacb15beca69ce310459c84a242f0",
+  "updated_at": "2026-08-03T22:29:27Z",
+  "candidate_commit": "c2c6318b16ac59cff724fd2c772a6806b3d7f8b3",
   "autorun_status": "PAUSED_BY_OPERATOR",
   "current_milestone": "client_report_and_forensic_bundle",
   "current_ticket": "V3-REPORT-001 (IN_PROGRESS)",
@@ -23,17 +23,19 @@
     "V3-FORKSUITE-001.hardhat": "Real Hardhat execution requires the process-attested digest-pinned rootless single-loopback runtime and trusted image-baked reporter specified by V3-HARDHAT-001."
   },
   "last_validation": {
-    "command": ".venv/bin/python -m py_compile src/mmaudit/models/schemas.py src/mmaudit/orchestration/manifest.py src/mmaudit/scanners/osv.py src/mmaudit/scanners/trivy.py; .venv/bin/ruff check {12 affected source/test files}; git diff --check",
+    "command": ".venv/bin/python -m py_compile src/mmaudit/models/scheduler.py src/mmaudit/orchestration/manifest.py src/mmaudit/orchestration/pipeline.py src/mmaudit/orchestration/scheduler.py src/mmaudit/orchestration/scheduler_runtime.py; .venv/bin/ruff check {5 affected production files plus 2 affected tests}; git diff --check",
     "result": "PASS: affected production modules compile, affected Ruff checks pass, and the working diff has no whitespace errors. These pause-only checks are not ticket acceptance evidence."
   },
   "pause_state": {
     "requested_at": "2026-08-03T20:08:17Z",
     "resumed_at": "2026-08-03T20:11:52Z",
-    "result": "Paused gracefully at 2026-08-03T22:02:03Z with V3-REPORT-001 still IN_PROGRESS and no completion claim.",
+    "result": "Persistent-goal continuation resumed at 2026-08-03T22:05:15Z from clean SSH-synchronized pause commit c2c6318b16ac59cff724fd2c772a6806b3d7f8b3.",
     "requested_at_latest": "2026-08-03T21:36:42Z",
-    "resumed_at_latest": null,
+    "resumed_at_latest": "2026-08-03T22:05:15Z",
     "requested_at_current": "2026-08-03T22:02:03Z",
-    "resume_action": "Finish the frozen pass-four candidate projection and scheduler-to-public report authority join without discarding valid partial evidence; add coherent-reseal integration coverage, synchronize the findings schema, then run integrated V3-REPORT-001 gates."
+    "resume_action": "Complete private terminal-finding authority for incomplete campaigns, add coherent-reseal regressions for terminal and report-quality evidence, synchronize generated schemas, then run integrated V3-REPORT-001 gates.",
+    "requested_at_new": "2026-08-03T22:29:27Z",
+    "result_new": "Paused at a validated WIP boundary after freezing public candidate projections and preserving partial accepted-candidate authority. V3-REPORT-001 remains IN_PROGRESS; no provider call or release claim occurred."
   },
   "scheduler_assurance_validation": {
     "status": "PASS_COMPONENT_FULL_ASSURANCE",

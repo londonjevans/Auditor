@@ -13,7 +13,7 @@ import re
 import shutil
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -331,6 +331,7 @@ from mmaudit.reporting.bundle import (
     build_findings_artifact,
     build_model_execution_artifact,
     build_run_cost_ledger_evidence,
+    source_symbol_is_present,
 )
 from mmaudit.reporting.client import (
     bind_active_finding_source_locations,
@@ -341,6 +342,7 @@ from mmaudit.reporting.json_report import stable_json, write_json
 from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
 from mmaudit.reporting.sarif import generate_report_sarif
 from mmaudit.reporting.status import report_status_metadata
+from mmaudit.repository.chunking import line_range_hash
 from mmaudit.repository.discovery import (
     DiscoveryResult,
     discover_repository,
@@ -727,7 +729,7 @@ def _candidate_source_paths(candidate: CandidateFinding) -> frozenset[str]:
 
 
 def _candidate_payload_sha256s(
-    candidates: list[CandidateFinding],
+    candidates: Sequence[CandidateFinding],
 ) -> dict[str, str]:
     """Hash every canonical normalized candidate payload, not only its stable ID."""
 
@@ -738,6 +740,59 @@ def _candidate_payload_sha256s(
         candidate.candidate_id: scheduler_canonical_sha256(candidate.model_dump(mode="json"))
         for candidate in sorted(candidates, key=lambda item: item.candidate_id)
     }
+
+
+def _bind_terminal_finding_source_ranges(
+    findings: list[Finding],
+    *,
+    source_contents: dict[str, str],
+    label: str,
+) -> list[Finding]:
+    """Bind terminal findings before pass seven seals their exact public payloads."""
+
+    bound: list[Finding] = []
+    for finding in findings:
+        if not finding.location_validation.valid:
+            raise ValueError(f"{label} finding lacks valid source-location evidence: {finding.id}")
+        if not finding.locations:
+            raise ValueError(f"{label} finding lacks a source location: {finding.id}")
+        bound_locations: list[Location] = []
+        for location in finding.locations:
+            try:
+                content = source_contents[location.path]
+            except KeyError:
+                raise ValueError(
+                    f"source content is unavailable for cited path: {location.path}"
+                ) from None
+            lines = content.splitlines(keepends=True)
+            if (
+                location.start_line < 1
+                or location.end_line < location.start_line
+                or location.end_line > len(lines)
+            ):
+                raise ValueError(f"source line range is outside the audited file: {location.path}")
+            selected = "".join(lines[location.start_line - 1 : location.end_line])
+            observed_range_hash = line_range_hash(
+                content,
+                location.start_line,
+                location.end_line,
+            )
+            if location.content_hash is not None and location.content_hash != observed_range_hash:
+                raise ValueError(
+                    f"source range hash differs from the final finding: {location.path}"
+                )
+            if location.symbol is not None and not source_symbol_is_present(
+                location.symbol,
+                selected,
+            ):
+                raise ValueError(
+                    f"source symbol is absent from the final cited range: {location.path}"
+                )
+            bound_locations.append(
+                location.model_copy(update={"content_hash": observed_range_hash})
+            )
+        bound.append(finding.model_copy(update={"locations": bound_locations}))
+    return bound
 
 
 def _finding_reduction_activation_input(
@@ -1830,6 +1885,7 @@ class AuditPipeline:
         budget_halted = False
         candidates: list[CandidateFinding] = []
         pass_four_candidates: list[CandidateFinding] = []
+        pass_four_candidate_projection_frozen = False
         candidate_origin_packages: dict[str, ContextPackage] = {}
         pending_execution_candidates: list[CandidateFinding] = []
         execution_candidates_integrated = False
@@ -3286,7 +3342,7 @@ class AuditPipeline:
                     task,
                     CandidateReviewBatch,
                 )
-                return cast(
+                completed_review = cast(
                     FindingReviewResult,
                     agent.bind_completed_review(
                         context,
@@ -3294,6 +3350,18 @@ class AuditPipeline:
                         completion_usage=completed_usage_for_task(task),
                     ),
                 )
+                retained_outputs = tuple(
+                    output for output in scheduler.journal.outputs if output.task_id == task.task_id
+                )
+                if len(retained_outputs) != 1 or retained_outputs[
+                    0
+                ].accepted_candidate_payload_sha256s != _candidate_payload_sha256s(
+                    completed_review.findings
+                ):
+                    raise OpenRouterSchemaError(
+                        "resumed candidate review differs from its host-accepted projection"
+                    )
+                return completed_review
 
             def completed_finding_review_or_terminal(
                 pass_result: SchedulerPassResult,
@@ -3820,6 +3888,7 @@ class AuditPipeline:
                                     output_value=batch.raw_response,
                                     usage_records=usage.records,
                                     specialist_accepted_outcome=specialist_accepted_outcome,
+                                    accepted_candidates=batch.findings,
                                     model_surface_review_requests=(
                                         sealed_context.requested_model_surfaces
                                     ),
@@ -4183,6 +4252,7 @@ class AuditPipeline:
                                 scheduler_task,
                                 output_value=batch.raw_response,
                                 usage_records=usage.records,
+                                accepted_candidates=batch.findings,
                                 model_surface_review_requests=(
                                     sealed_context.requested_model_surfaces
                                 ),
@@ -4481,6 +4551,7 @@ class AuditPipeline:
                         CandidateFinding.model_validate(candidate.model_dump(mode="python"))
                         for candidate in candidates
                     ]
+                    pass_four_candidate_projection_frozen = True
 
             if pending_execution_candidates and not execution_candidates_integrated:
                 candidates.extend(pending_execution_candidates)
@@ -6127,6 +6198,27 @@ class AuditPipeline:
 
             if not scheduler_halted:
                 assert judgment_host_task is not None
+                if not pass_four_candidate_projection_frozen:
+                    raise ValueError(
+                        "evidence-cap judgment lacks the frozen pass-four candidate projection"
+                    )
+                if pending_execution_candidates and not execution_candidates_integrated:
+                    raise ValueError(
+                        "evidence-cap judgment cannot precede deterministic candidate integration"
+                    )
+                terminal_source_contents = {
+                    item.relative_path: item.content for item in discovery.files
+                }
+                final_findings = _bind_terminal_finding_source_ranges(
+                    final_findings,
+                    source_contents=terminal_source_contents,
+                    label="active",
+                )
+                filtered_findings = _bind_terminal_finding_source_ranges(
+                    filtered_findings,
+                    source_contents=terminal_source_contents,
+                    label="reporting-filtered",
+                )
                 terminal_findings = [
                     *(("REPORTED_ACTIVE", finding) for finding in final_findings),
                     *(("REPORTED_REJECTED", finding) for finding in rejected_findings),
@@ -6198,8 +6290,10 @@ class AuditPipeline:
                     "severity_threshold": severity_threshold.value,
                     "group_ids": sorted(group.group_id for group in groups),
                     "judge_decision_ids": sorted(judge_decisions),
-                    "candidate_ids": sorted(candidate.candidate_id for candidate in candidates),
-                    "candidate_payload_sha256s": _candidate_payload_sha256s(candidates),
+                    "candidate_ids": sorted(
+                        candidate.candidate_id for candidate in pass_four_candidates
+                    ),
+                    "candidate_payload_sha256s": _candidate_payload_sha256s(pass_four_candidates),
                     "candidate_grouping_sha256": scheduler_canonical_sha256(
                         [
                             {
@@ -7270,12 +7364,18 @@ class AuditPipeline:
                     "metadata": report_metadata,
                 }
             )
+        public_candidate_projection = [
+            CandidateFinding.model_validate(candidate.model_dump(mode="python"))
+            for candidate in (
+                pass_four_candidates if pass_four_candidate_projection_frozen else candidates
+            )
+        ]
         log_handler.flush()
         self._write_artifacts(
             run_dir=run_dir,
             report=report,
             source_contents=audited_source_contents,
-            candidates=candidates,
+            candidate_projection=public_candidate_projection,
             verifications=verifications,
             cross_examinations=cross_examinations,
             threat_model=threat_model,
@@ -8021,7 +8121,7 @@ class AuditPipeline:
         run_dir: Path,
         report: AuditReport,
         source_contents: dict[str, str],
-        candidates: list[CandidateFinding],
+        candidate_projection: list[CandidateFinding],
         verifications: VerificationBatch,
         cross_examinations: list[CandidateCrossExaminationDecision],
         threat_model: ThreatModel | None,
@@ -8091,7 +8191,9 @@ class AuditPipeline:
             run_dir / "candidate-findings.json",
             {
                 "schema_version": "1.1",
-                "findings": [candidate.model_dump(mode="json") for candidate in candidates],
+                "findings": [
+                    candidate.model_dump(mode="json") for candidate in candidate_projection
+                ],
             },
         )
         write_json(
@@ -8216,7 +8318,7 @@ class AuditPipeline:
         source_excerpts = build_client_source_excerpts(report, source_contents)
         findings_artifact = build_findings_artifact(
             report,
-            candidates=candidates,
+            candidates=candidate_projection,
             reproduction_resolutions=reproduction_resolutions,
             source_excerpts=source_excerpts,
         )
@@ -8235,7 +8337,7 @@ class AuditPipeline:
             render_client_markdown(
                 report,
                 source_contents,
-                candidates=candidates,
+                candidates=candidate_projection,
                 reproduction_resolutions=reproduction_resolutions,
             ),
             encoding="utf-8",

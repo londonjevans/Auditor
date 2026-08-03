@@ -8,8 +8,8 @@ AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Client report and forensic evidence bundle
 CURRENT_TICKET: V3-REPORT-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-FIXTURE-001 (COMPLETE)
-NEXT_ACTION: Finish the frozen pass-four candidate projection and scheduler-to-public report authority join without discarding valid partial evidence; add coherent-reseal integration coverage, synchronize the findings schema, then run integrated V3-REPORT-001 gates.
-LAST_COMMAND: `.venv/bin/python -m py_compile src/mmaudit/models/schemas.py src/mmaudit/orchestration/manifest.py src/mmaudit/scanners/osv.py src/mmaudit/scanners/trivy.py`; `.venv/bin/ruff check src/mmaudit/models/schemas.py src/mmaudit/orchestration/manifest.py src/mmaudit/scanners/osv.py src/mmaudit/scanners/trivy.py tests/integration/test_pipeline.py tests/unit/test_manifest.py tests/unit/test_release_artifacts.py tests/unit/test_scanner_normalization_replay.py tests/unit/test_scanner_stream_custody.py tests/unit/test_scanners_reporting.py tests/unit/test_scheduler_host_contracts.py`; `git diff --check`
+NEXT_ACTION: Complete private terminal-finding authority for incomplete campaigns, add coherent-reseal regressions for terminal and report-quality evidence, synchronize generated schemas, then run integrated V3-REPORT-001 gates.
+LAST_COMMAND: `.venv/bin/python -m py_compile src/mmaudit/models/scheduler.py src/mmaudit/orchestration/manifest.py src/mmaudit/orchestration/pipeline.py src/mmaudit/orchestration/scheduler.py src/mmaudit/orchestration/scheduler_runtime.py`; `.venv/bin/ruff check src/mmaudit/models/scheduler.py src/mmaudit/orchestration/manifest.py src/mmaudit/orchestration/pipeline.py src/mmaudit/orchestration/scheduler.py src/mmaudit/orchestration/scheduler_runtime.py tests/integration/test_scheduler_pipeline.py tests/unit/test_client_forensic_reporting.py`; `git diff --check`
 LAST_RESULT: PASS: affected production modules compile, affected Ruff checks pass, and the working diff has no whitespace errors. These pause-only checks are not V3-REPORT-001 acceptance evidence.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
@@ -47,6 +47,39 @@ LAST_CHECKPOINT_COMMIT: ed068207093cacb15beca69ce310459c84a242f0
 - **WIP checkpoint:** The exact partial implementation is preserved at
   `ed068207093cacb15beca69ce310459c84a242f0`; this commit is intentionally not ticket-complete
   or release evidence.
+- **Resume (2026-08-03T22:05:15Z):** Persistent-goal continuation resumed from clean,
+  SSH-synchronized pause commit `c2c6318b16ac59cff724fd2c772a6806b3d7f8b3`. Work remains
+  bounded to the recorded scheduler-to-report authority join, partial-evidence preservation,
+  schema synchronization, and V3-REPORT-001 gates; no provider call is needed for this slice.
+
+## 2026-08-03T22:29:27Z — Graceful operator pause
+
+- **State:** `PAUSED_BY_OPERATOR`; `V3-REPORT-001` remains `IN_PROGRESS`. No ticket,
+  release, or maximum-assurance completion is claimed.
+- **Preserved WIP:** The public candidate projection is frozen at pass four, later adjudication
+  enrichment remains internal, successful partial candidate reviews retain exact host-accepted
+  projections, resume compares those exact hashes, and source ranges bind before pass-seven
+  sealing. The manifest has partial accepted-candidate and report-quality joins under active
+  development. Scheduler task-output schema `1.1` carries accepted-candidate authority while an
+  explicit `1.0` compatibility path is retained; this combined slice is not yet ticket evidence.
+- **Focused evidence:** The pipeline owner reports four focused integrations passing in
+  `19.43s`, including complete, exact-resume, partial-timeout, and failed-pass cases; the new
+  client ordering regression passed with its 13-file suite; scheduler model/journal tests passed
+  `116` cases. The final pause-only Python compilation, affected Ruff checks, and
+  `git diff --check` all passed. Broader ticket gates have not run.
+- **Known unfinished seam:** An incomplete campaign without a successful pass-seven judgment can
+  still emit terminal findings without independent private scheduler authority. Add a retained,
+  hash-bound terminal authority before scheduler artifact construction and validate every public
+  final, rejected, filtered, and report-quality projection against it. Then add coherent-reseal
+  tamper regressions and regenerate the stale findings schema.
+- **Safety/cost:** Every delegated agent is stopped or complete. No paid provider call, public
+  RPC, secret read, target-controlled command, or network operation occurred during this slice.
+  No long-running validation was started for the pause.
+- **Exact resume action:** Inspect this checkpoint diff, finish the private incomplete-terminal
+  authority without discarding valid partial evidence, run its focused regressions, synchronize
+  generated schemas, and then execute the recorded V3-REPORT-001 acceptance matrix.
+- **Checkpoint status:** A local WIP checkpoint and SSH push are being created immediately after
+  this record; the following pause-metadata commit will replace this sentence with exact hashes.
 
 ## 2026-08-03T21:01:54Z — Graceful operator pause
 

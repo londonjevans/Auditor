@@ -27,6 +27,7 @@ from mmaudit.models.scheduler import (
     scheduler_canonical_sha256,
 )
 from mmaudit.models.schemas import (
+    AuditReport,
     CandidateFinding,
     FormalEvidence,
     FormalResultKind,
@@ -75,8 +76,16 @@ from mmaudit.orchestration.pipeline import (
 )
 from mmaudit.orchestration.scheduler_runtime import PipelineScheduler
 from mmaudit.privacy import EffectivePrivacyPolicyEvidence
-from mmaudit.reporting.bundle import ModelExecutionArtifact, RunCostLedgerEvidence
+from mmaudit.reporting.bundle import (
+    FindingsArtifact,
+    ModelExecutionArtifact,
+    RunCostLedgerEvidence,
+    build_findings_artifact,
+)
+from mmaudit.reporting.client import render_client_markdown_from_artifact
 from mmaudit.reporting.json_report import write_json
+from mmaudit.reporting.markdown import render_forensic_markdown, render_markdown
+from mmaudit.reporting.sarif import generate_report_sarif
 from mmaudit.repository.discovery import discover_repository
 from mmaudit.repository.ignore import IgnoreMatcher
 from mmaudit.repository.mapping import build_repository_map
@@ -575,6 +584,71 @@ async def test_pipeline_persists_exact_seven_pass_scheduler_evidence(
         for attempt in model_execution.cost_ledger.attempts
         if attempt.usage_record_sha256 is not None
     } == {record.request_id for record in result.report.usage}
+
+    coherently_resealed_paths = (
+        "candidate-findings.json",
+        "findings.json",
+        "client-report.md",
+        "forensic-report.md",
+        "audit-report.md",
+        "audit-results.sarif",
+    )
+    original_public_bytes = {
+        name: (result.run_dir / name).read_bytes() for name in coherently_resealed_paths
+    }
+    candidate_path = result.run_dir / "candidate-findings.json"
+    candidate_payload = json.loads(original_public_bytes["candidate-findings.json"])
+    assert candidate_payload["findings"]
+    candidate_payload["findings"][0]["title"] = "Coherently resealed candidate tamper"
+    write_json(candidate_path, candidate_payload)
+    tampered_candidates = [
+        CandidateFinding.model_validate(candidate) for candidate in candidate_payload["findings"]
+    ]
+    public_report = AuditReport.model_validate_json(
+        (result.run_dir / "final-findings.json").read_text(encoding="utf-8")
+    )
+    original_findings = FindingsArtifact.model_validate_json(original_public_bytes["findings.json"])
+    source_excerpts = {
+        record.finding_id: record.source_excerpt
+        for record in original_findings.records
+        if record.source_excerpt is not None
+    }
+    tampered_findings = build_findings_artifact(
+        public_report,
+        candidates=tampered_candidates,
+        reproduction_resolutions=original_findings.reproduction_resolutions,
+        source_excerpts=source_excerpts,
+    )
+    write_json(result.run_dir / "findings.json", tampered_findings)
+    (result.run_dir / "client-report.md").write_text(
+        render_client_markdown_from_artifact(public_report, tampered_findings),
+        encoding="utf-8",
+    )
+    (result.run_dir / "forensic-report.md").write_text(
+        render_forensic_markdown(public_report, findings_artifact=tampered_findings),
+        encoding="utf-8",
+    )
+    (result.run_dir / "audit-report.md").write_text(
+        render_markdown(public_report, findings_artifact=tampered_findings),
+        encoding="utf-8",
+    )
+    write_json(
+        result.run_dir / "audit-results.sarif",
+        generate_report_sarif(public_report, findings_artifact=tampered_findings),
+    )
+    candidate_tampered_manifest = seal_run_evidence_manifest(
+        run_id=manifest.run_id,
+        repository_root_name=manifest.repository_root_name,
+        git_commit=manifest.git_commit,
+        sources=manifest.sources,
+        run_configuration=manifest.run_configuration,
+        bindings=manifest.bindings,
+        artifacts=collect_run_artifacts(result.run_dir),
+    )
+    with pytest.raises(ValueError, match="candidate artifact differs from scheduler"):
+        validate_manifest_artifacts(candidate_tampered_manifest, result.run_dir)
+    for name, payload in original_public_bytes.items():
+        (result.run_dir / name).write_bytes(payload)
 
     tampered_payload = model_execution.model_dump(mode="json")
     cost_payload = tampered_payload["cost_ledger"]

@@ -45,6 +45,7 @@ from mmaudit.models.scheduler import (
     SchedulerRetainedJournalReference,
     SchedulerShardInventory,
     SchedulerTaskKind,
+    SchedulerTaskOutput,
     SchedulerTerminalFindingState,
     SchedulerTerminalStatus,
     scheduler_canonical_sha256,
@@ -73,6 +74,7 @@ from mmaudit.models.schemas import (
     ModelIdentityStrength,
     ModelRequestValidationStatus,
     PropertyCorpus,
+    ReportQualityReview,
     ReproductionIntegrityStatus,
     ReproductionResolutionKind,
     ReproductionResult,
@@ -2812,14 +2814,13 @@ def _scheduler_pass_result(
     return matches[0] if matches else None
 
 
-def _reconstruct_successful_scheduler_output[OutputT: StrictModel](
+def _successful_scheduler_task_output(
     *,
     journal: SchedulerJournal,
     pass_result: SchedulerPassResult,
     task_id: str,
-    output_type: type[OutputT],
-) -> OutputT:
-    """Join a typed private payload to its one credited task result and output record."""
+) -> SchedulerTaskOutput:
+    """Return one exact successful private output from a complete or failed pass."""
 
     results = tuple(result for result in pass_result.task_results if result.task_id == task_id)
     outputs = tuple(output for output in journal.outputs if output.task_id == task_id)
@@ -2836,6 +2837,55 @@ def _reconstruct_successful_scheduler_output[OutputT: StrictModel](
         or result.output_artifact_sha256 != output.output_artifact_sha256
     ):
         raise ValueError("scheduler authority task result differs from its retained output")
+    return output
+
+
+def _scheduler_accepted_candidate_authority(
+    journal: SchedulerJournal,
+) -> dict[SchedulerPassKind, dict[str, str]]:
+    """Collect exact host-accepted candidates even when a later task failed."""
+
+    authority: dict[SchedulerPassKind, dict[str, str]] = {
+        SchedulerPassKind.BLIND_SHARD_REVIEW: {},
+        SchedulerPassKind.CROSS_SHARD_INTEGRATION: {},
+    }
+    for pass_kind in tuple(authority):
+        pass_result = _scheduler_pass_result(journal, pass_kind)
+        if pass_result is None:
+            continue
+        accepted = authority[pass_kind]
+        for result in pass_result.task_results:
+            if result.terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
+                continue
+            output = _successful_scheduler_task_output(
+                journal=journal,
+                pass_result=pass_result,
+                task_id=result.task_id,
+            )
+            for candidate_id, payload_sha256 in (
+                output.accepted_candidate_payload_sha256s.items()
+            ):
+                if candidate_id in accepted:
+                    raise ValueError("scheduler accepted candidate authority repeats an identity")
+                accepted[candidate_id] = payload_sha256
+        authority[pass_kind] = dict(sorted(accepted.items()))
+    return authority
+
+
+def _reconstruct_successful_scheduler_output[OutputT: StrictModel](
+    *,
+    journal: SchedulerJournal,
+    pass_result: SchedulerPassResult,
+    task_id: str,
+    output_type: type[OutputT],
+) -> OutputT:
+    """Join a typed private payload to its one credited task result and output record."""
+
+    output = _successful_scheduler_task_output(
+        journal=journal,
+        pass_result=pass_result,
+        task_id=task_id,
+    )
     reconstructed = journal.reconstruct_output(task_id, output_type)
     serialized = reconstructed.model_dump(mode="json")
     if (
@@ -2918,6 +2968,50 @@ def _scheduler_candidate_payload_sha256s(
         candidate.candidate_id: scheduler_canonical_sha256(candidate.model_dump(mode="json"))
         for candidate in ordered
     }
+
+
+def _validate_scheduler_report_quality_authority(
+    *,
+    report: AuditReport,
+    journal: SchedulerJournal,
+) -> None:
+    """Bind the public report-quality review to its exact retained model output."""
+
+    pass_result = _scheduler_pass_result(
+        journal,
+        SchedulerPassKind.EVIDENCE_CAPPED_JUDGMENT,
+    )
+    if pass_result is None:
+        if report.report_quality_review is not None:
+            raise ValueError("public report quality lacks scheduler authority")
+        return
+    tasks = tuple(
+        task for task in pass_result.plan.tasks if task.role == "specialist:report_quality"
+    )
+    if len(tasks) > 1:
+        raise ValueError("scheduler report-quality authority is ambiguous")
+    if not tasks:
+        if report.report_quality_review is not None:
+            raise ValueError("public report quality lacks a scheduled review")
+        return
+    task = tasks[0]
+    results = tuple(
+        result for result in pass_result.task_results if result.task_id == task.task_id
+    )
+    if len(results) != 1:
+        raise ValueError("scheduler report-quality task lacks one terminal result")
+    if results[0].terminal_status is not SchedulerTerminalStatus.SUCCEEDED:
+        if report.report_quality_review is not None:
+            raise ValueError("failed scheduler report quality was published")
+        return
+    retained = _reconstruct_successful_scheduler_output(
+        journal=journal,
+        pass_result=pass_result,
+        task_id=task.task_id,
+        output_type=ReportQualityReview,
+    )
+    if report.report_quality_review != retained:
+        raise ValueError("public report quality differs from scheduler authority")
 
 
 def _validate_scheduler_terminal_report_authority(
@@ -3070,6 +3164,9 @@ def _validate_scheduler_report_authority(
         _read_json_artifact(root, "reproduction-results.json")
     )
     candidate_hashes = _scheduler_candidate_payload_sha256s(candidate_artifact.findings)
+    accepted_authority = _scheduler_accepted_candidate_authority(journal)
+    blind_authority = accepted_authority[SchedulerPassKind.BLIND_SHARD_REVIEW]
+    cross_shard_authority = accepted_authority[SchedulerPassKind.CROSS_SHARD_INTEGRATION]
 
     reduction = _successful_scheduler_host_output(
         journal=journal,
@@ -3090,47 +3187,57 @@ def _validate_scheduler_report_authority(
         output_type=SchedulerEvidenceCapJudgmentOutput,
     )
 
-    if integration is not None:
-        if reduction is None or not set(reduction.candidate_ids) <= set(integration.candidate_ids):
-            raise ValueError("scheduler pass-four candidates lack pass-three authority")
-        if any(
-            integration.candidate_payload_sha256s[candidate_id] != candidate_sha256
-            for candidate_id, candidate_sha256 in reduction.candidate_payload_sha256s.items()
+    if reduction is None:
+        if cross_shard_authority:
+            raise ValueError("scheduler cross-shard candidates lack pass-three authority")
+        if not set(blind_authority) <= set(candidate_hashes) or any(
+            candidate_hashes[candidate_id] != candidate_sha256
+            for candidate_id, candidate_sha256 in blind_authority.items()
         ):
-            raise ValueError("scheduler pass-four changed a pass-three candidate payload")
-
-    latest_candidate_authority = (
-        integration.candidate_payload_sha256s
-        if integration is not None
-        else reduction.candidate_payload_sha256s
-        if reduction is not None
-        else {}
-    )
-    if not set(latest_candidate_authority) <= set(candidate_hashes) or any(
-        candidate_hashes[candidate_id] != candidate_sha256
-        for candidate_id, candidate_sha256 in latest_candidate_authority.items()
-    ):
-        raise ValueError("candidate artifact differs from scheduler host authority")
-    authoritative_ids = set(latest_candidate_authority)
-    unauthoritative_candidates = tuple(
-        candidate
-        for candidate in candidate_artifact.findings
-        if candidate.candidate_id not in authoritative_ids
-    )
-    if any(
-        candidate.origin_kind is not CandidateOriginKind.DETERMINISTIC_EXECUTION
-        for candidate in unauthoritative_candidates
-    ):
-        raise ValueError("incomplete scheduler report contains an unauthorized model candidate")
+            raise ValueError("candidate artifact differs from partial scheduler authority")
+        unauthoritative_candidates = tuple(
+            candidate
+            for candidate in candidate_artifact.findings
+            if candidate.candidate_id not in blind_authority
+        )
+        if any(
+            candidate.origin_kind is not CandidateOriginKind.DETERMINISTIC_EXECUTION
+            for candidate in unauthoritative_candidates
+        ):
+            raise ValueError("incomplete scheduler report contains an unauthorized model candidate")
+        latest_candidate_authority = candidate_hashes
+    else:
+        expected_blind_hashes = {
+            candidate_id: reduction.candidate_payload_sha256s[candidate_id]
+            for candidate_id in reduction.blind_candidate_ids
+        }
+        if blind_authority != expected_blind_hashes:
+            raise ValueError("scheduler pass-three differs from accepted blind candidates")
+        latest_candidate_authority = dict(reduction.candidate_payload_sha256s)
+        for candidate_id, candidate_sha256 in cross_shard_authority.items():
+            if candidate_id in latest_candidate_authority:
+                raise ValueError("scheduler cross-shard candidate repeats pass-three identity")
+            latest_candidate_authority[candidate_id] = candidate_sha256
+        latest_candidate_authority = dict(sorted(latest_candidate_authority.items()))
+        if integration is not None and (
+            integration.candidate_payload_sha256s != latest_candidate_authority
+            or not set(reduction.candidate_ids) <= set(integration.candidate_ids)
+        ):
+            raise ValueError("scheduler pass-four changed its accepted candidate authority")
+        if integration is not None:
+            latest_candidate_authority = integration.candidate_payload_sha256s
+        if candidate_hashes != latest_candidate_authority:
+            raise ValueError("candidate artifact differs from scheduler host authority")
 
     campaign_complete = journal.summary.status is SchedulerCampaignStatus.COMPLETE
+    _validate_scheduler_report_quality_authority(report=report, journal=journal)
     if campaign_complete and judgment is None:
         raise ValueError("complete scheduler report lacks successful pass-seven authority")
     if judgment is None:
         return
     if integration is None or (
-        judgment.candidate_ids != integration.candidate_ids
-        or judgment.candidate_payload_sha256s != integration.candidate_payload_sha256s
+        judgment.candidate_ids != tuple(latest_candidate_authority)
+        or judgment.candidate_payload_sha256s != latest_candidate_authority
     ):
         raise ValueError("scheduler pass-seven candidates differ from pass-four authority")
     if candidate_hashes != judgment.candidate_payload_sha256s:

@@ -58,6 +58,7 @@ from mmaudit.models.scheduler import (
     scheduler_canonical_sha256,
 )
 from mmaudit.models.schemas import (
+    CandidateFinding,
     ContextRequestEvidence,
     ModelSurfaceReviewArtifact,
     ModelSurfaceReviewRequest,
@@ -937,6 +938,7 @@ class SchedulerJournal:
         specialist_accepted_outcome: SpecialistAcceptedOutcome | None = None,
         model_surface_review_requests: Iterable[ModelSurfaceReviewRequest] = (),
         model_surface_review_artifact: ModelSurfaceReviewArtifact | None = None,
+        accepted_candidates: Iterable[CandidateFinding] = (),
     ) -> SchedulerTaskOutput:
         """Persist one private normalized task output before success may be recorded."""
 
@@ -959,6 +961,7 @@ class SchedulerJournal:
             specialist_accepted_outcome=specialist_accepted_outcome,
             model_surface_review_requests=model_surface_review_requests,
             model_surface_review_artifact=model_surface_review_artifact,
+            accepted_candidates=accepted_candidates,
         )
         _write_model(
             self._root_descriptor,
@@ -2395,7 +2398,9 @@ def _validate_loaded_state(
             specialist_accepted_outcome=output.specialist_accepted_outcome,
             model_surface_review_requests=output.model_surface_review_requests,
             model_surface_review_artifact=output.model_surface_review_artifact,
+            accepted_candidates=output.accepted_candidates,
             normalizer_sha256=completion.normalizer_sha256 if completion is not None else None,
+            schema_version=output.schema_version,
         )
         if output != expected_output:
             raise ValueError("scheduler output differs from its exact normalized task evidence")

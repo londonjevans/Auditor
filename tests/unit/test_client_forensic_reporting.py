@@ -498,6 +498,50 @@ def test_large_surface_table_stays_in_forensic_report_only() -> None:
     assert "FORENSIC-ONLY-SURFACE-0999" in forensic
 
 
+def test_client_summary_and_remediation_roadmap_are_severity_ordered() -> None:
+    specifications = [
+        ("LOW", Severity.LOW),
+        ("CRITICAL", Severity.CRITICAL),
+        ("INFORMATIONAL", Severity.INFORMATIONAL),
+        ("MEDIUM", Severity.MEDIUM),
+        ("HIGH", Severity.HIGH),
+    ]
+    findings = [
+        _finding(
+            FindingStatus.STRONGLY_SUPPORTED,
+            finding_id=f"MMA-ORDER-{label}",
+        ).model_copy(
+            update={
+                "title": f"{label.title()} priority remediation",
+                "severity": severity,
+                "recommendation": f"Apply the {label.lower()} priority remediation.",
+                "contributing_candidate_ids": [f"candidate-order-{label.lower()}"],
+            }
+        )
+        for label, severity in specifications
+    ]
+
+    rendered = _render_client(_report(findings=findings), {SOURCE_PATH: SOURCE})
+    summary = rendered.split("## Finding summary\n", maxsplit=1)[1].split(
+        "## Priority remediation roadmap\n", maxsplit=1
+    )[0]
+    roadmap = rendered.split("## Priority remediation roadmap\n", maxsplit=1)[1].split(
+        "## Detailed findings\n", maxsplit=1
+    )[0]
+    expected_labels = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFORMATIONAL"]
+
+    assert [
+        line.split("`", maxsplit=2)[1].removeprefix("MMA-ORDER-")
+        for line in summary.splitlines()
+        if line.startswith("| `MMA-ORDER-")
+    ] == expected_labels
+    assert [
+        line.split("**", maxsplit=2)[1].split(" —", maxsplit=1)[0]
+        for line in roadmap.splitlines()
+        if line[:1].isdigit()
+    ] == expected_labels
+
+
 def test_representative_client_report_stays_within_page_equivalent_budget() -> None:
     findings = [
         _finding(
