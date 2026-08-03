@@ -2,10 +2,10 @@
 
 ## Product Vision and Target-State Specification
 
-**Status:** North-star product and engineering specification<br>
-**Primary product scope:** Solidity and EVM smart-contract systems<br>
-**Delivery model:** Fully autonomous, website-purchased security audit<br>
-**Model access layer:** OpenRouter, with a continuously refreshed and policy-filtered model registry<br>
+**Status:** North-star product and engineering specification  
+**Primary product scope:** Solidity and EVM smart-contract systems  
+**Delivery model:** Fully autonomous, website-purchased security audit  
+**Model access layer:** OpenRouter, with a continuously refreshed and policy-filtered model registry  
 **Core promise:** The deepest practical multi-model smart-contract audit, with evidence strong enough that every published finding is defensible, source-bound, independently challenged, and dynamically validated whenever validation is feasible
 
 ---
@@ -1801,12 +1801,12 @@ The ultimate destination is reached when blind, independently adjudicated eviden
 
 ## 28. Product mantra
 
-> Use every eligible source of intelligence.<br>
-> Trust no single model.<br>
-> Validate every location.<br>
-> Challenge every candidate.<br>
-> Reproduce what can be reproduced.<br>
-> Prove what can be proved.<br>
-> Publish only what the evidence supports.<br>
-> Disclose everything that did not run.<br>
+> Use every eligible source of intelligence.  
+> Trust no single model.  
+> Validate every location.  
+> Challenge every candidate.  
+> Reproduce what can be reproduced.  
+> Prove what can be proved.  
+> Publish only what the evidence supports.  
+> Disclose everything that did not run.  
 > Make the audit autonomous, but never opaque.
