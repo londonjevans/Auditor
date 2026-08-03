@@ -5,7 +5,9 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import struct
+import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -96,6 +98,7 @@ from mmaudit.reporting.sarif import generate_sarif
 from mmaudit.repository.chunking import line_range_hash
 from mmaudit.scanners.base import (
     ScannerAdapter,
+    _cleanup_lingering_process_group,
     _darwin_current_uid_process_count,
     _darwin_nproc_ceiling_from_uid_listing,
     _darwin_process_group_rss_bytes,
@@ -2048,9 +2051,71 @@ def test_version_probe_rejects_descendant_that_outlives_process_group_leader(
 
     assert result.status is ExecutableVersionProbeStatus.ISOLATION_FAILURE
     assert result.version is None
-    assert result.diagnostic == (
-        "tool version command left a descendant process after its leader exited"
+    # Real POSIX process-group visibility can change while the asynchronous
+    # child is being killed and reaped. Both outcomes reject the probe; the
+    # deterministic classifier path is covered separately below.
+    assert result.diagnostic in {
+        "tool version command left a descendant process after its leader exited",
+        "scanner process-group absence could not be attested",
+    }
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group attestation")
+def test_process_group_cleanup_deterministically_rejects_proven_descendant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = subprocess.Popen(
+        [sys.executable, "-c", "pass"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
     )
+    process.wait(timeout=5)
+    killpg_calls: list[int] = []
+
+    def simulated_killpg(_process_group: int, signal_number: int) -> None:
+        killpg_calls.append(signal_number)
+        if len(killpg_calls) == 3:
+            raise ProcessLookupError(errno.ESRCH, "synthetic process group is absent")
+
+    monkeypatch.setattr(os, "killpg", simulated_killpg)
+
+    diagnostic = _cleanup_lingering_process_group(
+        process,
+        diagnostic="tool version command left a descendant process after its leader exited",
+    )
+
+    assert diagnostic == "tool version command left a descendant process after its leader exited"
+    assert killpg_calls == [0, signal.SIGKILL, 0]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group attestation")
+def test_process_group_cleanup_fails_closed_when_absence_cannot_be_attested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = subprocess.Popen(
+        [sys.executable, "-c", "pass"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    process.wait(timeout=5)
+    killpg_calls: list[int] = []
+
+    def simulated_killpg(_process_group: int, signal_number: int) -> None:
+        killpg_calls.append(signal_number)
+        if len(killpg_calls) == 3:
+            raise PermissionError(errno.EPERM, "synthetic process-group attestation refusal")
+
+    monkeypatch.setattr(os, "killpg", simulated_killpg)
+
+    diagnostic = _cleanup_lingering_process_group(
+        process,
+        diagnostic="tool version command left a descendant process after its leader exited",
+    )
+
+    assert diagnostic == "scanner process-group absence could not be attested"
+    assert killpg_calls == [0, signal.SIGKILL, 0]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group attestation")

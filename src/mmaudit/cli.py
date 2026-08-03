@@ -72,6 +72,10 @@ from mmaudit.config import (
     validate_model_independence,
 )
 from mmaudit.constants import DEFAULT_CONFIG_NAME, VERSION, ExitCode
+from mmaudit.forensic_export import (
+    export_complete_forensic_bundle,
+    verify_complete_forensic_bundle,
+)
 from mmaudit.logging import configure_logging
 from mmaudit.models.calibration import (
     build_model_calibration_artifact,
@@ -2841,6 +2845,80 @@ def verify_run_command(
     local_console.print(f"Result: {output.resolve()}")
     if verification.status is RunVerificationStatus.STALE:
         raise typer.Exit(ExitCode.INCOMPLETE)
+
+
+@app.command("export-forensic")
+def export_forensic_command(
+    run_dir: Annotated[
+        Path,
+        typer.Option("--run-dir", help="Exact local manifest-bound run directory."),
+    ],
+    destination: Annotated[
+        Path,
+        typer.Option(
+            "--destination",
+            help="Fresh wrapper directory; its parent must already exist.",
+        ),
+    ],
+    acknowledge_sensitive_evidence: Annotated[
+        bool,
+        typer.Option(
+            "--acknowledge-sensitive-evidence",
+            help="Acknowledge that private and log evidence will be copied exactly.",
+        ),
+    ] = False,
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Export a complete local forensic run without executing or sanitizing its evidence."""
+
+    local_console = Console(no_color=no_color)
+    try:
+        descriptor = export_complete_forensic_bundle(
+            source_run=run_dir,
+            destination=destination,
+            acknowledge_sensitive_evidence=acknowledge_sensitive_evidence,
+        )
+    except (OSError, ValueError) as exc:
+        local_console.print(f"[red]Forensic export failed safely:[/red] {exc}")
+        raise typer.Exit(ExitCode.CONFIGURATION) from exc
+    local_console.print(
+        "Complete forensic bundle exported: "
+        f"{descriptor.artifact_count} file(s), {descriptor.artifact_total_bytes} byte(s)"
+    )
+    local_console.print(f"Result: {destination.resolve()}")
+
+
+@app.command("verify-forensic-export")
+def verify_forensic_export_command(
+    bundle: Annotated[
+        Path,
+        typer.Option("--bundle", help="Complete forensic wrapper directory to verify."),
+    ],
+    acknowledge_sensitive_evidence: Annotated[
+        bool,
+        typer.Option(
+            "--acknowledge-sensitive-evidence",
+            help="Acknowledge that private and log evidence will be read for hashing.",
+        ),
+    ] = False,
+    no_color: Annotated[bool, typer.Option("--no-color")] = False,
+) -> None:
+    """Verify a complete forensic wrapper independently of its original run."""
+
+    local_console = Console(no_color=no_color)
+    try:
+        descriptor = verify_complete_forensic_bundle(
+            delivery_root=bundle,
+            acknowledge_sensitive_evidence=acknowledge_sensitive_evidence,
+        )
+    except (OSError, ValueError) as exc:
+        local_console.print(f"[red]Forensic verification failed safely:[/red] {exc}")
+        raise typer.Exit(ExitCode.CONFIGURATION) from exc
+    local_console.print(
+        "Complete forensic bundle verified: "
+        f"{descriptor.artifact_count} file(s), {descriptor.artifact_total_bytes} byte(s)"
+    )
+    local_console.print(f"Result: {bundle.resolve()}")
 
 
 @app.command("replay")

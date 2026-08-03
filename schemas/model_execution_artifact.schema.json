@@ -38,6 +38,203 @@
       "title": "AuditRunStatus",
       "type": "string"
     },
+    "CostEntryStatus": {
+      "description": "Persisted lifecycle state for one unique provider request.",
+      "enum": [
+        "reserved",
+        "reconciled",
+        "released",
+        "uncertain_accounted",
+        "reservation_overrun"
+      ],
+      "title": "CostEntryStatus",
+      "type": "string"
+    },
+    "CostLedgerAbsenceEvidence": {
+      "additionalProperties": false,
+      "description": "Typed zero-usage state that never invents a ledger snapshot.",
+      "properties": {
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "persistent_ledger_configured": {
+          "title": "Persistent Ledger Configured",
+          "type": "boolean"
+        },
+        "reason": {
+          "enum": [
+            "NO_MODEL_USAGE_AND_NO_PERSISTENT_LEDGER",
+            "NO_MODEL_USAGE_AND_NO_CAMPAIGN_LEDGER_EVIDENCE"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "run_entry_count": {
+          "const": 0,
+          "default": 0,
+          "title": "Run Entry Count",
+          "type": "integer"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "ABSENT_ZERO",
+            "UNESTABLISHED_ZERO"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "NOT_APPLICABLE",
+            "INCONCLUSIVE"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "usage_record_count": {
+          "const": 0,
+          "default": 0,
+          "title": "Usage Record Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "state",
+        "status",
+        "reason",
+        "persistent_ledger_configured",
+        "evidence_sha256"
+      ],
+      "title": "CostLedgerAbsenceEvidence",
+      "type": "object"
+    },
+    "CostLedgerAttemptEvidence": {
+      "additionalProperties": false,
+      "description": "One terminal campaign reservation with an optional exact usage join.",
+      "properties": {
+        "accounted_cost_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
+          "title": "Accounted Cost Usd Exact",
+          "type": "string"
+        },
+        "attempt_index": {
+          "maximum": 6,
+          "minimum": 1,
+          "title": "Attempt Index",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "ledger_entry_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ledger Entry Sha256",
+          "type": "string"
+        },
+        "logical_request_id": {
+          "pattern": "^scheduler-request-[0-9a-f]{64}$",
+          "title": "Logical Request Id",
+          "type": "string"
+        },
+        "reconciled_cost_usd_exact": {
+          "anyOf": [
+            {
+              "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reconciled Cost Usd Exact"
+        },
+        "release_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReleaseReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "released_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
+          "title": "Released Usd Exact",
+          "type": "string"
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "reservation_id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "title": "Reservation Id",
+          "type": "string"
+        },
+        "reserved_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
+          "title": "Reserved Usd Exact",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/CostEntryStatus"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "usage_record_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Usage Record Sha256"
+        }
+      },
+      "required": [
+        "logical_request_id",
+        "attempt_index",
+        "request_id",
+        "reservation_id",
+        "status",
+        "release_reason",
+        "reserved_usd_exact",
+        "accounted_cost_usd_exact",
+        "released_usd_exact",
+        "created_at",
+        "updated_at",
+        "ledger_entry_sha256"
+      ],
+      "title": "CostLedgerAttemptEvidence",
+      "type": "object"
+    },
     "ExecutionEvidenceKind": {
       "description": "Whether a runtime record came from a real process or a test double.",
       "enum": [
@@ -437,6 +634,166 @@
         "resolution_sha256"
       ],
       "title": "ReasoningRequestRoleResolution",
+      "type": "object"
+    },
+    "ReleaseReason": {
+      "description": "Closed release reasons that cannot carry arbitrary or secret text.",
+      "enum": [
+        "cancelled_before_send",
+        "failed_before_send"
+      ],
+      "title": "ReleaseReason",
+      "type": "string"
+    },
+    "RunCostLedgerEvidence": {
+      "additionalProperties": false,
+      "description": "Exact campaign-only delta between immutable atomic ledger snapshots.",
+      "properties": {
+        "attempts": {
+          "items": {
+            "$ref": "#/$defs/CostLedgerAttemptEvidence"
+          },
+          "maxItems": 1000000,
+          "title": "Attempts",
+          "type": "array"
+        },
+        "baseline_active_reserved_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
+          "title": "Baseline Active Reserved Usd Exact",
+          "type": "string"
+        },
+        "baseline_entry_count": {
+          "maximum": 1000000,
+          "minimum": 0,
+          "title": "Baseline Entry Count",
+          "type": "integer"
+        },
+        "baseline_has_reservation_overrun": {
+          "title": "Baseline Has Reservation Overrun",
+          "type": "boolean"
+        },
+        "baseline_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Baseline Sha256",
+          "type": "string"
+        },
+        "baseline_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Baseline Snapshot Sha256",
+          "type": "string"
+        },
+        "baseline_spent_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
+          "title": "Baseline Spent Usd Exact",
+          "type": "string"
+        },
+        "cap_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
+          "title": "Cap Usd Exact",
+          "type": "string"
+        },
+        "evidence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Evidence Sha256",
+          "type": "string"
+        },
+        "final_active_reserved_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
+          "title": "Final Active Reserved Usd Exact",
+          "type": "string"
+        },
+        "final_entry_count": {
+          "maximum": 1000000,
+          "minimum": 0,
+          "title": "Final Entry Count",
+          "type": "integer"
+        },
+        "final_has_reservation_overrun": {
+          "title": "Final Has Reservation Overrun",
+          "type": "boolean"
+        },
+        "final_over_cap": {
+          "title": "Final Over Cap",
+          "type": "boolean"
+        },
+        "final_remaining_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
+          "title": "Final Remaining Usd Exact",
+          "type": "string"
+        },
+        "final_snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Final Snapshot Sha256",
+          "type": "string"
+        },
+        "final_spent_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
+          "title": "Final Spent Usd Exact",
+          "type": "string"
+        },
+        "run_accounted_cost_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
+          "title": "Run Accounted Cost Usd Exact",
+          "type": "string"
+        },
+        "run_entry_count": {
+          "maximum": 1000000,
+          "minimum": 0,
+          "title": "Run Entry Count",
+          "type": "integer"
+        },
+        "run_released_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
+          "title": "Run Released Usd Exact",
+          "type": "string"
+        },
+        "run_reserved_usd_exact": {
+          "pattern": "^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,18})?$",
+          "title": "Run Reserved Usd Exact",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "state": {
+          "const": "RUN_SCOPED_CLOSED",
+          "default": "RUN_SCOPED_CLOSED",
+          "title": "State",
+          "type": "string"
+        },
+        "status": {
+          "const": "VALIDATED",
+          "default": "VALIDATED",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "baseline_sha256",
+        "baseline_snapshot_sha256",
+        "final_snapshot_sha256",
+        "cap_usd_exact",
+        "baseline_spent_usd_exact",
+        "baseline_active_reserved_usd_exact",
+        "final_spent_usd_exact",
+        "final_active_reserved_usd_exact",
+        "final_remaining_usd_exact",
+        "run_reserved_usd_exact",
+        "run_accounted_cost_usd_exact",
+        "run_released_usd_exact",
+        "baseline_entry_count",
+        "final_entry_count",
+        "run_entry_count",
+        "final_over_cap",
+        "baseline_has_reservation_overrun",
+        "final_has_reservation_overrun",
+        "attempts",
+        "evidence_sha256"
+      ],
+      "title": "RunCostLedgerEvidence",
       "type": "object"
     },
     "UsageRecord": {
@@ -874,6 +1231,21 @@
       "title": "Configured Models",
       "type": "object"
     },
+    "cost_ledger": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CostLedgerAbsenceEvidence"
+        },
+        {
+          "$ref": "#/$defs/RunCostLedgerEvidence"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cost Ledger"
+    },
     "limitations": {
       "items": {
         "type": "string"
@@ -937,8 +1309,11 @@
       "$ref": "#/$defs/AuditRunStatus"
     },
     "schema_version": {
-      "const": "1.0",
-      "default": "1.0",
+      "default": "1.1",
+      "enum": [
+        "1.0",
+        "1.1"
+      ],
       "title": "Schema Version",
       "type": "string"
     },

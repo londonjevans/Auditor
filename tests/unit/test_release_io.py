@@ -10,10 +10,14 @@ import pytest
 import mmaudit.release_io as release_io_module
 from mmaudit.orchestration.manifest import ManifestFileBinding
 from mmaudit.release_io import (
+    DEFAULT_MAX_EVIDENCE_BYTES,
+    MAX_STREAMED_EVIDENCE_BYTES,
+    copy_file_evidence,
     create_evidence_file_binding,
     read_file_evidence,
     read_json_evidence,
     revalidate_evidence_file_binding,
+    write_file_evidence,
     write_json_evidence,
 )
 from mmaudit.reporting.json_report import stable_json
@@ -59,6 +63,349 @@ def test_file_reader_returns_exact_non_json_bytes_and_binding(tmp_path: Path) ->
         sha256=hashlib.sha256(content).hexdigest(),
         size=len(content),
     )
+
+
+@pytest.mark.parametrize("content", [b"", b"\x00forensic\xff\n"])
+def test_file_writer_preserves_exact_binary_or_empty_bytes(
+    tmp_path: Path,
+    content: bytes,
+) -> None:
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+
+    binding = write_file_evidence(
+        evidence_root=evidence_root,
+        relative_path="exact.bin",
+        content=content,
+    )
+
+    assert (evidence_root / "exact.bin").read_bytes() == content
+    assert binding.size == len(content)
+    assert binding.sha256 == hashlib.sha256(content).hexdigest()
+    assert stat_mode(evidence_root / "exact.bin") == 0o600
+
+
+def test_streamed_copy_preserves_binding_across_different_relative_paths(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    destination_root = tmp_path / "destination"
+    source_root.mkdir()
+    destination_root.mkdir()
+    (source_root / "private").mkdir()
+    (destination_root / "runs").mkdir()
+    content = b"\x00streamed-forensic-evidence\xff\n"
+    (source_root / "private" / "evidence.bin").write_bytes(content)
+    expected = ManifestFileBinding(
+        path="private/evidence.bin",
+        sha256=hashlib.sha256(content).hexdigest(),
+        size=len(content),
+    )
+
+    copied = copy_file_evidence(
+        source_root=source_root,
+        source_relative_path=expected.path,
+        destination_root=destination_root,
+        destination_relative_path="runs/evidence.bin",
+        expected_binding=expected,
+    )
+
+    assert MAX_STREAMED_EVIDENCE_BYTES > DEFAULT_MAX_EVIDENCE_BYTES
+    assert copied == ManifestFileBinding(
+        path="runs/evidence.bin",
+        sha256=expected.sha256,
+        size=expected.size,
+    )
+    assert (destination_root / copied.path).read_bytes() == content
+    assert stat_mode(destination_root / copied.path) == 0o600
+
+
+def _streamed_copy_case(
+    tmp_path: Path,
+    *,
+    content: bytes = b"streamed-evidence-mutation-canary\n",
+) -> tuple[Path, Path, Path, Path, ManifestFileBinding]:
+    source_root = tmp_path / "source"
+    destination_root = tmp_path / "destination"
+    source_path = source_root / "private" / "evidence.bin"
+    destination_path = destination_root / "runs" / "evidence.bin"
+    source_path.parent.mkdir(parents=True)
+    destination_path.parent.mkdir(parents=True)
+    source_path.write_bytes(content)
+    return (
+        source_root,
+        destination_root,
+        source_path,
+        destination_path,
+        ManifestFileBinding(
+            path="private/evidence.bin",
+            sha256=hashlib.sha256(content).hexdigest(),
+            size=len(content),
+        ),
+    )
+
+
+def test_streamed_copy_cleans_partial_output_through_renamed_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root, destination_root, _source_path, destination_path, expected = _streamed_copy_case(
+        tmp_path
+    )
+    destination_parent = destination_path.parent
+    moved_parent = tmp_path / "moved-destination-parent"
+    real_write = release_io_module.os.write
+    writes = 0
+
+    def write_then_rename_parent(descriptor: int, data) -> int:
+        nonlocal writes
+        writes += 1
+        if writes == 1:
+            written = real_write(descriptor, data[:3])
+            destination_parent.rename(moved_parent)
+            destination_parent.mkdir()
+            return written
+        raise OSError("synthetic streamed write failure")
+
+    monkeypatch.setattr(release_io_module.os, "write", write_then_rename_parent)
+
+    with pytest.raises(ValueError, match="could not be streamed safely"):
+        copy_file_evidence(
+            source_root=source_root,
+            source_relative_path=expected.path,
+            destination_root=destination_root,
+            destination_relative_path="runs/evidence.bin",
+            expected_binding=expected,
+        )
+
+    assert not (moved_parent / "evidence.bin").exists()
+    assert not destination_path.exists()
+
+
+@pytest.mark.parametrize("surface", ["leaf", "parent"])
+def test_streamed_copy_rejects_nested_source_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    surface: str,
+) -> None:
+    content = b"same bytes do not establish the same source inode\n"
+    source_root, destination_root, source_path, destination_path, expected = _streamed_copy_case(
+        tmp_path, content=content
+    )
+    real_require_same_root = release_io_module._require_same_root
+    root_checks = 0
+
+    def replace_before_nested_reopen(path: Path, identity) -> None:
+        nonlocal root_checks
+        root_checks += 1
+        if root_checks == 1:
+            if surface == "leaf":
+                source_path.rename(tmp_path / "detached-source.bin")
+                source_path.write_bytes(content)
+            else:
+                source_path.parent.rename(tmp_path / "detached-source-parent")
+                source_path.parent.mkdir()
+                source_path.write_bytes(content)
+        real_require_same_root(path, identity)
+
+    monkeypatch.setattr(
+        release_io_module,
+        "_require_same_root",
+        replace_before_nested_reopen,
+    )
+
+    with pytest.raises(ValueError, match="source path changed"):
+        copy_file_evidence(
+            source_root=source_root,
+            source_relative_path=expected.path,
+            destination_root=destination_root,
+            destination_relative_path="runs/evidence.bin",
+            expected_binding=expected,
+        )
+
+    assert not destination_path.exists()
+
+
+@pytest.mark.parametrize("surface", ["leaf", "parent"])
+def test_streamed_copy_rejects_nested_destination_replacement_without_deleting_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    surface: str,
+) -> None:
+    content = b"same bytes do not establish the same destination inode\n"
+    source_root, destination_root, _source_path, destination_path, expected = _streamed_copy_case(
+        tmp_path, content=content
+    )
+    real_require_same_root = release_io_module._require_same_root
+    root_checks = 0
+    detached_leaf = tmp_path / "detached-destination.bin"
+    detached_parent = tmp_path / "detached-destination-parent"
+
+    def replace_before_nested_reopen(path: Path, identity) -> None:
+        nonlocal root_checks
+        root_checks += 1
+        if root_checks == 2:
+            if surface == "leaf":
+                destination_path.rename(detached_leaf)
+                destination_path.write_bytes(content)
+            else:
+                destination_path.parent.rename(detached_parent)
+                destination_path.parent.mkdir()
+                destination_path.write_bytes(content)
+        real_require_same_root(path, identity)
+
+    monkeypatch.setattr(
+        release_io_module,
+        "_require_same_root",
+        replace_before_nested_reopen,
+    )
+
+    with pytest.raises(ValueError, match="destination path changed"):
+        copy_file_evidence(
+            source_root=source_root,
+            source_relative_path=expected.path,
+            destination_root=destination_root,
+            destination_relative_path="runs/evidence.bin",
+            expected_binding=expected,
+        )
+
+    assert destination_path.read_bytes() == content
+    if surface == "leaf":
+        assert detached_leaf.read_bytes() == content
+    else:
+        assert not (detached_parent / "evidence.bin").exists()
+
+
+@pytest.mark.parametrize("replaced_root", ["source", "destination"])
+def test_streamed_copy_rejects_root_replacement_and_cleans_held_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replaced_root: str,
+) -> None:
+    source_root, destination_root, source_path, destination_path, expected = _streamed_copy_case(
+        tmp_path
+    )
+    target = source_root if replaced_root == "source" else destination_root
+    moved = tmp_path / f"moved-{replaced_root}-root"
+    real_require_same_root = release_io_module._require_same_root
+    root_checks = 0
+
+    def replace_before_root_check(path: Path, identity) -> None:
+        nonlocal root_checks
+        root_checks += 1
+        target_check = 1 if replaced_root == "source" else 2
+        if root_checks == target_check:
+            target.rename(moved)
+            target.mkdir()
+        real_require_same_root(path, identity)
+
+    monkeypatch.setattr(
+        release_io_module,
+        "_require_same_root",
+        replace_before_root_check,
+    )
+
+    with pytest.raises(ValueError, match="root changed"):
+        copy_file_evidence(
+            source_root=source_root,
+            source_relative_path=expected.path,
+            destination_root=destination_root,
+            destination_relative_path="runs/evidence.bin",
+            expected_binding=expected,
+        )
+
+    if replaced_root == "source":
+        assert (moved / "private" / "evidence.bin").read_bytes() == (
+            b"streamed-evidence-mutation-canary\n"
+        )
+        assert not source_path.exists()
+        assert not destination_path.exists()
+    else:
+        assert not (moved / "runs" / "evidence.bin").exists()
+        assert not destination_path.exists()
+
+
+@pytest.mark.parametrize("mismatch", ["size", "sha256"])
+def test_streamed_copy_rejects_binding_mismatch_and_removes_output(
+    tmp_path: Path,
+    mismatch: str,
+) -> None:
+    source_root, destination_root, _source_path, destination_path, expected = _streamed_copy_case(
+        tmp_path
+    )
+    invalid = expected.model_copy(
+        update={"size": expected.size + 1} if mismatch == "size" else {"sha256": "0" * 64}
+    )
+
+    with pytest.raises(ValueError, match=r"expected unshared|differs from its binding"):
+        copy_file_evidence(
+            source_root=source_root,
+            source_relative_path=expected.path,
+            destination_root=destination_root,
+            destination_relative_path="runs/evidence.bin",
+            expected_binding=invalid,
+        )
+
+    assert not destination_path.exists()
+
+
+def test_streamed_copy_preserves_preexisting_destination(tmp_path: Path) -> None:
+    source_root, destination_root, _source_path, destination_path, expected = _streamed_copy_case(
+        tmp_path
+    )
+    destination_path.write_bytes(b"preserve unrelated destination\n")
+
+    with pytest.raises(ValueError, match="fresh file"):
+        copy_file_evidence(
+            source_root=source_root,
+            source_relative_path=expected.path,
+            destination_root=destination_root,
+            destination_relative_path="runs/evidence.bin",
+            expected_binding=expected,
+        )
+
+    assert destination_path.read_bytes() == b"preserve unrelated destination\n"
+
+
+def test_streamed_copy_handles_sparse_file_above_in_memory_reader_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "source"
+    destination_root = tmp_path / "destination"
+    source_path = source_root / "large.bin"
+    destination_path = destination_root / "large.bin"
+    source_root.mkdir()
+    destination_root.mkdir()
+    size = DEFAULT_MAX_EVIDENCE_BYTES + 4_097
+    with source_path.open("wb") as handle:
+        handle.write(b"forensic-stream-start")
+        handle.seek(size - 1)
+        handle.write(b"\x00")
+    with source_path.open("rb") as handle:
+        source_sha256 = hashlib.file_digest(handle, "sha256").hexdigest()
+    expected = ManifestFileBinding(path="large.bin", sha256=source_sha256, size=size)
+    real_read = release_io_module.os.read
+    requested_read_sizes: list[int] = []
+
+    def bounded_read(descriptor: int, count: int) -> bytes:
+        requested_read_sizes.append(count)
+        return real_read(descriptor, count)
+
+    monkeypatch.setattr(release_io_module.os, "read", bounded_read)
+
+    copied = copy_file_evidence(
+        source_root=source_root,
+        source_relative_path=expected.path,
+        destination_root=destination_root,
+        destination_relative_path="large.bin",
+        expected_binding=expected,
+    )
+
+    assert copied.size > DEFAULT_MAX_EVIDENCE_BYTES
+    assert destination_path.stat().st_size == size
+    with destination_path.open("rb") as handle:
+        assert hashlib.file_digest(handle, "sha256").hexdigest() == source_sha256
+    assert requested_read_sizes
+    assert max(requested_read_sizes) <= 1024 * 1024
 
 
 @pytest.mark.parametrize(

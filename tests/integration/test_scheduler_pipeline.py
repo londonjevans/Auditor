@@ -53,6 +53,8 @@ from mmaudit.orchestration.cost_ledger import AtomicCostLedger, CostEntryStatus
 from mmaudit.orchestration.manifest import (
     RunEvidenceManifest,
     canonical_sha256,
+    collect_run_artifacts,
+    seal_run_evidence_manifest,
     validate_manifest_artifacts,
 )
 from mmaudit.orchestration.model_coverage import model_review_edge_subject_id
@@ -73,6 +75,8 @@ from mmaudit.orchestration.pipeline import (
 )
 from mmaudit.orchestration.scheduler_runtime import PipelineScheduler
 from mmaudit.privacy import EffectivePrivacyPolicyEvidence
+from mmaudit.reporting.bundle import ModelExecutionArtifact, RunCostLedgerEvidence
+from mmaudit.reporting.json_report import write_json
 from mmaudit.repository.discovery import discover_repository
 from mmaudit.repository.ignore import IgnoreMatcher
 from mmaudit.repository.mapping import build_repository_map
@@ -556,6 +560,41 @@ async def test_pipeline_persists_exact_seven_pass_scheduler_evidence(
         "mock model usage was excluded from substantive model-review coverage"
         in result.report.model_review_coverage.limitations
     )
+    model_execution_path = result.run_dir / "model-execution.json"
+    model_execution = ModelExecutionArtifact.model_validate_json(
+        model_execution_path.read_text(encoding="utf-8")
+    )
+    assert model_execution.schema_version == "1.1"
+    assert isinstance(model_execution.cost_ledger, RunCostLedgerEvidence)
+    assert model_execution.cost_ledger.baseline_sha256 == (
+        artifact.summary.manifest.cost_ledger_baseline.baseline_sha256
+    )
+    assert model_execution.cost_ledger.run_entry_count > 0
+    assert {
+        attempt.logical_request_id
+        for attempt in model_execution.cost_ledger.attempts
+        if attempt.usage_record_sha256 is not None
+    } == {record.request_id for record in result.report.usage}
+
+    tampered_payload = model_execution.model_dump(mode="json")
+    cost_payload = tampered_payload["cost_ledger"]
+    assert isinstance(cost_payload, dict)
+    cost_payload["baseline_sha256"] = "f" * 64
+    cost_payload["evidence_sha256"] = scheduler_canonical_sha256(
+        {key: value for key, value in cost_payload.items() if key != "evidence_sha256"}
+    )
+    write_json(model_execution_path, tampered_payload)
+    tampered_manifest = seal_run_evidence_manifest(
+        run_id=manifest.run_id,
+        repository_root_name=manifest.repository_root_name,
+        git_commit=manifest.git_commit,
+        sources=manifest.sources,
+        run_configuration=manifest.run_configuration,
+        bindings=manifest.bindings,
+        artifacts=collect_run_artifacts(result.run_dir),
+    )
+    with pytest.raises(ValueError, match="scheduler baseline"):
+        validate_manifest_artifacts(tampered_manifest, result.run_dir)
 
 
 @pytest.mark.asyncio

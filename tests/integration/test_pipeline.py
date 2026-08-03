@@ -67,7 +67,6 @@ from mmaudit.models.schemas import (
     LocalInvariantDeployment,
     LocalInvariantDeploymentArgument,
     Location,
-    MaximumAssuranceStatus,
     ModelReviewCoverage,
     ModelReviewSurfaceKind,
     ModelSurfaceReviewArtifact,
@@ -805,7 +804,11 @@ async def test_authorized_mock_handler_replacement_revokes_mock_evidence(
 ) -> None:
     config = config_factory(privacy={"fail_on_detected_secret": False})
     fake = FakeOpenRouter()
-    client, http_client = _provider(config, fake)
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "handler-replacement-cost-ledger.json",
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    client, http_client = _provider(config, fake, atomic_ledger=ledger)
     calls = 0
 
     def replacement(_request: httpx.Request) -> httpx.Response:
@@ -822,6 +825,7 @@ async def test_authorized_mock_handler_replacement_revokes_mock_evidence(
         repo=vulnerable_repo,
         output=output,
         client=client,
+        cost_ledger=ledger,
         scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
     )
     try:
@@ -1019,13 +1023,18 @@ async def test_reused_provider_client_cannot_carry_usage_into_another_provider_r
 ) -> None:
     config = config_factory(privacy={"fail_on_detected_secret": False})
     fake = FakeOpenRouter()
-    client, http_client = _provider(config, fake)
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "reused-client-cost-ledger.json",
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    client, http_client = _provider(config, fake, atomic_ledger=ledger)
     output = tmp_path / "provider-output"
     pipeline = AuditPipeline(
         config,
         repo=vulnerable_repo,
         output=output,
         client=client,
+        cost_ledger=ledger,
         scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
     )
     try:
@@ -1054,28 +1063,28 @@ async def test_mock_provider_session_rejects_usage_relabelled_as_real(
     config = config_factory()
     fake = FakeOpenRouter()
     usage = EvidenceMismatchingUsageLedger()
-    client, http_client = _provider(config, fake, usage=usage)
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "usage-relabel-cost-ledger.json",
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    client, http_client = _provider(config, fake, usage=usage, atomic_ledger=ledger)
     pipeline = AuditPipeline(
         config,
         repo=vulnerable_repo,
         output=tmp_path / "provider-output",
         client=client,
+        cost_ledger=ledger,
         scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
     )
     try:
-        result = await pipeline.run(allow_code_egress=True)
+        with pytest.raises(ValueError, match="scheduler usage hash"):
+            await pipeline.run(allow_code_egress=True)
     finally:
         await http_client.aclose()
 
-    assert result.exit_code is ExitCode.MODEL_FAILURE
-    assert any(
-        "provider usage execution evidence differs from the established session" in reason
-        for reason in result.report.incomplete_reasons
-    )
-    assert result.report.model_review_coverage is not None
-    assert result.report.model_review_coverage.overall.numerator == 0
-    assert result.report.maximum_assurance is not None
-    assert result.report.maximum_assurance.status is MaximumAssuranceStatus.NOT_REQUESTED
+    run_directories = tuple((tmp_path / "provider-output" / "runs").iterdir())
+    assert run_directories
+    assert all(not (run_dir / "run-evidence-manifest.json").exists() for run_dir in run_directories)
 
 
 def _current_benchmark_verification() -> BenchmarkCertificateVerification:
@@ -1161,6 +1170,12 @@ async def _run(
     resume_run_dir: Path | None = None,
     output: Path | None = None,
 ):
+    if cost_ledger is None:
+        ledger_index = sum(1 for path in tmp_path.glob("test-cost-ledger-*.json") if path.is_file())
+        cost_ledger = AtomicCostLedger.initialize(
+            tmp_path / f"test-cost-ledger-{ledger_index}.json",
+            cap_usd=Decimal(str(config.execution.budget_usd)),
+        )
     client, http_client = _provider(config, fake, atomic_ledger=cost_ledger)
     pipeline = AuditPipeline(
         config,
@@ -2141,12 +2156,17 @@ async def test_frontier_privacy_refuses_before_model_request_without_exact_conse
         )
     )
     fake = FakeOpenRouter()
-    client, http_client = _provider(config, fake)
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / f"frontier-{consent_state}-cost-ledger.json",
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    client, http_client = _provider(config, fake, atomic_ledger=ledger)
     pipeline = AuditPipeline(
         config,
         repo=vulnerable_repo,
         output=tmp_path / "frontier-output",
         client=client,
+        cost_ledger=ledger,
         scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
         privacy_consent_observation=observation,
         privacy_source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
@@ -2194,12 +2214,17 @@ async def test_synthetic_benchmark_profile_cannot_authorize_private_operator_sou
         source_sha256="e" * 64,
     )
     fake = FakeOpenRouter()
-    client, http_client = _provider(config, fake)
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "synthetic-profile-cost-ledger.json",
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    client, http_client = _provider(config, fake, atomic_ledger=ledger)
     pipeline = AuditPipeline(
         config,
         repo=vulnerable_repo,
         output=tmp_path / "synthetic-output",
         client=client,
+        cost_ledger=ledger,
         scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
         privacy_consent_observation=observation,
         privacy_source_classification=PrivacySourceClassification.PRIVATE_OPERATOR_SOURCE,
@@ -2233,12 +2258,17 @@ async def test_synthetic_benchmark_enum_cannot_bypass_committed_source_provenanc
         }
     )
     fake = FakeOpenRouter()
-    client, http_client = _provider(config, fake)
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "synthetic-provenance-cost-ledger.json",
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    client, http_client = _provider(config, fake, atomic_ledger=ledger)
     pipeline = AuditPipeline(
         config,
         repo=vulnerable_repo,
         output=tmp_path / "synthetic-provenance-output",
         client=client,
+        cost_ledger=ledger,
         scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
         privacy_source_classification=PrivacySourceClassification.SYNTHETIC_COMMITTED,
     )
@@ -2272,18 +2302,24 @@ async def test_loaded_operator_credential_is_absent_from_emitted_audit_artifacts
     secret_file.chmod(0o600)
     config = config_factory(privacy={"fail_on_detected_secret": False})
     fake = FakeOpenRouter()
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "secret-canary-cost-ledger.json",
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
 
     with load_operator_secrets(secret_file, environ={}) as secrets:
         client, http_client = _provider(
             config,
             fake,
             api_key=secrets.openrouter_api_key,
+            atomic_ledger=ledger,
         )
         pipeline = AuditPipeline(
             config,
             repo=vulnerable_repo,
             output=tmp_path / "output",
             client=client,
+            cost_ledger=ledger,
             scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
         )
         try:
@@ -4849,12 +4885,17 @@ async def test_required_infeasible_scope_blocks_provider_spend(
         privacy={"fail_on_detected_secret": False},
     )
     fake = FakeOpenRouter()
-    client, http_client = _provider(config, fake)
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "infeasible-scope-cost-ledger.json",
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    client, http_client = _provider(config, fake, atomic_ledger=ledger)
     pipeline = AuditPipeline(
         config,
         repo=repo,
         output=tmp_path / "scope-preflight-output",
         client=client,
+        cost_ledger=ledger,
         scanner_runner=StaticScannerRunner(  # type: ignore[arg-type]
             status=ScannerStatus.UNAVAILABLE,
         ),
@@ -5224,12 +5265,17 @@ async def test_code_egress_defaults_to_refusal(
         }
     )
     fake = FakeOpenRouter()
-    client, http_client = _provider(config, fake)
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "code-egress-refusal-cost-ledger.json",
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    client, http_client = _provider(config, fake, atomic_ledger=ledger)
     pipeline = AuditPipeline(
         config,
         repo=vulnerable_repo,
         output=tmp_path / "output",
         client=client,
+        cost_ledger=ledger,
         scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
     )
     try:
@@ -5813,12 +5859,17 @@ async def test_reused_pipeline_does_not_leak_provider_privacy_state_into_scanner
 ) -> None:
     config = config_factory(privacy={"fail_on_detected_secret": False})
     fake = FakeOpenRouter()
-    client, http_client = _provider(config, fake)
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "reused-privacy-cost-ledger.json",
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    client, http_client = _provider(config, fake, atomic_ledger=ledger)
     pipeline = AuditPipeline(
         config,
         repo=vulnerable_repo,
         output=tmp_path / "reused-output",
         client=client,
+        cost_ledger=ledger,
         scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
     )
     try:

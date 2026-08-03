@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from mmaudit.benchmark.engine import BenchmarkReport
 from mmaudit.config import ModelsConfig
+from mmaudit.forensic_export import ForensicDeliveryDescriptor
 from mmaudit.models.calibration import ModelCalibrationArtifact
 from mmaudit.models.lineage_review import ModelLineageReviewArtifact
 from mmaudit.models.qualification import ModelQualificationArtifact
@@ -55,6 +56,7 @@ MODELS: dict[str, type[BaseModel]] = {
     "context_manifest.schema.json": ContextManifest,
     "coverage_artifact.schema.json": CoverageArtifact,
     "findings_artifact.schema.json": FindingsArtifact,
+    "forensic_delivery_descriptor.schema.json": ForensicDeliveryDescriptor,
     "hardhat_reporter_inventory.schema.json": HardhatReporterInventory,
     "hardhat_reporter_test.schema.json": HardhatReporterExecution,
     "hardhat_request_inventory.schema.json": HardhatInventoryPhaseRequest,
@@ -87,6 +89,7 @@ TITLE_OVERRIDES = {
     "benchmark_report.schema.json": "mmaudit benchmark report",
     "coverage_artifact.schema.json": "mmaudit forensic coverage artifact",
     "findings_artifact.schema.json": "mmaudit forensic findings artifact",
+    "forensic_delivery_descriptor.schema.json": "mmaudit complete forensic delivery descriptor",
     "hardhat_reporter_inventory.schema.json": "mmaudit Hardhat inventory observation",
     "hardhat_reporter_test.schema.json": "mmaudit Hardhat test observation",
     "hardhat_request_inventory.schema.json": "mmaudit Hardhat inventory phase request",

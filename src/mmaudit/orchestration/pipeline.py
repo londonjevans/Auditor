@@ -330,6 +330,7 @@ from mmaudit.reporting.bundle import (
     build_coverage_artifact,
     build_findings_artifact,
     build_model_execution_artifact,
+    build_run_cost_ledger_evidence,
 )
 from mmaudit.reporting.client import (
     bind_active_finding_source_locations,
@@ -1590,6 +1591,21 @@ class AuditPipeline:
         self.privacy_consent_observation = None
         self.privacy_source_provenance_observation = None
 
+    def _effective_cost_ledger(self) -> AtomicCostLedger | None:
+        """Resolve one atomic-ledger authority and reject split custody."""
+
+        client_ledger = self.client.budget.atomic_ledger if self.client is not None else None
+        configured_ledger = self.cost_ledger
+        if client_ledger is not None and configured_ledger is not None:
+            if client_ledger.identity_sha256 != configured_ledger.identity_sha256:
+                raise ValueError("pipeline and provider client use different cost ledgers")
+            return client_ledger
+        if self.client is not None:
+            if configured_ledger is not None:
+                raise ValueError("provider client does not use the configured cost ledger")
+            return client_ledger
+        return configured_ledger
+
     def _planned_model_execution_evidence(self) -> ExecutionEvidenceKind:
         """Return the fail-closed evidence class for the pending provider path."""
 
@@ -1721,8 +1737,6 @@ class AuditPipeline:
         ci_policy_digest = (
             deterministic_ci_policy_sha256(self.config, run_options) if ci_mode else None
         )
-        if not scanner_only and self.client is None and self.cost_ledger is None:
-            raise ValueError("provider audits require an explicit existing cumulative cost ledger")
         if not scanner_only and self.client is not None and self.client.usage.records:
             raise ValueError("provider audits require a fresh empty client usage ledger")
         if not scanner_only and self.client is not None and self.client.context_preflight.records:
@@ -1741,6 +1755,9 @@ class AuditPipeline:
             and (not self._owns_client or type(self.client) is not OpenRouterClient)
         ):
             raise ValueError("injected provider clients cannot establish REAL execution provenance")
+        effective_cost_ledger = self._effective_cost_ledger()
+        if not scanner_only and effective_cost_ledger is None:
+            raise ValueError("provider audits require an explicit existing cumulative cost ledger")
         benchmark_required = (
             self.config.maximum_assurance.benchmark_gate or self.config.maximum_assurance.ci_mode
         )
@@ -2665,7 +2682,7 @@ class AuditPipeline:
                     self.config.execution.conservative_usd_per_million_tokens
                 ),
                 max_requests_per_agent=self.config.execution.max_requests_per_agent,
-                atomic_ledger=None if scanner_only else self.cost_ledger,
+                atomic_ledger=None if scanner_only else effective_cost_ledger,
                 require_endpoint_cost_bound=not scanner_only,
                 global_input_token_budget=(
                     None if scanner_only else self.config.token_budgets.global_input_token_budget
@@ -2862,7 +2879,7 @@ class AuditPipeline:
                     ),
                 )
                 scheduler_analysis_input_sha256 = scheduler_analysis_input.analysis_input_sha256
-                atomic_ledger = self.client.budget.atomic_ledger
+                atomic_ledger = self._effective_cost_ledger()
                 scheduler_cost_ledger_baseline = None
                 if resume_scheduler_journal is None and atomic_ledger is not None:
                     scheduler_cost_ledger_baseline = build_scheduler_cost_ledger_baseline(
@@ -7082,6 +7099,7 @@ class AuditPipeline:
             scheduler_runtime_journal=(
                 self._active_scheduler.journal if self._active_scheduler is not None else None
             ),
+            cost_ledger=effective_cost_ledger,
         )
         self.logger.removeHandler(log_handler)
         log_handler.close()
@@ -7820,6 +7838,7 @@ class AuditPipeline:
         ci_state: CIRunState | None,
         scheduler_artifact: SchedulerArtifact | None,
         scheduler_runtime_journal: SchedulerJournal | None,
+        cost_ledger: AtomicCostLedger | None,
     ) -> None:
         status_metadata = report_status_metadata(report)
         if scheduler_artifact is not None:
@@ -7996,7 +8015,33 @@ class AuditPipeline:
         write_json(run_dir / "final-findings.json", report)
         write_json(run_dir / "findings.json", findings_artifact)
         write_json(run_dir / "coverage.json", build_coverage_artifact(report))
-        write_json(run_dir / "model-execution.json", build_model_execution_artifact(report))
+        scheduler_cost_baseline = (
+            scheduler_artifact.summary.manifest.cost_ledger_baseline
+            if scheduler_artifact is not None
+            else None
+        )
+        cost_ledger_evidence = None
+        if scheduler_cost_baseline is not None:
+            if scheduler_artifact is None:  # pragma: no cover - derived immediately above.
+                raise ValueError("scheduler cost baseline lacks its campaign artifact")
+            if cost_ledger is None:
+                raise ValueError("scheduler cost baseline lacks its live terminal ledger")
+            cost_ledger_evidence = build_run_cost_ledger_evidence(
+                baseline=scheduler_cost_baseline,
+                final_snapshot=cost_ledger.snapshot(),
+                campaign_logical_request_ids=tuple(
+                    item.logical_request_id for item in scheduler_artifact.model_requests
+                ),
+                usage_records=report.usage,
+            )
+        write_json(
+            run_dir / "model-execution.json",
+            build_model_execution_artifact(
+                report,
+                cost_ledger_evidence=cost_ledger_evidence,
+                persistent_ledger_configured=cost_ledger is not None,
+            ),
+        )
         (run_dir / "client-report.md").write_text(
             render_client_markdown(
                 report,

@@ -177,6 +177,8 @@ def test_help_lists_required_commands() -> None:
         "benchmark",
         "verify-certificate",
         "verify-run",
+        "export-forensic",
+        "verify-forensic-export",
         "replay",
     ):
         assert command in result.stdout

@@ -394,7 +394,13 @@ def _write_required_artifacts(run_dir: Path, report: AuditReport) -> None:
     )
     write_json(run_dir / "findings.json", build_findings_artifact(report))
     write_json(run_dir / "coverage.json", build_coverage_artifact(report))
-    write_json(run_dir / "model-execution.json", build_model_execution_artifact(report))
+    write_json(
+        run_dir / "model-execution.json",
+        build_model_execution_artifact(
+            report,
+            legacy_schema_1_0=report.schema_version != "1.2",
+        ),
+    )
     write_json(run_dir / "audit-results.sarif", generate_report_sarif(report))
     (run_dir / "client-report.md").write_text(
         render_client_markdown(report, {}),

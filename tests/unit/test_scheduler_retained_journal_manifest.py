@@ -11,9 +11,14 @@ from typing import Any
 
 import pytest
 
+import mmaudit.forensic_export as forensic_export_module
 import mmaudit.orchestration.manifest as manifest_module
 import mmaudit.orchestration.scheduler as scheduler_module
 from mmaudit.config import AuditConfig
+from mmaudit.forensic_export import (
+    export_complete_forensic_bundle,
+    verify_complete_forensic_bundle,
+)
 from mmaudit.models.scheduler import (
     SchedulerArtifact,
     SchedulerRetainedJournalReference,
@@ -27,6 +32,7 @@ from mmaudit.orchestration.manifest import (
     build_run_evidence_manifest,
     validate_manifest_artifacts,
     validate_scheduler_artifact,
+    write_run_evidence_manifest,
 )
 from tests.unit.test_scheduler_manifest import (
     _live_scheduler_journal,
@@ -131,6 +137,31 @@ def _write_resealed_reference_payload(case: _RetainedJournalCase, **changes: Any
     )
 
 
+def _seal_retained_consumer_for_export(
+    case: _RetainedJournalCase,
+) -> tuple[Path, RunEvidenceManifest]:
+    consumer = case.consumer.parent / case.manifest.run_id
+    case.consumer.rename(consumer)
+    reference_path = consumer / "private" / SCHEDULER_RETAINED_JOURNAL_REFERENCE_FILENAME
+    _write_reference(
+        reference_path,
+        SchedulerRetainedJournalReference.from_artifact(
+            owner_run_id=case.owner.name,
+            consumer_run_id=consumer.name,
+            artifact=case.artifact,
+        ),
+    )
+    with _live_scheduler_journal(case.owner, case.artifact) as journal:
+        manifest = build_run_evidence_manifest(
+            run_dir=consumer,
+            report=case.report,
+            config=case.config,
+            scheduler_runtime_journal=journal,
+        )
+    write_run_evidence_manifest(consumer / "run-evidence-manifest.json", manifest)
+    return consumer, manifest
+
+
 def test_detached_retained_journal_reconstructs_after_physical_owner_closed(
     retained_case: _RetainedJournalCase,
 ) -> None:
@@ -142,6 +173,81 @@ def test_detached_retained_journal_reconstructs_after_physical_owner_closed(
     reference_bytes = retained_case.reference_path.read_bytes()
     assert bindings[relative_reference].size == len(reference_bytes)
     assert bindings[relative_reference].sha256 == hashlib.sha256(reference_bytes).hexdigest()
+
+
+def test_complete_forensic_export_retains_resumed_run_journal_after_source_removal(
+    retained_case: _RetainedJournalCase,
+    tmp_path: Path,
+) -> None:
+    consumer, manifest = _seal_retained_consumer_for_export(retained_case)
+    destination = tmp_path / "complete-forensic-resumed-run"
+
+    descriptor = export_complete_forensic_bundle(
+        source_run=consumer,
+        destination=destination,
+        acknowledge_sensitive_evidence=True,
+    )
+
+    assert descriptor.source_run_directory_name == consumer.name
+    assert descriptor.source_run_id == manifest.run_id
+    assert len(descriptor.retained_journal_dependencies) == 1
+    dependency = descriptor.retained_journal_dependencies[0]
+    assert dependency.reference.owner_run_id == retained_case.owner.name
+    assert dependency.reference.consumer_run_id == consumer.name
+    assert descriptor.private_artifact_count >= dependency.artifact_count + 1
+    original_runs = retained_case.owner.parent
+    original_runs.rename(tmp_path / "original-runs-removed")
+
+    verified = verify_complete_forensic_bundle(
+        delivery_root=destination,
+        acknowledge_sensitive_evidence=True,
+    )
+
+    assert verified == descriptor
+    assert (destination / dependency.journal_directory).is_dir()
+
+
+def test_forensic_verifier_rejects_byte_identical_retained_journal_swap(
+    retained_case: _RetainedJournalCase,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    consumer, _manifest = _seal_retained_consumer_for_export(retained_case)
+    destination = tmp_path / "complete-forensic-resumed-run"
+    descriptor = export_complete_forensic_bundle(
+        source_run=consumer,
+        destination=destination,
+        acknowledge_sensitive_evidence=True,
+    )
+    dependency = descriptor.retained_journal_dependencies[0]
+    journal = destination / dependency.journal_directory
+    twin = tmp_path / "retained-journal-twin"
+    displaced = tmp_path / "retained-journal-displaced"
+    shutil.copytree(journal, twin, copy_function=shutil.copy2)
+    real_reader = forensic_export_module.read_json_evidence
+    descriptor_reads = 0
+
+    def swap_after_final_descriptor_read(**kwargs: Any) -> Any:
+        nonlocal descriptor_reads
+        observation = real_reader(**kwargs)
+        if kwargs["relative_path"] == "forensic-delivery.json":
+            descriptor_reads += 1
+            if descriptor_reads == 2:
+                journal.rename(displaced)
+                twin.rename(journal)
+        return observation
+
+    monkeypatch.setattr(
+        forensic_export_module,
+        "read_json_evidence",
+        swap_after_final_descriptor_read,
+    )
+
+    with pytest.raises(ValueError, match=r"directory identity changed|authority changed"):
+        verify_complete_forensic_bundle(
+            delivery_root=destination,
+            acknowledge_sensitive_evidence=True,
+        )
 
 
 def test_detached_retained_journal_requires_its_sealed_reference_binding(

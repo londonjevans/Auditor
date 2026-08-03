@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: PAUSED_OPERATOR
+AUTORUN_STATUS: PAUSED_OPERATOR_REQUEST
 CURRENT_MILESTONE: Client report and forensic evidence bundle
 CURRENT_TICKET: V3-REPORT-001 (IN_PROGRESS)
 LAST_COMPLETED_TICKET: V3-FIXTURE-001 (COMPLETE)
-NEXT_ACTION: Resume V3-REPORT-001 from the paused WIP checkpoint; inspect the interrupted forensic-export helper slice, implement the run-scoped cost-ledger lifecycle projection, resolve the fail-closed scanner diagnostic race, then run the focused and complete ticket-close matrices before granting completion credit.
-LAST_COMMAND: `pgrep -fl 'pytest|mypy|ruff|mmaudit|generate_release_schemas|forge|anvil|slither|echidna|medusa|halmos|kontrol|certora' || true`.
-LAST_RESULT: INCONCLUSIVE process probe: this managed macOS environment denied process-list access (`sysmond service not found` / `Cannot get process list`). All delegated workers were explicitly stopped, no unified command session remains active, and `git diff --check` passed immediately before this pause record.
+NEXT_ACTION: Resume V3-REPORT-001 by formatting and running the latest forensic-export directory-inventory regressions, then close the three independently reproduced cost-custody defects (private provider-attempt usage join, exact-versus-presentation cost, and current-manifest legacy downgrade) before integrated schema, static, and ticket-close gates.
+LAST_COMMAND: `pgrep -fl 'pytest|mypy|ruff|generate_release_schemas|mmaudit|python.*Auditor'`.
+LAST_RESULT: PAUSED: no matching validation or mmaudit process was running; all delegated agents stopped at saved filesystem states. The newest forensic directory-inventory tests are explicitly unformatted and unexecuted.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -125,6 +125,44 @@ LAST_CHECKPOINT_COMMIT: 2ea5d19cbeac1726060292415075b18628226c8f
   `2ea5d19cbeac1726060292415075b18628226c8f`. It is not a ticket-complete, release, or
   maximum-assurance claim; the documented focused failure and remaining forensic/cost evidence
   work must be resolved after resume.
+- **Resume (2026-08-03T19:20:02Z):** Persistent-goal continuation resumed from clean,
+  SSH-synchronized pause commit `bcdad9014fcbba8f68c1db0313a6a84718f6a9bf`. The exact
+  1,417-line objective was re-read and its recorded SHA-256 reverified. Work remains bounded to
+  V3-REPORT-001; no provider call or public-network operation is required for this slice.
+- **Fail-closed scanner diagnostic assay:** The real POSIX descendant cleanup test now accepts
+  either of the two exact isolation-failure observations that can arise while the child is killed
+  and reaped; deterministic helper regressions separately prove the known-descendant and
+  absence-not-attested branches. The exact focused command passed `3` tests in `1.31s`. This
+  changes no scanner success criterion: every accepted branch remains `ISOLATION_FAILURE`.
+- **Run-scoped cost-custody slice:** Current model-execution evidence now distinguishes an honest
+  zero-use absence from an exact scheduler campaign ledger delta and retains terminal reservation,
+  retry, release, uncertain-accounting, reconciled-cost, baseline, final-snapshot, and overrun
+  evidence without serializing the global ledger path or prior request history. The exact focused
+  command `.venv/bin/pytest -q tests/unit/test_forensic_cost_ledger.py
+  tests/unit/test_manifest.py
+  tests/integration/test_scheduler_pipeline.py::test_pipeline_persists_exact_seven_pass_scheduler_evidence`
+  passed `54` tests in `13.50s`. The prior broader pipeline run exposed an honest failed timeout
+  whose terminal public request has no success-usage hash; the corrected focused timeout assay
+  passed `1` test in `2.31s`. Independent review of the exact private scheduler-usage join remains
+  open, so this is not yet ticket-complete evidence.
+- **Report traceability and streamed release I/O:** `MA-REPORT-BUNDLE` now names the executable
+  complete-delivery, cost-custody, schema, and adversarial test paths. The traceability suite passed
+  `11` tests in `0.05s`; targeted Ruff and strict mypy passed. The hardened streamed copier was
+  handed back with `56` focused tests passing in `0.62s`, including path replacement, partial-write
+  cleanup, exact binding, and sparse evidence above the in-memory reader bound. Final integrated
+  export validation and independent review remain active before completion credit.
+- **Graceful pause (2026-08-03T20:08:17Z):** The operator requested a laptop-safe pause. All
+  delegated work stopped at saved filesystem states and the process check found no pytest, mypy,
+  Ruff, schema-generation, mmaudit, or repository Python process. The forensic-export matrix had
+  previously passed `29` tests, its retained-portability assay passed `1`, and focused Ruff/mypy
+  were green; subsequent directory-inventory binding and retained-journal byte-swap regressions
+  are saved but have not been formatted or executed and receive no validation credit. Independent
+  cost review reproduced three open fail-closed defects: missing exact private provider-attempt
+  usage custody, exact Decimal versus presentation-float cost disagreement (including recovered
+  uncertainty), and schema-`1.2` manifest acceptance of legacy model-execution custody. Follow-up
+  should also inspect detached final-snapshot completeness and route/fallback accounting. No
+  provider request, paid call, public-network operation, commit, or push occurred during this
+  pause slice; V3-REPORT-001 remains `IN_PROGRESS`.
 
 ## 2026-08-03 — V3-FIXTURE-001
 

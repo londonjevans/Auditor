@@ -24,6 +24,7 @@ type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]
 type JsonWritable = BaseModel | dict[str, Any] | list[Any]
 
 DEFAULT_MAX_EVIDENCE_BYTES = 100_000_000
+MAX_STREAMED_EVIDENCE_BYTES = 4 * 1024**3
 _READ_CHUNK_BYTES = 1024 * 1024
 _NOFOLLOW_FLAG = getattr(os, "O_NOFOLLOW", 0)
 _DIRECTORY_FLAG = getattr(os, "O_DIRECTORY", 0)
@@ -148,7 +149,7 @@ def write_file_evidence(
 
     bound = _validate_max_bytes(max_bytes)
     normalized = _normalize_evidence_path(relative_path)
-    if not isinstance(content, bytes) or not content or len(content) > bound:
+    if not isinstance(content, bytes) or len(content) > bound:
         raise ValueError("release evidence bytes exceed their output bound")
     return _write_file_content(
         evidence_root=evidence_root,
@@ -156,6 +157,214 @@ def write_file_evidence(
         content=content,
         max_bytes=bound,
     )
+
+
+def copy_file_evidence(
+    *,
+    source_root: Path,
+    source_relative_path: str | Path,
+    destination_root: Path,
+    destination_relative_path: str | Path,
+    expected_binding: ManifestFileBinding,
+) -> ManifestFileBinding:
+    """Stream one exact manifest-bound file between trusted roots without following links."""
+
+    source_path = _normalize_evidence_path(source_relative_path)
+    destination_path = _normalize_evidence_path(destination_relative_path)
+    expected = ManifestFileBinding.model_validate(expected_binding.model_dump(mode="json"))
+    if expected.path != source_path:
+        raise ValueError("release evidence source path differs from its expected binding")
+    if expected.size > MAX_STREAMED_EVIDENCE_BYTES:
+        raise ValueError("release evidence source exceeds its streamed-copy bound")
+
+    source: _RootHandle | None = None
+    destination: _RootHandle | None = None
+    source_parent: int | None = None
+    destination_parent: int | None = None
+    destination_leaf: str | None = None
+    source_descriptor: int | None = None
+    destination_descriptor: int | None = None
+    source_identity: tuple[int, int, int, int, int, int, int] | None = None
+    destination_identity: tuple[int, int, int, int, int, int, int] | None = None
+    created_identity: tuple[int, int] | None = None
+    failure: BaseException | None = None
+    cleanup_through_path = False
+    result: ManifestFileBinding | None = None
+    try:
+        source = _open_root(source_root)
+        source_parent, source_leaf = _open_parent(source, source_path)
+        try:
+            source_before = os.stat(
+                source_leaf,
+                dir_fd=source_parent,
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise ValueError("release evidence source is missing") from exc
+        if (
+            not stat.S_ISREG(source_before.st_mode)
+            or _is_link_or_reparse(source_before)
+            or source_before.st_nlink != 1
+            or source_before.st_size != expected.size
+        ):
+            raise ValueError("release evidence source must be the expected unshared regular file")
+        try:
+            source_descriptor = os.open(
+                source_leaf,
+                os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | _NOFOLLOW_FLAG,
+                dir_fd=source_parent,
+            )
+        except OSError as exc:
+            raise ValueError("release evidence source could not be opened safely") from exc
+        source_opened = os.fstat(source_descriptor)
+        if _stat_identity(source_opened) != _stat_identity(source_before):
+            raise ValueError("release evidence source changed before streaming")
+        source_identity = _stat_identity(source_opened)
+
+        destination = _open_root(destination_root)
+        destination_parent, destination_leaf = _open_parent(destination, destination_path)
+        try:
+            destination_descriptor = os.open(
+                destination_leaf,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0) | _NOFOLLOW_FLAG,
+                0o600,
+                dir_fd=destination_parent,
+            )
+        except OSError as exc:
+            raise ValueError("release evidence destination must be a fresh file") from exc
+        os.fchmod(destination_descriptor, 0o600)
+        destination_opened = os.fstat(destination_descriptor)
+        created_identity = (destination_opened.st_dev, destination_opened.st_ino)
+        if (
+            not stat.S_ISREG(destination_opened.st_mode)
+            or destination_opened.st_nlink != 1
+            or destination_opened.st_size != 0
+            or stat.S_IMODE(destination_opened.st_mode) != 0o600
+        ):
+            raise ValueError("release evidence output is not a fresh private file")
+
+        source_digest = hashlib.sha256()
+        source_size = 0
+        while True:
+            remaining = MAX_STREAMED_EVIDENCE_BYTES - source_size
+            chunk = os.read(source_descriptor, min(_READ_CHUNK_BYTES, remaining + 1))
+            if not chunk:
+                break
+            source_size += len(chunk)
+            if source_size > MAX_STREAMED_EVIDENCE_BYTES:
+                raise ValueError("release evidence source exceeds its streamed-copy bound")
+            source_digest.update(chunk)
+            view = memoryview(chunk)
+            while view:
+                written = os.write(destination_descriptor, view)
+                if written <= 0:
+                    raise OSError("release evidence streamed write made no progress")
+                view = view[written:]
+        os.fsync(destination_descriptor)
+
+        source_finished = os.fstat(source_descriptor)
+        source_after = os.stat(
+            source_leaf,
+            dir_fd=source_parent,
+            follow_symlinks=False,
+        )
+        source_identities = {
+            _stat_identity(source_before),
+            _stat_identity(source_opened),
+            _stat_identity(source_finished),
+            _stat_identity(source_after),
+        }
+        if (
+            len(source_identities) != 1
+            or source_size != expected.size
+            or source_digest.hexdigest() != expected.sha256
+        ):
+            raise ValueError("release evidence source changed or differs from its binding")
+
+        destination_written = os.fstat(destination_descriptor)
+        os.lseek(destination_descriptor, 0, os.SEEK_SET)
+        destination_sha256, destination_size = _hash_descriptor(
+            destination_descriptor,
+            max_bytes=MAX_STREAMED_EVIDENCE_BYTES,
+        )
+        destination_verified = os.fstat(destination_descriptor)
+        destination_entry = os.stat(
+            destination_leaf,
+            dir_fd=destination_parent,
+            follow_symlinks=False,
+        )
+        if (
+            created_identity != (destination_written.st_dev, destination_written.st_ino)
+            or _stat_identity(destination_written) != _stat_identity(destination_verified)
+            or _stat_identity(destination_verified) != _stat_identity(destination_entry)
+            or destination_verified.st_nlink != 1
+            or stat.S_IMODE(destination_verified.st_mode) != 0o600
+            or _is_link_or_reparse(destination_entry)
+            or destination_size != expected.size
+            or destination_sha256 != expected.sha256
+        ):
+            raise ValueError("release evidence destination differs after streaming")
+        os.fsync(destination_parent)
+
+        source_identity = _stat_identity(source_finished)
+        destination_identity = _stat_identity(destination_verified)
+        _require_same_root(source_root, source.identity)
+        _require_same_root(destination_root, destination.identity)
+        _require_same_relative_file(
+            root=source,
+            relative_path=source_path,
+            expected_identity=source_identity,
+            label="source",
+        )
+        _require_same_relative_file(
+            root=destination,
+            relative_path=destination_path,
+            expected_identity=destination_identity,
+            label="destination",
+        )
+        # Recheck root identity after resolving both nested paths so a root swap cannot
+        # bridge two otherwise valid relative observations.
+        _require_same_root(source_root, source.identity)
+        _require_same_root(destination_root, destination.identity)
+        result = ManifestFileBinding(
+            path=destination_path,
+            sha256=expected.sha256,
+            size=expected.size,
+        )
+    except BaseException as exc:
+        failure = exc
+        cleanup_through_path = not _unlink_created_file_at(
+            parent_descriptor=destination_parent,
+            leaf=destination_leaf,
+            created_identity=created_identity,
+        )
+    finally:
+        if destination_descriptor is not None:
+            os.close(destination_descriptor)
+        if source_descriptor is not None:
+            os.close(source_descriptor)
+        if destination_parent is not None:
+            os.close(destination_parent)
+        if source_parent is not None:
+            os.close(source_parent)
+        if destination is not None:
+            os.close(destination.descriptor)
+        if source is not None:
+            os.close(source.descriptor)
+
+    if failure is not None:
+        if cleanup_through_path:
+            _unlink_created_file(
+                evidence_root=destination_root,
+                relative_path=destination_path,
+                created_identity=created_identity,
+            )
+        if isinstance(failure, OSError):
+            raise ValueError("release evidence could not be streamed safely") from failure
+        raise failure
+    if result is None or source_identity is None or destination_identity is None:
+        raise ValueError("release evidence streamed copy did not produce a bound result")
+    return result
 
 
 def _write_file_content(
@@ -454,6 +663,20 @@ def _read_descriptor(descriptor: int, *, max_bytes: int) -> bytes:
     return bytes(content)
 
 
+def _hash_descriptor(descriptor: int, *, max_bytes: int) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size = 0
+    while size <= max_bytes:
+        chunk = os.read(descriptor, min(_READ_CHUNK_BYTES, max_bytes + 1 - size))
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > max_bytes:
+            raise ValueError("release evidence file exceeds its streamed-copy bound")
+        digest.update(chunk)
+    return digest.hexdigest(), size
+
+
 def _require_same_root(path: Path, expected: tuple[int, int, int]) -> None:
     root = _open_root(path)
     try:
@@ -461,6 +684,79 @@ def _require_same_root(path: Path, expected: tuple[int, int, int]) -> None:
             raise ValueError("release evidence root changed during file observation")
     finally:
         os.close(root.descriptor)
+
+
+def _require_same_relative_file(
+    *,
+    root: _RootHandle,
+    relative_path: str,
+    expected_identity: tuple[int, int, int, int, int, int, int],
+    label: str,
+) -> None:
+    """Reopen one nested path from its held root and require the same exact file."""
+
+    parent_descriptor: int | None = None
+    descriptor: int | None = None
+    try:
+        parent_descriptor, leaf = _open_parent(root, relative_path)
+        before = os.stat(leaf, dir_fd=parent_descriptor, follow_symlinks=False)
+        if (
+            _stat_identity(before) != expected_identity
+            or not stat.S_ISREG(before.st_mode)
+            or _is_link_or_reparse(before)
+            or before.st_nlink != 1
+        ):
+            raise ValueError(f"release evidence {label} path changed during streaming")
+        descriptor = os.open(
+            leaf,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | _NOFOLLOW_FLAG,
+            dir_fd=parent_descriptor,
+        )
+        opened = os.fstat(descriptor)
+        finished = os.fstat(descriptor)
+        after = os.stat(leaf, dir_fd=parent_descriptor, follow_symlinks=False)
+        if {
+            _stat_identity(before),
+            _stat_identity(opened),
+            _stat_identity(finished),
+            _stat_identity(after),
+        } != {expected_identity}:
+            raise ValueError(f"release evidence {label} path changed during streaming")
+    except OSError as exc:
+        raise ValueError(f"release evidence {label} path changed during streaming") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if parent_descriptor is not None:
+            os.close(parent_descriptor)
+
+
+def _unlink_created_file_at(
+    *,
+    parent_descriptor: int | None,
+    leaf: str | None,
+    created_identity: tuple[int, int] | None,
+) -> bool:
+    """Remove only this call's output while its original parent descriptor is held."""
+
+    if created_identity is None:
+        return True
+    if parent_descriptor is None or leaf is None:
+        return False
+    try:
+        metadata = os.stat(leaf, dir_fd=parent_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    if (metadata.st_dev, metadata.st_ino) != created_identity:
+        return False
+    try:
+        os.unlink(leaf, dir_fd=parent_descriptor)
+        os.fsync(parent_descriptor)
+    except OSError:
+        return False
+    return True
 
 
 def _normalize_evidence_path(path: str | Path) -> str:

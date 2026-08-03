@@ -93,9 +93,11 @@ from mmaudit.orchestration.execution_candidates import (
 )
 from mmaudit.reporting.bundle import (
     MANIFEST_BOUND_REPORT_DELIVERABLES,
+    CostLedgerAbsenceEvidence,
     CoverageArtifact,
     FindingsArtifact,
     ModelExecutionArtifact,
+    RunCostLedgerEvidence,
     build_coverage_artifact,
     build_findings_artifact,
     build_model_execution_artifact,
@@ -602,6 +604,8 @@ def _build_run_evidence_manifest(
         qualification_runtime=qualification_runtime,
         scheduler_runtime_journal=scheduler_runtime_journal,
     )
+    if report.schema_version == "1.2" or report_bundle_required:
+        _validate_model_execution_cost_ledger_custody(root, report, scheduler_artifact)
 
     bindings = ManifestBindingSet(
         configuration=_configuration_bindings(effective_config),
@@ -939,7 +943,21 @@ def _validate_report_bundle_artifacts(
     model_execution = ModelExecutionArtifact.model_validate(
         _read_json_artifact(root, "model-execution.json")
     )
-    if model_execution != build_model_execution_artifact(report):
+    expected_model_execution = build_model_execution_artifact(
+        report,
+        cost_ledger_evidence=(
+            model_execution.cost_ledger
+            if isinstance(model_execution.cost_ledger, RunCostLedgerEvidence)
+            else None
+        ),
+        persistent_ledger_configured=(
+            model_execution.cost_ledger.persistent_ledger_configured
+            if isinstance(model_execution.cost_ledger, CostLedgerAbsenceEvidence)
+            else False
+        ),
+        legacy_schema_1_0=model_execution.schema_version == "1.0",
+    )
+    if model_execution != expected_model_execution:
         raise ValueError("model-execution.json differs from the final report")
     expected_client = render_client_markdown_from_artifact(report, findings).encode("utf-8")
     client_sha256, client_size = _file_sha256(
@@ -964,6 +982,67 @@ def _validate_report_bundle_artifacts(
     expected_sarif = generate_report_sarif(report)
     if _read_json_artifact(root, "audit-results.sarif") != expected_sarif:
         raise ValueError("audit-results.sarif differs from the final report")
+
+
+def _validate_model_execution_cost_ledger_custody(
+    root: Path,
+    report: AuditReport,
+    scheduler_artifact: SchedulerArtifact | None,
+) -> None:
+    """Bind current forensic cost custody to the exact scheduler campaign baseline."""
+
+    model_execution = ModelExecutionArtifact.model_validate(
+        _read_json_artifact(root, "model-execution.json")
+    )
+    if report.schema_version == "1.2" and model_execution.schema_version != "1.1":
+        raise ValueError("current report requires current forensic cost-ledger custody")
+    evidence = model_execution.cost_ledger
+    baseline = (
+        scheduler_artifact.summary.manifest.cost_ledger_baseline
+        if scheduler_artifact is not None
+        else None
+    )
+    if isinstance(evidence, CostLedgerAbsenceEvidence):
+        if baseline is not None:
+            raise ValueError("scheduler cost baseline lacks terminal run-scoped custody")
+        return
+    if not isinstance(evidence, RunCostLedgerEvidence):
+        if report.schema_version == "1.2":
+            raise ValueError("current report lacks typed forensic cost-ledger custody")
+        return
+    if scheduler_artifact is None or baseline is None:
+        raise ValueError("run-scoped cost custody lacks an exact scheduler baseline")
+    if (
+        evidence.baseline_sha256 != baseline.baseline_sha256
+        or evidence.baseline_snapshot_sha256 != baseline.ledger_snapshot_sha256
+        or Decimal(evidence.cap_usd_exact) != Decimal(baseline.cap_usd_exact)
+        or Decimal(evidence.baseline_spent_usd_exact) != Decimal(baseline.spent_usd_exact)
+        or Decimal(evidence.baseline_active_reserved_usd_exact)
+        != Decimal(baseline.active_reserved_usd_exact)
+        or evidence.baseline_entry_count != len(baseline.entries)
+    ):
+        raise ValueError("forensic cost custody differs from the scheduler baseline")
+    scheduler_requests = {
+        request.logical_request_id: request for request in scheduler_artifact.model_requests
+    }
+    if any(attempt.logical_request_id not in scheduler_requests for attempt in evidence.attempts):
+        raise ValueError("forensic cost custody contains a non-scheduler request")
+    usage_hashes = {
+        record.request_id: scheduler_canonical_sha256(record.model_dump(mode="json"))
+        for record in report.usage
+    }
+    for request_id, usage_sha256 in usage_hashes.items():
+        scheduler_request = scheduler_requests.get(request_id)
+        if scheduler_request is None:
+            raise ValueError("model usage is outside the scheduler campaign")
+        if scheduler_request.usage_record_sha256 not in {None, usage_sha256}:
+            raise ValueError("scheduler usage hash differs from forensic cost custody")
+    for request in scheduler_artifact.model_requests:
+        if (
+            request.usage_record_sha256 is not None
+            and usage_hashes.get(request.logical_request_id) != request.usage_record_sha256
+        ):
+            raise ValueError("scheduler terminal usage is absent from forensic cost custody")
 
 
 def _validate_report_artifact_consistency(
@@ -2500,7 +2579,7 @@ def validate_manifest_artifacts(
                 if qualification_path.exists()
                 else None
             )
-            validate_scheduler_artifact(
+            scheduler_artifact = validate_scheduler_artifact(
                 root,
                 report,
                 config=effective_config,
@@ -2514,11 +2593,17 @@ def validate_manifest_artifacts(
                 effective_config,
             )
         else:
-            validate_scheduler_artifact(
+            scheduler_artifact = validate_scheduler_artifact(
                 root,
                 report,
                 scheduler_runtime_journal=scheduler_runtime_journal,
                 scheduler_reference_binding=scheduler_reference_binding,
+            )
+        if report.schema_version == "1.2" or manifest.schema_version == "1.2":
+            _validate_model_execution_cost_ledger_custody(
+                root,
+                report,
+                scheduler_artifact,
             )
         expected_classification = (
             manifest.run_configuration.run_options.privacy_source_classification

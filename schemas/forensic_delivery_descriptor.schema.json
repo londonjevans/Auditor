@@ -1,0 +1,158 @@
+{
+  "$defs": {
+    "ManifestFileBinding": {
+      "additionalProperties": false,
+      "description": "Hash and size for one normalized source or run-artifact path.",
+      "properties": {
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size": {
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "size"
+      ],
+      "title": "ManifestFileBinding",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/forensic_delivery_descriptor.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Self-hashed descriptor for a complete forensic delivery directory.",
+  "properties": {
+    "artifact_count": {
+      "maximum": 100001,
+      "minimum": 2,
+      "title": "Artifact Count",
+      "type": "integer"
+    },
+    "artifact_inventory_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Artifact Inventory Sha256",
+      "type": "string"
+    },
+    "artifact_total_bytes": {
+      "maximum": 4394967296,
+      "minimum": 1,
+      "title": "Artifact Total Bytes",
+      "type": "integer"
+    },
+    "artifacts": {
+      "items": {
+        "$ref": "#/$defs/ManifestFileBinding"
+      },
+      "maxItems": 100001,
+      "minItems": 2,
+      "title": "Artifacts",
+      "type": "array"
+    },
+    "bundle_kind": {
+      "const": "COMPLETE_FORENSIC_BUNDLE",
+      "default": "COMPLETE_FORENSIC_BUNDLE",
+      "title": "Bundle Kind",
+      "type": "string"
+    },
+    "descriptor_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Descriptor Sha256",
+      "type": "string"
+    },
+    "evidence_inclusion_policy": {
+      "const": "ALL_MANIFEST_BOUND_ARTIFACTS",
+      "default": "ALL_MANIFEST_BOUND_ARTIFACTS",
+      "title": "Evidence Inclusion Policy",
+      "type": "string"
+    },
+    "log_artifact_count": {
+      "maximum": 100001,
+      "minimum": 0,
+      "title": "Log Artifact Count",
+      "type": "integer"
+    },
+    "logs_included": {
+      "title": "Logs Included",
+      "type": "boolean"
+    },
+    "private_artifact_count": {
+      "maximum": 100001,
+      "minimum": 0,
+      "title": "Private Artifact Count",
+      "type": "integer"
+    },
+    "private_evidence_included": {
+      "title": "Private Evidence Included",
+      "type": "boolean"
+    },
+    "run_directory": {
+      "const": "run",
+      "default": "run",
+      "title": "Run Directory",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "sensitive_evidence_acknowledged": {
+      "const": true,
+      "default": true,
+      "title": "Sensitive Evidence Acknowledged",
+      "type": "boolean"
+    },
+    "source_manifest_file_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Manifest File Sha256",
+      "type": "string"
+    },
+    "source_manifest_path": {
+      "const": "run-evidence-manifest.json",
+      "default": "run-evidence-manifest.json",
+      "title": "Source Manifest Path",
+      "type": "string"
+    },
+    "source_manifest_self_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Manifest Self Sha256",
+      "type": "string"
+    },
+    "source_run_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Source Run Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "source_run_id",
+    "source_manifest_file_sha256",
+    "source_manifest_self_sha256",
+    "artifact_count",
+    "artifact_total_bytes",
+    "artifact_inventory_sha256",
+    "artifacts",
+    "private_evidence_included",
+    "logs_included",
+    "private_artifact_count",
+    "log_artifact_count",
+    "descriptor_sha256"
+  ],
+  "title": "mmaudit complete forensic delivery descriptor",
+  "type": "object"
+}
