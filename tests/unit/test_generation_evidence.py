@@ -12,6 +12,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+import mmaudit.models.openrouter as openrouter_module
 from mmaudit.constants import OPENROUTER_DEFAULT_BASE_URL
 from mmaudit.models.generation_evidence import (
     GenerationEvidenceValidationError,
@@ -344,10 +345,6 @@ def _client(
     *,
     api_key: str = "synthetic-key",
 ) -> tuple[OpenRouterClient, httpx.AsyncClient]:
-    http_client = httpx.AsyncClient(
-        transport=httpx.MockTransport(handler),
-        base_url="https://fake.test/api/v1/",
-    )
     client = OpenRouterClient(
         api_key=api_key,
         execution=config.execution,
@@ -361,9 +358,26 @@ def _client(
             max_requests_per_agent=config.execution.max_requests_per_agent,
         ),
         usage=UsageLedger(),
-        http_client=http_client,
+        base_url="https://fake.test/api/v1/",
+        test_only_mock_handler=handler,
     )
-    return client, http_client
+    return client, client._client
+
+
+def _mock_real_generation_control_flow(
+    monkeypatch: pytest.MonkeyPatch,
+    client: OpenRouterClient,
+) -> None:
+    """Exercise REAL reconciliation branches over a clearly MOCK local transport."""
+
+    original = openrouter_module.trusted_openrouter_execution_evidence
+
+    def classify(subject: OpenRouterClient) -> ExecutionEvidenceKind:
+        if subject is client:
+            return ExecutionEvidenceKind.REAL
+        return original(subject)
+
+    monkeypatch.setattr(openrouter_module, "trusted_openrouter_execution_evidence", classify)
 
 
 def test_generation_payload_is_allowlisted_self_hashed_and_mock_labeled() -> None:
@@ -1299,7 +1313,7 @@ async def test_partial_generation_metadata_rejects_explicit_decisive_contradicti
         }
     )
     client, http_client = _client(config, handler)
-    client.execution_evidence = ExecutionEvidenceKind.REAL
+    _mock_real_generation_control_flow(monkeypatch, client)
     monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
     try:
         with pytest.raises(OpenRouterGenerationReconciliationError) as raised:
@@ -1350,7 +1364,7 @@ async def test_partial_generation_metadata_rejects_internal_cost_contradiction(
         }
     )
     client, http_client = _client(config, handler)
-    client.execution_evidence = ExecutionEvidenceKind.REAL
+    _mock_real_generation_control_flow(monkeypatch, client)
     monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
     try:
         with pytest.raises(OpenRouterSchemaError, match="invalid"):
@@ -1393,7 +1407,7 @@ async def test_partial_generation_metadata_may_settle_only_eventual_usage_field(
         }
     )
     client, http_client = _client(config, handler)
-    client.execution_evidence = ExecutionEvidenceKind.REAL
+    _mock_real_generation_control_flow(monkeypatch, client)
     monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
     try:
         evidence = await client.get_generation_evidence(
@@ -1412,13 +1426,14 @@ async def test_partial_generation_metadata_may_settle_only_eventual_usage_field(
 @pytest.mark.asyncio
 async def test_noncertification_generation_reconciliation_remains_supported(
     config_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = config_factory(execution={"max_model_retries": 0})
     client, http_client = _client(
         config,
         lambda _request: httpx.Response(200, json=_generation_payload()),
     )
-    client.execution_evidence = ExecutionEvidenceKind.REAL
+    _mock_real_generation_control_flow(monkeypatch, client)
     expectation = GenerationReconciliationExpectation(
         exact_model_id=_MODEL,
         canonical_model_id=_CANONICAL_MODEL,
@@ -1466,7 +1481,7 @@ async def test_generation_verification_polls_eventual_usage_until_it_matches(
         }
     )
     client, http_client = _client(config, handler)
-    client.execution_evidence = ExecutionEvidenceKind.REAL
+    _mock_real_generation_control_flow(monkeypatch, client)
     monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
     request = GenerationVerificationRequest(
         benchmark_report_sha256="1" * 64,
@@ -1524,7 +1539,7 @@ async def test_generation_reconciliation_polls_until_complete_native_pair_matche
         }
     )
     client, http_client = _client(config, handler)
-    client.execution_evidence = ExecutionEvidenceKind.REAL
+    _mock_real_generation_control_flow(monkeypatch, client)
     monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
     expectation = GenerationReconciliationExpectation(
         exact_model_id=_MODEL,
@@ -1575,7 +1590,7 @@ async def test_generation_verification_exhaustion_preserves_typed_value_free_mis
         }
     )
     client, http_client = _client(config, handler)
-    client.execution_evidence = ExecutionEvidenceKind.REAL
+    _mock_real_generation_control_flow(monkeypatch, client)
     monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
     request = GenerationVerificationRequest(
         benchmark_report_sha256="1" * 64,
@@ -1640,7 +1655,7 @@ async def test_unmatched_token_pairs_exhaust_with_typed_final_evidence(
         }
     )
     client, http_client = _client(config, handler)
-    client.execution_evidence = ExecutionEvidenceKind.REAL
+    _mock_real_generation_control_flow(monkeypatch, client)
     monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
     expectation = GenerationReconciliationExpectation(
         exact_model_id=_MODEL,
@@ -1695,7 +1710,7 @@ async def test_generation_verification_fails_decisive_provider_mismatch_immediat
         }
     )
     client, http_client = _client(config, handler)
-    client.execution_evidence = ExecutionEvidenceKind.REAL
+    _mock_real_generation_control_flow(monkeypatch, client)
     monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
     request = GenerationVerificationRequest(
         benchmark_report_sha256="1" * 64,
@@ -1753,7 +1768,7 @@ async def test_generation_verification_prioritizes_decisive_timestamp_over_event
         }
     )
     client, http_client = _client(config, handler)
-    client.execution_evidence = ExecutionEvidenceKind.REAL
+    _mock_real_generation_control_flow(monkeypatch, client)
     monkeypatch.setattr(client, "_wait_for_generation_metadata", no_wait)
     request = GenerationVerificationRequest(
         benchmark_report_sha256="1" * 64,
@@ -1948,6 +1963,7 @@ def test_generation_evidence_does_not_retain_authorization_or_content() -> None:
 @pytest.mark.asyncio
 async def test_generation_attestation_set_is_bounded_concurrent_and_ordered(
     config_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     active_requests = 0
     maximum_active_requests = 0
@@ -1979,7 +1995,7 @@ async def test_generation_attestation_set_is_bounded_concurrent_and_ordered(
         }
     )
     client, http_client = _client(config, handler)
-    client.execution_evidence = ExecutionEvidenceKind.REAL
+    _mock_real_generation_control_flow(monkeypatch, client)
     generation_ids = tuple(delays)
     requests = tuple(
         _verification_request(generation_id, index=index)
@@ -2039,6 +2055,7 @@ async def test_generation_attestation_set_deadline_includes_authentication(
 @pytest.mark.asyncio
 async def test_generation_attestation_set_selects_failure_by_request_order(
     config_factory: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/key"):
@@ -2062,7 +2079,7 @@ async def test_generation_attestation_set_selects_failure_by_request_order(
         }
     )
     client, http_client = _client(config, handler)
-    client.execution_evidence = ExecutionEvidenceKind.REAL
+    _mock_real_generation_control_flow(monkeypatch, client)
     generation_ids = ("gen-failure-first", "gen-failure-second")
     requests = tuple(
         _verification_request(generation_id, index=index)

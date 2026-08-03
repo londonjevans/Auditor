@@ -1133,6 +1133,7 @@ def models_check(
                     registry.validate(
                         config,
                         metadata,
+                        require_verified_qualification=False,
                         zdr_model_ids=zdr_ids,
                         source_egress_requested=True,
                     )

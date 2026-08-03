@@ -26,6 +26,7 @@ from mmaudit.benchmark.models import (
     ModelBenchmarkReport,
     ModelBenchmarkSuite,
 )
+from mmaudit.config import ModelLineageConfig, ModelQualityMeasurementConfig
 from mmaudit.models.calibration import (
     ModelCalibrationArtifact,
     TrustedModelCalibrationVerification,
@@ -88,6 +89,125 @@ def _utc_second(value: datetime, *, label: str) -> datetime:
     if value.tzinfo is None or value.utcoffset() != timedelta(0) or value.microsecond:
         raise ValueError(f"{label} must be a whole-second UTC timestamp")
     return value
+
+
+def promote_qualified_model_lineages(
+    *,
+    declared_identities: tuple[ModelLineageConfig, ...],
+    candidate_registry: CandidateRegistry,
+    qualification_artifact: ModelQualificationArtifact,
+    qualification_verification: QualificationVerification,
+    promoted_at: datetime,
+) -> tuple[ModelLineageConfig, ...]:
+    """Attach benchmark-derived quality to exact identity-only production records.
+
+    This deterministic transition does not itself grant runtime selection authority.
+    Production still requires the repository's opaque, current qualification capability.
+    """
+
+    promoted_at = _utc_second(promoted_at, label="model quality promotion time")
+    registry = CandidateRegistry.model_validate(candidate_registry.model_dump(mode="json"))
+    artifact = ModelQualificationArtifact.model_validate(
+        qualification_artifact.model_dump(mode="json")
+    )
+    verification = QualificationVerification.model_validate(
+        qualification_verification.model_dump(mode="json")
+    )
+    identities = tuple(
+        ModelLineageConfig.model_validate(identity.model_dump(mode="json"))
+        for identity in declared_identities
+    )
+
+    if not identities:
+        raise ValueError("model quality promotion requires identity-only records")
+    identity_ids = tuple(identity.canonical_model_id for identity in identities)
+    if identity_ids != tuple(sorted(set(identity_ids))):
+        raise ValueError("model quality promotion identities must be unique and sorted")
+    if any(identity.measured_quality is not None for identity in identities):
+        raise ValueError("model quality promotion requires unmeasured identity records")
+
+    if not verification.valid or verification.errors:
+        raise ValueError("model quality promotion requires valid qualification verification")
+    if not verification.production_selection_ready:
+        raise ValueError("model quality promotion requires production-ready Tier A evidence")
+    if (
+        artifact.bindings.candidate_registry_sha256 != registry.registry_sha256
+        or verification.candidate_registry_sha256 != registry.registry_sha256
+        or verification.artifact_sha256 != artifact.artifact_sha256
+        or verification.policy_sha256 != artifact.bindings.qualification_policy_sha256
+    ):
+        raise ValueError("model quality promotion evidence bindings are inconsistent")
+    if artifact.created_at > verification.verified_at:
+        raise ValueError("model quality promotion verification predates its artifact")
+    if verification.verified_at > promoted_at:
+        raise ValueError("model quality promotion predates qualification verification")
+
+    candidates = {candidate.exact_model_id: candidate for candidate in registry.candidates}
+    results = {result.exact_model_id: result for result in artifact.results}
+    if set(candidates) != set(results):
+        raise ValueError("model quality promotion candidate and result sets differ")
+    if any(
+        candidate.benchmark_status
+        in {CandidateBenchmarkStatus.PENDING, CandidateBenchmarkStatus.INCONCLUSIVE}
+        for candidate in candidates.values()
+    ) or any(
+        result.disposition is QualificationDisposition.INCONCLUSIVE for result in results.values()
+    ):
+        raise ValueError("model quality promotion rejects pending or inconclusive evidence")
+
+    eligible_ids = verification.eligible_tier_a_model_ids
+    if identity_ids != eligible_ids:
+        raise ValueError("model quality promotion identities differ from eligible Tier A models")
+    tier_a_ids = tuple(
+        sorted(
+            result.exact_model_id
+            for result in artifact.results
+            if result.disposition is QualificationDisposition.TIER_A
+        )
+    )
+    if tier_a_ids != eligible_ids:
+        raise ValueError("model quality promotion omits or adds a Tier A result")
+    observed_roots = {results[model_id].root_lineage for model_id in eligible_ids}
+    if any(root is None for root in observed_roots):
+        raise ValueError("model quality promotion root-lineage evidence is inconsistent")
+    eligible_roots = tuple(sorted(root for root in observed_roots if root is not None))
+    if eligible_roots != verification.eligible_root_lineages:
+        raise ValueError("model quality promotion root-lineage evidence is inconsistent")
+
+    promoted: list[ModelLineageConfig] = []
+    for identity in identities:
+        model_id = identity.canonical_model_id
+        candidate = candidates[model_id]
+        result = results[model_id]
+        if (
+            candidate.canonical_model_slug != result.canonical_model_slug
+            or candidate.root_lineage is None
+            or identity.root_lineage != candidate.root_lineage
+            or candidate.root_lineage != result.root_lineage
+            or candidate.approved_provider_endpoint != result.approved_provider_endpoint
+            or candidate.approved_provider_name != result.approved_provider_name
+            or candidate.endpoint_snapshot_sha256 != result.endpoint_snapshot_sha256
+            or candidate.output_capability_sha256 != result.output_capability_sha256
+            or candidate.model_metadata_snapshot_sha256 != result.model_metadata_snapshot_sha256
+            or candidate.pricing_snapshot_sha256 != result.pricing_snapshot_sha256
+            or candidate.structured_output_mode is not result.structured_output_mode
+            or candidate.benchmark_status is not CandidateBenchmarkStatus.PASSED
+            or candidate.benchmark_artifact_sha256 != result.benchmark_report_sha256
+            or candidate.qualification_expires_at != result.expires_at
+            or result.disposition is not QualificationDisposition.TIER_A
+            or result.benchmark_verification_sha256 is None
+            or not result.approved_roles
+            or result.expires_at is None
+            or result.expires_at <= promoted_at
+        ):
+            raise ValueError(f"model quality promotion evidence differs for {model_id}")
+        quality = ModelQualityMeasurementConfig(
+            score=result.overall_score,
+            tier="highest",
+            measurement=f"sha256:{result.quality_measurement_sha256}",
+        )
+        promoted.append(identity.model_copy(update={"measured_quality": quality}))
+    return tuple(promoted)
 
 
 class QualificationReleaseBindings(StrictModel):

@@ -26,6 +26,31 @@ Documentation, provider marketing, leaderboard scores, endpoint discoverability,
 SHA-256-shaped value is not qualification evidence. No candidate listed below is
 qualified or eligible as of this document.
 
+## Candidate, identity, quality, and selection boundaries
+
+The candidate registry and the audit configuration registry serve different purposes.
+The transition between them is deliberately one-way and explicit:
+
+1. The self-hashed candidate registry records discovered exact models, endpoint evidence,
+   and the operator lineage-review state. It is an input to measurement, not an audit-role
+   allowlist.
+2. An approved candidate may be represented in `models.registry` by a declared
+   `ModelLineageConfig` containing only `root_lineage`, `canonical_model_id`, `aliases`, and
+   `retention_policy`. This identity-only record is sufficient for approved benchmark and
+   calibration routing. It cannot satisfy an audit-role quality requirement.
+3. A completed benchmark may add one nested `measured_quality` record containing the exact
+   `score`, `tier`, and hash-bound `measurement`. The attachment is an explicit,
+   evidence-backed promotion of the declared identity; it is not inferred from a model name,
+   provider metadata, or documentation.
+4. Production selection separately requires current, independently verified qualification
+   evidence and exact agreement with the attached measurement, model identity, approved root
+   lineage, role, and endpoint. The static nested record never grants selection authority by
+   itself.
+
+An unmeasured identity omits `measured_quality` completely. It must never contain a default,
+zero, null, placeholder, or sentinel score standing in for absent benchmark evidence. The
+three nested measurement fields are atomic: a partial record is invalid.
+
 ## Exact model identity
 
 The registry must store these values separately:

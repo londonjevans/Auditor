@@ -1,0 +1,396 @@
+{
+  "$defs": {
+    "ModelCatalogRefreshConfig": {
+      "additionalProperties": false,
+      "description": "Static fail-closed policy for current provider-catalogue evidence.",
+      "properties": {
+        "automatic_benchmark_daily_budget_usd": {
+          "default": "0",
+          "pattern": "^(?:0|[1-9][0-9]{0,5})(?:\\.[0-9]{1,9})?$",
+          "title": "Automatic Benchmark Daily Budget Usd",
+          "type": "string"
+        },
+        "automatic_benchmark_per_model_budget_usd": {
+          "default": "0",
+          "pattern": "^(?:0|[1-9][0-9]{0,5})(?:\\.[0-9]{1,9})?$",
+          "title": "Automatic Benchmark Per Model Budget Usd",
+          "type": "string"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "hard_max_age_hours": {
+          "default": 72,
+          "maximum": 2160,
+          "minimum": 2,
+          "title": "Hard Max Age Hours",
+          "type": "integer"
+        },
+        "pricing_increase_tolerance_fraction": {
+          "default": "0.05",
+          "pattern": "^(?:0|[1-9][0-9]{0,5})(?:\\.[0-9]{1,9})?$",
+          "title": "Pricing Increase Tolerance Fraction",
+          "type": "string"
+        },
+        "soft_max_age_hours": {
+          "default": 30,
+          "maximum": 720,
+          "minimum": 1,
+          "title": "Soft Max Age Hours",
+          "type": "integer"
+        }
+      },
+      "title": "ModelCatalogRefreshConfig",
+      "type": "object"
+    },
+    "ModelLineageConfig": {
+      "$comment": "Canonical model ID and aliases are also required to be case-insensitively distinct by ModelsConfig runtime validation.",
+      "additionalProperties": false,
+      "description": "Immutable operator-reviewed identity with optional measured quality.",
+      "properties": {
+        "aliases": {
+          "default": [],
+          "items": {
+            "pattern": "^[^\\s/]+/[^\\s/]+$",
+            "type": "string"
+          },
+          "title": "Aliases",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "canonical_model_id": {
+          "pattern": "^[^\\s/]+/[^\\s/]+$",
+          "title": "Canonical Model Id",
+          "type": "string"
+        },
+        "measured_quality": {
+          "$ref": "#/$defs/ModelQualityMeasurementConfig"
+        },
+        "retention_policy": {
+          "enum": [
+            "zero",
+            "temporary",
+            "persistent"
+          ],
+          "title": "Retention Policy",
+          "type": "string"
+        },
+        "root_lineage": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Root Lineage",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root_lineage",
+        "canonical_model_id",
+        "retention_policy"
+      ],
+      "title": "ModelLineageConfig",
+      "type": "object"
+    },
+    "ModelProviderPolicyConfig": {
+      "additionalProperties": false,
+      "description": "Explicit OpenRouter endpoint routing policy with no implicit fallback.",
+      "properties": {
+        "allow_fallbacks": {
+          "default": false,
+          "title": "Allow Fallbacks",
+          "type": "boolean"
+        },
+        "only": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Only",
+          "type": "array"
+        },
+        "order": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Order",
+          "type": "array"
+        }
+      },
+      "title": "ModelProviderPolicyConfig",
+      "type": "object"
+    },
+    "ModelQualityMeasurementConfig": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "tier": {
+                "const": "high"
+              }
+            },
+            "required": [
+              "tier"
+            ]
+          },
+          "then": {
+            "properties": {
+              "score": {
+                "minimum": 0.75,
+                "type": "number"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "tier": {
+                "const": "highest"
+              }
+            },
+            "required": [
+              "tier"
+            ]
+          },
+          "then": {
+            "properties": {
+              "score": {
+                "minimum": 0.9,
+                "type": "number"
+              }
+            }
+          }
+        }
+      ],
+      "description": "Optional benchmark-derived quality attached only after measurement.",
+      "properties": {
+        "measurement": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Measurement",
+          "type": "string"
+        },
+        "score": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Score",
+          "type": "number"
+        },
+        "tier": {
+          "enum": [
+            "standard",
+            "high",
+            "highest"
+          ],
+          "title": "Tier",
+          "type": "string"
+        }
+      },
+      "required": [
+        "score",
+        "tier",
+        "measurement"
+      ],
+      "title": "ModelQualityMeasurementConfig",
+      "type": "object"
+    },
+    "ModelReasoningConfig": {
+      "additionalProperties": false,
+      "description": "Bounded provider reasoning controls with an explicit completion reserve.",
+      "properties": {
+        "effort": {
+          "anyOf": [
+            {
+              "enum": [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effort"
+        },
+        "exclude": {
+          "default": false,
+          "title": "Exclude",
+          "type": "boolean"
+        },
+        "max_tokens": {
+          "anyOf": [
+            {
+              "maximum": 65536,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Tokens"
+        },
+        "reserved_tokens": {
+          "anyOf": [
+            {
+              "maximum": 65536,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reserved Tokens"
+        }
+      },
+      "title": "ModelReasoningConfig",
+      "type": "object"
+    },
+    "ModelRoleConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "default": [
+            "structured_json"
+          ],
+          "items": {
+            "enum": [
+              "structured_json",
+              "long_context",
+              "security_reasoning",
+              "solidity",
+              "test_generation",
+              "formal_reasoning"
+            ],
+            "type": "string"
+          },
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "fallbacks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Fallbacks",
+          "type": "array"
+        },
+        "primary": {
+          "title": "Primary",
+          "type": "string"
+        },
+        "quality_tier": {
+          "default": "standard",
+          "enum": [
+            "standard",
+            "high",
+            "highest"
+          ],
+          "title": "Quality Tier",
+          "type": "string"
+        },
+        "reasoning": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelReasoningConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "primary"
+      ],
+      "title": "ModelRoleConfig",
+      "type": "object"
+    }
+  },
+  "$id": "https://mmaudit.local/schemas/models_config.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "allow_non_independent_models": {
+      "default": false,
+      "title": "Allow Non Independent Models",
+      "type": "boolean"
+    },
+    "business_logic": {
+      "$ref": "#/$defs/ModelRoleConfig"
+    },
+    "catalog_refresh": {
+      "$ref": "#/$defs/ModelCatalogRefreshConfig"
+    },
+    "configuration": {
+      "$ref": "#/$defs/ModelRoleConfig"
+    },
+    "judge": {
+      "$ref": "#/$defs/ModelRoleConfig"
+    },
+    "minimum_distinct_families": {
+      "default": 3,
+      "minimum": 3,
+      "title": "Minimum Distinct Families",
+      "type": "integer"
+    },
+    "minimum_high_quality_slots": {
+      "default": 0,
+      "maximum": 64,
+      "minimum": 0,
+      "title": "Minimum High Quality Slots",
+      "type": "integer"
+    },
+    "provider_policy": {
+      "$ref": "#/$defs/ModelProviderPolicyConfig"
+    },
+    "reasoning": {
+      "$ref": "#/$defs/ModelReasoningConfig"
+    },
+    "registry": {
+      "$comment": "Canonical IDs and aliases are required to be globally case-insensitively unique by ModelsConfig runtime validation; this cross-item relation is not expressible in JSON Schema draft 2020-12.",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ModelLineageConfig"
+      },
+      "title": "Registry",
+      "type": "array"
+    },
+    "source_audit": {
+      "$ref": "#/$defs/ModelRoleConfig"
+    },
+    "specialists": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ModelRoleConfig"
+      },
+      "title": "Specialists",
+      "type": "object"
+    },
+    "threat_model": {
+      "$ref": "#/$defs/ModelRoleConfig"
+    },
+    "verifier": {
+      "$ref": "#/$defs/ModelRoleConfig"
+    }
+  },
+  "required": [
+    "threat_model",
+    "source_audit",
+    "business_logic",
+    "configuration",
+    "verifier",
+    "judge"
+  ],
+  "title": "mmaudit models configuration",
+  "type": "object"
+}

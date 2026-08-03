@@ -94,6 +94,7 @@ from mmaudit.models.openrouter import (
     OpenRouterQualificationRoutingEvidence,
     OpenRouterQualifiedReasoningRoutingBinding,
     OpenRouterSchemaError,
+    trusted_openrouter_execution_evidence,
 )
 from mmaudit.models.qualification import VerifiedProductionQualification
 from mmaudit.models.registry import (
@@ -103,7 +104,7 @@ from mmaudit.models.registry import (
 )
 from mmaudit.models.runtime import (
     build_openrouter_runtime_controls,
-    maximum_assurance_model_certification_required,
+    production_model_qualification_required,
 )
 from mmaudit.models.scheduler import (
     SchedulerAbsenceReason,
@@ -1578,6 +1579,13 @@ class AuditPipeline:
         self.privacy_consent_observation = None
         self.privacy_source_provenance_observation = None
 
+    def _planned_model_execution_evidence(self) -> ExecutionEvidenceKind:
+        """Return the fail-closed evidence class for the pending provider path."""
+
+        if self.client is None:
+            return ExecutionEvidenceKind.REAL
+        return trusted_openrouter_execution_evidence(self.client)
+
     async def run(
         self,
         *,
@@ -1708,16 +1716,17 @@ class AuditPipeline:
             raise ValueError("provider audits require a fresh empty client usage ledger")
         if not scanner_only and self.client is not None and self.client.context_preflight.records:
             raise ValueError("provider audits require a fresh empty context preflight ledger")
+        planned_model_execution_evidence = self._planned_model_execution_evidence()
         if (
             not scanner_only
             and self.client is not None
-            and self.client.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
+            and planned_model_execution_evidence is ExecutionEvidenceKind.UNVERIFIED
         ):
             raise ValueError("provider audits reject unverified injected clients")
         if (
             not scanner_only
             and self.client is not None
-            and self.client.execution_evidence is ExecutionEvidenceKind.REAL
+            and planned_model_execution_evidence is ExecutionEvidenceKind.REAL
             and (not self._owns_client or type(self.client) is not OpenRouterClient)
         ):
             raise ValueError("injected provider clients cannot establish REAL execution provenance")
@@ -2616,12 +2625,15 @@ class AuditPipeline:
                     >= SEVERITY_ORDER[severity_threshold.value]
                 ):
                     final_findings.append(finding)
-        model_certification_required = maximum_assurance_model_certification_required(self.config)
+        model_qualification_required = production_model_qualification_required(
+            self.config,
+            execution_evidence=self._planned_model_execution_evidence(),
+        )
         qualification_preflight: ProductionQualificationValidation | None = None
         if not scanner_only:
             qualification_preflight = self._write_model_qualification_runtime(
                 run_dir,
-                required=model_certification_required,
+                required=model_qualification_required,
             )
             if qualification_preflight.required and not qualification_preflight.valid:
                 incomplete.append("; ".join(qualification_preflight.errors))
@@ -2743,8 +2755,8 @@ class AuditPipeline:
             if self.client is None:
                 controls = build_openrouter_runtime_controls(
                     self.config,
-                    certification=model_certification_required,
-                    require_single_model_per_role=model_certification_required,
+                    certification=model_qualification_required,
+                    require_single_model_per_role=model_qualification_required,
                     effective_privacy_policy=self.effective_privacy_policy,
                     privacy_authorization=self.privacy_authorization,
                 )
@@ -7190,7 +7202,10 @@ class AuditPipeline:
         cache_dir = _safe_output_directory(self.output, "cache")
         registry = ModelRegistry(cache_dir / "openrouter-models.json")
         provider_policy = self.client.provider_policy
-        qualification_required = maximum_assurance_model_certification_required(self.config)
+        qualification_required = production_model_qualification_required(
+            self.config,
+            execution_evidence=self._planned_model_execution_evidence(),
+        )
         qualification_validation = (
             qualification_preflight
             if qualification_preflight is not None
@@ -7207,8 +7222,7 @@ class AuditPipeline:
         if source_egress_requested and not provider_policy.configured_endpoints:
             raise OpenRouterError("source egress requires an explicit provider endpoint allowlist")
         real_provider_client = (
-            type(self.client) is OpenRouterClient
-            and self.client.execution_evidence is ExecutionEvidenceKind.REAL
+            trusted_openrouter_execution_evidence(self.client) is ExecutionEvidenceKind.REAL
         )
         models_payload: dict[str, Any] | None = None
         models = None if refresh or real_provider_client else registry.load_cache()
@@ -8326,7 +8340,7 @@ def _provider_session_provenance(
             trusted_concrete_client=False,
             usage_evidence_consistent=False,
         )
-    session_evidence = client.execution_evidence
+    session_evidence = trusted_openrouter_execution_evidence(client)
     return _issue_provider_session_provenance(
         execution_evidence=session_evidence,
         pipeline_owned=pipeline_owned,

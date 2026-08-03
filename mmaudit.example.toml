@@ -276,17 +276,23 @@ min_dependency_resolution_fraction = 1.0
 minimum_distinct_families = 3
 minimum_high_quality_slots = 0
 allow_non_independent_models = false
-# Add one immutable record per root model lineage. Put mirrors and aliases in the
-# same record so they cannot count as independent. Quality measurements must be
-# benchmark-derived and hash-bound; do not reuse this illustrative digest.
+# Add one immutable declared-identity record per root model lineage. Put mirrors
+# and aliases in the same record so they cannot count as independent. An
+# identity-only record is valid for measurement, but never for an audit role.
 # [[models.registry]]
 # root_lineage = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 # canonical_model_id = "PROVIDER_A/MODEL_ID_A"
 # aliases = ["MIRROR_PROVIDER/MODEL_ALIAS_A"]
-# measured_quality_score = 0.90
-# measured_quality_tier = "highest"
-# quality_measurement = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 # retention_policy = "zero" # zero, temporary, or persistent
+# After a benchmark completes, an explicit evidence-backed promotion may attach
+# this complete nested record. Omit the whole table while unmeasured; never use a
+# zero, null, placeholder, or sentinel as a substitute for absent evidence.
+# [models.registry.measured_quality]
+# score = 0.90
+# tier = "highest"
+# measurement = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+# This attachment is not production authority. Current independently verified
+# qualification and production-selection evidence remain mandatory.
 
 [models.catalog_refresh]
 # Provider catalogue observations are soft-stale after 30 hours and hard-expired

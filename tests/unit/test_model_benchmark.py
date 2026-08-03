@@ -910,6 +910,7 @@ def test_target_selection_deduplicates_aliases_by_immutable_lineage(
     entry = model_registry_entry(
         "synthetic/canonical",
         aliases=["synthetic/alias"],
+        include_measured_quality=False,
     )
     config = config_factory(
         models={"registry": [entry]},
@@ -918,6 +919,10 @@ def test_target_selection_deduplicates_aliases_by_immutable_lineage(
             "approved_model_lineages": [entry["root_lineage"]],
         },
     )
+
+    identity = config.models.registry[0]
+    assert identity.measured_quality is None
+    assert "measured_quality" not in identity.model_dump(mode="json")
 
     targets = select_model_benchmark_targets(
         config,
@@ -946,7 +951,10 @@ def test_target_selection_deduplicates_aliases_by_immutable_lineage(
 def test_model_benchmark_egress_rejects_unapproved_registered_target(
     config_factory: Callable[..., AuditConfig],
 ) -> None:
-    entry = model_registry_entry("synthetic/canonical")
+    entry = model_registry_entry(
+        "synthetic/canonical",
+        include_measured_quality=False,
+    )
     config = config_factory(
         models={"registry": [entry]},
         privacy={
@@ -957,6 +965,32 @@ def test_model_benchmark_egress_rejects_unapproved_registered_target(
     targets = select_model_benchmark_targets(config, ["synthetic/canonical"])
 
     with pytest.raises(ValueError, match="root lineage is not approved"):
+        validate_model_benchmark_egress(
+            config,
+            targets,
+            explicitly_allowed=True,
+        )
+
+
+def test_model_benchmark_egress_rejects_identity_retention_above_policy(
+    config_factory: Callable[..., AuditConfig],
+) -> None:
+    entry = model_registry_entry(
+        "synthetic/canonical",
+        include_measured_quality=False,
+        retention_policy="temporary",
+    )
+    config = config_factory(
+        models={"registry": [entry]},
+        privacy={
+            "allow_code_egress": False,
+            "approved_model_lineages": [entry["root_lineage"]],
+            "maximum_model_retention": "zero",
+        },
+    )
+    targets = select_model_benchmark_targets(config, ["synthetic/canonical"])
+
+    with pytest.raises(ValueError, match="retention exceeds policy"):
         validate_model_benchmark_egress(
             config,
             targets,

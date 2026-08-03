@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0.0",
-  "updated_at": "2026-08-03T01:15:15Z",
-  "candidate_commit": "d8e075a8e39f0008853dd59b9ffea2364171832e",
-  "autorun_status": "RUNNING",
+  "updated_at": "2026-08-03T03:55:47Z",
+  "candidate_commit": "517559e5c9526f78e516374ebc194933d01eac7f",
+  "autorun_status": "PAUSED_BY_OPERATOR",
   "current_milestone": "model_qualification_bootstrap",
   "current_ticket": "V3-BOOTSTRAP-001 (IN_PROGRESS)",
-  "last_checkpoint_commit": "6b83b527ce14b7cff3b8abbe153603b2e8e14ae9",
+  "last_checkpoint_commit": "517559e5c9526f78e516374ebc194933d01eac7f",
   "real_model_calls": {
     "attempted": 10,
     "succeeded": 1,
@@ -19,13 +19,12 @@
   },
   "completed_real_audits": 0,
   "blocked_tickets": {
-    "V3-OBJECTIVE-001": "Exact objective source bytes matching f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43 are absent from all 918 nonignored files; reconstruction is forbidden.",
-    "V3-TARGETSPEC-001": "Blocked on V3-OBJECTIVE-001 because precedence and reconciliation require the missing objective content.",
+    "V3-TARGETSPEC-001": "The exact objective source is now committed, but this ticket remains dependency-blocked until actionable V3-OBJECTIVE-001 finishes its digest-reference and regression work.",
     "V3-FORKSUITE-001.hardhat": "Real Hardhat execution requires the process-attested digest-pinned rootless single-loopback runtime and trusted image-baked reporter specified by V3-HARDHAT-001."
   },
   "last_validation": {
-    "command": "git ls-files -co --exclude-standard -z | xargs -0 shasum -a 256 | awk <exact required objective digest predicate>",
-    "result": "BLOCKED_TECHNICAL: HASHED=918, MATCHES=0; distinct Corrovera product vision SHA-256 77e5ab93225377e86e4ad08f09775deaac86b927a6817b8dca9eaa6f81b8a2a6"
+    "command": ".venv/bin/pytest -q tests/integration/test_pipeline.py --cache-clear",
+    "result": "PAUSED_BY_OPERATOR: interrupted cleanly after 79 passing tests in 302.30s; no failure had surfaced; partial run is not acceptance evidence"
   },
   "scheduler_assurance_validation": {
     "status": "PASS_COMPONENT_FULL_ASSURANCE",

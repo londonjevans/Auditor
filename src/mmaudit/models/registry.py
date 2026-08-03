@@ -407,10 +407,10 @@ class ModelRegistry:
         config: AuditConfig,
         models: list[dict[str, Any]],
         *,
+        require_verified_qualification: bool,
         zdr_model_ids: set[str] | None = None,
         source_egress_requested: bool = False,
         production_qualification: VerifiedProductionQualification | None = None,
-        require_verified_qualification: bool | None = None,
         qualification_now: datetime | None = None,
     ) -> list[str]:
         """Validate provider capabilities, source egress, and production qualification."""
@@ -418,11 +418,7 @@ class ModelRegistry:
         metadata_ids = [str(item.get("id", "")) for item in models]
         by_id = {model_id: item for model_id, item in zip(metadata_ids, models, strict=True)}
         errors: list[str] = []
-        qualification_required = (
-            config.profile is AuditProfile.MAXIMUM_ASSURANCE
-            if require_verified_qualification is None
-            else require_verified_qualification
-        )
+        qualification_required = require_verified_qualification
         if qualification_required or production_qualification is not None:
             qualification_validation = ModelRegistry.validate_production_qualification(
                 config,
@@ -455,14 +451,18 @@ class ModelRegistry:
                         f"record: {model_id}"
                     )
             else:
-                if (
+                quality = lineage.measured_quality
+                if quality is None:
+                    errors.append(
+                        f"model lacks benchmark-derived quality measurement for {role}: {model_id}"
+                    )
+                elif (
                     not qualification_required
-                    and _QUALITY_TIER_RANK[lineage.measured_quality_tier]
-                    < _QUALITY_TIER_RANK[required_tier]
+                    and _QUALITY_TIER_RANK[quality.tier] < _QUALITY_TIER_RANK[required_tier]
                 ):
                     errors.append(
                         f"model measured quality tier is below {role} requirement: "
-                        f"{model_id} is {lineage.measured_quality_tier}, requires {required_tier}"
+                        f"{model_id} is {quality.tier}, requires {required_tier}"
                     )
                 if source_egress_requested:
                     if lineage.root_lineage not in approved_lineages:
@@ -749,16 +749,20 @@ def _validate_configured_production_models(
             errors.append(
                 f"selected production model must be the canonical lineage record: {model_id}"
             )
-        elif lineage.quality_measurement != model.quality_measurement:
+        elif lineage.measured_quality is None:
+            errors.append(
+                f"verified production model lacks configured quality measurement: {model_id}"
+            )
+        elif lineage.measured_quality.measurement != model.quality_measurement:
             errors.append(
                 f"configured quality measurement differs from verified qualification "
                 f"result: {model_id}"
             )
-        elif lineage.measured_quality_score != model.overall_score:
+        elif lineage.measured_quality.score != model.overall_score:
             errors.append(
                 f"configured quality score differs from verified qualification result: {model_id}"
             )
-        elif lineage.measured_quality_tier != "highest":
+        elif lineage.measured_quality.tier != "highest":
             errors.append(
                 f"configured quality tier differs from verified Tier A qualification: {model_id}"
             )

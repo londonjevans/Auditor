@@ -126,6 +126,9 @@ def synthetic_production_qualification(
     models: list[VerifiedTierAModelQualification] = []
     for model_id in model_ids:
         configured_lineage = lineage_by_model.get(model_id.lower())
+        configured_quality = (
+            None if configured_lineage is None else configured_lineage.measured_quality
+        )
         root_lineage = (
             configured_lineage.root_lineage
             if configured_lineage is not None
@@ -175,14 +178,14 @@ def synthetic_production_qualification(
         object.__setattr__(
             model,
             "overall_score",
-            configured_lineage.measured_quality_score if configured_lineage is not None else 1.0,
+            configured_quality.score if configured_quality is not None else 1.0,
         )
         object.__setattr__(
             model,
             "quality_measurement_sha256",
             (
-                configured_lineage.quality_measurement.removeprefix("sha256:")
-                if configured_lineage is not None
+                configured_quality.measurement.removeprefix("sha256:")
+                if configured_quality is not None
                 else hashlib.sha256(f"quality:{model_id}".encode()).hexdigest()
             ),
         )

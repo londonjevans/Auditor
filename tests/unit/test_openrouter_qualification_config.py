@@ -68,6 +68,7 @@ def test_unbound_qualification_config_cannot_qualify_an_ordinary_audit() -> None
     errors = ModelRegistry.validate(
         config,
         metadata,
+        require_verified_qualification=False,
         zdr_model_ids={ROLE_MODEL_ID},
         source_egress_requested=True,
     )

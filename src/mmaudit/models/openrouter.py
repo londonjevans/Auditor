@@ -12,7 +12,7 @@ import random
 import re
 import time
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Coroutine, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -21,7 +21,9 @@ from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, cast
 from urllib.parse import quote
+from weakref import WeakKeyDictionary
 
+import httpcore
 import httpx
 from pydantic import BaseModel, ValidationError
 from pydantic_core import SchemaValidator
@@ -221,9 +223,25 @@ _UNENFORCEABLE_VARIABLE_PRICING_FIELDS = frozenset(
     }
 )
 _TRUSTED_ASYNC_CLIENT_SEND = httpx.AsyncClient.send
+_TRUSTED_ASYNC_CLIENT_GETATTRIBUTE = httpx.AsyncClient.__getattribute__
 _TRUSTED_ASYNC_CLIENT_REQUEST = httpx.AsyncClient.request
 _TRUSTED_ASYNC_CLIENT_STREAM = httpx.AsyncClient.stream
+_TRUSTED_ASYNC_CLIENT_BUILD_REQUEST = httpx.AsyncClient.build_request
+_TRUSTED_ASYNC_CLIENT_MERGE_URL = httpx.AsyncClient._merge_url
+_TRUSTED_ASYNC_CLIENT_BUILD_REQUEST_AUTH = httpx.AsyncClient._build_request_auth
+_TRUSTED_ASYNC_CLIENT_SEND_HANDLING_AUTH = httpx.AsyncClient._send_handling_auth
+_TRUSTED_ASYNC_CLIENT_SEND_HANDLING_REDIRECTS = httpx.AsyncClient._send_handling_redirects
+_TRUSTED_ASYNC_CLIENT_TRANSPORT_FOR_URL = httpx.AsyncClient._transport_for_url
+_TRUSTED_ASYNC_CLIENT_SEND_SINGLE_REQUEST = httpx.AsyncClient._send_single_request
 _TRUSTED_ASYNC_HTTP_TRANSPORT_REQUEST = httpx.AsyncHTTPTransport.handle_async_request
+_TRUSTED_ASYNC_HTTP_TRANSPORT_GETATTRIBUTE = httpx.AsyncHTTPTransport.__getattribute__
+_TRUSTED_MOCK_TRANSPORT_REQUEST = httpx.MockTransport.handle_async_request
+_TRUSTED_MOCK_TRANSPORT_GETATTRIBUTE = httpx.MockTransport.__getattribute__
+_TRUSTED_ANYIO_BACKEND_TYPE = httpcore.AnyIOBackend
+_TRUSTED_ANYIO_BACKEND_GETATTRIBUTE = httpcore.AnyIOBackend.__getattribute__
+_TRUSTED_ANYIO_CONNECT_TCP = httpcore.AnyIOBackend.connect_tcp
+_TRUSTED_ANYIO_CONNECT_UNIX_SOCKET = httpcore.AnyIOBackend.connect_unix_socket
+_TRUSTED_ANYIO_SLEEP = httpcore.AnyIOBackend.sleep
 _QUALIFICATION_FUTURE_SKEW = timedelta(minutes=5)
 _QUALIFICATION_LINEAGE_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 _QUALIFICATION_ROLE_PATTERN = re.compile(r"^[a-z][a-z0-9_:.-]{0,127}$")
@@ -1976,6 +1994,61 @@ def _registered_endpoints_for_output_mode(
     return tuple(projected)
 
 
+@dataclass(frozen=True)
+class _TrustedTransportBinding:
+    """Issuer-held transport authority that instance attribute mutation cannot create."""
+
+    execution_evidence: ExecutionEvidenceKind
+    http_client: httpx.AsyncClient
+    transport: object
+    base_url: str
+    mock_handler: object | None = None
+    request_lock: asyncio.Lock | None = None
+    client_attribute_names: frozenset[str] = frozenset()
+    transport_attribute_names: frozenset[str] = frozenset()
+    owned_pool: object | None = None
+    owned_pool_attribute_names: frozenset[str] = frozenset()
+    owned_pool_attribute_values: tuple[tuple[str, object], ...] = ()
+    owned_pool_request_callable: object | None = None
+    owned_pool_create_connection_callable: object | None = None
+    owned_pool_assign_requests_callable: object | None = None
+    owned_pool_close_connections_callable: object | None = None
+    owned_pool_getattribute_callable: object | None = None
+    network_backend: object | None = None
+    network_backend_type: type[object] | None = None
+    network_backend_attribute_names: frozenset[str] = frozenset()
+    network_backend_connect_tcp_callable: object | None = None
+    network_backend_connect_unix_socket_callable: object | None = None
+    network_backend_sleep_callable: object | None = None
+    network_backend_init_callable: object | None = None
+    network_backend_getattribute_callable: object | None = None
+    follow_redirects: bool = False
+    max_redirects: int = 0
+
+
+def _transport_binding_registry() -> tuple[
+    Callable[[object, _TrustedTransportBinding], None],
+    Callable[[object], _TrustedTransportBinding | None],
+]:
+    bindings: WeakKeyDictionary[object, _TrustedTransportBinding] = WeakKeyDictionary()
+    lock = Lock()
+
+    def register(subject: object, binding: _TrustedTransportBinding) -> None:
+        with lock:
+            bindings[subject] = binding
+
+    def lookup(subject: object) -> _TrustedTransportBinding | None:
+        with lock:
+            return bindings.get(subject)
+
+    return register, lookup
+
+
+_register_trusted_transport_binding, _lookup_trusted_transport_binding = (
+    _transport_binding_registry()
+)
+
+
 class OpenRouterClient:
     """Minimal client that never enables tools, web access, or random model routing."""
 
@@ -2001,7 +2074,20 @@ class OpenRouterClient:
         effective_privacy_policy: EffectivePrivacyPolicyEvidence | None = None,
         privacy_authorization: TrustedPrivacyAuthorization | None = None,
         context_preflight_ledger: ContextPreflightLedger | None = None,
+        test_only_mock_handler: (
+            Callable[[httpx.Request], httpx.Response]
+            | Callable[[httpx.Request], Coroutine[None, None, httpx.Response]]
+            | None
+        ) = None,
     ) -> None:
+        if http_client is not None and test_only_mock_handler is not None:
+            raise OpenRouterPrivacyError(
+                "test-only mock handler cannot be combined with an injected HTTP client"
+            )
+        if test_only_mock_handler is not None and "synthetic" not in api_key.lower():
+            raise OpenRouterPrivacyError(
+                "test-only mock transport requires an explicitly synthetic credential"
+            )
         if (
             not api_key
             or len(api_key.encode("utf-8")) > 4_096
@@ -2117,8 +2203,8 @@ class OpenRouterClient:
                 "model-output repair is disabled for certification because repaired output "
                 "cannot count as a review"
             )
-        self._owns_client = http_client is None
-        closed_mock_transport = _uses_closed_httpx_mock_transport(http_client)
+        closed_mock_transport = test_only_mock_handler is not None
+        self._owns_client = http_client is None and not closed_mock_transport
         normalized_base_url = base_url.rstrip("/") + "/"
         effective_base_url = (
             normalized_base_url
@@ -2129,7 +2215,7 @@ class OpenRouterClient:
             raise OpenRouterPrivacyError(
                 "operator credentials may only use the canonical OpenRouter API endpoint"
             )
-        self.execution_evidence = (
+        initial_execution_evidence = (
             ExecutionEvidenceKind.MOCK
             if closed_mock_transport
             else (
@@ -2138,6 +2224,7 @@ class OpenRouterClient:
                 else ExecutionEvidenceKind.UNVERIFIED
             )
         )
+        self.execution_evidence = initial_execution_evidence
         self._requires_paid_controls = (
             not closed_mock_transport or self.budget.atomic_ledger is not None
         )
@@ -2149,23 +2236,144 @@ class OpenRouterClient:
             "X-OpenRouter-Title": "mmaudit",
             "X-OpenRouter-Metadata": "enabled",
         }
-        self._client = http_client or httpx.AsyncClient(
-            base_url=normalized_base_url,
-            timeout=httpx.Timeout(execution.request_timeout_seconds),
-            headers=self._headers,
-            trust_env=False,
-        )
+        if test_only_mock_handler is not None:
+            self._client = httpx.AsyncClient(
+                base_url=normalized_base_url,
+                timeout=httpx.Timeout(execution.request_timeout_seconds),
+                headers=self._headers,
+                transport=httpx.MockTransport(test_only_mock_handler),
+                trust_env=False,
+            )
+        else:
+            self._client = http_client or httpx.AsyncClient(
+                base_url=normalized_base_url,
+                timeout=httpx.Timeout(execution.request_timeout_seconds),
+                headers=self._headers,
+                limits=httpx.Limits(max_keepalive_connections=0),
+                trust_env=False,
+            )
         self._client_identity = self._client
+        self._base_url_identity = str(self._client.base_url)
         self._transport_identity = getattr(self._client, "_transport", None)
+        self._test_only_mock_transport_authorized = closed_mock_transport
+        self._mock_handler_identity = (
+            getattr(self._transport_identity, "handler", None) if closed_mock_transport else None
+        )
         self._owned_client_identity = self._client if self._owns_client else None
         self._owned_transport_identity = (
             getattr(self._client, "_transport", None) if self._owns_client else None
+        )
+        self._close_client_identity = (
+            self._client if self._owns_client or closed_mock_transport else None
         )
         if self._owns_client and not _owned_httpx_callables_are_pristine(
             self._client,
             self._owned_transport_identity,
         ):
             raise OpenRouterPrivacyError("owned provider callable provenance is invalid")
+        if closed_mock_transport and not _mock_httpx_callables_are_pristine(
+            self._client,
+            self._transport_identity,
+            self._mock_handler_identity,
+        ):
+            raise OpenRouterPrivacyError("test-only mock transport provenance is invalid")
+        if type(self) is OpenRouterClient and initial_execution_evidence in {
+            ExecutionEvidenceKind.REAL,
+            ExecutionEvidenceKind.MOCK,
+        }:
+            owned_pool = (
+                getattr(self._transport_identity, "_pool", None)
+                if initial_execution_evidence is ExecutionEvidenceKind.REAL
+                else None
+            )
+            network_backend = (
+                getattr(owned_pool, "_network_backend", None) if owned_pool is not None else None
+            )
+            _register_trusted_transport_binding(
+                self,
+                _TrustedTransportBinding(
+                    execution_evidence=initial_execution_evidence,
+                    http_client=self._client,
+                    transport=self._transport_identity,
+                    base_url=self._base_url_identity,
+                    mock_handler=self._mock_handler_identity,
+                    request_lock=(
+                        asyncio.Lock()
+                        if initial_execution_evidence is ExecutionEvidenceKind.REAL
+                        else None
+                    ),
+                    client_attribute_names=frozenset(vars(self._client)),
+                    transport_attribute_names=frozenset(vars(self._transport_identity)),
+                    owned_pool=owned_pool,
+                    owned_pool_attribute_names=(
+                        frozenset(vars(owned_pool)) if owned_pool is not None else frozenset()
+                    ),
+                    owned_pool_attribute_values=(
+                        tuple(sorted(vars(owned_pool).items())) if owned_pool is not None else ()
+                    ),
+                    owned_pool_request_callable=(
+                        getattr(type(owned_pool), "handle_async_request", None)
+                        if owned_pool is not None
+                        else None
+                    ),
+                    owned_pool_create_connection_callable=(
+                        getattr(type(owned_pool), "create_connection", None)
+                        if owned_pool is not None
+                        else None
+                    ),
+                    owned_pool_assign_requests_callable=(
+                        getattr(type(owned_pool), "_assign_requests_to_connections", None)
+                        if owned_pool is not None
+                        else None
+                    ),
+                    owned_pool_close_connections_callable=(
+                        getattr(type(owned_pool), "_close_connections", None)
+                        if owned_pool is not None
+                        else None
+                    ),
+                    owned_pool_getattribute_callable=(
+                        getattr(type(owned_pool), "__getattribute__", None)
+                        if owned_pool is not None
+                        else None
+                    ),
+                    network_backend=network_backend,
+                    network_backend_type=(
+                        type(network_backend) if network_backend is not None else None
+                    ),
+                    network_backend_attribute_names=(
+                        frozenset(vars(network_backend))
+                        if network_backend is not None
+                        else frozenset()
+                    ),
+                    network_backend_connect_tcp_callable=(
+                        getattr(type(network_backend), "connect_tcp", None)
+                        if network_backend is not None
+                        else None
+                    ),
+                    network_backend_connect_unix_socket_callable=(
+                        getattr(type(network_backend), "connect_unix_socket", None)
+                        if network_backend is not None
+                        else None
+                    ),
+                    network_backend_sleep_callable=(
+                        getattr(type(network_backend), "sleep", None)
+                        if network_backend is not None
+                        else None
+                    ),
+                    network_backend_init_callable=(
+                        getattr(type(network_backend), "_init_backend", None)
+                        if network_backend is not None
+                        else None
+                    ),
+                    network_backend_getattribute_callable=(
+                        getattr(type(network_backend), "__getattribute__", None)
+                        if network_backend is not None
+                        else None
+                    ),
+                    follow_redirects=self._client.follow_redirects,
+                    max_redirects=self._client.max_redirects,
+                ),
+            )
 
     async def __aenter__(self) -> OpenRouterClient:
         return self
@@ -2175,8 +2383,8 @@ class OpenRouterClient:
 
     async def close(self) -> None:
         self.clear_credentials()
-        if self._owned_client_identity is not None:
-            await self._owned_client_identity.aclose()
+        if self._close_client_identity is not None:
+            await self._close_client_identity.aclose()
 
     def retained_unbound_completions(self) -> tuple[StructuredCompletion[Any], ...]:
         """Return bounded in-memory unbound evidence without serializing its values."""
@@ -2540,7 +2748,7 @@ class OpenRouterClient:
         OpenRouterClient._validate_transport_provenance(self)
         if (
             type(self) is not _TRUSTED_OPENROUTER_CLIENT_TYPE
-            or self.execution_evidence is not ExecutionEvidenceKind.REAL
+            or trusted_openrouter_execution_evidence(self) is not ExecutionEvidenceKind.REAL
             or not self._owns_client
             or not self._authentication_validated
         ):
@@ -2751,7 +2959,7 @@ class OpenRouterClient:
                         requested_generation_id=validated_generation_id,
                         retrieved_at=datetime.now(UTC),
                         retrieval_attempts=attempt,
-                        execution_evidence=self.execution_evidence,
+                        execution_evidence=trusted_openrouter_execution_evidence(self),
                     )
                 except (GenerationEvidenceValidationError, ValidationError):
                     try:
@@ -2760,7 +2968,7 @@ class OpenRouterClient:
                             requested_generation_id=validated_generation_id,
                             reconciliation_expectation=expectation,
                             retrieval_attempts=attempt,
-                            execution_evidence=self.execution_evidence,
+                            execution_evidence=trusted_openrouter_execution_evidence(self),
                         )
                     except GenerationReconciliationMismatchError as exc:
                         raise OpenRouterGenerationReconciliationError(
@@ -2927,7 +3135,7 @@ class OpenRouterClient:
     ) -> TrustedGenerationVerification:
         """Authenticate and freshly re-fetch an exact generation set without completions."""
 
-        if not _openrouter_generation_verification_callables_are_pristine():
+        if not _openrouter_client_callables_are_pristine():
             raise OpenRouterPrivacyError(
                 "trusted generation verification client callables are not pristine"
             )
@@ -2962,7 +3170,7 @@ class OpenRouterClient:
             )
         if (
             type(self) is not _TRUSTED_OPENROUTER_CLIENT_TYPE
-            or self.execution_evidence is not ExecutionEvidenceKind.REAL
+            or trusted_openrouter_execution_evidence(self) is not ExecutionEvidenceKind.REAL
             or not self._owns_client
         ):
             raise OpenRouterPrivacyError(
@@ -3051,7 +3259,7 @@ class OpenRouterClient:
             )
             if (
                 type(self) is not _TRUSTED_OPENROUTER_CLIENT_TYPE
-                or self.execution_evidence is not ExecutionEvidenceKind.REAL
+                or trusted_openrouter_execution_evidence(self) is not ExecutionEvidenceKind.REAL
                 or not self._owns_client
                 or not self._authentication_validated
                 or model_binding is None
@@ -3603,7 +3811,7 @@ class OpenRouterClient:
         """Return whether one request must consume sealed production reasoning authority."""
 
         return (
-            self.execution_evidence is ExecutionEvidenceKind.REAL
+            trusted_openrouter_execution_evidence(self) is ExecutionEvidenceKind.REAL
             and self.provider_policy.certification
             and not _is_prequalification_provider_role(role)
         )
@@ -3706,7 +3914,7 @@ class OpenRouterClient:
     ) -> EndpointRouteIntersection:
         registered_policy = self._endpoint_pricing.get(model)
         if registered_policy is None:
-            if self.execution_evidence is not ExecutionEvidenceKind.MOCK:
+            if trusted_openrouter_execution_evidence(self) is not ExecutionEvidenceKind.MOCK:
                 raise OpenRouterRequestLimitError(
                     "endpoint token planning requires frozen route capacity evidence"
                 )
@@ -4153,7 +4361,8 @@ class OpenRouterClient:
         while True:
             attempts += 1
             try:
-                response = await self._bounded_request(
+                response = await _TRUSTED_BOUNDED_REQUEST(
+                    self,
                     "GET",
                     path,
                     max_bytes=max_bytes,
@@ -4218,43 +4427,59 @@ class OpenRouterClient:
         json_body: dict[str, Any] | None = None,
         max_bytes: int,
     ) -> httpx.Response:
-        self._validate_transport_provenance()
-        chunks: list[bytes] = []
-        total = 0
-        relative_path = path.lstrip("/")
-        try:
-            async with self._client.stream(
-                method,
-                relative_path,
-                json=json_body,
-                headers=self._headers,
-                timeout=httpx.Timeout(self.execution.request_timeout_seconds),
-            ) as response:
-                async for chunk in response.aiter_bytes():
-                    total += len(chunk)
-                    if total > max_bytes:
-                        raise OpenRouterSchemaError(
-                            "provider response exceeded the configured safety limit"
-                        )
-                    chunks.append(chunk)
-                safe_request = httpx.Request(method, response.request.url)
-                return httpx.Response(
-                    status_code=response.status_code,
-                    headers=_decoded_response_headers(response.headers),
-                    content=b"".join(chunks),
-                    request=safe_request,
-                )
-        except OpenRouterError:
-            raise
-        except httpx.HTTPError as exc:
-            if exc.request is not None:
-                exc.request = httpx.Request(method, self._client.base_url.join(relative_path))
-            raise
-        except Exception:
-            pass
-        raise OpenRouterSchemaError("model transport failed safely")
+        binding = _lookup_trusted_transport_binding(self)
+        if binding is None:
+            raise OpenRouterPrivacyError(
+                "network-capable injected provider clients are not permitted"
+            )
 
-    def _validate_transport_provenance(self) -> None:
+        async def perform() -> httpx.Response:
+            _TRUSTED_VALIDATE_TRANSPORT_PROVENANCE(self)
+            chunks: list[bytes] = []
+            total = 0
+            relative_path = path.lstrip("/")
+            try:
+                async with self._client.stream(
+                    method,
+                    relative_path,
+                    json=json_body,
+                    headers=self._headers,
+                    timeout=httpx.Timeout(self.execution.request_timeout_seconds),
+                ) as response:
+                    async for chunk in response.aiter_bytes():
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise OpenRouterSchemaError(
+                                "provider response exceeded the configured safety limit"
+                            )
+                        chunks.append(chunk)
+                    safe_request = httpx.Request(method, response.request.url)
+                    return httpx.Response(
+                        status_code=response.status_code,
+                        headers=_decoded_response_headers(response.headers),
+                        content=b"".join(chunks),
+                        request=safe_request,
+                    )
+            except OpenRouterError:
+                raise
+            except httpx.HTTPError as exc:
+                if exc.request is not None:
+                    exc.request = httpx.Request(method, self._client.base_url.join(relative_path))
+                raise
+            except Exception:
+                pass
+            raise OpenRouterSchemaError("model transport failed safely")
+
+        if binding.execution_evidence is ExecutionEvidenceKind.REAL:
+            if binding.request_lock is None:
+                raise OpenRouterPrivacyError(
+                    "provider transport provenance changed after validation"
+                )
+            async with binding.request_lock:
+                return await perform()
+        return await perform()
+
+    def _validate_transport_provenance(self) -> ExecutionEvidenceKind:
         if any(
             name in vars(self)
             for name in (
@@ -4268,24 +4493,42 @@ class OpenRouterClient:
             )
         ):
             raise OpenRouterPrivacyError("provider client callables changed after validation")
-        if (
-            self._client is not self._client_identity
-            or getattr(self._client, "_transport", None) is not self._transport_identity
-        ):
-            raise OpenRouterPrivacyError("provider transport provenance changed after validation")
-        if self.execution_evidence is ExecutionEvidenceKind.UNVERIFIED:
+        binding = _lookup_trusted_transport_binding(self)
+        if type(self) is not _TRUSTED_OPENROUTER_CLIENT_TYPE or binding is None:
             raise OpenRouterPrivacyError(
                 "network-capable injected provider clients are not permitted"
             )
-        if self._owns_client and (
-            self._client is not self._owned_client_identity
-            or getattr(self._client, "_transport", None) is not self._owned_transport_identity
-            or not _owned_httpx_callables_are_pristine(
-                self._client,
-                self._owned_transport_identity,
-            )
+        try:
+            current_client = object.__getattribute__(self, "_client")
+            current_transport = object.__getattribute__(current_client, "_transport")
+        except (AttributeError, TypeError) as exc:
+            raise OpenRouterPrivacyError(
+                "provider transport provenance changed after validation"
+            ) from exc
+        if (
+            current_client is not binding.http_client
+            or current_transport is not binding.transport
+            or str(current_client.base_url) != binding.base_url
+        ):
+            raise OpenRouterPrivacyError("provider transport provenance changed after validation")
+        if (
+            binding.execution_evidence is ExecutionEvidenceKind.REAL
+            and not _owned_httpx_callables_are_pristine(current_client, current_transport)
         ):
             raise OpenRouterPrivacyError("owned provider callable provenance is invalid")
+        if (
+            binding.execution_evidence is ExecutionEvidenceKind.MOCK
+            and not _mock_httpx_callables_are_pristine(
+                current_client,
+                current_transport,
+                binding.mock_handler,
+            )
+        ):
+            raise OpenRouterPrivacyError("test-only mock transport provenance is invalid")
+        execution_evidence = trusted_openrouter_execution_evidence(self)
+        if execution_evidence is ExecutionEvidenceKind.UNVERIFIED:
+            raise OpenRouterPrivacyError("provider transport provenance changed after validation")
+        return execution_evidence
 
     def build_request(
         self,
@@ -4597,7 +4840,7 @@ class OpenRouterClient:
             raise OpenRouterRequestLimitError(
                 "unbound evidence retention is full; inspect and clear it before retrying"
             )
-        if self.execution_evidence is ExecutionEvidenceKind.UNVERIFIED:
+        if trusted_openrouter_execution_evidence(self) is ExecutionEvidenceKind.UNVERIFIED:
             raise OpenRouterPrivacyError(
                 "network-capable injected provider clients are not permitted"
             )
@@ -4621,7 +4864,7 @@ class OpenRouterClient:
                 raise OpenRouterCostControlError(
                     "real provider completion lacks validated endpoint pricing"
                 )
-        if self.execution_evidence is ExecutionEvidenceKind.REAL:
+        if trusted_openrouter_execution_evidence(self) is ExecutionEvidenceKind.REAL:
             if (
                 type(self) is not _TRUSTED_OPENROUTER_CLIENT_TYPE
                 or not self._owns_client
@@ -4663,7 +4906,7 @@ class OpenRouterClient:
                     endpoint_policy=self._endpoint_pricing.get(model),
                     model_identity=self._model_identities.get(model),
                     require_runtime_snapshots=(
-                        self.execution_evidence is ExecutionEvidenceKind.REAL
+                        trusted_openrouter_execution_evidence(self) is ExecutionEvidenceKind.REAL
                     ),
                 )
             qualification_bindings[model] = binding
@@ -4711,7 +4954,7 @@ class OpenRouterClient:
                     extra={"role": role, "status": "identity_unbound"},
                 )
                 return completion
-            if self.execution_evidence is ExecutionEvidenceKind.REAL:
+            if trusted_openrouter_execution_evidence(self) is ExecutionEvidenceKind.REAL:
                 completion = await self._bind_real_completion_identity(completion)
                 if _is_concluded_unbound_completion(completion):
                     self._retain_unbound_completion(completion)
@@ -4749,7 +4992,7 @@ class OpenRouterClient:
             )
         if (
             type(self) is not _TRUSTED_OPENROUTER_CLIENT_TYPE
-            or self.execution_evidence is not ExecutionEvidenceKind.REAL
+            or trusted_openrouter_execution_evidence(self) is not ExecutionEvidenceKind.REAL
             or not self._owns_client
             or not self._authentication_validated
         ):
@@ -4782,10 +5025,10 @@ class OpenRouterClient:
 
         if (
             type(self) is not _TRUSTED_OPENROUTER_CLIENT_TYPE
-            or self.execution_evidence is not ExecutionEvidenceKind.REAL
+            or trusted_openrouter_execution_evidence(self) is not ExecutionEvidenceKind.REAL
             or not self._owns_client
             or not self._authentication_validated
-            or not _openrouter_generation_verification_callables_are_pristine()
+            or not _openrouter_client_callables_are_pristine()
         ):
             raise OpenRouterPrivacyError(
                 "REAL identity binding requires an authenticated owned provider client"
@@ -5353,7 +5596,8 @@ class OpenRouterClient:
                     if observer is not None and attempts == 1:
                         observer.request_dispatched(logical_request_id=request_id)
                     active_network_attempted = True
-                    response = await self._bounded_request(
+                    response = await _TRUSTED_BOUNDED_REQUEST(
+                        self,
                         "POST",
                         "/chat/completions",
                         json_body=body,
@@ -5522,7 +5766,7 @@ class OpenRouterClient:
             usage_record = UsageRecord(
                 request_id=request_id,
                 role=role,
-                execution_evidence=self.execution_evidence,
+                execution_evidence=trusted_openrouter_execution_evidence(self),
                 requested_model=model,
                 returned_model=envelope.returned_model,
                 actual_model=envelope.selected_model,
@@ -5660,7 +5904,7 @@ class OpenRouterClient:
                 failed_usage = UsageRecord(
                     request_id=request_id,
                     role=role,
-                    execution_evidence=self.execution_evidence,
+                    execution_evidence=trusted_openrouter_execution_evidence(self),
                     requested_model=model,
                     returned_model=returned_model,
                     provider=actual_provider,
@@ -6274,7 +6518,7 @@ class OpenRouterClient:
                 if endpoint_policy is not None
                 else _canonical_sha256(
                     {
-                        "execution_evidence": self.execution_evidence.value,
+                        "execution_evidence": trusted_openrouter_execution_evidence(self).value,
                         "mode": StructuredOutputMode.NATIVE_JSON_SCHEMA.value,
                         "model": envelope.requested_model,
                     }
@@ -6682,7 +6926,9 @@ _TRUSTED_BOUNDED_REQUEST = OpenRouterClient._bounded_request
 _TRUSTED_VALIDATE_TRANSPORT_PROVENANCE = OpenRouterClient._validate_transport_provenance
 
 
-def _openrouter_generation_verification_callables_are_pristine() -> bool:
+def _openrouter_client_callables_are_pristine() -> bool:
+    """Verify the client-owned request and evidence dispatch boundary is unchanged."""
+
     return (
         (
             GenerationVerificationRequest.reconciliation_expectation
@@ -6707,12 +6953,194 @@ def _openrouter_generation_verification_callables_are_pristine() -> bool:
     )
 
 
-def _uses_closed_httpx_mock_transport(client: httpx.AsyncClient | None) -> bool:
-    """Recognize only httpx's exact in-memory test transport as mock execution."""
-
-    if client is None:
+def _network_backend_graph_is_current(binding: _TrustedTransportBinding) -> bool:
+    backend = binding.network_backend
+    if backend is None or type(backend) is not binding.network_backend_type:
         return False
-    return type(getattr(client, "_transport", None)) is httpx.MockTransport
+    try:
+        backend_values = vars(backend)
+        backend_type = type(backend)
+        if (
+            getattr(backend_type, "connect_tcp", None)
+            is not binding.network_backend_connect_tcp_callable
+            or getattr(backend_type, "connect_unix_socket", None)
+            is not binding.network_backend_connect_unix_socket_callable
+            or getattr(backend_type, "sleep", None) is not binding.network_backend_sleep_callable
+            or getattr(backend_type, "_init_backend", None)
+            is not binding.network_backend_init_callable
+            or getattr(backend_type, "__getattribute__", None)
+            is not binding.network_backend_getattribute_callable
+        ):
+            return False
+        initial_names = binding.network_backend_attribute_names
+        if frozenset(backend_values) not in {initial_names, initial_names | {"_backend"}}:
+            return False
+        inner = backend_values.get("_backend")
+        if inner is None:
+            return True
+        if vars(inner):
+            return False
+        inner_type = type(inner)
+        if inner_type is _TRUSTED_ANYIO_BACKEND_TYPE:
+            return (
+                inner_type.connect_tcp is _TRUSTED_ANYIO_CONNECT_TCP
+                and inner_type.connect_unix_socket is _TRUSTED_ANYIO_CONNECT_UNIX_SOCKET
+                and inner_type.sleep is _TRUSTED_ANYIO_SLEEP
+                and getattr(inner_type, "__getattribute__", None)
+                is _TRUSTED_ANYIO_BACKEND_GETATTRIBUTE
+            )
+    except (AttributeError, TypeError):
+        return False
+    return False
+
+
+def _transport_binding_graph_is_current(binding: _TrustedTransportBinding) -> bool:
+    """Verify the bound HTTPX object graph has no new or substituted dispatch authority."""
+
+    try:
+        if frozenset(vars(binding.http_client)) != binding.client_attribute_names:
+            return False
+        if frozenset(vars(binding.transport)) != binding.transport_attribute_names:
+            return False
+        if (
+            binding.http_client.follow_redirects is not binding.follow_redirects
+            or binding.http_client.max_redirects != binding.max_redirects
+        ):
+            return False
+        if binding.execution_evidence is ExecutionEvidenceKind.REAL:
+            pool = object.__getattribute__(binding.transport, "_pool")
+            current_pool_values = vars(pool)
+            connections = current_pool_values.get("_connections")
+            requests = current_pool_values.get("_requests")
+            if (
+                pool is not binding.owned_pool
+                or frozenset(current_pool_values) != binding.owned_pool_attribute_names
+                or any(
+                    current_pool_values[name] is not original
+                    for name, original in binding.owned_pool_attribute_values
+                )
+                or "handle_async_request" in current_pool_values
+                or getattr(type(pool), "handle_async_request", None)
+                is not binding.owned_pool_request_callable
+                or getattr(type(pool), "create_connection", None)
+                is not binding.owned_pool_create_connection_callable
+                or getattr(type(pool), "_assign_requests_to_connections", None)
+                is not binding.owned_pool_assign_requests_callable
+                or getattr(type(pool), "_close_connections", None)
+                is not binding.owned_pool_close_connections_callable
+                or getattr(type(pool), "__getattribute__", None)
+                is not binding.owned_pool_getattribute_callable
+                or type(connections) is not list
+                or bool(connections)
+                or type(requests) is not list
+                or bool(requests)
+                or not _network_backend_graph_is_current(binding)
+            ):
+                return False
+    except (AttributeError, TypeError):
+        return False
+    return True
+
+
+def trusted_openrouter_execution_evidence(client: OpenRouterClient) -> ExecutionEvidenceKind:
+    """Derive execution evidence once from exact sealed transport identities.
+
+    The public descriptive label is deliberately ignored. This function uses base-object
+    attribute access and exact concrete types so subclasses, dynamic attribute overrides, and
+    concurrent label changes cannot influence the qualification decision.
+    """
+
+    if type(client) is not _TRUSTED_OPENROUTER_CLIENT_TYPE:
+        return ExecutionEvidenceKind.UNVERIFIED
+    if not _openrouter_client_callables_are_pristine():
+        return ExecutionEvidenceKind.UNVERIFIED
+    binding = _lookup_trusted_transport_binding(client)
+    if binding is None:
+        return ExecutionEvidenceKind.UNVERIFIED
+    try:
+        http_client = object.__getattribute__(client, "_client")
+        transport = object.__getattribute__(http_client, "_transport")
+    except (AttributeError, TypeError):
+        return ExecutionEvidenceKind.UNVERIFIED
+    if (
+        http_client is not binding.http_client
+        or transport is not binding.transport
+        or str(http_client.base_url) != binding.base_url
+        or not _transport_binding_graph_is_current(binding)
+    ):
+        return ExecutionEvidenceKind.UNVERIFIED
+    if binding.execution_evidence is ExecutionEvidenceKind.REAL:
+        if (
+            binding.base_url == _NORMALIZED_OPENROUTER_BASE_URL
+            and _owned_httpx_callables_are_pristine(http_client, transport)
+        ):
+            return ExecutionEvidenceKind.REAL
+        return ExecutionEvidenceKind.UNVERIFIED
+    if (
+        binding.execution_evidence is ExecutionEvidenceKind.MOCK
+        and type(http_client) is httpx.AsyncClient
+        and type(transport) is httpx.MockTransport
+        and _mock_httpx_callables_are_pristine(
+            http_client,
+            transport,
+            binding.mock_handler,
+        )
+    ):
+        return ExecutionEvidenceKind.MOCK
+    return ExecutionEvidenceKind.UNVERIFIED
+
+
+def _mock_httpx_callables_are_pristine(
+    client: httpx.AsyncClient,
+    transport: object,
+    handler_identity: object,
+) -> bool:
+    """Keep the explicitly authorized test transport sealed after construction."""
+
+    if type(client) is not httpx.AsyncClient or type(transport) is not httpx.MockTransport:
+        return False
+    try:
+        client_values = vars(client)
+        transport_values = vars(transport)
+        handler = object.__getattribute__(transport, "handler")
+        selected_transport = httpx.AsyncClient._transport_for_url(client, client.base_url)
+    except (AttributeError, TypeError):
+        return False
+    return (
+        handler is handler_identity
+        and selected_transport is transport
+        and client_values.get("_mounts") == {}
+        and client_values.get("_auth") is None
+        and client_values.get("_event_hooks") == {"request": [], "response": []}
+        and client_values.get("_trust_env") is False
+        and "send" not in client_values
+        and "request" not in client_values
+        and "stream" not in client_values
+        and "build_request" not in client_values
+        and "_merge_url" not in client_values
+        and "_build_request_auth" not in client_values
+        and "_send_handling_auth" not in client_values
+        and "_send_handling_redirects" not in client_values
+        and "_transport_for_url" not in client_values
+        and "_send_single_request" not in client_values
+        and "handle_async_request" not in transport_values
+        and httpx.AsyncClient.send is _TRUSTED_ASYNC_CLIENT_SEND
+        and httpx.AsyncClient.request is _TRUSTED_ASYNC_CLIENT_REQUEST
+        and httpx.AsyncClient.stream is _TRUSTED_ASYNC_CLIENT_STREAM
+        and httpx.AsyncClient.build_request is _TRUSTED_ASYNC_CLIENT_BUILD_REQUEST
+        and httpx.AsyncClient.__getattribute__ is _TRUSTED_ASYNC_CLIENT_GETATTRIBUTE
+        and httpx.AsyncClient._merge_url is _TRUSTED_ASYNC_CLIENT_MERGE_URL
+        and (httpx.AsyncClient._build_request_auth is _TRUSTED_ASYNC_CLIENT_BUILD_REQUEST_AUTH)
+        and (httpx.AsyncClient._send_handling_auth is _TRUSTED_ASYNC_CLIENT_SEND_HANDLING_AUTH)
+        and (
+            httpx.AsyncClient._send_handling_redirects
+            is _TRUSTED_ASYNC_CLIENT_SEND_HANDLING_REDIRECTS
+        )
+        and (httpx.AsyncClient._transport_for_url is _TRUSTED_ASYNC_CLIENT_TRANSPORT_FOR_URL)
+        and (httpx.AsyncClient._send_single_request is _TRUSTED_ASYNC_CLIENT_SEND_SINGLE_REQUEST)
+        and httpx.MockTransport.handle_async_request is _TRUSTED_MOCK_TRANSPORT_REQUEST
+        and httpx.MockTransport.__getattribute__ is _TRUSTED_MOCK_TRANSPORT_GETATTRIBUTE
+    )
 
 
 def _owned_httpx_callables_are_pristine(
@@ -6726,17 +7154,44 @@ def _owned_httpx_callables_are_pristine(
     try:
         client_values = vars(client)
         transport_values = vars(transport)
-    except TypeError:
+        selected_transport = httpx.AsyncClient._transport_for_url(client, client.base_url)
+    except (AttributeError, TypeError):
         return False
     return (
-        "send" not in client_values
+        selected_transport is transport
+        and client_values.get("_mounts") == {}
+        and client_values.get("_auth") is None
+        and client_values.get("_event_hooks") == {"request": [], "response": []}
+        and client_values.get("_trust_env") is False
+        and "send" not in client_values
         and "request" not in client_values
         and "stream" not in client_values
+        and "build_request" not in client_values
+        and "_merge_url" not in client_values
+        and "_build_request_auth" not in client_values
+        and "_send_handling_auth" not in client_values
+        and "_send_handling_redirects" not in client_values
+        and "_transport_for_url" not in client_values
+        and "_send_single_request" not in client_values
         and "handle_async_request" not in transport_values
         and httpx.AsyncClient.send is _TRUSTED_ASYNC_CLIENT_SEND
         and httpx.AsyncClient.request is _TRUSTED_ASYNC_CLIENT_REQUEST
         and httpx.AsyncClient.stream is _TRUSTED_ASYNC_CLIENT_STREAM
+        and httpx.AsyncClient.build_request is _TRUSTED_ASYNC_CLIENT_BUILD_REQUEST
+        and httpx.AsyncClient.__getattribute__ is _TRUSTED_ASYNC_CLIENT_GETATTRIBUTE
+        and httpx.AsyncClient._merge_url is _TRUSTED_ASYNC_CLIENT_MERGE_URL
+        and (httpx.AsyncClient._build_request_auth is _TRUSTED_ASYNC_CLIENT_BUILD_REQUEST_AUTH)
+        and (httpx.AsyncClient._send_handling_auth is _TRUSTED_ASYNC_CLIENT_SEND_HANDLING_AUTH)
+        and (
+            httpx.AsyncClient._send_handling_redirects
+            is _TRUSTED_ASYNC_CLIENT_SEND_HANDLING_REDIRECTS
+        )
+        and (httpx.AsyncClient._transport_for_url is _TRUSTED_ASYNC_CLIENT_TRANSPORT_FOR_URL)
+        and (httpx.AsyncClient._send_single_request is _TRUSTED_ASYNC_CLIENT_SEND_SINGLE_REQUEST)
         and (httpx.AsyncHTTPTransport.handle_async_request is _TRUSTED_ASYNC_HTTP_TRANSPORT_REQUEST)
+        and (
+            httpx.AsyncHTTPTransport.__getattribute__ is _TRUSTED_ASYNC_HTTP_TRANSPORT_GETATTRIBUTE
+        )
     )
 
 

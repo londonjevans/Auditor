@@ -130,7 +130,7 @@ def _derived_production_config() -> AuditConfig:
             measured_quality_score=result.overall_score,
             measured_quality_tier="highest",
         )
-        entry["quality_measurement"] = f"sha256:{result.quality_measurement_sha256}"
+        entry["measured_quality"]["measurement"] = f"sha256:{result.quality_measurement_sha256}"
         registry.append(entry)
     data = base_config_data()
     data["privacy"]["approved_model_lineages"] = sorted(

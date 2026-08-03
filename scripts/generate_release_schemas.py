@@ -9,6 +9,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from mmaudit.benchmark.engine import BenchmarkReport
+from mmaudit.config import ModelsConfig
 from mmaudit.models.calibration import ModelCalibrationArtifact
 from mmaudit.models.lineage_review import ModelLineageReviewArtifact
 from mmaudit.models.qualification import ModelQualificationArtifact
@@ -51,6 +52,7 @@ MODELS: dict[str, type[BaseModel]] = {
     "hardhat_request_test.schema.json": HardhatTestPhaseRequest,
     "model_calibration.schema.json": ModelCalibrationArtifact,
     "model_lineage_review.schema.json": ModelLineageReviewArtifact,
+    "models_config.schema.json": ModelsConfig,
     "model_qualification.schema.json": ModelQualificationArtifact,
     "model_refresh_attempt.schema.json": ModelRefreshAttempt,
     "model_refresh_diff.schema.json": ModelRefreshDiff,
@@ -79,6 +81,7 @@ TITLE_OVERRIDES = {
     "hardhat_request_test.schema.json": "mmaudit Hardhat test phase request",
     "model_calibration.schema.json": "mmaudit model calibration artifact",
     "model_lineage_review.schema.json": "mmaudit model lineage review artifact",
+    "models_config.schema.json": "mmaudit models configuration",
     "model_qualification.schema.json": "mmaudit model qualification artifact",
     "model_refresh_attempt.schema.json": "mmaudit model refresh attempt",
     "model_refresh_diff.schema.json": "mmaudit model refresh diff",
@@ -98,6 +101,36 @@ def rendered_schema(filename: str, model: type[BaseModel]) -> str:
     """Return one deterministic draft-2020-12 schema."""
 
     schema = model.model_json_schema()
+    if filename == "models_config.schema.json":
+        lineage = schema["$defs"]["ModelLineageConfig"]
+        measured_quality = lineage["properties"]["measured_quality"]
+        non_null_options = [
+            option for option in measured_quality["anyOf"] if option.get("type") != "null"
+        ]
+        if len(non_null_options) != 1:
+            raise ValueError("models configuration schema has an unexpected quality union")
+        lineage["properties"]["measured_quality"] = non_null_options[0]
+        lineage["properties"]["aliases"]["uniqueItems"] = True
+        lineage["$comment"] = (
+            "Canonical model ID and aliases are also required to be case-insensitively "
+            "distinct by ModelsConfig runtime validation."
+        )
+        schema["properties"]["registry"]["$comment"] = (
+            "Canonical IDs and aliases are required to be globally case-insensitively unique "
+            "by ModelsConfig runtime validation; this cross-item relation is not expressible "
+            "in JSON Schema draft 2020-12."
+        )
+        quality = schema["$defs"]["ModelQualityMeasurementConfig"]
+        quality["allOf"] = [
+            {
+                "if": {
+                    "properties": {"tier": {"const": tier}},
+                    "required": ["tier"],
+                },
+                "then": {"properties": {"score": {"minimum": minimum, "type": "number"}}},
+            }
+            for tier, minimum in (("high", 0.75), ("highest", 0.9))
+        ]
     schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
     schema["$id"] = f"{SCHEMA_BASE}/{filename}"
     if filename in TITLE_OVERRIDES:

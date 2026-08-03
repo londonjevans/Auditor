@@ -1695,7 +1695,7 @@ are invisible to source review by construction.
 - **Dependencies:** None.
 - **Unblocks:** `V3-CALIBRATE-001`, `V3-LINEAGE-001`, `V3-MODELREFRESH-001`, and transitively
   `V3-QUALIFY-001` and every real-audit ticket.
-- **Status:** `COMPLETE`
+- **Status:** `IN_PROGRESS`
 - **Implementation:** Declared lineage identity and retention are now independent of one optional,
   atomic nested measured-quality record. Approved identity-only records work in the deterministic
   benchmark target/egress path, while audit preflight, ordinary role validation, and verified
@@ -1704,7 +1704,7 @@ are invisible to source review by construction.
   not itself grant runtime selection authority. The candidate/config/promotion relationship is
   documented, both templates agree, and a generated strict models-configuration schema is
   committed.
-- **Validation:** Focused registry/benchmark/promotion tests passed `79`; configuration/CLI passed
+- **Historical pre-review validation:** Focused registry/benchmark/promotion tests passed `79`; configuration/CLI passed
   `119`; candidate, calibration, qualification, role, and CLI workflows passed `169`; schema tests
   passed `2`. Ruff format check passed all `419` files, Ruff check passed, strict mypy passed all
   `165` source files, schemas verified, both TOML templates parsed, and `.venv/bin/pytest -q
@@ -1717,9 +1717,15 @@ are invisible to source review by construction.
   production audit to rely on a manually populated static quality record without current opaque
   qualification. The preceding full-suite result applies to that pre-review tree only and is not
   final acceptance evidence for this ticket.
-- **Next action:** Require current independently verified qualification for every REAL or
-  UNVERIFIED production model path, preserve MOCK-only test execution without REAL credit, then
-  revalidate before checkpointing.
+- **Current status:** The qualification gate and subsequent issuer-held OpenRouter transport,
+  request-callable, pool-content, and class-dispatch hardening are implemented. The final focused
+  OpenRouter/generation matrix passed `323` tests, and bounded independent re-probing found both
+  last false-REAL paths closed. The complete pipeline gate was paused by the operator after `79`
+  passes without failure, so the ticket remains in progress and that partial run earns no
+  acceptance credit.
+- **Next action:** Rerun the complete pipeline integration file from the beginning, then run the
+  changed model/config/schema matrix and repository-wide static/full-suite gates before
+  checkpointing.
 
 ## V3-MODELREFRESH-001 — Daily catalogue refresh and candidate drift detection
 

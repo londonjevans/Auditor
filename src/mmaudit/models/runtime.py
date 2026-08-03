@@ -14,7 +14,7 @@ from mmaudit.models.reasoning import (
     ReasoningControlProfile,
     ReasoningPolicyArtifact,
 )
-from mmaudit.models.schemas import AuditProfile
+from mmaudit.models.schemas import AuditProfile, ExecutionEvidenceKind
 from mmaudit.privacy import (
     EffectivePrivacyPolicyEvidence,
     TrustedPrivacyAuthorization,
@@ -37,6 +37,24 @@ def maximum_assurance_model_certification_required(config: AuditConfig) -> bool:
         config.profile is AuditProfile.MAXIMUM_ASSURANCE
         or config.maximum_assurance.require
         or config.maximum_assurance.ci_mode
+    )
+
+
+def production_model_qualification_required(
+    config: AuditConfig,
+    *,
+    execution_evidence: ExecutionEvidenceKind,
+) -> bool:
+    """Require current qualification for every path that could establish production evidence.
+
+    Standard-profile calls may omit production qualification only when a closed mock transport
+    makes their evidence explicitly MOCK. Maximum-assurance modes remain qualification-bound
+    even under mocks so their fail-closed contract can be exercised deterministically.
+    """
+
+    return (
+        maximum_assurance_model_certification_required(config)
+        or execution_evidence is not ExecutionEvidenceKind.MOCK
     )
 
 

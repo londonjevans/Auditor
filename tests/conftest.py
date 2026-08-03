@@ -35,19 +35,24 @@ def model_registry_entry(
     aliases: list[str] | None = None,
     measured_quality_score: float = 0.95,
     measured_quality_tier: str = "highest",
+    include_measured_quality: bool = True,
     retention_policy: str = "zero",
 ) -> dict[str, Any]:
     """Build deterministic synthetic registry metadata for local tests."""
 
-    return {
+    entry: dict[str, Any] = {
         "root_lineage": root_lineage or _sha256_identifier(f"lineage:{model_id}"),
         "canonical_model_id": model_id,
         "aliases": aliases or [],
-        "measured_quality_score": measured_quality_score,
-        "measured_quality_tier": measured_quality_tier,
-        "quality_measurement": _sha256_identifier(f"quality:{model_id}"),
         "retention_policy": retention_policy,
     }
+    if include_measured_quality:
+        entry["measured_quality"] = {
+            "score": measured_quality_score,
+            "tier": measured_quality_tier,
+            "measurement": _sha256_identifier(f"quality:{model_id}"),
+        }
+    return entry
 
 
 def _sha256_identifier(value: str) -> str:

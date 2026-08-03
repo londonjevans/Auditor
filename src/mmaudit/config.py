@@ -1112,32 +1112,61 @@ def _canonical_decimal_text(value: Decimal) -> str:
     return normalized or "0"
 
 
+class ModelQualityMeasurementConfig(ConfigModel):
+    """Optional benchmark-derived quality attached only after measurement."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    score: float = Field(strict=True, ge=0, le=1)
+    tier: ModelQualityTier
+    measurement: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+    @field_validator("measurement")
+    @classmethod
+    def measurement_is_immutable_identifier(cls, value: str) -> str:
+        if not _SHA256_IDENTIFIER.fullmatch(value):
+            raise ValueError("quality measurement must be a lowercase sha256 identifier")
+        return value
+
+    @model_validator(mode="after")
+    def tier_matches_score(self) -> ModelQualityMeasurementConfig:
+        minimum = _MODEL_QUALITY_MINIMUM_SCORE[self.tier]
+        if self.score < minimum:
+            raise ValueError(f"measured quality tier {self.tier} requires score >= {minimum}")
+        return self
+
+
 class ModelLineageConfig(ConfigModel):
-    """Immutable operator-reviewed identity, quality, and retention metadata."""
+    """Immutable operator-reviewed identity with optional measured quality."""
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True, frozen=True)
 
-    root_lineage: str
-    canonical_model_id: str
-    aliases: tuple[str, ...] = ()
-    measured_quality_score: float = Field(ge=0, le=1)
-    measured_quality_tier: ModelQualityTier
-    quality_measurement: str
+    root_lineage: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    canonical_model_id: str = Field(pattern=r"^[^\s/]+/[^\s/]+$")
+    aliases: tuple[Annotated[str, Field(pattern=r"^[^\s/]+/[^\s/]+$")], ...] = ()
     retention_policy: ModelRetentionPolicy
+    measured_quality: ModelQualityMeasurementConfig | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
-    @field_validator("root_lineage", "quality_measurement")
+    @field_validator("measured_quality", mode="before")
     @classmethod
-    def hashes_are_immutable_identifiers(cls, value: str) -> str:
+    def absent_quality_is_omitted_not_null(cls, value: Any) -> Any:
+        if value is None:
+            raise ValueError("unmeasured model quality must be omitted rather than null")
+        return value
+
+    @field_validator("root_lineage")
+    @classmethod
+    def lineage_is_immutable_identifier(cls, value: str) -> str:
         if not _SHA256_IDENTIFIER.fullmatch(value):
-            raise ValueError(
-                "lineage and quality measurements must be lowercase sha256 identifiers"
-            )
+            raise ValueError("lineage must be a lowercase sha256 identifier")
         return value
 
     @field_validator("canonical_model_id")
     @classmethod
     def canonical_model_has_provider(cls, value: str) -> str:
-        value = value.strip()
         if not _MODEL_IDENTIFIER.fullmatch(value):
             raise ValueError("canonical model IDs must use provider/model form")
         return value
@@ -1145,23 +1174,17 @@ class ModelLineageConfig(ConfigModel):
     @field_validator("aliases")
     @classmethod
     def aliases_are_distinct_model_ids(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        cleaned = tuple(value.strip() for value in values)
-        lowered = [value.lower() for value in cleaned]
-        if any(not _MODEL_IDENTIFIER.fullmatch(value) for value in cleaned):
+        lowered = [value.lower() for value in values]
+        if any(not _MODEL_IDENTIFIER.fullmatch(value) for value in values):
             raise ValueError("model aliases must use provider/model form")
         if len(lowered) != len(set(lowered)):
             raise ValueError("model aliases must be unique")
-        return cleaned
+        return values
 
     @model_validator(mode="after")
-    def measured_tier_matches_score(self) -> ModelLineageConfig:
+    def canonical_identity_is_not_an_alias(self) -> ModelLineageConfig:
         if self.canonical_model_id.lower() in {alias.lower() for alias in self.aliases}:
             raise ValueError("canonical model ID cannot also be an alias")
-        minimum = _MODEL_QUALITY_MINIMUM_SCORE[self.measured_quality_tier]
-        if self.measured_quality_score < minimum:
-            raise ValueError(
-                f"measured quality tier {self.measured_quality_tier} requires score >= {minimum}"
-            )
         return self
 
     def model_ids(self) -> tuple[str, ...]:
@@ -2029,6 +2052,19 @@ def validate_model_independence(config: AuditConfig) -> list[str]:
         errors.append(
             "configured models lack immutable operator-reviewed root lineage records: "
             + ", ".join(missing_lineage_ids)
+        )
+    missing_quality_ids = tuple(
+        sorted(
+            model_id
+            for model_id in configured_ids
+            if (entry := lineage_by_id.get(model_id.lower())) is not None
+            and entry.measured_quality is None
+        )
+    )
+    if missing_quality_ids:
+        errors.append(
+            "configured audit models lack benchmark-derived quality measurements: "
+            + ", ".join(missing_quality_ids)
         )
 
     analysis_families = {

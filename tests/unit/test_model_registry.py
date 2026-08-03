@@ -49,7 +49,7 @@ def _verified_production_config_and_capability() -> tuple[
             measured_quality_score=result.overall_score,
             measured_quality_tier="highest",
         )
-        entry["quality_measurement"] = f"sha256:{result.quality_measurement_sha256}"
+        entry["measured_quality"]["measurement"] = f"sha256:{result.quality_measurement_sha256}"
         registry.append(entry)
     roles = list(MODEL_IDS)
     role_models: dict[str, Any] = {
@@ -108,6 +108,102 @@ def test_lineage_record_is_immutable(config_factory) -> None:
         lineage.root_lineage = "sha256:" + ("f" * 64)
 
 
+def test_identity_only_lineage_has_no_quality_sentinel() -> None:
+    data = base_config_data()
+    data["models"]["registry"][0].pop("measured_quality")
+
+    config = AuditConfig.model_validate(data)
+    lineage = config.models.registry[0]
+    serialized = lineage.model_dump(mode="json")
+
+    assert lineage.measured_quality is None
+    assert "measured_quality" not in serialized
+    assert "measured_quality_score" not in serialized
+    assert "measured_quality_tier" not in serialized
+    assert "quality_measurement" not in serialized
+
+
+def test_identity_only_lineage_rejects_explicit_null_quality() -> None:
+    data = base_config_data()
+    data["models"]["registry"][0]["measured_quality"] = None
+
+    with pytest.raises(ValidationError, match="must be omitted rather than null"):
+        AuditConfig.model_validate(data)
+
+
+@pytest.mark.parametrize("missing", ["score", "tier", "measurement"])
+def test_partial_measured_quality_record_is_rejected(missing: str) -> None:
+    data = base_config_data()
+    data["models"]["registry"][0]["measured_quality"].pop(missing)
+
+    with pytest.raises(ValidationError, match="Field required"):
+        AuditConfig.model_validate(data)
+
+
+def test_flat_legacy_quality_fields_are_not_silently_promoted() -> None:
+    data = base_config_data()
+    entry = data["models"]["registry"][0]
+    entry.pop("measured_quality")
+    entry.update(
+        {
+            "measured_quality_score": 0.95,
+            "measured_quality_tier": "highest",
+            "quality_measurement": "sha256:" + ("a" * 64),
+        }
+    )
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        AuditConfig.model_validate(data)
+
+
+def test_identity_only_audit_role_fails_preflight_and_registry_validation() -> None:
+    data = base_config_data()
+    selected = data["models"]["threat_model"]["primary"]
+    entry = next(
+        item for item in data["models"]["registry"] if item["canonical_model_id"] == selected
+    )
+    entry.pop("measured_quality")
+    config = AuditConfig.model_validate(data)
+
+    independence_errors = validate_model_independence(config)
+    registry_errors = ModelRegistry.validate(
+        config,
+        _metadata(config),
+        require_verified_qualification=False,
+    )
+
+    assert any(
+        "configured audit models lack benchmark-derived quality measurements" in error
+        and selected in error
+        for error in independence_errors
+    )
+    assert any(
+        "model lacks benchmark-derived quality measurement" in error and selected in error
+        for error in registry_errors
+    )
+
+
+def test_measured_zero_is_distinct_from_unmeasured() -> None:
+    data = base_config_data()
+    quality = data["models"]["registry"][0]["measured_quality"]
+    quality["score"] = 0.0
+    quality["tier"] = "standard"
+    config = AuditConfig.model_validate(data)
+
+    observed = config.models.registry[0].measured_quality
+
+    assert observed is not None
+    assert observed.score == 0.0
+    assert not any(
+        "lacks benchmark-derived quality measurement" in error
+        for error in ModelRegistry.validate(
+            config,
+            _metadata(config),
+            require_verified_qualification=False,
+        )
+    )
+
+
 def test_aliases_share_one_independence_slot(config_factory) -> None:
     base = config_factory()
     threat_id = base.models.threat_model.primary
@@ -164,6 +260,7 @@ def test_source_egress_requires_explicit_root_approval(config_factory) -> None:
     errors = ModelRegistry.validate(
         config,
         _metadata(config),
+        require_verified_qualification=False,
         zdr_model_ids=set(configured_model_ids(config, include_fallbacks=True)),
         source_egress_requested=True,
     )
@@ -184,6 +281,7 @@ def test_source_egress_rejects_retention_above_policy(config_factory) -> None:
     errors = ModelRegistry.validate(
         config,
         _metadata(config),
+        require_verified_qualification=False,
         zdr_model_ids=set(configured_model_ids(config, include_fallbacks=True)),
         source_egress_requested=True,
     )
@@ -196,19 +294,18 @@ def test_source_egress_rejects_retention_above_policy(config_factory) -> None:
 def test_measured_quality_tier_must_satisfy_role_requirement(config_factory) -> None:
     config = config_factory()
     source = config.models.source_audit.model_copy(update={"quality_tier": "highest"})
-    registry = [
-        (
-            entry.model_copy(
+    registry = []
+    for entry in config.models.registry:
+        if entry.canonical_model_id == source.primary:
+            assert entry.measured_quality is not None
+            entry = entry.model_copy(
                 update={
-                    "measured_quality_score": 0.8,
-                    "measured_quality_tier": "high",
+                    "measured_quality": entry.measured_quality.model_copy(
+                        update={"score": 0.8, "tier": "high"}
+                    )
                 }
             )
-            if entry.canonical_model_id == source.primary
-            else entry
-        )
-        for entry in config.models.registry
-    ]
+        registry.append(entry)
     config = config.model_copy(
         update={
             "models": config.models.model_copy(
@@ -220,17 +317,49 @@ def test_measured_quality_tier_must_satisfy_role_requirement(config_factory) -> 
         }
     )
 
-    errors = ModelRegistry.validate(config, _metadata(config))
+    errors = ModelRegistry.validate(
+        config,
+        _metadata(config),
+        require_verified_qualification=False,
+    )
 
     assert any("measured quality tier is below source_audit.primary" in error for error in errors)
 
 
 def test_measured_quality_tier_rejects_unqualified_score() -> None:
     data = base_config_data()
-    data["models"]["registry"][0]["measured_quality_score"] = 0.5
-    data["models"]["registry"][0]["measured_quality_tier"] = "high"
+    data["models"]["registry"][0]["measured_quality"]["score"] = 0.5
+    data["models"]["registry"][0]["measured_quality"]["tier"] = "high"
 
     with pytest.raises(ValidationError, match=r"requires score >= 0\.75"):
+        AuditConfig.model_validate(data)
+
+
+@pytest.mark.parametrize("coercive_score", [True, "0.95"])
+def test_measured_quality_score_rejects_coercive_values(coercive_score: object) -> None:
+    data = base_config_data()
+    data["models"]["registry"][0]["measured_quality"]["score"] = coercive_score
+
+    with pytest.raises(ValidationError, match="valid number"):
+        AuditConfig.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("root_lineage", "SHA256:" + ("a" * 64)),
+        ("canonical_model_id", " author/model "),
+        ("aliases", [" author/alias "]),
+    ],
+)
+def test_lineage_identity_rejects_values_outside_published_schema(
+    field: str,
+    value: object,
+) -> None:
+    data = base_config_data()
+    data["models"]["registry"][0][field] = value
+
+    with pytest.raises(ValidationError):
         AuditConfig.model_validate(data)
 
 
@@ -287,7 +416,26 @@ def test_model_metadata_cache_rejects_duplicate_json_keys(tmp_path: Path) -> Non
 def test_maximum_assurance_rejects_shape_only_quality_hashes(config_factory) -> None:
     config = config_factory().model_copy(update={"profile": AuditProfile.MAXIMUM_ASSURANCE})
 
-    errors = ModelRegistry.validate(config, _metadata(config))
+    errors = ModelRegistry.validate(
+        config,
+        _metadata(config),
+        require_verified_qualification=True,
+    )
+
+    assert (
+        "verified production qualification is required; "
+        "configured quality hashes are not authorization"
+    ) in errors
+
+
+def test_standard_production_rejects_shape_only_quality_hashes(config_factory) -> None:
+    config = config_factory()
+
+    errors = ModelRegistry.validate(
+        config,
+        _metadata(config),
+        require_verified_qualification=True,
+    )
 
     assert (
         "verified production qualification is required; "
@@ -319,7 +467,11 @@ def test_catalog_registry_does_not_globally_filter_non_native_output_models(
         for model_id in configured_model_ids(config, include_fallbacks=True)
     ]
 
-    errors = ModelRegistry.validate(config, metadata)
+    errors = ModelRegistry.validate(
+        config,
+        metadata,
+        require_verified_qualification=False,
+    )
 
     assert not any("structured JSON output" in error for error in errors)
 
@@ -417,16 +569,40 @@ def test_production_qualification_rejects_unapproved_root_lineage() -> None:
     )
 
 
+def test_production_selection_rejects_identity_only_registry_entry() -> None:
+    config, qualification, observed_at = _verified_production_config_and_capability()
+    registry = list(config.models.registry)
+    unmeasured_model_id = registry[0].canonical_model_id
+    registry[0] = registry[0].model_copy(update={"measured_quality": None})
+    changed = config.model_copy(
+        update={
+            "models": config.models.model_copy(update={"registry": tuple(registry)}),
+        }
+    )
+
+    evidence = ModelRegistry.validate_production_qualification(
+        changed,
+        qualification,
+        now=observed_at,
+    )
+
+    assert not evidence.valid
+    assert (
+        f"verified production model lacks configured quality measurement: {unmeasured_model_id}"
+        in evidence.errors
+    )
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
         (
-            "quality_measurement",
+            "measurement",
             "sha256:" + ("f" * 64),
             "quality measurement differs",
         ),
-        ("measured_quality_score", 0.95, "quality score differs"),
-        ("measured_quality_tier", "high", "quality tier differs"),
+        ("score", 0.95, "quality score differs"),
+        ("tier", "high", "quality tier differs"),
     ],
 )
 def test_production_selection_rejects_stale_configured_quality_designations(
@@ -436,7 +612,10 @@ def test_production_selection_rejects_stale_configured_quality_designations(
 ) -> None:
     config, qualification, observed_at = _verified_production_config_and_capability()
     registry = list(config.models.registry)
-    registry[0] = registry[0].model_copy(update={field: value})
+    assert registry[0].measured_quality is not None
+    registry[0] = registry[0].model_copy(
+        update={"measured_quality": registry[0].measured_quality.model_copy(update={field: value})}
+    )
     changed = config.model_copy(
         update={
             "models": config.models.model_copy(update={"registry": tuple(registry)}),

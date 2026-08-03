@@ -5,7 +5,9 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 import time
+import types
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -31,7 +33,11 @@ from mmaudit.config import (
 )
 from mmaudit.constants import ALL_SPECIALIST_ROLES, ExitCode
 from mmaudit.isolation.dependencies import dependency_tree_sha256
-from mmaudit.models.openrouter import OpenRouterClient, OpenRouterRequestLimitError
+from mmaudit.models.openrouter import (
+    OpenRouterClient,
+    OpenRouterRequestLimitError,
+    trusted_openrouter_execution_evidence,
+)
 from mmaudit.models.runtime import build_openrouter_runtime_controls
 from mmaudit.models.schemas import (
     AnalysisState,
@@ -528,6 +534,41 @@ async def test_maximum_assurance_missing_qualification_fails_before_model_transp
 
 
 @pytest.mark.asyncio
+async def test_standard_real_provider_path_requires_current_opaque_qualification(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    ledger = AtomicCostLedger.initialize(
+        tmp_path / "standard-real-ledger.json",
+        cap_usd=Decimal(str(config.execution.budget_usd)),
+    )
+    pipeline = AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=tmp_path / "standard-real-output",
+        api_key="synthetic-provider-canary",
+        cost_ledger=ledger,
+        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+    )
+
+    result = await pipeline.run(allow_code_egress=True)
+
+    assert pipeline.client is None
+    payload = json.loads(
+        (result.run_dir / "model-qualification-runtime.json").read_text(encoding="utf-8")
+    )
+    assert payload["required"]
+    assert not payload["valid"]
+    assert any(
+        "configured quality hashes are not authorization" in error for error in payload["errors"]
+    )
+    assert result.exit_code is ExitCode.MODEL_FAILURE
+    assert ledger.snapshot().spent_usd == Decimal("0")
+
+
+@pytest.mark.asyncio
 async def test_real_injected_client_cannot_establish_provider_session(
     config_factory,
     vulnerable_repo: Path,
@@ -619,6 +660,309 @@ async def test_real_injected_client_is_rejected_even_with_selected_ledger(
     finally:
         await client.close()
 
+    assert not (output / "runs").exists()
+
+
+@pytest.mark.asyncio
+async def test_network_injected_client_cannot_relabel_itself_as_mock(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    http_client = httpx.AsyncClient(base_url="https://openrouter.ai/api/v1")
+    client = OpenRouterClient(
+        api_key="synthetic-provider-canary",
+        execution=config.execution,
+        privacy=config.privacy,
+        budget=BudgetManager(
+            total_usd=config.execution.budget_usd,
+            max_output_tokens=config.execution.max_output_tokens_per_request,
+            conservative_usd_per_million_tokens=(
+                config.execution.conservative_usd_per_million_tokens
+            ),
+            max_requests_per_agent=config.execution.max_requests_per_agent,
+        ),
+        usage=UsageLedger(),
+        http_client=http_client,
+    )
+    assert client.execution_evidence is ExecutionEvidenceKind.UNVERIFIED
+    client.execution_evidence = ExecutionEvidenceKind.MOCK
+    output = tmp_path / "provider-output"
+    pipeline = AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=output,
+        client=client,
+        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+    )
+    try:
+        with pytest.raises(ValueError, match="reject unverified injected clients"):
+            await pipeline.run(allow_code_egress=True)
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert not (output / "runs").exists()
+
+
+@pytest.mark.asyncio
+async def test_network_client_subclass_cannot_contextually_spoof_mock_evidence(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    class ContextualEvidenceClient(OpenRouterClient):
+        evidence_reads = 0
+
+        def __getattribute__(self, name: str) -> Any:
+            if name == "execution_evidence":
+                reads = object.__getattribute__(self, "evidence_reads")
+                object.__setattr__(self, "evidence_reads", reads + 1)
+                return ExecutionEvidenceKind.REAL if reads % 2 == 0 else ExecutionEvidenceKind.MOCK
+            return super().__getattribute__(name)
+
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    http_client = httpx.AsyncClient(base_url="https://openrouter.ai/api/v1")
+    client = ContextualEvidenceClient(
+        api_key="synthetic-provider-canary",
+        execution=config.execution,
+        privacy=config.privacy,
+        budget=BudgetManager(
+            total_usd=config.execution.budget_usd,
+            max_output_tokens=config.execution.max_output_tokens_per_request,
+            conservative_usd_per_million_tokens=(
+                config.execution.conservative_usd_per_million_tokens
+            ),
+            max_requests_per_agent=config.execution.max_requests_per_agent,
+        ),
+        usage=UsageLedger(),
+        http_client=http_client,
+    )
+    output = tmp_path / "provider-output"
+    pipeline = AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=output,
+        client=client,
+        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+    )
+    try:
+        assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.UNVERIFIED
+        assert client.evidence_reads == 0
+        with pytest.raises(ValueError, match="reject unverified injected clients"):
+            await pipeline.run(allow_code_egress=True)
+    finally:
+        await client.close()
+        await http_client.aclose()
+
+    assert client.evidence_reads == 0
+    assert not (output / "runs").exists()
+
+
+@pytest.mark.asyncio
+async def test_closed_mock_transport_classification_ignores_concurrent_label_changes(
+    config_factory,
+) -> None:
+    config = config_factory()
+    fake = FakeOpenRouter()
+    client, http_client = _provider(config, fake)
+    started = threading.Barrier(2)
+    finished = threading.Event()
+
+    def relabel() -> None:
+        started.wait()
+        for _ in range(10_000):
+            client.execution_evidence = ExecutionEvidenceKind.REAL
+            client.execution_evidence = ExecutionEvidenceKind.UNVERIFIED
+            client.execution_evidence = ExecutionEvidenceKind.MOCK
+        finished.set()
+
+    thread = threading.Thread(target=relabel)
+    thread.start()
+    started.wait()
+    observed: set[ExecutionEvidenceKind] = set()
+    while not finished.is_set():
+        observed.add(trusted_openrouter_execution_evidence(client))
+    thread.join()
+    observed.add(trusted_openrouter_execution_evidence(client))
+    try:
+        assert observed == {ExecutionEvidenceKind.MOCK}
+        client.execution_evidence = ExecutionEvidenceKind.REAL
+        assert client._validate_transport_provenance() is ExecutionEvidenceKind.MOCK
+    finally:
+        client.clear_credentials()
+        await http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_authorized_mock_handler_replacement_revokes_mock_evidence(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    fake = FakeOpenRouter()
+    client, http_client = _provider(config, fake)
+    calls = 0
+
+    def replacement(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"data": []})
+
+    transport = client._transport_identity
+    assert type(transport) is httpx.MockTransport
+    transport.handler = replacement
+    output = tmp_path / "provider-output"
+    pipeline = AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=output,
+        client=client,
+        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+    )
+    try:
+        assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.UNVERIFIED
+        with pytest.raises(ValueError, match="reject unverified injected clients"):
+            await pipeline.run(allow_code_egress=True)
+    finally:
+        client.clear_credentials()
+        await http_client.aclose()
+
+    assert calls == 0
+    assert not (output / "runs").exists()
+
+
+@pytest.mark.asyncio
+async def test_authorized_mock_client_callable_replacement_revokes_mock_evidence(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    fake = FakeOpenRouter()
+    client, http_client = _provider(config, fake)
+    calls = 0
+    original_stream = http_client.stream
+
+    def replacement_stream(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        return original_stream(*args, **kwargs)
+
+    http_client.stream = types.MethodType(replacement_stream, http_client)  # type: ignore[method-assign]
+    output = tmp_path / "provider-output"
+    pipeline = AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=output,
+        client=client,
+        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+    )
+    try:
+        assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.UNVERIFIED
+        with pytest.raises(ValueError, match="reject unverified injected clients"):
+            await pipeline.run(allow_code_egress=True)
+    finally:
+        client.clear_credentials()
+        await http_client.aclose()
+
+    assert calls == 0
+    assert not (output / "runs").exists()
+
+
+@pytest.mark.asyncio
+async def test_external_generic_mock_transport_has_no_mock_authority(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"data": []})
+
+    http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://openrouter.ai/api/v1",
+        trust_env=False,
+    )
+    client = OpenRouterClient(
+        api_key="synthetic-provider-canary",
+        execution=config.execution,
+        privacy=config.privacy,
+        budget=BudgetManager(
+            total_usd=config.execution.budget_usd,
+            max_output_tokens=config.execution.max_output_tokens_per_request,
+            conservative_usd_per_million_tokens=(
+                config.execution.conservative_usd_per_million_tokens
+            ),
+            max_requests_per_agent=config.execution.max_requests_per_agent,
+        ),
+        usage=UsageLedger(),
+        http_client=http_client,
+    )
+    client.execution_evidence = ExecutionEvidenceKind.MOCK
+    client._test_only_mock_transport_authorized = True
+    client._mock_handler_identity = http_client._transport.handler
+    client._client_identity = http_client
+    client._transport_identity = http_client._transport
+    client._base_url_identity = str(http_client.base_url)
+    client._owns_client = False
+    client._owned_client_identity = http_client
+    client._owned_transport_identity = http_client._transport
+    output = tmp_path / "provider-output"
+    pipeline = AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=output,
+        client=client,
+        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+    )
+    try:
+        assert client.execution_evidence is ExecutionEvidenceKind.MOCK
+        assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.UNVERIFIED
+        with pytest.raises(ValueError, match="reject unverified injected clients"):
+            await pipeline.run(allow_code_egress=True)
+    finally:
+        client.clear_credentials()
+        await http_client.aclose()
+
+    assert calls == 0
+    assert not (output / "runs").exists()
+
+
+@pytest.mark.asyncio
+async def test_authorized_mock_mount_mutation_revokes_mock_evidence(
+    config_factory,
+    vulnerable_repo: Path,
+    tmp_path: Path,
+) -> None:
+    config = config_factory(privacy={"fail_on_detected_secret": False})
+    fake = FakeOpenRouter()
+    client, http_client = _provider(config, fake)
+    http_client._mounts = {object(): client._transport_identity}  # type: ignore[dict-item]
+    output = tmp_path / "provider-output"
+    pipeline = AuditPipeline(
+        config,
+        repo=vulnerable_repo,
+        output=output,
+        client=client,
+        scanner_runner=StaticScannerRunner(),  # type: ignore[arg-type]
+    )
+    try:
+        assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.UNVERIFIED
+        with pytest.raises(ValueError, match="reject unverified injected clients"):
+            await pipeline.run(allow_code_egress=True)
+    finally:
+        client.clear_credentials()
+        await http_client.aclose()
+
+    assert fake.requests == []
     assert not (output / "runs").exists()
 
 
@@ -766,10 +1110,6 @@ def _provider(
     usage: UsageLedger | None = None,
     atomic_ledger: AtomicCostLedger | None = None,
 ) -> tuple[OpenRouterClient, httpx.AsyncClient]:
-    http_client = httpx.AsyncClient(
-        transport=httpx.MockTransport(fake.handler),
-        base_url="https://fake.openrouter.test",
-    )
     usage = usage or UsageLedger()
     budget = BudgetManager(
         total_usd=config.execution.budget_usd,
@@ -788,20 +1128,19 @@ def _provider(
         require_endpoint_cost_bound=atomic_ledger is not None,
     )
     controls = build_openrouter_runtime_controls(config, certification=False)
-    return (
-        OpenRouterClient(
-            api_key=api_key,
-            execution=config.execution,
-            privacy=config.privacy,
-            budget=budget,
-            usage=usage,
-            http_client=http_client,
-            provider_policy=controls.provider_policy,
-            reasoning_policy=(controls.reasoning_policy if atomic_ledger is None else None),
-            token_budgets=config.token_budgets,
-        ),
-        http_client,
+    client = OpenRouterClient(
+        api_key=api_key,
+        execution=config.execution,
+        privacy=config.privacy,
+        budget=budget,
+        usage=usage,
+        base_url="https://fake.openrouter.test",
+        provider_policy=controls.provider_policy,
+        reasoning_policy=(controls.reasoning_policy if atomic_ledger is None else None),
+        token_budgets=config.token_budgets,
+        test_only_mock_handler=fake.handler,
     )
+    return client, client._client
 
 
 async def _run(
@@ -1802,7 +2141,7 @@ async def test_loaded_operator_credential_is_absent_from_emitted_audit_artifacts
     caplog: pytest.LogCaptureFixture,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    canary = "sk-or-v1-loaded-artifact-canary"
+    canary = "sk-or-v1-synthetic-loaded-artifact-canary"
     secret_file = tmp_path / "operator-control.env"
     secret_file.write_text(f"OPENROUTER_API_KEY={canary}\n", encoding="utf-8")
     secret_file.chmod(0o600)

@@ -64,6 +64,7 @@ from mmaudit.models.openrouter import (
     is_retryable_status,
     safe_headers,
     strict_json_schema,
+    trusted_openrouter_execution_evidence,
 )
 from mmaudit.models.output_modes import StructuredOutputMode
 from mmaudit.models.reasoning import (
@@ -951,11 +952,6 @@ def _client(
     production_qualification: Any | None = None,
     privacy_models: tuple[str, ...] = ("alpha/atlas-secure",),
 ) -> tuple[OpenRouterClient, httpx.AsyncClient, UsageLedger]:
-    transport = httpx.MockTransport(handler)
-    http_client = httpx.AsyncClient(
-        transport=transport,
-        base_url="https://fake.test/api/v1/",
-    )
     usage = UsageLedger()
     budget = BudgetManager(
         total_usd=config.execution.budget_usd,
@@ -983,7 +979,7 @@ def _client(
         privacy=config.privacy,
         budget=budget,
         usage=usage,
-        http_client=http_client,
+        base_url="https://fake.test/api/v1/",
         run_dir=run_dir,
         provider_policy=policy,
         reasoning=reasoning,
@@ -992,8 +988,9 @@ def _client(
         qualification_routing=qualification_routing or (),
         production_qualification=production_qualification,
         effective_privacy_policy=effective_privacy_policy,
+        test_only_mock_handler=handler,
     )
-    return client, http_client, usage
+    return client, client._client, usage
 
 
 async def _paid_control_client_with_mock_transport(
@@ -1005,17 +1002,13 @@ async def _paid_control_client_with_mock_transport(
     qualification_routing: tuple[OpenRouterQualificationRoutingEvidence, ...] | None = None,
 ) -> tuple[OpenRouterClient, UsageLedger, httpx.AsyncClient]:
     usage = UsageLedger()
-    http_client = httpx.AsyncClient(
-        transport=httpx.MockTransport(handler),
-        base_url="https://fake.test/api/v1/",
-    )
     client = OpenRouterClient(
         api_key="synthetic-key",
         execution=config.execution,
         privacy=config.privacy,
         budget=budget,
         usage=usage,
-        http_client=http_client,
+        base_url="https://fake.test/api/v1/",
         provider_policy=provider_policy,
         qualification_routing=(
             qualification_routing
@@ -1037,9 +1030,10 @@ async def _paid_control_client_with_mock_transport(
             providers=provider_policy.configured_endpoints,
             requested_budget_usd=Decimal(str(budget.total_usd)),
         ),
+        test_only_mock_handler=handler,
     )
     assert client.execution_evidence is ExecutionEvidenceKind.MOCK
-    return client, usage, http_client
+    return client, usage, client._client
 
 
 def _owned_client(config, *, base_url: str) -> OpenRouterClient:
@@ -1058,6 +1052,22 @@ def _owned_client(config, *, base_url: str) -> OpenRouterClient:
         usage=UsageLedger(),
         base_url=base_url,
     )
+
+
+def _mock_real_control_flow(
+    monkeypatch: pytest.MonkeyPatch,
+    client: OpenRouterClient,
+) -> None:
+    """Exercise REAL-only branch logic without granting MOCK evidence production authority."""
+
+    original = openrouter_module.trusted_openrouter_execution_evidence
+
+    def classify(subject: OpenRouterClient) -> ExecutionEvidenceKind:
+        if subject is client:
+            return ExecutionEvidenceKind.REAL
+        return original(subject)
+
+    monkeypatch.setattr(openrouter_module, "trusted_openrouter_execution_evidence", classify)
 
 
 @pytest.mark.asyncio
@@ -1115,6 +1125,33 @@ async def test_injected_network_transport_is_unverified_and_cannot_send(
         await http_client.aclose()
 
 
+def test_mock_transport_rejects_non_synthetic_credential(config_factory) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"data": []})
+
+    with pytest.raises(OpenRouterPrivacyError, match="explicitly synthetic credential"):
+        OpenRouterClient(
+            api_key="sk-or-v1-test-placeholder",
+            execution=config_factory().execution,
+            privacy=config_factory().privacy,
+            budget=BudgetManager(
+                total_usd=20,
+                max_output_tokens=2_048,
+                conservative_usd_per_million_tokens=10,
+                max_requests_per_agent=2,
+            ),
+            usage=UsageLedger(),
+            base_url="https://fake.test/api/v1/",
+            test_only_mock_handler=handler,
+        )
+
+    assert calls == 0
+
+
 @pytest.mark.asyncio
 async def test_injected_network_transport_cannot_redirect_operator_credentials(
     config_factory,
@@ -1168,9 +1205,245 @@ async def test_owned_client_send_mutation_cannot_fabricate_real_execution(
 
     client._client.send = fabricated_send  # type: ignore[method-assign]
     try:
+        with pytest.raises(OpenRouterPrivacyError, match="provenance"):
+            await client.validate_authentication()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_owned_client_mount_mutation_cannot_fabricate_real_execution(
+    config_factory,
+) -> None:
+    client = _owned_client(config_factory(), base_url=OPENROUTER_DEFAULT_BASE_URL)
+    client._client._mounts = {object(): client._client._transport}  # type: ignore[dict-item]
+    try:
         with pytest.raises(OpenRouterPrivacyError, match="callable provenance"):
             await client.validate_authentication()
     finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_owned_client_base_url_mutation_cannot_redirect_real_execution(
+    config_factory,
+) -> None:
+    client = _owned_client(config_factory(), base_url=OPENROUTER_DEFAULT_BASE_URL)
+    client._client.base_url = "https://changed.invalid/api/v1/"
+    try:
+        assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.UNVERIFIED
+        with pytest.raises(OpenRouterPrivacyError, match="transport provenance changed"):
+            await client.validate_authentication()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_owned_client_auth_dispatch_mutation_revokes_real_evidence(
+    config_factory,
+) -> None:
+    client = _owned_client(config_factory(), base_url=OPENROUTER_DEFAULT_BASE_URL)
+    calls = 0
+
+    async def fabricated_dispatch(*_args: Any, **_kwargs: Any) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"data": {}})
+
+    client._client._send_handling_auth = fabricated_dispatch  # type: ignore[method-assign]
+    try:
+        assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.UNVERIFIED
+        with pytest.raises(OpenRouterPrivacyError, match="callable provenance"):
+            await client.validate_authentication()
+    finally:
+        await client.close()
+
+    assert calls == 0
+
+
+@pytest.mark.asyncio
+async def test_owned_transport_pool_replacement_revokes_real_evidence(
+    config_factory,
+) -> None:
+    client = _owned_client(config_factory(), base_url=OPENROUTER_DEFAULT_BASE_URL)
+    original_pool = client._client._transport._pool
+    client._client._transport._pool = object()  # type: ignore[assignment]
+    try:
+        assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.UNVERIFIED
+        with pytest.raises(OpenRouterPrivacyError, match="transport provenance changed"):
+            await client.validate_authentication()
+    finally:
+        client._client._transport._pool = original_pool
+        await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ("_network_backend", "_proxy"))
+async def test_owned_transport_pool_dispatch_field_mutation_revokes_real_evidence(
+    config_factory,
+    field: str,
+) -> None:
+    client = _owned_client(config_factory(), base_url=OPENROUTER_DEFAULT_BASE_URL)
+    pool = client._client._transport._pool
+    original = getattr(pool, field)
+    setattr(pool, field, object())
+    try:
+        assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.UNVERIFIED
+        with pytest.raises(OpenRouterPrivacyError, match="transport provenance changed"):
+            await client.validate_authentication()
+    finally:
+        setattr(pool, field, original)
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_owned_network_backend_callable_mutation_revokes_real_evidence(
+    config_factory,
+) -> None:
+    client = _owned_client(config_factory(), base_url=OPENROUTER_DEFAULT_BASE_URL)
+    backend = client._client._transport._pool._network_backend
+    calls = 0
+
+    async def fabricated_connect(*_args: Any, **_kwargs: Any) -> object:
+        nonlocal calls
+        calls += 1
+        return object()
+
+    backend.connect_tcp = fabricated_connect  # type: ignore[method-assign]
+    try:
+        assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.UNVERIFIED
+        with pytest.raises(OpenRouterPrivacyError, match="transport provenance changed"):
+            await client.validate_authentication()
+    finally:
+        del backend.connect_tcp
+        await client.close()
+
+    assert calls == 0
+
+
+@pytest.mark.asyncio
+async def test_owned_network_backend_legitimate_asyncio_initialization_preserves_real_evidence(
+    config_factory,
+) -> None:
+    client = _owned_client(config_factory(), base_url=OPENROUTER_DEFAULT_BASE_URL)
+    backend = client._client._transport._pool._network_backend
+    try:
+        await backend._init_backend()
+        assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.REAL
+        assert client._validate_transport_provenance() is ExecutionEvidenceKind.REAL
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ("_merge_url", "_build_request_auth"))
+async def test_owned_httpx_class_dispatch_mutation_revokes_real_evidence(
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+) -> None:
+    client = _owned_client(config_factory(), base_url=OPENROUTER_DEFAULT_BASE_URL)
+
+    def fabricated(*_args: Any, **_kwargs: Any) -> object:
+        return object()
+
+    monkeypatch.setattr(httpx.AsyncClient, field, fabricated)
+    try:
+        assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.UNVERIFIED
+        with pytest.raises(OpenRouterPrivacyError, match="callable provenance"):
+            await client.validate_authentication()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_owned_httpx_getattribute_mutation_revokes_real_evidence(
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _owned_client(config_factory(), base_url=OPENROUTER_DEFAULT_BASE_URL)
+    original = httpx.AsyncClient.__getattribute__
+
+    def fabricated(subject: httpx.AsyncClient, name: str) -> Any:
+        if name == "stream":
+            return lambda *_args, **_kwargs: object()
+        return original(subject, name)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__getattribute__", fabricated)
+    try:
+        assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.UNVERIFIED
+        with pytest.raises(OpenRouterPrivacyError, match="callable provenance"):
+            await client.validate_authentication()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("owner", "field"),
+    (("pool", "create_connection"), ("backend", "_init_backend")),
+)
+async def test_owned_httpcore_class_dispatch_mutation_revokes_real_evidence(
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    owner: str,
+    field: str,
+) -> None:
+    client = _owned_client(config_factory(), base_url=OPENROUTER_DEFAULT_BASE_URL)
+    pool = client._client._transport._pool
+    subject = pool if owner == "pool" else pool._network_backend
+
+    def fabricated(*_args: Any, **_kwargs: Any) -> object:
+        return object()
+
+    monkeypatch.setattr(type(subject), field, fabricated)
+    try:
+        assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.UNVERIFIED
+        with pytest.raises(OpenRouterPrivacyError, match="transport provenance changed"):
+            await client.validate_authentication()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_owned_client_request_boundary_mutation_revokes_real_evidence(
+    config_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _owned_client(config_factory(), base_url=OPENROUTER_DEFAULT_BASE_URL)
+    calls = 0
+
+    async def fabricated(*_args: Any, **_kwargs: Any) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"data": {}})
+
+    monkeypatch.setattr(OpenRouterClient, "_bounded_request", fabricated)
+    try:
+        assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.UNVERIFIED
+        with pytest.raises(OpenRouterPrivacyError, match="provenance"):
+            await client.validate_authentication()
+        assert calls == 0
+        assert not client._authentication_validated
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_owned_pool_connection_content_injection_revokes_real_evidence(
+    config_factory,
+) -> None:
+    client = _owned_client(config_factory(), base_url=OPENROUTER_DEFAULT_BASE_URL)
+    pool = client._client._transport._pool
+    pool._connections.append(object())
+    try:
+        assert pool._max_keepalive_connections == 0
+        assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.UNVERIFIED
+        with pytest.raises(OpenRouterPrivacyError, match="transport provenance changed"):
+            await client.validate_authentication()
+        assert not client._authentication_validated
+    finally:
+        pool._connections.clear()
         await client.close()
 
 
@@ -1323,7 +1596,8 @@ async def test_certification_requires_validated_endpoint_pricing_before_send(
         privacy=config.privacy,
         budget=budget,
         usage=UsageLedger(),
-        http_client=http_client,
+        base_url="https://fake.test/api/v1/",
+        test_only_mock_handler=handler,
         provider_policy=OpenRouterProviderPolicy(
             certification=True,
             only=("approved-provider",),
@@ -1356,6 +1630,7 @@ async def test_certification_requires_validated_endpoint_pricing_before_send(
             schema_name="answer",
         )
     finally:
+        await client.close()
         await http_client.aclose()
 
     assert result.answer == "bounded"
@@ -1832,7 +2107,8 @@ async def test_paid_non_zdr_completion_requires_live_consent_before_transport(
         privacy=config.privacy,
         budget=budget,
         usage=UsageLedger(),
-        http_client=http_client,
+        base_url="https://fake.test/api/v1/",
+        test_only_mock_handler=handler,
         provider_policy=OpenRouterProviderPolicy(
             only=("approved-provider",),
             allow_fallbacks=False,
@@ -1914,7 +2190,8 @@ async def test_non_zdr_model_membership_uses_validated_capability_snapshot(
             require_endpoint_cost_bound=True,
         ),
         usage=UsageLedger(),
-        http_client=http_client,
+        base_url="https://fake.test/api/v1/",
+        test_only_mock_handler=handler,
         provider_policy=OpenRouterProviderPolicy(only=("approved-provider",)),
         effective_privacy_policy=forged_policy,
         privacy_authorization=authorization,
@@ -1977,7 +2254,8 @@ async def test_certification_non_zdr_client_requires_live_consent_at_constructio
                     max_requests_per_agent=2,
                 ),
                 usage=UsageLedger(),
-                http_client=http_client,
+                base_url="https://fake.test/api/v1/",
+                test_only_mock_handler=handler,
                 provider_policy=OpenRouterProviderPolicy(
                     certification=True,
                     only=("approved-provider",),
@@ -2078,7 +2356,8 @@ async def test_consent_bound_non_zdr_request_omits_zdr_and_serializes_only_hash_
         privacy=config.privacy,
         budget=budget,
         usage=usage,
-        http_client=http_client,
+        base_url="https://fake.test/api/v1/",
+        test_only_mock_handler=handler,
         provider_policy=OpenRouterProviderPolicy(
             only=("approved-provider",),
             allow_fallbacks=False,
@@ -2190,7 +2469,8 @@ async def test_non_zdr_consent_expiry_after_reservation_prevents_transport_and_r
         privacy=config.privacy,
         budget=budget,
         usage=UsageLedger(),
-        http_client=http_client,
+        base_url="https://fake.test/api/v1/",
+        test_only_mock_handler=handler,
         provider_policy=OpenRouterProviderPolicy(
             only=("approved-provider",),
             allow_fallbacks=False,
@@ -2272,7 +2552,8 @@ async def test_non_zdr_exact_request_endpoint_is_refused_before_reservation(
             require_endpoint_cost_bound=True,
         ),
         usage=UsageLedger(),
-        http_client=http_client,
+        base_url="https://fake.test/api/v1/",
+        test_only_mock_handler=handler,
         provider_policy=OpenRouterProviderPolicy(
             certification=True,
             only=("approved-provider",),
@@ -2389,7 +2670,8 @@ async def test_non_zdr_exact_endpoint_requires_disclosure_before_reservation(
             require_endpoint_cost_bound=True,
         ),
         usage=UsageLedger(),
-        http_client=http_client,
+        base_url="https://fake.test/api/v1/",
+        test_only_mock_handler=handler,
         provider_policy=OpenRouterProviderPolicy(
             certification=True,
             only=providers,
@@ -2491,7 +2773,8 @@ async def test_invalid_non_zdr_authorization_is_refused_before_transport(
         privacy=config.privacy,
         budget=budget,
         usage=UsageLedger(),
-        http_client=http_client,
+        base_url="https://fake.test/api/v1/",
+        test_only_mock_handler=handler,
         provider_policy=OpenRouterProviderPolicy(
             only=(provider,),
             allow_fallbacks=False,
@@ -3063,7 +3346,7 @@ async def test_real_completion_dispatches_through_generation_binding_before_retu
         calls.append(completion.usage_record.request_id)
         return completion
 
-    client.execution_evidence = ExecutionEvidenceKind.REAL
+    _mock_real_control_flow(monkeypatch, client)
     client._owns_client = True
     client._authentication_validated = True
     client._qualification_routing = {}
@@ -3148,7 +3431,7 @@ async def test_real_unbound_generation_result_is_preserved_without_host_model_fa
     async def preserve_unbound(completion: Any) -> Any:
         return completion
 
-    client.execution_evidence = ExecutionEvidenceKind.REAL
+    _mock_real_control_flow(monkeypatch, client)
     client._owns_client = True
     client._authentication_validated = True
     monkeypatch.setattr(client, "_complete_one", completed_without_transport)
@@ -3307,6 +3590,7 @@ async def test_actual_real_identity_binding_retains_metadata_fetch_failure(
 
     monkeypatch.setattr(client, "_complete_one", return_provisional)
     await client._client.aclose()
+    _mock_real_control_flow(monkeypatch, client)
     try:
         result = await client.complete_with_evidence(
             role="model_benchmark",
@@ -3424,6 +3708,7 @@ async def test_real_ordinary_provider_fallback_is_preserved_as_unbound(
 
     monkeypatch.setattr(client, "_complete_one", return_provisional)
     await client._client.aclose()
+    _mock_real_control_flow(monkeypatch, client)
     try:
         result = await client.complete_with_evidence(
             role="source_audit",
@@ -3483,7 +3768,7 @@ async def test_value_only_real_caller_retains_unbound_completion_in_safe_typed_e
     async def return_unbound(**_kwargs: Any) -> Any:
         return completion
 
-    client.execution_evidence = ExecutionEvidenceKind.REAL
+    _mock_real_control_flow(monkeypatch, client)
     monkeypatch.setattr(client, "complete_with_evidence", return_unbound)
     try:
         with pytest.raises(OpenRouterUnboundIdentityError) as caught:
@@ -3545,7 +3830,7 @@ async def test_bound_real_caller_rejects_but_retains_unbound_completion(
     async def return_unbound(**_kwargs: Any) -> Any:
         return completion
 
-    client.execution_evidence = ExecutionEvidenceKind.REAL
+    _mock_real_control_flow(monkeypatch, client)
     client._owns_client = True
     client._authentication_validated = True
     monkeypatch.setattr(client, "complete_with_evidence", return_unbound)
@@ -3697,6 +3982,8 @@ async def test_structured_request_and_usage(config_factory) -> None:
     config = config_factory()
     client, http_client, usage = _client(config, handler)
     assert client.execution_evidence is ExecutionEvidenceKind.MOCK
+    client.execution_evidence = ExecutionEvidenceKind.REAL
+    assert trusted_openrouter_execution_evidence(client) is ExecutionEvidenceKind.MOCK
     try:
         result = await client.complete(
             role="source_audit",
@@ -5357,7 +5644,8 @@ async def test_concurrent_usage_records_account_only_their_own_request_cost(
         privacy=config.privacy,
         budget=budget,
         usage=usage,
-        http_client=http_client,
+        base_url="https://fake.test/api/v1/",
+        test_only_mock_handler=handler,
     )
     try:
         await asyncio.gather(
@@ -5379,6 +5667,7 @@ async def test_concurrent_usage_records_account_only_their_own_request_cost(
             ),
         )
     finally:
+        await client.close()
         await http_client.aclose()
 
     assert arrived == 2
@@ -5861,7 +6150,7 @@ async def test_clear_credentials_does_not_mutate_caller_owned_authorization(
 ) -> None:
     http_client = httpx.AsyncClient(
         transport=httpx.MockTransport(lambda _request: httpx.Response(200)),
-        base_url="https://fake.test",
+        base_url=OPENROUTER_DEFAULT_BASE_URL,
         headers={"Authorization": "Bearer caller-owned"},
     )
     budget = BudgetManager(
@@ -6642,6 +6931,7 @@ def test_public_qualification_routing_requires_exact_opaque_authority(config_fac
 async def test_real_postqualification_rejects_public_projection_without_opaque_authority(
     config_factory,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = 0
 
@@ -6669,7 +6959,7 @@ async def test_real_postqualification_rejects_public_projection_without_opaque_a
         reasoning_policy=reasoning_policy,
     )
     client.register_certification_model_discovery(evidence=evidence, manifest=manifest)
-    client.execution_evidence = ExecutionEvidenceKind.REAL
+    _mock_real_control_flow(monkeypatch, client)
     client._owns_client = True
     client._authentication_validated = True
     try:
@@ -6706,6 +6996,7 @@ async def test_real_postqualification_rejects_absent_or_legacy_reasoning_before_
     config_factory,
     reasoning: OpenRouterReasoning | None,
     expected_error: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = 0
 
@@ -6723,7 +7014,7 @@ async def test_real_postqualification_rejects_absent_or_legacy_reasoning_before_
         ),
         reasoning=reasoning,
     )
-    client.execution_evidence = ExecutionEvidenceKind.REAL
+    _mock_real_control_flow(monkeypatch, client)
     client._owns_client = True
     client._authentication_validated = True
     try:
@@ -6746,6 +7037,7 @@ async def test_real_postqualification_rejects_absent_or_legacy_reasoning_before_
 @pytest.mark.asyncio
 async def test_real_postqualification_single_request_cannot_bypass_opaque_or_plan_gate(
     config_factory,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = 0
 
@@ -6772,7 +7064,7 @@ async def test_real_postqualification_single_request_cannot_bypass_opaque_or_pla
         reasoning_policy=reasoning_policy,
         qualification_routing=(binding,),
     )
-    client.execution_evidence = ExecutionEvidenceKind.REAL
+    _mock_real_control_flow(monkeypatch, client)
     client._owns_client = True
     client._authentication_validated = True
     try:
@@ -6807,6 +7099,7 @@ def test_real_prequalification_roles_remain_outside_postqualification_reasoning_
     config_factory,
     role: str,
     reasoning: OpenRouterReasoning | None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, http_client, _usage = _client(
         config_factory(),
@@ -6817,7 +7110,7 @@ def test_real_prequalification_roles_remain_outside_postqualification_reasoning_
         ),
         reasoning=reasoning,
     )
-    client.execution_evidence = ExecutionEvidenceKind.REAL
+    _mock_real_control_flow(monkeypatch, client)
     try:
         assert not client._is_real_postqualification_certification(role)
         assert client._reasoning_for_role(role) == reasoning
@@ -6827,6 +7120,7 @@ def test_real_prequalification_roles_remain_outside_postqualification_reasoning_
 
 def test_real_postqualification_seals_exact_capability_and_qualification_reasoning_plan(
     config_factory,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from mmaudit.models.runtime import build_reasoning_policy
     from mmaudit.orchestration.pipeline import _openrouter_qualification_routing
@@ -6865,7 +7159,7 @@ def test_real_postqualification_seals_exact_capability_and_qualification_reasoni
         qualification_routing=routing,
         production_qualification=authority,
     )
-    client.execution_evidence = ExecutionEvidenceKind.REAL
+    _mock_real_control_flow(monkeypatch, client)
     target = authority.models[0]
     qualification_binding = client._qualification_routing[target.exact_model_id]
     role_binding = next(

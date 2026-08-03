@@ -6,8 +6,40 @@ from mmaudit.config import ConfigError
 from mmaudit.models.runtime import (
     build_openrouter_runtime_controls,
     maximum_assurance_model_certification_required,
+    production_model_qualification_required,
 )
-from mmaudit.models.schemas import AuditProfile
+from mmaudit.models.schemas import AuditProfile, ExecutionEvidenceKind
+
+
+@pytest.mark.parametrize(
+    ("execution_evidence", "required"),
+    [
+        (ExecutionEvidenceKind.REAL, True),
+        (ExecutionEvidenceKind.UNVERIFIED, True),
+        (ExecutionEvidenceKind.MOCK, False),
+    ],
+)
+def test_standard_production_qualification_tracks_execution_evidence(
+    config_factory,
+    execution_evidence: ExecutionEvidenceKind,
+    required: bool,
+) -> None:
+    assert (
+        production_model_qualification_required(
+            config_factory(),
+            execution_evidence=execution_evidence,
+        )
+        is required
+    )
+
+
+def test_maximum_assurance_requires_qualification_even_for_mock_execution(config_factory) -> None:
+    config = config_factory(profile=AuditProfile.MAXIMUM_ASSURANCE).effective()
+
+    assert production_model_qualification_required(
+        config,
+        execution_evidence=ExecutionEvidenceKind.MOCK,
+    )
 
 
 def test_standard_runtime_controls_require_one_exact_endpoint_without_provider_fallback(

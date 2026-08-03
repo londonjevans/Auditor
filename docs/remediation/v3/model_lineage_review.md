@@ -106,25 +106,35 @@ were unresolved and must not be revived without derivation evidence:
 - `deepcogito/cogito-v2.1-671b` — no HuggingFace identifier is exposed in the catalogue, and
   its 671B parameter count matches DeepSeek V3. If revived it may collide with `deepseek/*`.
 
-## Binding requirements — why this record is not yet sufficient
+## Binding requirements — identity is not quality or selection authority
 
-`ModelLineageConfig` requires `measured_quality_score`, `measured_quality_tier`, and a
-`quality_measurement` sha256 alongside `root_lineage`. Those are qualification outputs, so a
-registry entry cannot be authored from this record alone. The lineage decision and the quality
-measurement are structurally coupled.
+`ModelLineageConfig` now separates the operator-reviewed declaration from measured quality.
+The declared identity contains `root_lineage`, `canonical_model_id`, `aliases`, and
+`retention_policy`. Its optional nested `measured_quality` record contains only a benchmark's
+hash-bound `score`, `tier`, and `measurement` output. This review can therefore authorize an
+identity for approved benchmark and calibration routing before any quality result exists,
+without making that identity selectable for an audit role.
 
-Consequently the completion order is fixed:
+The evidence transition is fixed:
 
-1. `V3-MODELREFRESH-001` / `V3-QUALIFY-001` — re-run discovery so exact models, endpoints,
-   pricing, and ZDR eligibility carry hash-bound evidence.
-2. `V3-CALIBRATE-001` — set reachable thresholds before paid qualification; the current
-   all-dimension `1.0` policy would reject every model regardless of capability.
-3. Qualification produces `measured_quality_score` and `quality_measurement`.
-4. Registry entries are written using the `root_lineage` values above, and
-   `privacy.approved_model_lineages` is populated with the eight authorised identifiers.
+1. `V3-MODELREFRESH-001` re-runs discovery so exact models, endpoints, pricing, and privacy
+   eligibility carry current hash-bound evidence.
+2. The operator review is joined to that candidate registry. The approved root lineage may
+   populate an identity-only `models.registry` entry and `privacy.approved_model_lineages` for
+   benchmark and calibration purposes.
+3. `V3-CALIBRATE-001` sets reachable thresholds before paid qualification; the historical
+   all-dimension `1.0` policy is not treated as measured production policy.
+4. Qualification produces the quality score, tier, and measurement hash. One explicit,
+   evidence-backed promotion attaches that complete nested record to the declared identity.
+5. Production selection independently revalidates the current qualification, exact identity,
+   root lineage, role, endpoint, and attached quality values. Neither the identity declaration
+   nor the nested static record grants production authority by itself.
 
-Until step 4, `approved_model_lineages` stays empty and egress stays fail-closed. That is
-correct behaviour and must not be worked around by hand-authoring registry entries.
+While a model is unmeasured, `measured_quality` is absent. A default, zero, null, placeholder,
+or sentinel score must never stand in for missing evidence, and a partial nested measurement is
+invalid. Source egress remains fail-closed unless the separate privacy, lineage, and retention
+conditions are satisfied; production audit roles additionally remain fail-closed until the
+quality and verified-selection conditions are satisfied.
 
 ## Note on ZDR scope
 

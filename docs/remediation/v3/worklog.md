@@ -4,13 +4,13 @@ The objective source has SHA-256
 `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43`.
 Do not record credentials, raw private prompts, or raw provider completions here.
 
-AUTORUN_STATUS: RUNNING
+AUTORUN_STATUS: PAUSED_BY_OPERATOR
 CURRENT_MILESTONE: Model qualification bootstrap
 CURRENT_TICKET: V3-BOOTSTRAP-001 (IN_PROGRESS)
-LAST_COMPLETED_TICKET: V3-SCHEDULER-001
-NEXT_ACTION: Separate declared model identity from optional measured quality without weakening production selection; add focused bootstrap and fail-closed regressions.
-LAST_COMMAND: `git ls-files -co --exclude-standard -z | xargs -0 shasum -a 256 | awk '$1 == "f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43" { print; matches += 1 } END { print "HASHED=" NR; print "MATCHES=" (matches + 0) }'`
-LAST_RESULT: BLOCKED_TECHNICAL: V3-OBJECTIVE-001 exact-source audit hashed 918 tracked/untracked nonignored files and found 0 matches; the digest appears only as a reference and reconstruction is forbidden. V3-TARGETSPEC-001 is dependency-blocked. The distinct Corrovera vision is restored at its recorded `77e5ab...` hash, and commit `d8e075a8e39f0008853dd59b9ffea2364171832e` is present on `origin/main`. Continuing with independent V3-BOOTSTRAP-001.
+LAST_COMPLETED_TICKET: V3-OBJECTIVE-001 (BLOCKED_TECHNICAL disposition checkpointed)
+NEXT_ACTION: On operator resume, rerun `.venv/bin/pytest -q tests/integration/test_pipeline.py --cache-clear` from the beginning, then complete the affected and repository-wide validation gates.
+LAST_COMMAND: `.venv/bin/pytest -q tests/integration/test_pipeline.py --cache-clear`
+LAST_RESULT: PAUSED_BY_OPERATOR: interrupted cleanly after 79 passing tests in 302.30s; no failure had surfaced and the partial run is not acceptance evidence.
 REAL_MODEL_CALLS_ATTEMPTED: 10
 REAL_MODEL_CALLS_SUCCEEDED: 1
 REAL_MODEL_CALLS_REJECTED: 9
@@ -18,8 +18,229 @@ OPENROUTER_COST_USED_USD: 0.0033415625
 OPENROUTER_COST_RESERVED_USD: 0.00
 OPENROUTER_BUDGET_REMAINING_USD: 249.9966584375
 COMPLETED_REAL_AUDITS: 0
-BLOCKED_EXTERNAL_ITEMS: Exact objective source bytes matching `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43` are absent, blocking V3-OBJECTIVE-001 and dependent V3-TARGETSPEC-001; exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied.
-LAST_CHECKPOINT_COMMIT: 6b83b527ce14b7cff3b8abbe153603b2e8e14ae9
+BLOCKED_EXTERNAL_ITEMS: The exact Mistral/Venice smoke route returned provider rate limiting and will not be retried unchanged; no qualified production ensemble; required rootless isolation and several certified external engines remain unavailable; private holdout and independently adjudicated professional comparison are not supplied. The previously absent exact objective source is now committed at `517559e5c9526f78e516374ebc194933d01eac7f` with the required SHA-256; its remaining queue references and regression are actionable after the current bounded ticket.
+LAST_CHECKPOINT_COMMIT: 517559e5c9526f78e516374ebc194933d01eac7f
+
+## 2026-08-03 — V3-BOOTSTRAP-001
+
+- **Status:** `IN_PROGRESS`; independent review found one remaining fail-closed boundary gap.
+- **Defensive objective:** Remove the quality-before-quality-measurement cycle while keeping
+  every audit-role and production-selection path fail closed for unmeasured identities.
+- **Typed separation:** `ModelLineageConfig` now contains immutable declared identity and
+  retention fields plus an optional nested `measured_quality` record. The nested record is
+  atomic (`score`, `tier`, and hash-bound `measurement`), omitted while unmeasured, and rejects
+  explicit null, partial records, flat legacy fields, invalid hashes, and tier/score mismatch.
+  A legitimate measured zero remains distinguishable from missing evidence; no zero or sentinel
+  is synthesized.
+- **Measurement boundary:** Approved identity-only canonical and alias records can be resolved
+  by the existing model benchmark target and egress controls without a prior quality value.
+  Unapproved root lineages and retention above policy still fail before provider access.
+- **Selection boundary:** Both the audit preflight and model registry reject an identity-only
+  configured role. Maximum-assurance production validation additionally rejects an absent nested
+  quality record even when otherwise valid opaque Tier-A evidence is supplied, and continues to
+  require exact current independently verified qualification evidence.
+- **Promotion transition:** `promote_qualified_model_lineages` is the single deterministic
+  candidate-to-config quality attachment. It accepts no caller-supplied score, tier, or hash;
+  derives them from exact current Tier-A results; validates candidate, artifact, verification,
+  canonical ID, root, endpoint, output mode, benchmark report, expiry, and eligible-set joins;
+  and rejects aliases, already-measured identities, pending/inconclusive/mock-only evidence,
+  stale evidence, and mismatches. The transition itself does not grant runtime selection
+  authority.
+- **Schema and documentation:** Added generated `schemas/models_config.schema.json`; both
+  example TOML files describe the same identity/quality boundary; model-selection and lineage
+  review documentation now record the candidate registry, declared identity, explicit promotion,
+  and separately verified production selection relationship.
+- **Focused validation:** Registry/benchmark/promotion matrix passed `79` tests in `11.07s`;
+  configuration/CLI passed `119` tests in `5.51s`; candidate, calibration, qualification,
+  role, and CLI workflows passed `169` tests in `126.26s`; release-schema tests passed `2`.
+  Full Ruff format check reported `419` files formatted, Ruff check passed, strict mypy passed
+  all `165` source files, release schemas verified, both TOML templates parsed, and diff checks
+  passed. The only warnings were inherited best-effort cleanup permission warnings for stale
+  local clean-Anvil temporary directories.
+- **External boundary:** No provider call, paid spend, network access, target repository, or
+  operator secret was used. Real model qualification remains a later queue ticket and receives
+  no credit here.
+- **Repository-wide validation:** `.venv/bin/pytest -q --cache-clear` passed `4416` tests with
+  `11` explicit external-prerequisite or paid-provider opt-in skips in `1293.89s` (`21m33s`).
+  The skips were the unavailable rootless image/adversarial container cases, Echidna, Halmos,
+  Medusa, offline replay compiler, realistic AST compiler, fork-differential compiler, Foundry
+  fork compiler, and the deliberately disabled paid-provider integration. Two inherited
+  best-effort cleanup warnings referenced stale permission-restricted clean-Anvil temporary
+  directories and did not affect the result.
+- **Independent review:** The first pass did not bind ordinary REAL production model execution
+  to the opaque current qualification artifact. A manually populated nested quality record could
+  therefore still authorize ordinary production roles, including aliases, even though the static
+  record is intended to be descriptive rather than runtime authority. The full-suite result above
+  predates this finding and will not be used as final acceptance evidence after the correction.
+- **Next action:** Gate all REAL and UNVERIFIED production execution on current verified
+  qualification while retaining explicit MOCK-only test execution without REAL evidence credit.
+- **Boundary correction:** Added an execution-evidence-aware production qualification gate.
+  Owned provider construction is treated as planned REAL execution and requires opaque current
+  qualification before client construction or spend. Unknown evidence fails closed as
+  UNVERIFIED. Closed-transport standard tests may omit production qualification only because
+  their evidence is irreducibly MOCK; maximum-assurance remains qualification-bound even there.
+- **Correction validation:** The focused runtime, registry, standard REAL preflight, and
+  maximum-assurance MOCK preflight set passed `65` tests in `9.75s`. The standard REAL negative
+  regression retained a zero-spend ledger and never constructed a provider client.
+- **Next action:** Run the expanded affected suite and final ticket validation; the earlier
+  repository-wide result will remain historical until it is superseded on the corrected tree.
+- **Expanded pipeline validation:** `.venv/bin/pytest -q tests/integration/test_pipeline.py
+  --cache-clear` passed all `106` tests in `311.41s`. The corrected boundary preserved all
+  standard MOCK-only orchestration behavior. Affected-file Ruff passed, strict mypy reported no
+  issues in the two changed source modules, and `git diff --check` passed.
+- **Next action:** Run all changed model/config/schema tests, resolve independent read-only
+  review findings, then supersede the historical repository-wide result on the corrected tree.
+- **Independent review follow-up:** Three additional gaps were reproduced and corrected before
+  checkpointing. First, MOCK qualification exemption is now bound to the exact closed in-memory
+  transport, so mutating an injected network client's public evidence label cannot bypass
+  qualification. Second, the generated schema now represents `measured_quality` as optional but
+  non-null and carries the exact lowercase SHA-256 measurement pattern; both committed templates'
+  commented identity-only and measured examples parse through the runtime model. Third,
+  promotion now preserves declared aliases, while the existing exact-canonical opaque selection
+  gates continue to prevent aliases from inheriting qualification. An end-to-end regression
+  proves promoted alias-bearing output can pass current exact production validation only with
+  the independently issued opaque capability.
+- **API footgun removed:** `ModelRegistry.validate` no longer infers whether qualification is
+  required from the profile. Every caller must explicitly declare measurement-only versus
+  production-authoritative validation; the audit pipeline always supplies its immutable
+  transport-derived requirement.
+- **Follow-up focused validation:** The schema/template, promotion-to-production, transport
+  relabel, runtime, and registry set passed `73` tests in `10.32s`.
+- **Next action:** Run the full affected OpenRouter, generation-evidence, pipeline, model,
+  configuration, and schema suites before repository-wide validation.
+- **Final affected-suite validation:** OpenRouter and generation-evidence suites passed `307`
+  tests in `2.22s`; the complete pipeline integration file passed `107` tests in `309.77s`;
+  and all changed CLI, runtime, registry, benchmark, promotion, schema, and qualification-config
+  tests passed `183` tests in `16.41s`. Only the two inherited best-effort cleanup permission
+  warnings appeared. No real provider or network path executed.
+- **Next action:** Run repository-wide formatting, lint, strict typing, schema/template checks,
+  and full pytest on this corrected tree, then checkpoint only if final review remains clean.
+- **Repository-wide static validation:** Ruff found all `419` files already formatted and all
+  checks passed; strict mypy found no issues in `165` source files; release-schema verification,
+  both complete TOML template parses, and `git diff --check` passed.
+- **Next action:** Run the full pytest suite on the corrected tree, incorporate final independent
+  review, and checkpoint only if both remain clean.
+- **Final provenance hardening:** An adversarial review found that execution evidence still
+  trusted a mutable public label and generic injected HTTPX mock transports. Evidence is now
+  derived only from the exact base client and sealed transport identities. A dedicated internal
+  test-only mock construction path is classified `MOCK`; generic injected clients remain
+  `UNVERIFIED`. Both MOCK and owned REAL paths reject client, transport, handler, callable, URL
+  mount, auth, hook, or environment-trust mutation before any request. Subclasses and concurrent
+  label changes have no authority. Runtime/schema parity now also covers strict numeric scores,
+  tier thresholds, immutable hash/model identifiers, and unique aliases.
+- **Latest validation:** The focused schema, registry, runtime, and transport regression matrix
+  passed `76` tests in `10.33s`; affected Ruff passed; strict mypy passed all `165` source files;
+  and the complete OpenRouter/generation-evidence matrix passed `308` tests in `2.28s`. One
+  superseded repository-wide run was deliberately interrupted after `57` passes and `5` skips
+  when the mount/callable gap was found, so no acceptance result is claimed from it. No provider,
+  network, target, operator secret, or additional spend was used.
+- **Next action:** Run the complete pipeline integration file and changed model/config/schema
+  matrix on this final tree, incorporate the final independent review, then run repository-wide
+  validation.
+- **Review-driven base URL/schema correction:** Owned provider evidence now snapshots the exact
+  canonical base URL and rejects later redirection before a request; the MOCK seam also seals its
+  configured base URL and refuses non-synthetic credentials. The generated conditional score
+  subschemas compile under local Ajv 2020 strict mode. Cross-record case-insensitive ID uniqueness
+  is explicitly documented as a runtime semantic constraint because draft 2020-12 cannot express
+  that cross-item relation; the typed runtime loader remains authoritative and rejects it.
+- **Superseded run and revalidation:** The pipeline run started before these corrections was
+  deliberately interrupted after `32` passing cases in `145.89s`; no acceptance result is claimed.
+  On the corrected tree, strict mypy passed `165` source files, Ajv strict schema compilation
+  returned `AJV_STRICT_OK`, focused correction tests passed `8`, the OpenRouter/generation suite
+  passed `310` in `2.28s`, and the affected CLI/model/config/schema suite passed `188` in `16.34s`.
+  No provider, network, target, secret, or spend was used.
+- **Next action:** Run the complete pipeline integration file on the corrected tree, incorporate
+  final independent review, and then run repository-wide validation.
+- **Issuer-held transport authority:** A final review proved that an injected generic mock could
+  rewrite all prior instance snapshot fields and manufacture the descriptive MOCK label. Trusted
+  evidence now requires an exact immutable binding issued into a module-held weak identity
+  registry only by exact base-client construction; instance fields, labels, subclasses, and
+  injected transports cannot create that binding. A regression rewrites every former instance
+  flag and still fails closed before the injected handler runs.
+- **Trusted test-code boundary:** The explicit mock handler remains repository-controlled test
+  code rather than a production isolation primitive. It can receive only an explicitly synthetic
+  credential, always records MOCK evidence, and cannot satisfy real maximum-assurance model-review
+  credit. Mutable handler behavior is therefore not claimed as network isolation; real execution
+  continues to require the owned canonical transport and opaque production qualification.
+- **Superseded pipeline result:** The next pre-registry pipeline run exposed one expected test
+  adaptation: a realistic local leak canary lacked the required synthetic marker. It was stopped
+  after `1` failure and `31` passes in `140.45s`; no acceptance result is claimed. The canary now
+  retains its realistic prefix while explicitly identifying itself as synthetic. Seven focused
+  provenance/canary cases passed in `4.22s`, Ruff passed, strict mypy passed `165` source files,
+  and the full OpenRouter/generation suite passed `310` in `2.57s`. No external call or spend ran.
+- **Next action:** Run the complete pipeline integration file on the issuer-held-authority tree,
+  incorporate final read-only review, and then run repository-wide validation.
+- **Owned object-graph correction:** Read-only review then proved two deeper mutations remained:
+  an instance-level HTTPX authentication dispatcher and replacement connection pool retained a
+  REAL classification. The issuer-held binding now covers the exact client/transport attribute
+  sets, canonical base URL, redirect settings, owned pool identity and attribute set, pool request
+  callable, and HTTPX build/auth/redirect/send dispatch callables. Both reproduced mutations now
+  return `UNVERIFIED` and fail before their fabricated path can run.
+- **Operational evidence correction:** Every OpenRouter request-planning, routing, generation,
+  usage, and debug-evidence decision now derives the trusted classification directly; the mutable
+  public label is descriptive and cannot change behavior or serialized evidence. A regression
+  sets the label to REAL on a MOCK transport and still records MOCK usage. Twenty-five legacy unit
+  cases had been using that label mutation to simulate REAL branches. Those cases now use clearly
+  named, test-local mocked-control-flow helpers; generation retrieval remains MOCK except within
+  the explicitly mocked REAL-reconciliation branch. None is credited as a real provider test.
+- **Superseded run and validation:** The pipeline run predating these corrections was deliberately
+  interrupted after `39` passes in `255.57s`; no acceptance result is claimed. Six focused
+  object-graph/label cases passed, Ruff passed, strict mypy passed `165` source files, and the full
+  OpenRouter/generation suite passed `312` in `2.43s`. No provider, network, target, secret, or
+  spend was used.
+- **Next action:** Run the complete pipeline integration file on the final object-graph-bound
+  tree, incorporate final review, and then run repository-wide validation.
+- **Nested transport closure:** A subsequent read-only review reproduced mutations below the
+  transport identity itself. The issuer-held binding now snapshots the complete connection-pool
+  field identities, pool connection/assignment/close dispatch, lazy network-backend identity and
+  initialization dispatch, exact inner AnyIO backend dispatch, and relevant `__getattribute__`
+  authority. Legitimate lazy AnyIO backend initialization remains accepted; replacement fields,
+  instance dispatch, and class dispatch all revoke REAL evidence before request execution.
+- **Class-dispatch validation:** Five focused pool/backend/HTTPX mutation and legitimate-init
+  cases passed. Affected Ruff passed, strict mypy passed all `165` source files, and the complete
+  OpenRouter/generation-evidence matrix passed `321` tests in `2.47s`. Unit helpers that select
+  REAL control-flow branches remain explicitly mocked branch tests and are not real provider
+  execution evidence. No provider, network, target, secret, or spend was used.
+- **Superseded pipeline result:** A pipeline run started before nested pool configuration was
+  sealed was deliberately interrupted after `32` passing cases in `53.16s`; no acceptance result
+  is claimed from it.
+- **Newly available objective bytes:** `docs/remediation/v3/product_completion_goal.txt` is now
+  committed at `517559e5c9526f78e516374ebc194933d01eac7f` and hashes exactly to the previously required
+  `f77db665fe3092e6b809402dcac7e370bc9c3c507542fd40ef7c6f5eaad32e43` value. It is preserved and
+  excluded from this ticket's checkpoint; `V3-OBJECTIVE-001` can be reopened after this bounded
+  ticket completes.
+- **Next action:** Run the complete pipeline integration file on the class-dispatch-sealed tree,
+  incorporate final read-only review, and then run repository-wide validation.
+- **Request-boundary and pool-content closure:** The final read-only probe found that replacing
+  the client `_bounded_request` method or appending a response-producing object to the existing
+  pool connection list could still preserve descriptive REAL evidence. Central trusted
+  classification now seals the client-owned request/evidence callables, internal callers use the
+  snapshotted request boundary, and the original request implementation calls the snapshotted
+  provenance validator. REAL owned clients disable keepalive, reject nonempty connection or
+  request queues before dispatch, and serialize their pool use with an issuer-held lock. MOCK
+  clients retain concurrent test execution and cannot earn REAL credit.
+- **No-progress isolation:** The first combined unit rerun exposed a MOCK concurrency deadlock
+  caused by applying the REAL serialization lock too broadly. It was interrupted after `123`
+  passes and isolated to `test_concurrent_usage_records_account_only_their_own_request_cost`.
+  Restricting serialization to REAL owned transport restored the intended MOCK concurrency; the
+  isolated concurrency plus both new negative regressions passed `3` tests in `0.53s`.
+- **Corrected focused evidence:** Affected formatting and Ruff passed; strict mypy passed all
+  `165` source files; and the complete OpenRouter/generation-evidence matrix passed `323` tests in
+  `2.49s`. The two false-REAL regressions reject before the fabricated response path runs. No
+  provider, network, target, secret, or spend was used.
+- **Next action:** Run the complete pipeline integration file on this corrected tree, confirm the
+  bounded re-review, and then run repository-wide validation.
+- **Independent closure recheck:** The same two no-network probes now report `UNVERIFIED`, raise
+  `OpenRouterPrivacyError`, leave authentication false, and execute neither fabricated response
+  path. The reviewer found no failure in the bounded recheck and edited no files.
+- **Operator pause:** The restarted pipeline integration gate was interrupted cleanly at the
+  operator's request after `79` passing tests in `302.30s`; no failure had surfaced. This partial
+  result is not acceptance evidence and must be rerun from the beginning. No provider request,
+  network access, target execution, operator-secret read, reservation, or paid spend occurred.
+  No test or child process remains active. The ticket remains `IN_PROGRESS`, and no checkpoint
+  commit was created from the not-yet-final tree.
+- **Resume action:** Rerun `.venv/bin/pytest -q tests/integration/test_pipeline.py --cache-clear`,
+  then the changed model/config/schema matrix, repository-wide static gates, and complete pytest.
 
 ## 2026-08-03 — V3-OBJECTIVE-001 and V3-TARGETSPEC-001 dependency disposition
 
