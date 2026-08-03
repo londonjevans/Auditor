@@ -2002,23 +2002,23 @@ no duplicate, and no ticket scheduled before a declared dependency completes.
    `V3-QUALIFY-001`.
 2. `V3-FORKSUITE-001` — partial with the safe Foundry path complete. The Hardhat subtask stays
    `BLOCKED_TECHNICAL` behind `V3-HARDHAT-001` and its operator container prerequisite.
-3. `V3-OBJECTIVE-001` — blocked technical: the exact hash-matching byte stream is absent and
-   reconstruction is forbidden. Resume only when the operator supplies it.
-4. `V3-TARGETSPEC-001` — blocked technical on `V3-OBJECTIVE-001`; reconciliation cannot infer
-   the missing objective from its hash.
-5. `V3-BOOTSTRAP-001` — **highest leverage remaining ticket.** Small, no dependencies, and
+3. `V3-BOOTSTRAP-001` — **highest leverage remaining ticket.** Small, no dependencies, and
    until it lands no model can be benchmarked, `approved_model_lineages` cannot be populated,
    and the recorded operator lineage authorisation cannot take effect.
-6. `V3-TOOLDIAG-002` — small; without it a real audit still returns zero static-analyzer
+4. `V3-TOOLDIAG-002` — small; without it a real audit still returns zero static-analyzer
    findings.
-7. `V3-FIXTURE-001` — close-out only. Its sole remaining gap was that `V3-SHARD-001` had to
+5. `V3-FIXTURE-001` — close-out only. Its sole remaining gap was that `V3-SHARD-001` had to
    consume the scale corpus; `V3-SHARD-001` is `COMPLETE` and its evidence records the
    4,952/15,116/35,444-line corpus passing deterministic sharding. Verify and mark `COMPLETE`.
 
 ### Phase 2 — the shippable deterministic product
 
-8. `V3-REPORT-001` — client-facing deliverable. Needed by every product variant.
-9. `V3-SCOPE-001` — claims match capability.
+6. `V3-REPORT-001` — client-facing deliverable. Needed by every product variant.
+7. `V3-SCOPE-001` — claims match capability.
+8. `V3-OBJECTIVE-001` — blocked technical: the exact hash-matching byte stream is absent and
+   reconstruction is forbidden. Resume only when the operator supplies it.
+9. `V3-TARGETSPEC-001` — blocked technical on `V3-OBJECTIVE-001`; reconciliation cannot infer
+   the missing objective from its hash.
 
 At this point the deterministic offering is complete and saleable: pinned-fork suite
 execution, local-versus-fork divergence, execution-originated findings, audited-suite
@@ -2039,25 +2039,25 @@ model, no qualification, and no provider spend anywhere in the path.
 14. `V3-QUALIFY-001` — first qualified models.
 15. `V3-SINGLE-AUDIT-001` — **first real audit.** `completed_real_audits` becomes non-zero.
 
-16. `V3-LEARNING-001` phase 1 (capture only) — schedule here so the first real audit is
+16. `V3-TIMESPLIT-001`
+
+17. `V3-LEARNING-001` phase 1 (capture only) — schedule here so the first real audit is
    recorded. Capture cannot be done retroactively; evidence not written during a run is
    gone. Phase 2 waits for a measured baseline.
 ### Phase 4 — orchestration hardening, now provable against real models
 
-17. `V3-TRUNCATION-001`
-18. `V3-COVERAGE-001`
-19. `V3-CONSENSUS-001` — must precede the multi-model audit, since it is what prevents a
+18. `V3-TRUNCATION-001`
+19. `V3-COVERAGE-001`
+20. `V3-CONSENSUS-001` — must precede the multi-model audit, since it is what prevents a
     single verifier suppressing a candidate group.
-20. `V3-MULTI-AUDIT-001`
-21. `V3-ENSEMBLE-001` — settle whether the specialist ensemble beats concentrated compute
+21. `V3-MULTI-AUDIT-001`
+22. `V3-ENSEMBLE-001` — settle whether the specialist ensemble beats concentrated compute
     before committing to its cost and latency.
-22. `V3-TAXONOMY-001`
-23. `V3-RETRIEVAL-001`
-24. `V3-MUTATION-001`
+23. `V3-TAXONOMY-001`
+24. `V3-RETRIEVAL-001`
+25. `V3-MUTATION-001`
 
 ### Phase 5 — evidence and claims
-
-25. `V3-TIMESPLIT-001`
 26. `V3-CONVERGENCE-001` — thresholds derived from the measured discovery curve, not guessed.
 27. `V3-HUMANCMP-001` — the only ticket that can ever substantiate a superiority claim.
 28. `V3-STABILITY-001`
